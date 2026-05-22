@@ -13,7 +13,7 @@
 현재 공개 기준:
 
 ```text
-v0.2.4 pre-release
+v0.2.5 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -156,7 +156,7 @@ OCR과 AI 전사는 유용하지만, 모델에 따라 달라질 수 있는 deriv
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.2.4
+v0.2.5
 v0.3.0
 v1.0.0
 ```

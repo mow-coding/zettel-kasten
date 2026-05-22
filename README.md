@@ -13,7 +13,7 @@
 Current public baseline:
 
 ```text
-v0.2.4 pre-release
+v0.2.5 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -155,7 +155,7 @@ See [Text Provenance Hierarchy](ai-archive-kit/docs/text-provenance-hierarchy.md
 Release tags are compatibility checkpoints:
 
 ```text
-v0.2.4
+v0.2.5
 v0.3.0
 v1.0.0
 ```
