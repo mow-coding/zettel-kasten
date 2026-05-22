@@ -1,0 +1,99 @@
+version: provider-bindings/v0.1
+archive_id: archive:personal:template
+bindings:
+  - binding_id: github:archive-repo
+    provider: github
+    enabled: true
+    purpose: zettels_specs_code_and_view_definitions
+    resource:
+      org: example-org
+      repo: personal-archive
+    auth:
+      token_env: GITHUB_TOKEN
+    owner_mapping:
+      admin_team: archive-admins
+      operator_team: archive-operators
+  - binding_id: cloudflare_r2:objects
+    provider: cloudflare_r2
+    enabled: true
+    purpose: large_original_object_storage
+    resource:
+      account_id_ref: CLOUDFLARE_ACCOUNT_ID
+      bucket: personal-archive-objects
+      jurisdiction: default
+    auth:
+      api_token_env: CF_R2_API_TOKEN
+      access_key_id_env: CF_R2_ACCESS_KEY_ID
+      secret_access_key_env: CF_R2_SECRET_ACCESS_KEY
+    owner_mapping:
+      bucket_admin_role: archive-storage-admin
+  - binding_id: backblaze_b2:objects
+    provider: backblaze_b2
+    enabled: true
+    purpose: alternate_large_original_object_storage
+    resource:
+      bucket: personal-archive-objects
+    auth:
+      key_id_env: B2_KEY_ID
+      application_key_env: B2_APPLICATION_KEY
+    owner_mapping:
+      bucket_admin_role: archive-storage-admin
+  - binding_id: neon:coordination
+    provider: neon
+    enabled: true
+    purpose: optional_shared_coordination_db_not_source_of_truth
+    resource:
+      project_id_ref: NEON_PROJECT_ID
+      branch: production
+      database: archive_coordination
+      role: archive_app
+    auth:
+      database_url_env: NEON_DATABASE_URL
+    owner_mapping:
+      database_admin_role: archive-db-admin
+  - binding_id: external_ssd:local-backup
+    provider: external_ssd
+    enabled: true
+    purpose: durable_local_backup
+    resource:
+      drive_label: ARCHIVE_BACKUP
+      path_hint: archives/personal
+    auth:
+      custody_record: manual
+    owner_mapping:
+      custodian: owner
+  - binding_id: rclone:object-sync
+    provider: rclone
+    enabled: true
+    purpose: replaceable_object_storage_sync
+    resource:
+      remote_name: archive-objects
+    auth:
+      config_env: RCLONE_CONFIG
+    owner_mapping:
+      remote_admin: archive-storage-admin
+  - binding_id: restic:encrypted-backup
+    provider: restic
+    enabled: true
+    purpose: encrypted_backup_repository
+    resource:
+      repository_ref: RESTIC_REPOSITORY
+    auth:
+      repository_env: RESTIC_REPOSITORY
+      password_env: RESTIC_PASSWORD
+    owner_mapping:
+      backup_admin: archive-backup-admin
+  - binding_id: keepassxc:secrets
+    provider: keepassxc
+    enabled: true
+    purpose: external_secret_vault
+    resource:
+      database_hint: personal-vault.kdbx
+    auth:
+      unlock: manual
+    owner_mapping:
+      entry_refs:
+        - GitHub archive token
+        - R2 archive credentials
+        - B2 archive credentials
+        - Neon coordination database URL

@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Archive Kit archive identity",
+  "type": "object",
+  "required": ["identity", "ownership", "trusted_counterparties", "lineage"],
+  "properties": {
+    "identity": {
+      "type": "object",
+      "required": ["archive_id", "identity_id", "scope", "principal_id", "public_keys"],
+      "properties": {
+        "archive_id": {"type": "string"},
+        "identity_id": {"type": "string"},
+        "scope": {"type": "string", "enum": ["personal", "relationship", "family", "child", "project", "company", "business_unit"]},
+        "principal_id": {"type": "string"},
+        "display_name": {"type": "string"},
+        "public_keys": {"type": "array"}
+      }
+    },
+    "ownership": {
+      "type": "object",
+      "required": ["owner_id", "owner_kind", "operators", "transfer_policy"],
+      "properties": {
+        "owner_id": {"type": "string"},
+        "owner_kind": {
+          "type": "string",
+          "enum": ["person", "relationship", "family", "household", "child", "project", "company", "business_unit", "team", "role", "client", "server"]
+        },
+        "owner_display_name": {"type": "string"},
+        "owner_archive_id": {"type": ["string", "null"]},
+        "operators": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["operator_id", "role"],
+            "properties": {
+              "operator_id": {"type": "string"},
+              "role": {"type": "string"},
+              "permissions": {
+                "type": "array",
+                "items": {"type": "string"}
+              },
+              "starts_at": {"type": "string"},
+              "ends_at": {"type": ["string", "null"]}
+            }
+          }
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["subject_id", "relationship"],
+            "properties": {
+              "subject_id": {"type": "string"},
+              "relationship": {"type": "string"},
+              "notes": {"type": "string"}
+            }
+          }
+        },
+        "transfer_policy": {
+          "type": "object",
+          "required": ["ownership_transfer_allowed", "requires_human_approval", "requires_receipt"],
+          "properties": {
+            "ownership_transfer_allowed": {"type": "boolean"},
+            "requires_human_approval": {"type": "boolean"},
+            "requires_receipt": {"type": "boolean"},
+            "receipt_action": {"type": "string"},
+            "default_transfer_target": {"type": ["string", "null"]}
+          }
+        }
+      }
+    },
+    "trusted_counterparties": {"type": "array"},
+    "lineage": {
+      "type": "object",
+      "required": ["parents", "children", "merged_from"],
+      "properties": {
+        "parents": {"type": "array"},
+        "children": {"type": "array"},
+        "forked_from": {},
+        "merged_from": {"type": "array"},
+        "exited_from": {},
+        "ownership_transfers": {"type": "array"}
+      }
+    }
+  }
+}

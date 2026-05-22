@@ -1,0 +1,2489 @@
+﻿from __future__ import annotations
+
+import io
+import json
+import shutil
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+
+
+KIT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = KIT_ROOT / "src"
+PROMOTION_CHECKLIST_IDS = [
+    "one_clear_purpose",
+    "understandable_title",
+    "future_self_contained",
+    "source_clarity",
+    "object_id_only",
+    "stable_facets",
+    "allowed_edges",
+    "explicit_visibility",
+    "provenance_present",
+    "sensitive_content_reviewed",
+]
+
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from ai_archive_kit import archive_cli
+
+
+class ArchiveCliTests(unittest.TestCase):
+    def run_cli(self, args: list[str]) -> tuple[int, str]:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer), redirect_stderr(buffer):
+            code = archive_cli.main(args)
+        return code, buffer.getvalue()
+
+    def init_personal_archive(self, root: Path, archive_id: str = "archive:personal:test") -> tuple[int, str]:
+        return self.run_cli(
+            [
+                "init",
+                str(root),
+                "--type",
+                "personal",
+                "--archive-id",
+                archive_id,
+                "--principal-id",
+                "person:test",
+                "--principal-name",
+                "Test Person",
+                "--name",
+                "Test Personal Archive",
+            ]
+        )
+
+    def init_transfer_ready_family_archive(self, root: Path) -> Path:
+        code, output = self.run_cli(
+            [
+                "init",
+                str(root),
+                "--type",
+                "family",
+                "--archive-id",
+                "archive:family:example-household",
+                "--principal-id",
+                "family:example-household",
+                "--principal-kind",
+                "family",
+                "--principal-name",
+                "Example Household",
+                "--name",
+                "Example Household Archive",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        identity_path = root / "archive-identity.yml"
+        identity = archive_cli.load_yaml(identity_path.read_text(encoding="utf-8"))
+        identity["trusted_counterparties"].append(
+            {
+                "identity_id": "identity:archive:child:example-child",
+                "archive_id": "archive:child:example-child",
+                "principal_id": "person:child-template",
+                "expected_fingerprint": "SHA256:example-child-primary",
+                "trust_level": "out_of_band_verified",
+            }
+        )
+        identity_path.write_text(archive_cli.dump_yaml(identity), encoding="utf-8")
+        return root
+
+    def init_transfer_ready_business_unit_archive(self, root: Path) -> Path:
+        code, output = self.run_cli(
+            [
+                "init",
+                str(root),
+                "--type",
+                "company",
+                "--archive-id",
+                "archive:business_unit:fake-space",
+                "--principal-id",
+                "business_unit:fake-space",
+                "--principal-kind",
+                "project",
+                "--principal-name",
+                "Fake Space Business Unit",
+                "--name",
+                "Fake Space Business Unit Archive",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+
+        archive_path = root / "archive.yml"
+        archive_data = archive_cli.load_yaml(archive_path.read_text(encoding="utf-8"))
+        archive_data["type"] = "business_unit"
+        archive_data["principal"]["kind"] = "business_unit"
+        archive_path.write_text(archive_cli.dump_yaml(archive_data), encoding="utf-8")
+
+        identity_path = root / "archive-identity.yml"
+        identity = archive_cli.load_yaml(identity_path.read_text(encoding="utf-8"))
+        identity["identity"]["scope"] = "business_unit"
+        identity["identity"]["principal_id"] = "business_unit:fake-space"
+        identity["identity"]["display_name"] = "Fake Space Business Unit"
+        identity["ownership"] = {
+            "owner_id": "company:fake-blue",
+            "owner_kind": "company",
+            "owner_display_name": "Fake Blue Company",
+            "owner_archive_id": "archive:company:fake-blue",
+            "operators": [
+                {
+                    "operator_id": "role:business-unit-admin",
+                    "role": "business_unit_operator",
+                    "permissions": ["capture", "curate", "approve", "transfer_request"],
+                },
+                {
+                    "operator_id": "person:fake-founder",
+                    "role": "founder_operator",
+                    "permissions": ["capture", "curate", "approve", "transfer_request"],
+                },
+            ],
+            "subjects": [
+                {
+                    "subject_id": "business_unit:fake-space",
+                    "relationship": "business_unit_subject",
+                }
+            ],
+            "transfer_policy": {
+                "ownership_transfer_allowed": True,
+                "requires_human_approval": True,
+                "requires_receipt": True,
+                "receipt_action": "transfer_archive_ownership",
+                "default_transfer_target": "company:fake-spinout",
+            },
+        }
+        identity["trusted_counterparties"].append(
+            {
+                "identity_id": "identity:archive:company:fake-spinout",
+                "archive_id": "archive:company:fake-spinout",
+                "principal_id": "company:fake-spinout",
+                "expected_fingerprint": "SHA256:fake-spinout-primary",
+                "trust_level": "out_of_band_verified",
+            }
+        )
+        identity_path.write_text(archive_cli.dump_yaml(identity), encoding="utf-8")
+        return root
+
+    def copy_fake_archive(self, root: Path) -> Path:
+        shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
+        return root
+
+    def make_fake_lunch_draft_promotion_ready(self, archive_root: Path, title: str = "Promotion-ready lunch note") -> Path:
+        path = archive_root / "inbox" / "zet_20260519_draft_ai_lunch_note.md"
+        text = path.read_text(encoding="utf-8")
+        match = archive_cli.FRONTMATTER_RE.match(text)
+        self.assertIsNotNone(match)
+        assert match is not None
+        frontmatter = archive_cli.load_yaml(match.group(1))
+        body = text[match.end() :].lstrip()
+        frontmatter["title"] = title
+        frontmatter["kind"] = "permanent_note"
+        frontmatter["promotion"] = {
+            "stage": "promotion_candidate",
+            "ready_for_promotion": True,
+            "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
+        }
+        path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+        return path
+
+    def test_doctor_fake_life_archive_passes_strict(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(["doctor", str(archive_root), "--strict"])
+        self.assertEqual(code, 0, output)
+        self.assertIn("0 error(s), 0 warning(s)", output)
+
+    def test_init_then_doctor_passes_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root)
+            self.assertEqual(init_code, 0, init_output)
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+            self.assertIn("0 error(s), 0 warning(s)", doctor_output)
+
+    def test_init_gitignore_protects_local_profiles_and_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:gitignore")
+            self.assertEqual(init_code, 0, init_output)
+
+            gitignore = (archive_root / ".gitignore").read_text(encoding="utf-8")
+            self.assertIn("profiles/local/", gitignore)
+            self.assertIn("keyrings/local/", gitignore)
+            self.assertIn(".archive-local/", gitignore)
+            self.assertIn("*.kdbx", gitignore)
+            self.assertIn("credentials.json", gitignore)
+            self.assertIn("**/db/archive-index.sqlite", gitignore)
+
+    def test_init_writes_archive_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:identity")
+            self.assertEqual(init_code, 0, init_output)
+
+            identity = archive_cli.load_yaml((archive_root / "archive-identity.yml").read_text(encoding="utf-8"))
+            self.assertEqual(identity["identity"]["archive_id"], "archive:personal:identity")
+            self.assertEqual(identity["identity"]["scope"], "personal")
+            self.assertEqual(identity["identity"]["principal_id"], "person:test")
+            self.assertEqual(identity["ownership"]["owner_id"], "person:test")
+            self.assertEqual(identity["ownership"]["owner_kind"], "person")
+            self.assertEqual(identity["ownership"]["operators"][0]["operator_id"], "person:test")
+            self.assertEqual(identity["ownership"]["transfer_policy"]["receipt_action"], "transfer_archive_ownership")
+            self.assertEqual(identity["trusted_counterparties"], [])
+
+    def test_init_family_archive_keeps_owner_and_operator_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "family-archive"
+            code, output = self.run_cli(
+                [
+                    "init",
+                    str(archive_root),
+                    "--type",
+                    "family",
+                    "--archive-id",
+                    "archive:family:test",
+                    "--principal-id",
+                    "family:test",
+                    "--principal-kind",
+                    "family",
+                    "--principal-name",
+                    "Test Family",
+                    "--name",
+                    "Test Family Archive",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+
+            identity = archive_cli.load_yaml((archive_root / "archive-identity.yml").read_text(encoding="utf-8"))
+            self.assertEqual(identity["ownership"]["owner_id"], "family:test")
+            self.assertEqual(identity["ownership"]["owner_kind"], "family")
+            self.assertEqual(identity["ownership"]["owner_display_name"], "Test Family")
+            self.assertEqual(identity["ownership"]["owner_archive_id"], "archive:family:test")
+            self.assertEqual(identity["ownership"]["operators"][0]["operator_id"], "person:member-a")
+            self.assertEqual(identity["ownership"]["operators"][0]["role"], "parent_operator")
+            self.assertTrue(identity["ownership"]["transfer_policy"]["ownership_transfer_allowed"])
+
+    def test_onboard_dry_run_returns_plan_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "onboard-personal"
+            code, output = self.run_cli(
+                [
+                    "onboard",
+                    "--target-root",
+                    str(archive_root),
+                    "--type",
+                    "personal",
+                    "--archive-id",
+                    "archive:personal:onboard",
+                    "--principal-id",
+                    "person:onboard",
+                    "--principal-name",
+                    "Onboard Person",
+                    "--provider-profile",
+                    "full_provider_plan",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["docker_runtime"]["container_os"], "linux")
+            self.assertEqual(result["provider_profile"], "full_provider_plan")
+            self.assertIn("github", result["provider_bindings"]["enabled_providers"])
+            self.assertFalse(archive_root.exists())
+
+    def test_onboard_approve_creates_archive_and_applies_provider_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "onboard-family"
+            code, output = self.run_cli(
+                [
+                    "onboard",
+                    "--target-root",
+                    str(archive_root),
+                    "--type",
+                    "family",
+                    "--archive-id",
+                    "archive:family:onboard",
+                    "--principal-id",
+                    "family:onboard",
+                    "--principal-name",
+                    "Onboard Household",
+                    "--provider-profile",
+                    "local_only",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["doctor"]["errors"], 0)
+            self.assertEqual(result["doctor"]["warnings"], 0)
+            self.assertTrue((archive_root / "archive.yml").is_file())
+            self.assertTrue((archive_root / "provider-bindings.yml").is_file())
+
+            provider_data = archive_cli.load_yaml((archive_root / "provider-bindings.yml").read_text(encoding="utf-8"))
+            enabled = {
+                item["provider"]
+                for item in provider_data["bindings"]
+                if item.get("enabled") is True
+            }
+            disabled = {
+                item["provider"]
+                for item in provider_data["bindings"]
+                if item.get("enabled") is False
+            }
+            self.assertEqual(enabled, {"external_ssd", "keepassxc"})
+            self.assertIn("github", disabled)
+            self.assertEqual(provider_data["onboarding"]["provider_profile"], "local_only")
+            self.assertNotIn("ghp_", (archive_root / "provider-bindings.yml").read_text(encoding="utf-8"))
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_onboard_blocks_nonempty_target_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "existing"
+            archive_root.mkdir()
+            (archive_root / "keep.txt").write_text("existing\n", encoding="utf-8")
+            code, output = self.run_cli(
+                [
+                    "onboard",
+                    "--target-root",
+                    str(archive_root),
+                    "--type",
+                    "personal",
+                    "--archive-id",
+                    "archive:personal:blocked",
+                    "--principal-id",
+                    "person:blocked",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("empty or absent" in blocker for blocker in result["blockers"]))
+            self.assertEqual((archive_root / "keep.txt").read_text(encoding="utf-8"), "existing\n")
+
+    def test_onboard_blocks_file_target_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "not-a-directory"
+            archive_root.write_text("existing file\n", encoding="utf-8")
+            code, output = self.run_cli(
+                [
+                    "onboard",
+                    "--target-root",
+                    str(archive_root),
+                    "--type",
+                    "personal",
+                    "--archive-id",
+                    "archive:personal:blocked-file",
+                    "--principal-id",
+                    "person:blocked-file",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("folder or absent" in blocker for blocker in result["blockers"]))
+            self.assertEqual(archive_root.read_text(encoding="utf-8"), "existing file\n")
+
+    def test_doctor_missing_archive_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "missing"
+            code, output = self.run_cli(["doctor", str(archive_root)])
+            self.assertEqual(code, 1)
+            self.assertIn("archive_root_missing", output)
+
+    def test_validate_fake_life_archive_passes_json(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(["validate", str(archive_root), "--format", "json"])
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["errors"], 0)
+        self.assertEqual(result["warnings"], 0)
+
+    def test_list_zettels_json_returns_all_statuses(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(["list-zettels", str(archive_root), "--status", "all", "--format", "json"])
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertEqual(result["count"], 5)
+        statuses = {item["status"] for item in result["zettels"]}
+        self.assertIn("canonical", statuses)
+        self.assertIn("draft", statuses)
+        self.assertNotIn("\\", result["zettels"][0]["path"])
+        self.assertIn("T", result["zettels"][0]["created_at"])
+
+    def test_read_zettel_by_id_and_path(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        zettel_id = "zet_20240504_fake_lunch_thought"
+        code, output = self.run_cli(["read-zettel", str(archive_root), "--zettel-id", zettel_id, "--format", "json"])
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertEqual(result["frontmatter"]["id"], zettel_id)
+        self.assertIn("private personal reflection", result["body"])
+
+        windows_style_path = result["path"].replace("/", "\\")
+        path_code, path_output = self.run_cli(["read-zettel", str(archive_root), "--path", windows_style_path, "--format", "json"])
+        self.assertEqual(path_code, 0, path_output)
+        path_result = json.loads(path_output)
+        self.assertEqual(path_result["path"], result["path"])
+
+    def test_read_zettel_rejects_non_zettel_path(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(["read-zettel", str(archive_root), "--path", "archive.yml"])
+        self.assertEqual(code, 1)
+        self.assertIn("inbox/ or zettels", output)
+
+    def test_create_draft_writes_to_inbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:create-draft")
+            self.assertEqual(init_code, 0, init_output)
+
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "CLI draft note",
+                    "--body",
+                    "# CLI draft note\n\nCreated by a CLI test.",
+                    "--facet",
+                    "domain=test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["status"], "draft")
+            self.assertTrue(result["path"].startswith("inbox/"))
+            self.assertTrue((archive_root / result["path"]).is_file())
+            self.assertEqual(result["frontmatter"]["facets"]["domain"], "test")
+
+    def test_create_draft_rejects_unsafe_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:unsafe-draft")
+            self.assertEqual(init_code, 0, init_output)
+
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Unsafe draft",
+                    "--body",
+                    "This mentions C:\\Users\\example\\secret.txt.",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("absolute path", output)
+
+    def test_promote_dry_run_checks_inbox_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            code, output = self.run_cli(
+                [
+                    "promote",
+                    str(archive_root),
+                    "--path",
+                    "inbox\\zet_20260519_draft_ai_lunch_note.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["draft_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+            self.assertEqual(result["proposed_canonical_path"], "zettels/zet_20260519_draft_ai_lunch_note.md")
+            self.assertEqual(result["proposed_receipt_path"], "receipts/promotion/zet_20260519_draft_ai_lunch_note.promotion.json")
+            self.assertEqual(len(result["checklist"]), len(PROMOTION_CHECKLIST_IDS))
+            self.assertTrue(all(item["status"] == "passed" for item in result["checklist"]))
+            self.assertEqual(result["receipt_preview"]["action"], "promote_zettel")
+            self.assertTrue(result["receipt_preview"]["dry_run"])
+            self.assertFalse((archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists())
+            self.assertFalse((archive_root / "receipts" / "promotion" / "zet_20260519_draft_ai_lunch_note.promotion.json").exists())
+
+    def test_promote_dry_run_blocks_unreviewed_fleeting_capture(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(
+            [
+                "promote",
+                str(archive_root),
+                "--path",
+                "inbox/zet_20260519_draft_ai_lunch_note.md",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 1)
+        result = json.loads(output)
+        self.assertFalse(result["ok"])
+        self.assertIn("Note kind cannot be promoted to canonical memory: fleeting_capture.", result["blockers"])
+        self.assertTrue(any(item["status"] == "needs_human_review" for item in result["checklist"]))
+        self.assertEqual(result["receipt_preview"]["receipt_path"], result["proposed_receipt_path"])
+
+    def test_promote_real_requires_approval_and_reviewer(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(
+            [
+                "promote",
+                str(archive_root),
+                "--path",
+                "inbox/zet_20260519_draft_ai_lunch_note.md",
+            ]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("--approve", output)
+
+        reviewed_code, reviewed_output = self.run_cli(
+            [
+                "promote",
+                str(archive_root),
+                "--path",
+                "inbox/zet_20260519_draft_ai_lunch_note.md",
+                "--approve",
+            ]
+        )
+        self.assertEqual(reviewed_code, 1)
+        self.assertIn("--reviewed-by", reviewed_output)
+
+    def test_promote_real_writes_canonical_receipt_and_keeps_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path = self.make_fake_lunch_draft_promotion_ready(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "promote",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["draft_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+            self.assertEqual(result["canonical_path"], "zettels/zet_20260519_draft_ai_lunch_note.md")
+            self.assertEqual(result["receipt_path"], "receipts/promotion/zet_20260519_draft_ai_lunch_note.promotion.json")
+
+            canonical_path = archive_root / result["canonical_path"]
+            receipt_path = archive_root / result["receipt_path"]
+            self.assertTrue(canonical_path.is_file())
+            self.assertTrue(receipt_path.is_file())
+            self.assertTrue(draft_path.is_file())
+
+            canonical_text = canonical_path.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(canonical_text)
+            self.assertIsNotNone(match)
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            self.assertEqual(frontmatter["status"], "canonical")
+            self.assertEqual(frontmatter["promotion"]["stage"], "promoted")
+            self.assertEqual(frontmatter["promotion"]["reviewed_by"], "person:test")
+            self.assertEqual(frontmatter["promotion"]["checklist_version"], "zettel-promotion/v0.2")
+            self.assertIn("reviewed_at", frontmatter["promotion"])
+            self.assertIn("updated_at", frontmatter)
+
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["receipt_id"], "receipt:promotion:zet_20260519_draft_ai_lunch_note")
+            self.assertEqual(receipt["action"], "promote_zettel")
+            self.assertFalse(receipt["dry_run"])
+            self.assertEqual(receipt["reviewed_by"], "person:test")
+            self.assertEqual(receipt["source"]["path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+            self.assertEqual(receipt["target"]["path"], "zettels/zet_20260519_draft_ai_lunch_note.md")
+            self.assertEqual(receipt["zettel"]["id"], "zet_20260519_draft_ai_lunch_note")
+            self.assertEqual(receipt["result"]["created_paths"], result["created_paths"])
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_promote_real_blocks_dry_run_blockers_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            code, output = self.run_cli(
+                [
+                    "promote",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("Promotion blocked by dry-run", output)
+            self.assertFalse((archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists())
+            self.assertFalse((archive_root / "receipts" / "promotion" / "zet_20260519_draft_ai_lunch_note.promotion.json").exists())
+
+    def test_promote_real_requires_allow_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root, title="Fake thought while eating alone")
+
+            code, output = self.run_cli(
+                [
+                    "promote",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("--allow-warnings", output)
+            self.assertFalse((archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists())
+            self.assertFalse((archive_root / "receipts" / "promotion" / "zet_20260519_draft_ai_lunch_note.promotion.json").exists())
+
+            allowed_code, allowed_output = self.run_cli(
+                [
+                    "promote",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--allow-warnings",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(allowed_code, 0, allowed_output)
+            result = json.loads(allowed_output)
+            self.assertTrue(any("same_title" in warning for warning in result["warnings"]))
+
+    def test_promote_real_fails_when_target_or_receipt_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            canonical_path = archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md"
+            canonical_path.write_text("existing canonical", encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "promote",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("Proposed canonical path already exists", output)
+            self.assertEqual(canonical_path.read_text(encoding="utf-8"), "existing canonical")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            receipt_path = archive_root / "receipts" / "promotion" / "zet_20260519_draft_ai_lunch_note.promotion.json"
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_text("{}\n", encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "promote",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("Promotion receipt path already exists", output)
+            self.assertFalse((archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists())
+            self.assertEqual(receipt_path.read_text(encoding="utf-8"), "{}\n")
+
+    def test_promote_dry_run_blocks_canonical_zettel(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(
+            [
+                "promote",
+                str(archive_root),
+                "--path",
+                "zettels/zet_20240504_fake_lunch_thought.md",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 1)
+        result = json.loads(output)
+        self.assertFalse(result["ok"])
+        self.assertIn("Only drafts inside inbox/ can be promoted.", result["blockers"])
+
+    def test_promote_dry_run_reports_same_title_duplicate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root, title="Fake thought while eating alone")
+            code, output = self.run_cli(
+                [
+                    "promote",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(any(item["reason"] == "same_title" for item in result["near_duplicates"]))
+            self.assertTrue(any("same_title" in warning for warning in result["warnings"]))
+
+    def test_search_requires_generated_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            code, output = self.run_cli(["search", str(archive_root), "lunch", "--format", "json"])
+            self.assertEqual(code, 1)
+            self.assertIn("Archive index is missing", output)
+
+    def test_index_then_search_finds_zettels_objects_and_views(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            first_code, first_output = self.run_cli(["index", str(archive_root), "--format", "json"])
+            self.assertEqual(first_code, 0, first_output)
+            first_result = json.loads(first_output)
+            self.assertTrue(first_result["ok"])
+            self.assertEqual(first_result["index_path"], "db/archive-index.sqlite")
+            self.assertGreaterEqual(first_result["zettels"], 5)
+            self.assertGreaterEqual(first_result["objects"], 2)
+            self.assertGreaterEqual(first_result["views"], 1)
+            self.assertGreaterEqual(first_result["source_map_entries"], 2)
+            self.assertTrue((archive_root / "db" / "archive-index.sqlite").is_file())
+
+            second_code, second_output = self.run_cli(["index", str(archive_root), "--format", "json"])
+            self.assertEqual(second_code, 0, second_output)
+            self.assertEqual(json.loads(second_output), first_result)
+
+            zettel_code, zettel_output = self.run_cli(["search", str(archive_root), "lunch", "--format", "json"])
+            self.assertEqual(zettel_code, 0, zettel_output)
+            zettel_result = json.loads(zettel_output)
+            self.assertGreaterEqual(zettel_result["count"], 1)
+            self.assertEqual(zettel_result["results"][0]["type"], "zettel")
+            self.assertNotIn("\\", zettel_result["results"][0]["path"])
+
+            object_code, object_output = self.run_cli(["search", str(archive_root), "fake-school-record", "--format", "json"])
+            self.assertEqual(object_code, 0, object_output)
+            object_result = json.loads(object_output)
+            self.assertTrue(any(item["type"] == "object" for item in object_result["results"]))
+
+            view_code, view_output = self.run_cli(["search", str(archive_root), "Homebase", "--format", "json"])
+            self.assertEqual(view_code, 0, view_output)
+            view_result = json.loads(view_output)
+            self.assertTrue(any(item["type"] == "view" for item in view_result["results"]))
+
+            source_code, source_output = self.run_cli(["search", str(archive_root), "fake-school-record", "--format", "json"])
+            self.assertEqual(source_code, 0, source_output)
+            source_result = json.loads(source_output)
+            self.assertTrue(any(item["type"] == "source_map" for item in source_result["results"]))
+
+    def test_sources_cli_lists_registered_sources(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(["sources", str(archive_root), "--format", "json"])
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertTrue(result["source_bindings_present"])
+        self.assertGreaterEqual(result["source_count"], 2)
+        fake_source = next(item for item in result["sources"] if item["source_id"] == "local:fake-sample-objects")
+        self.assertTrue(fake_source["source_map_present"])
+        self.assertEqual(fake_source["mapped_items"], 2)
+
+    def test_add_source_dry_run_does_not_write_bindings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:add-source-dry-run")
+            self.assertEqual(init_code, 0, init_output)
+            before = (archive_root / "source-bindings.yml").read_text(encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "add-source",
+                    str(archive_root),
+                    "--source-id",
+                    "local:desktop",
+                    "--type",
+                    "local_folder",
+                    "--local-root",
+                    str(Path(tmp) / "Desktop"),
+                    "--write-local-profile",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["source_binding"]["root_ref"], "ARCHIVE_SOURCE_LOCAL_DESKTOP_ROOT")
+            self.assertIn("source-bindings.yml", result["would_change"])
+            self.assertIn("profiles/local/source-roots.local.yml", result["would_change"])
+            self.assertEqual((archive_root / "source-bindings.yml").read_text(encoding="utf-8"), before)
+            self.assertFalse((archive_root / "profiles" / "local" / "source-roots.local.yml").exists())
+
+    def test_add_source_approve_writes_binding_and_ignored_local_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:add-source-approve")
+            self.assertEqual(init_code, 0, init_output)
+            source_root = Path(tmp) / "Desktop"
+            source_root.mkdir()
+
+            code, output = self.run_cli(
+                [
+                    "add-source",
+                    str(archive_root),
+                    "--source-id",
+                    "local:desktop",
+                    "--type",
+                    "local_folder",
+                    "--description",
+                    "Desktop folder selected by user.",
+                    "--local-root",
+                    str(source_root),
+                    "--write-local-profile",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["source_id"], "local:desktop")
+            bindings = archive_cli.load_yaml((archive_root / "source-bindings.yml").read_text(encoding="utf-8"))
+            self.assertTrue(any(item["source_id"] == "local:desktop" for item in bindings["sources"]))
+            profile_path = archive_root / "profiles" / "local" / "source-roots.local.yml"
+            self.assertTrue(profile_path.is_file())
+            profile = archive_cli.load_yaml(profile_path.read_text(encoding="utf-8"))
+            self.assertEqual(profile["sources"]["local:desktop"]["path"], str(source_root.resolve()))
+
+            scan_code, scan_output = self.run_cli(
+                [
+                    "scan-source",
+                    str(archive_root),
+                    "--source",
+                    "local:desktop",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(scan_code, 0, scan_output)
+            self.assertEqual(json.loads(scan_output)["source_root_resolution"]["method"], "ignored_local_profile")
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_add_source_blocks_duplicate_and_absolute_root_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:add-source-blocks")
+            self.assertEqual(init_code, 0, init_output)
+
+            dup_code, dup_output = self.run_cli(
+                [
+                    "add-source",
+                    str(archive_root),
+                    "--source-id",
+                    "local:personal-documents",
+                    "--type",
+                    "local_folder",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(dup_code, 1)
+            self.assertIn("Source already exists", dup_output)
+
+            bad_code, bad_output = self.run_cli(
+                [
+                    "add-source",
+                    str(archive_root),
+                    "--source-id",
+                    "local:absolute",
+                    "--type",
+                    "local_folder",
+                    "--root-ref",
+                    "C:\\Users\\example\\Documents",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(bad_code, 1)
+            self.assertIn("root_ref must be an env/root ref", bad_output)
+
+    def test_source_mounts_returns_docker_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:mount-plan")
+            self.assertEqual(init_code, 0, init_output)
+
+            code, output = self.run_cli(["source-mounts", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["strategy"], "docker_compose_override_or_host_native_cli")
+            local_source = next(item for item in result["sources"] if item["source_id"] == "local:personal-documents")
+            self.assertTrue(local_source["needs_host_mount"])
+            self.assertIn("/sources/local_personal_documents", local_source["docker_scan_command"])
+            object_source = next(item for item in result["sources"] if item["source_id"] == "object:manifest")
+            self.assertFalse(object_source["needs_host_mount"])
+
+    def test_pilot_plan_returns_personal_and_team_steps_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            personal_root = Path(tmp) / "personal-life"
+            team_root = Path(tmp) / "team-archive"
+            code, output = self.run_cli(
+                [
+                    "pilot-plan",
+                    "--personal-root",
+                    str(personal_root),
+                    "--team-root",
+                    str(team_root),
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["action"], "plan_real_archive_pilot")
+            self.assertEqual(len(result["archives"]), 2)
+            self.assertFalse(personal_root.exists())
+            self.assertFalse(team_root.exists())
+            personal = next(item for item in result["archives"] if item["role"] == "personal_life")
+            team = next(item for item in result["archives"] if item["role"] == "team")
+            self.assertIn("cloudflare_r2", personal["enabled_providers"])
+            self.assertIn("github", team["enabled_providers"])
+            self.assertTrue(any(source["source_id"] == "notion:personal-export" for source in personal["suggested_sources"]))
+            self.assertTrue(any(source["source_id"] == "google_drive:team-export" for source in team["suggested_sources"]))
+
+    def test_pilot_plan_blocks_nested_personal_and_team_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            personal_root = Path(tmp) / "archive"
+            team_root = personal_root / "team"
+            code, output = self.run_cli(
+                [
+                    "pilot-plan",
+                    "--personal-root",
+                    str(personal_root),
+                    "--team-root",
+                    str(team_root),
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertIn("Personal and team archive roots must not be nested inside each other.", result["blockers"])
+
+    def test_preflight_passes_fake_archive(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(["preflight", str(archive_root), "--format", "json"])
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["doctor"]["errors"], 0)
+        self.assertEqual(result["doctor"]["warnings"], 0)
+        self.assertEqual(result["blockers"], [])
+
+    def test_preflight_require_source_maps_blocks_missing_map(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(["preflight", str(archive_root), "--require-source-maps", "--format", "json"])
+        self.assertEqual(code, 1, output)
+        result = json.loads(output)
+        self.assertFalse(result["ok"])
+        self.assertIn("object:manifest", result["sources"]["missing_source_maps"])
+        self.assertTrue(any(item["code"] == "source_map_missing" for item in result["findings"]))
+
+    def test_preflight_blocks_drive_or_filesystem_root_local_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            profile = archive_root / "profiles" / "local" / "source-roots.local.yml"
+            profile.parent.mkdir(parents=True)
+            broad_root = Path(archive_root.anchor) if archive_root.anchor else Path("/")
+            profile.write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "version": "source-roots-local/v0.1",
+                        "sources": {
+                            "local:fake-sample-objects": {
+                                "root_ref": "ARCHIVE_SOURCE_FAKE_ROOT",
+                                "path": str(broad_root),
+                                "path_is_local_only": True,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            code, output = self.run_cli(["preflight", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any(item["code"] == "local_source_root_too_broad" for item in result["findings"]))
+
+    def test_recovery_plan_is_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+            code, output = self.run_cli(["recovery-plan", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["action"], "archive_recovery_plan")
+            self.assertIn("db/archive-index.sqlite", result["excluded_from_restore_copy"])
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+            self.assertEqual(after, before)
+
+    def test_restore_drill_dry_run_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            target = Path(tmp) / "restore-copy"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            code, output = self.run_cli(["restore-drill", str(archive_root), "--target", str(target), "--dry-run", "--format", "json"])
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertFalse(target.exists())
+            self.assertFalse((archive_root / "receipts" / "recovery").exists())
+
+    def test_restore_drill_approve_copies_valid_archive_and_unblocks_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            target = Path(tmp) / "restore-copy"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+
+            blocked_code, blocked_output = self.run_cli(["preflight", str(archive_root), "--require-restore-drill", "--format", "json"])
+            self.assertEqual(blocked_code, 1, blocked_output)
+            self.assertIn("restore_drill_required", blocked_output)
+
+            code, output = self.run_cli(
+                [
+                    "restore-drill",
+                    str(archive_root),
+                    "--target",
+                    str(target),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertFalse(result["dry_run"])
+            self.assertTrue(result["ok"])
+            self.assertTrue((target / "archive.yml").is_file())
+            self.assertTrue((target / "db" / "archive-index.sqlite").is_file())
+            self.assertFalse((target / ".git").exists())
+
+            receipt_path = archive_root / result["receipt_path"]
+            self.assertTrue(receipt_path.is_file())
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                archive_cli.validate_schema(receipt, "restore-drill-receipt.schema.json"),
+                [],
+            )
+
+            original_doctor_code, original_doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(original_doctor_code, 0, original_doctor_output)
+
+            restored_doctor_code, restored_doctor_output = self.run_cli(["doctor", str(target), "--strict"])
+            self.assertEqual(restored_doctor_code, 0, restored_doctor_output)
+
+            preflight_code, preflight_output = self.run_cli(["preflight", str(archive_root), "--require-restore-drill", "--format", "json"])
+            self.assertEqual(preflight_code, 0, preflight_output)
+            preflight = json.loads(preflight_output)
+            self.assertIsNotNone(preflight["restore_drill"]["latest_successful"])
+
+    def test_restore_drill_blocks_unsafe_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            bad_targets = [
+                archive_root / "inside",
+                Path(archive_root.anchor) if archive_root.anchor else Path("/"),
+            ]
+            nonempty = Path(tmp) / "nonempty"
+            nonempty.mkdir()
+            (nonempty / "already.txt").write_text("nope", encoding="utf-8")
+            bad_targets.append(nonempty)
+            for target in bad_targets:
+                with self.subTest(target=str(target)):
+                    code, output = self.run_cli(["restore-drill", str(archive_root), "--target", str(target), "--dry-run", "--format", "json"])
+                    self.assertEqual(code, 1, output)
+                    result = json.loads(output)
+                    self.assertFalse(result["ok"])
+                    self.assertGreater(len(result["blockers"]), 0)
+
+    def test_scan_source_dry_run_is_metadata_only_and_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:source-dry-run")
+            self.assertEqual(init_code, 0, init_output)
+            source_root = Path(tmp) / "scattered-docs"
+            source_root.mkdir()
+            (source_root / "note.txt").write_text("private content should not be read", encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "scan-source",
+                    str(archive_root),
+                    "--source",
+                    "local:personal-documents",
+                    "--source-root",
+                    str(source_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["scan_mode"], "metadata_only")
+            self.assertEqual(result["item_count"], 1)
+            self.assertFalse(result["items"][0]["provenance"]["content_read"])
+            self.assertNotIn(str(source_root), output)
+            self.assertFalse((archive_root / result["proposed_source_map_path"]).exists())
+            self.assertFalse((archive_root / result["proposed_receipt_path"]).exists())
+
+    def test_scan_source_approve_writes_source_map_and_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:source-approve")
+            self.assertEqual(init_code, 0, init_output)
+            source_root = Path(tmp) / "scattered-docs"
+            source_root.mkdir()
+            (source_root / "plan.txt").write_text("fake plan", encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "scan-source",
+                    str(archive_root),
+                    "--source",
+                    "local:personal-documents",
+                    "--source-root",
+                    str(source_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            source_map_path = archive_root / result["source_map_path"]
+            receipt_path = archive_root / result["receipt_path"]
+            self.assertTrue(source_map_path.is_file())
+            self.assertTrue(receipt_path.is_file())
+            entry = json.loads(source_map_path.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(entry["relative_path"], "plan.txt")
+            self.assertFalse(entry["provenance"]["full_hash_calculated"])
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertFalse(receipt["dry_run"])
+            self.assertEqual(receipt["action"], "scan_archive_source")
+            self.assertEqual(receipt["reviewed_by"], "person:test")
+            self.assertEqual(
+                archive_cli.validate_schema(receipt, "source-scan-receipt.schema.json"),
+                [],
+            )
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_scan_source_supports_notion_and_google_drive_exports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:external-source-map")
+            self.assertEqual(init_code, 0, init_output)
+            source_path = archive_root / "source-bindings.yml"
+            data = archive_cli.load_yaml(source_path.read_text(encoding="utf-8"))
+            data["sources"].extend(
+                [
+                    {
+                        "source_id": "notion:export",
+                        "source_type": "notion_export",
+                        "enabled": True,
+                        "root_ref": "NOTION_EXPORT_ROOT",
+                        "scope_policy": {"mode": "metadata_only", "include": ["**/*"], "exclude": [], "max_items": 2000},
+                        "visibility": {"scope": "private", "source_visibility": "private"},
+                    },
+                    {
+                        "source_id": "google-drive:export",
+                        "source_type": "google_drive_export",
+                        "enabled": True,
+                        "root_ref": "GOOGLE_DRIVE_EXPORT_MANIFEST",
+                        "scope_policy": {"mode": "metadata_only", "include": ["**/*"], "exclude": [], "max_items": 2000},
+                        "visibility": {"scope": "private", "source_visibility": "private"},
+                    },
+                ]
+            )
+            source_path.write_text(archive_cli.dump_yaml(data), encoding="utf-8")
+
+            notion_root = KIT_ROOT / "examples" / "external-imports" / "notion-export"
+            notion_code, notion_output = self.run_cli(
+                [
+                    "scan-source",
+                    str(archive_root),
+                    "--source",
+                    "notion:export",
+                    "--source-root",
+                    str(notion_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(notion_code, 0, notion_output)
+            notion_result = json.loads(notion_output)
+            self.assertEqual(notion_result["source_type"], "notion_export")
+            self.assertEqual(notion_result["item_count"], 1)
+
+            manifest = KIT_ROOT / "examples" / "external-imports" / "google-drive-export" / "manifest.json"
+            gdrive_code, gdrive_output = self.run_cli(
+                [
+                    "scan-source",
+                    str(archive_root),
+                    "--source",
+                    "google-drive:export",
+                    "--source-root",
+                    str(manifest),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(gdrive_code, 0, gdrive_output)
+            gdrive_result = json.loads(gdrive_output)
+            self.assertEqual(gdrive_result["source_type"], "google_drive_export")
+            self.assertEqual(gdrive_result["items"][0]["external_url"], "https://drive.google.com/file/d/fake-research-note/view")
+
+    def test_doctor_flags_source_binding_absolute_path_and_source_map_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            source_path = archive_root / "source-bindings.yml"
+            data = archive_cli.load_yaml(source_path.read_text(encoding="utf-8"))
+            data["sources"][0]["root_ref"] = "C:\\Users\\example\\Documents"
+            source_path.write_text(archive_cli.dump_yaml(data), encoding="utf-8")
+            bad_map = archive_root / "source-maps" / "bad.jsonl"
+            bad_map.write_text(
+                json.dumps(
+                    {
+                        "source_id": "local:fake-sample-objects",
+                        "item_id": "bad",
+                        "item_kind": "file",
+                        "relative_path": "../secret.txt",
+                        "visibility": {"scope": "private", "source_visibility": "private"},
+                        "scan_status": "seen",
+                        "provenance": {},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(["doctor", str(archive_root)])
+            self.assertEqual(code, 1)
+            self.assertIn("source_binding_sensitive_path", output)
+            self.assertIn("source_map_relative_path_unsafe", output)
+
+    def test_pack_view_creates_workpack_with_zettels_and_object_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            code, output = self.run_cli(
+                [
+                    "pack",
+                    str(archive_root),
+                    "--view",
+                    "view.fake.education.gilwon",
+                    "--purpose",
+                    "Portable education context for testing.",
+                    "--mode",
+                    "reference",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["view_id"], "view.fake.education.gilwon")
+            self.assertEqual(result["zettels"], 1)
+            self.assertEqual(result["objects"], 1)
+            self.assertTrue(result["package_path"].startswith("workpacks/"))
+            package_root = archive_root / result["package_path"]
+            self.assertTrue((package_root / "package.yml").is_file())
+            self.assertTrue((package_root / "zettels" / "zet_20110228_fake_school_record.md").is_file())
+            self.assertTrue((package_root / "manifests" / "files.jsonl").is_file())
+            self.assertTrue((package_root / "views" / "view_fake_education_gilwon.yml").is_file())
+            package = archive_cli.load_yaml((package_root / "package.yml").read_text(encoding="utf-8"))
+            self.assertFalse(package["ownership_gate"]["ownership_transfer"])
+            self.assertEqual(package["ownership_gate"]["current_owner"], "person:fake-user")
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_pack_unknown_view_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            code, output = self.run_cli(
+                [
+                    "pack",
+                    str(archive_root),
+                    "--view",
+                    "view.fake.missing",
+                    "--purpose",
+                    "Should fail.",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("View id not found", output)
+
+    def test_import_workpack_dry_run_previews_target_writes_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source_root = self.copy_fake_archive(Path(tmp) / "source")
+            pack_code, pack_output = self.run_cli(
+                [
+                    "pack",
+                    str(source_root),
+                    "--view",
+                    "view.fake.education.gilwon",
+                    "--purpose",
+                    "Portable education context for import dry-run.",
+                    "--mode",
+                    "reference",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(pack_code, 0, pack_output)
+            package_root = source_root / json.loads(pack_output)["package_path"]
+
+            target_root = Path(tmp) / "target"
+            init_code, init_output = self.init_personal_archive(target_root, "archive:personal:import-target")
+            self.assertEqual(init_code, 0, init_output)
+
+            code, output = self.run_cli(["import", str(target_root), str(package_root), "--dry-run", "--format", "json"])
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(len(result["zettels"]), 1)
+            self.assertEqual(result["zettels"][0]["target_path"], "inbox/zet_20110228_fake_school_record.md")
+            self.assertEqual(result["zettels"][0]["action"], "create_inbox_draft")
+            self.assertEqual(len(result["objects"]), 1)
+            self.assertEqual(result["objects"][0]["action"], "append_manifest_record")
+            self.assertFalse(result["ownership_gate"]["ownership_transfer"])
+            self.assertTrue(result["proposed_receipt_path"].startswith("receipts/import/"))
+            self.assertFalse((target_root / "inbox" / "zet_20110228_fake_school_record.md").exists())
+            self.assertFalse((target_root / result["proposed_receipt_path"]).exists())
+
+    def test_import_workpack_dry_run_requires_trust_when_package_requires_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source_root = self.copy_fake_archive(Path(tmp) / "source")
+            pack_code, pack_output = self.run_cli(
+                [
+                    "pack",
+                    str(source_root),
+                    "--view",
+                    "view.fake.education.gilwon",
+                    "--purpose",
+                    "Trust-gated import dry-run test.",
+                    "--mode",
+                    "reference",
+                    "--target-archive",
+                    "archive:personal:trusted-target",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(pack_code, 0, pack_output)
+            package_root = source_root / json.loads(pack_output)["package_path"]
+
+            target_root = Path(tmp) / "target"
+            init_code, init_output = self.init_personal_archive(target_root, "archive:personal:trusted-target")
+            self.assertEqual(init_code, 0, init_output)
+            target_identity_path = target_root / "archive-identity.yml"
+            target_identity = archive_cli.load_yaml(target_identity_path.read_text(encoding="utf-8"))
+            target_identity["trusted_counterparties"].append(
+                {
+                    "identity_id": "identity:archive:personal:fake-life",
+                    "archive_id": "archive:personal:fake-life",
+                    "principal_id": "person:fake-user",
+                    "expected_fingerprint": "SHA256:fake-user-primary",
+                    "trust_level": "out_of_band_verified",
+                }
+            )
+            target_identity_path.write_text(archive_cli.dump_yaml(target_identity), encoding="utf-8")
+
+            missing_code, missing_output = self.run_cli(["import", str(target_root), str(package_root), "--dry-run"])
+            self.assertEqual(missing_code, 1)
+            self.assertIn("Counterparty fingerprint is required", missing_output)
+
+            code, output = self.run_cli(
+                [
+                    "import",
+                    str(target_root),
+                    str(package_root),
+                    "--dry-run",
+                    "--counterparty-id",
+                    "archive:personal:fake-life",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-user-primary",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["trust_gate"]["status"], "verified")
+            self.assertEqual(result["scope_gate"]["included_zettels"], ["zettels/zet_20110228_fake_school_record.md"])
+
+    def test_import_workpack_without_dry_run_is_unavailable(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        workpack = archive_root / "workpacks" / "fake-company-derived-onboarding"
+        code, output = self.run_cli(["import", str(archive_root), str(workpack)])
+        self.assertEqual(code, 1)
+        self.assertIn("Only --dry-run", output)
+
+    def test_import_workpack_dry_run_reports_duplicate_zettel_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            pack_code, pack_output = self.run_cli(
+                [
+                    "pack",
+                    str(archive_root),
+                    "--view",
+                    "view.fake.education.gilwon",
+                    "--purpose",
+                    "Duplicate import dry-run test.",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(pack_code, 0, pack_output)
+            package_root = archive_root / json.loads(pack_output)["package_path"]
+
+            code, output = self.run_cli(["import", str(archive_root), str(package_root), "--dry-run", "--format", "json"])
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("already has zettel id" in blocker for blocker in result["blockers"]))
+            self.assertIn("zettel_id_exists", result["zettels"][0]["conflicts"])
+
+    def test_import_external_notion_dry_run_previews_inbox_draft_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:notion-import")
+            self.assertEqual(init_code, 0, init_output)
+            export_root = KIT_ROOT / "examples" / "external-imports" / "notion-export"
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(export_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["source_system"], "notion")
+            self.assertEqual(result["item_count"], 1)
+            item = result["items"][0]
+            self.assertEqual(item["title"], "Family Archive Plan")
+            self.assertTrue(item["target_path"].startswith("inbox/zet_import_notion_"))
+            self.assertTrue(result["proposed_receipt_path"].endswith(".external-import.json"))
+            self.assertFalse((archive_root / item["target_path"]).exists())
+            self.assertFalse((archive_root / result["proposed_receipt_path"]).exists())
+
+    def test_import_external_google_drive_manifest_apply_writes_draft_and_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:gdrive-import")
+            self.assertEqual(init_code, 0, init_output)
+            manifest = KIT_ROOT / "examples" / "external-imports" / "google-drive-export" / "manifest.json"
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "google_drive",
+                    "--export",
+                    str(manifest),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["imported_count"], 1)
+            draft_paths = [path for path in result["created_paths"] if path.startswith("inbox/")]
+            self.assertEqual(len(draft_paths), 1)
+            draft_path = archive_root / draft_paths[0]
+            self.assertTrue(draft_path.is_file())
+            draft_text = draft_path.read_text(encoding="utf-8")
+            self.assertIn("external_import:", draft_text)
+            self.assertIn("gdrive:file:fake-research-note", draft_text)
+            self.assertIn("https://drive.google.com/file/d/fake-research-note/view", draft_text)
+            receipt_path = archive_root / result["receipt_path"]
+            self.assertTrue(receipt_path.is_file())
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["action"], "import_external_archive")
+            self.assertEqual(receipt["source_system"], "google_drive")
+            self.assertFalse(receipt["source_export"]["external_api_called"])
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_import_external_requires_explicit_mode_and_reviewer_for_apply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:external-guards")
+            self.assertEqual(init_code, 0, init_output)
+            export_root = KIT_ROOT / "examples" / "external-imports" / "notion-export"
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(export_root),
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("--dry-run or --approve", output)
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(export_root),
+                    "--approve",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("--reviewed-by", output)
+
+    def test_import_external_second_run_blocks_on_existing_receipt_or_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:external-duplicate")
+            self.assertEqual(init_code, 0, init_output)
+            export_root = KIT_ROOT / "examples" / "external-imports" / "notion-export"
+
+            first_code, first_output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(export_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(first_code, 0, first_output)
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(export_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("already has imported zettel id" in blocker for blocker in result["blockers"]))
+
+    def test_share_dry_run_checks_scope_and_trust(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(
+            [
+                "share",
+                str(archive_root),
+                "--view",
+                "view.fake.company.derived",
+                "--target-archive",
+                "archive:company:fake-blue",
+                "--counterparty-id",
+                "archive:company:fake-blue",
+                "--counterparty-fingerprint",
+                "SHA256:fake-company-blue",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["trust_gate"]["status"], "verified")
+        self.assertEqual(len(result["scope_gate"]["included"]), 1)
+        self.assertEqual(result["scope_gate"]["included"][0]["path"], "zettels/zet_20240505_fake_company_onboarding_insight.md")
+        self.assertEqual(result["scope_gate"]["excluded"], [])
+        self.assertFalse(result["ownership_gate"]["ownership_transfer"])
+        self.assertEqual(result["ownership_gate"]["current_owner"], "person:fake-user")
+        self.assertTrue(result["proposed_receipt_path"].startswith("receipts/share/"))
+
+    def test_share_dry_run_requires_counterparty_fingerprint_and_blocks_mismatch(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        missing_code, missing_output = self.run_cli(
+            [
+                "share",
+                str(archive_root),
+                "--view",
+                "view.fake.company.derived",
+                "--target-archive",
+                "archive:company:fake-blue",
+                "--counterparty-id",
+                "archive:company:fake-blue",
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(missing_code, 1)
+        self.assertIn("Counterparty fingerprint is required", missing_output)
+
+        mismatch_code, mismatch_output = self.run_cli(
+            [
+                "share",
+                str(archive_root),
+                "--view",
+                "view.fake.company.derived",
+                "--target-archive",
+                "archive:company:fake-blue",
+                "--counterparty-id",
+                "archive:company:fake-blue",
+                "--counterparty-fingerprint",
+                "SHA256:attacker",
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(mismatch_code, 1)
+        self.assertIn("Counterparty fingerprint does not match", mismatch_output)
+
+    def test_share_dry_run_excludes_sensitive_categories_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            frontmatter = {
+                "id": "zet_20260521_fake_medical_note",
+                "title": "Fake medical note",
+                "created_at": "2026-05-21T00:00:00+09:00",
+                "updated_at": "2026-05-21T00:00:00+09:00",
+                "archive_id": "archive:personal:fake-life",
+                "status": "canonical",
+                "kind": "permanent_note",
+                "facets": {"domain": "medical", "record_type": "journal"},
+                "assets": [],
+                "edges": [],
+                "provenance": {
+                    "created_by": "test",
+                    "created_in": "archive:personal:fake-life",
+                    "source": "test",
+                    "derived_from": [],
+                },
+                "visibility": {"scope": "private", "allowed_archives": [], "source_visibility": "private"},
+                "promotion": {"stage": "promoted"},
+            }
+            (archive_root / "zettels" / "zet_20260521_fake_medical_note.md").write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\nSensitive fake medical note.\n",
+                encoding="utf-8",
+            )
+            (archive_root / "views" / "sensitive.yml").write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "id": "view.fake.sensitive.medical",
+                        "name": "Sensitive medical view",
+                        "for": "ai_context",
+                        "filters": {"facets.domain": "medical"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "share",
+                    str(archive_root),
+                    "--view",
+                    "view.fake.sensitive.medical",
+                    "--target-archive",
+                    "archive:company:fake-blue",
+                    "--counterparty-id",
+                    "archive:company:fake-blue",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-company-blue",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["scope_gate"]["included"], [])
+            self.assertEqual(result["scope_gate"]["excluded"][0]["path"], "zettels/zet_20260521_fake_medical_note.md")
+            self.assertIn("medical", result["scope_gate"]["excluded"][0]["sensitive_categories"])
+
+    def test_transfer_ownership_dry_run_previews_family_to_child_receipt_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_family_archive(Path(tmp) / "family-archive")
+            code, output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "person:child-template",
+                    "--operator-after",
+                    "person:child-template",
+                    "--approved-by",
+                    "person:member-a",
+                    "--approved-by",
+                    "person:member-b",
+                    "--counterparty-id",
+                    "person:child-template",
+                    "--counterparty-fingerprint",
+                    "SHA256:example-child-primary",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["previous_owner"], "family:example-household")
+            self.assertEqual(result["new_owner"], "person:child-template")
+            self.assertEqual(result["new_owner_kind"], "person")
+            self.assertEqual(result["subject"], "person:child-template")
+            self.assertEqual(result["trust_gate"]["status"], "verified")
+            self.assertTrue(result["ownership_gate"]["ownership_transfer"])
+            self.assertEqual(result["ownership_gate"]["operators_before"], ["person:member-a", "person:member-b"])
+            self.assertEqual(result["ownership_gate"]["operators_after"], ["person:child-template"])
+            self.assertEqual(result["receipt_preview"]["action"], "transfer_archive_ownership")
+            self.assertEqual(result["receipt_preview"]["operators_after"], ["person:child-template"])
+            self.assertEqual(result["provider_change_plan"]["status"], "manual_required")
+            self.assertIn("provider_change_plan", result["receipt_preview"])
+            self.assertTrue(any(item["provider"] == "github" for item in result["provider_change_plan"]["providers"]))
+            schema_issues = archive_cli.validate_schema(
+                result["receipt_preview"],
+                "ownership-transfer-receipt.schema.json",
+            )
+            self.assertEqual(schema_issues, [])
+            for field in [
+                "receipt_id",
+                "action",
+                "dry_run",
+                "source_archive",
+                "previous_owner",
+                "new_owner",
+                "operators_before",
+                "operators_after",
+                "scope_manifest",
+                "approval_actors",
+                "trust_gate",
+                "ownership_gate",
+                "lineage",
+                "blockers",
+                "warnings",
+            ]:
+                self.assertIn(field, result["receipt_preview"])
+            self.assertFalse((archive_root / result["proposed_receipt_path"]).exists())
+
+            identity = archive_cli.load_yaml((archive_root / "archive-identity.yml").read_text(encoding="utf-8"))
+            self.assertEqual(identity["ownership"]["owner_id"], "family:example-household")
+
+    def test_transfer_ownership_dry_run_previews_business_unit_spinout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_business_unit_archive(Path(tmp) / "business-unit-archive")
+            code, output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "company:fake-spinout",
+                    "--new-owner-kind",
+                    "company",
+                    "--new-owner-archive",
+                    "archive:company:fake-spinout",
+                    "--operator-after",
+                    "role:spinout-admin",
+                    "--operator-after",
+                    "person:fake-founder",
+                    "--approved-by",
+                    "role:business-unit-admin",
+                    "--subject",
+                    "business_unit:fake-space",
+                    "--counterparty-id",
+                    "company:fake-spinout",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-spinout-primary",
+                    "--reason",
+                    "business_unit_spinout",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["previous_owner"], "company:fake-blue")
+            self.assertEqual(result["new_owner"], "company:fake-spinout")
+            self.assertEqual(result["subject"], "business_unit:fake-space")
+            self.assertEqual(result["trust_gate"]["status"], "verified")
+            self.assertEqual(result["ownership_gate"]["operators_after"], ["role:spinout-admin", "person:fake-founder"])
+            self.assertEqual(result["lineage"]["reason"], "business_unit_spinout")
+            self.assertEqual(result["provider_change_plan"]["status"], "manual_required")
+            self.assertEqual(
+                archive_cli.validate_schema(result["receipt_preview"], "ownership-transfer-receipt.schema.json"),
+                [],
+            )
+            self.assertFalse((archive_root / result["proposed_receipt_path"]).exists())
+
+    def test_transfer_ownership_dry_run_blocks_missing_operator_and_trust(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_family_archive(Path(tmp) / "family-archive")
+            code, output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "person:child-template",
+                    "--approved-by",
+                    "person:member-a",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("--operator-after" in blocker for blocker in result["blockers"]))
+            self.assertTrue(any("Counterparty fingerprint is required" in blocker for blocker in result["blockers"]))
+
+    def test_transfer_ownership_dry_run_blocks_fingerprint_mismatch_and_unknown_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_family_archive(Path(tmp) / "family-archive")
+            code, output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "person:child-template",
+                    "--operator-after",
+                    "person:child-template",
+                    "--approved-by",
+                    "person:unknown",
+                    "--counterparty-id",
+                    "person:child-template",
+                    "--counterparty-fingerprint",
+                    "SHA256:attacker",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("Approval actor is not the current owner or an operator" in blocker for blocker in result["blockers"]))
+            self.assertTrue(any("Counterparty fingerprint does not match" in blocker for blocker in result["blockers"]))
+
+    def test_transfer_ownership_real_requires_approve_and_reviewed_by(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_family_archive(Path(tmp) / "family-archive")
+            code, output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "person:child-template",
+                    "--operator-after",
+                    "person:child-template",
+                    "--approved-by",
+                    "person:member-a",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("Real ownership transfer requires --approve", output)
+            identity = archive_cli.load_yaml((archive_root / "archive-identity.yml").read_text(encoding="utf-8"))
+            self.assertEqual(identity["ownership"]["owner_id"], "family:example-household")
+
+            reviewed_code, reviewed_output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "person:child-template",
+                    "--operator-after",
+                    "person:child-template",
+                    "--approved-by",
+                    "person:member-a",
+                    "--approve",
+                ]
+            )
+            self.assertEqual(reviewed_code, 1)
+            self.assertIn("Real ownership transfer requires --reviewed-by", reviewed_output)
+
+    def test_transfer_ownership_real_applies_family_to_child_and_writes_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_family_archive(Path(tmp) / "family-archive")
+            code, output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "person:child-template",
+                    "--operator-after",
+                    "person:child-template",
+                    "--approved-by",
+                    "person:member-a",
+                    "--approved-by",
+                    "person:member-b",
+                    "--counterparty-id",
+                    "person:child-template",
+                    "--counterparty-fingerprint",
+                    "SHA256:example-child-primary",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:member-a",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["previous_owner"], "family:example-household")
+            self.assertEqual(result["new_owner"], "person:child-template")
+            self.assertEqual(result["provider_change_plan"]["status"], "manual_required")
+            receipt_path = archive_root / result["receipt_path"]
+            self.assertTrue(receipt_path.is_file())
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertFalse(receipt["dry_run"])
+            self.assertEqual(receipt["reviewed_by"], "person:member-a")
+            self.assertEqual(receipt["result"]["changed_paths"], ["archive-identity.yml", result["receipt_path"]])
+            self.assertFalse(receipt["result"]["provider_changes_applied"])
+            self.assertIn("provider_change_plan", receipt)
+            self.assertEqual(
+                archive_cli.validate_schema(receipt, "ownership-transfer-receipt.schema.json"),
+                [],
+            )
+
+            identity = archive_cli.load_yaml((archive_root / "archive-identity.yml").read_text(encoding="utf-8"))
+            self.assertEqual(identity["ownership"]["owner_id"], "person:child-template")
+            self.assertEqual(identity["ownership"]["owner_kind"], "person")
+            self.assertEqual(identity["ownership"]["operators"][0]["operator_id"], "person:child-template")
+            self.assertEqual(identity["ownership"]["operators"][0]["role"], "owner_operator")
+            self.assertIn("ownership_transfers", identity["lineage"])
+            self.assertEqual(identity["lineage"]["ownership_transfers"][-1]["receipt_path"], result["receipt_path"])
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_transfer_ownership_real_applies_business_unit_spinout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_business_unit_archive(Path(tmp) / "business-unit-archive")
+            code, output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "company:fake-spinout",
+                    "--new-owner-kind",
+                    "company",
+                    "--new-owner-archive",
+                    "archive:company:fake-spinout",
+                    "--operator-after",
+                    "role:spinout-admin",
+                    "--operator-after",
+                    "person:fake-founder",
+                    "--approved-by",
+                    "role:business-unit-admin",
+                    "--subject",
+                    "business_unit:fake-space",
+                    "--counterparty-id",
+                    "company:fake-spinout",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-spinout-primary",
+                    "--reason",
+                    "business_unit_spinout",
+                    "--approve",
+                    "--reviewed-by",
+                    "role:business-unit-admin",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            identity = archive_cli.load_yaml((archive_root / "archive-identity.yml").read_text(encoding="utf-8"))
+            self.assertEqual(identity["ownership"]["owner_id"], "company:fake-spinout")
+            self.assertEqual(identity["ownership"]["owner_kind"], "company")
+            self.assertEqual(identity["ownership"]["owner_archive_id"], "archive:company:fake-spinout")
+            self.assertEqual(
+                [item["operator_id"] for item in identity["ownership"]["operators"]],
+                ["role:spinout-admin", "person:fake-founder"],
+            )
+            receipt = json.loads((archive_root / result["receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(receipt["lineage"]["reason"], "business_unit_spinout")
+            self.assertEqual(receipt["provider_change_plan"]["status"], "manual_required")
+
+    def test_transfer_ownership_real_blocks_dry_run_failures_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_family_archive(Path(tmp) / "family-archive")
+            before_identity = (archive_root / "archive-identity.yml").read_text(encoding="utf-8")
+            code, output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "person:child-template",
+                    "--operator-after",
+                    "person:child-template",
+                    "--approved-by",
+                    "person:unknown",
+                    "--counterparty-id",
+                    "person:child-template",
+                    "--counterparty-fingerprint",
+                    "SHA256:attacker",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:member-a",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("Ownership transfer blocked by dry-run", output)
+            self.assertEqual((archive_root / "archive-identity.yml").read_text(encoding="utf-8"), before_identity)
+            self.assertFalse(any((archive_root / "receipts" / "lineage").glob("*.ownership-transfer.json")))
+
+    def test_transfer_ownership_real_blocks_existing_receipt_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_family_archive(Path(tmp) / "family-archive")
+            receipt_path = (
+                archive_root
+                / "receipts"
+                / "lineage"
+                / "archive_family_example_household__to__person_child_template.ownership-transfer.json"
+            )
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_text("{}\n", encoding="utf-8")
+            before_identity = (archive_root / "archive-identity.yml").read_text(encoding="utf-8")
+            code, output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "person:child-template",
+                    "--operator-after",
+                    "person:child-template",
+                    "--approved-by",
+                    "person:member-a",
+                    "--counterparty-id",
+                    "person:child-template",
+                    "--counterparty-fingerprint",
+                    "SHA256:example-child-primary",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:member-a",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("Proposed ownership transfer receipt already exists", output)
+            self.assertEqual((archive_root / "archive-identity.yml").read_text(encoding="utf-8"), before_identity)
+            self.assertEqual(receipt_path.read_text(encoding="utf-8"), "{}\n")
+
+    def test_providers_cli_returns_binding_summary_and_manual_plan(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(["providers", str(archive_root), "--format", "json"])
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertTrue(result["bindings_present"])
+        self.assertGreaterEqual(result["binding_count"], 8)
+        self.assertEqual(result["provider_change_plan"]["status"], "manual_required")
+        self.assertTrue(any(item["provider"] == "neon" for item in result["providers"]))
+
+    def test_doctor_validates_ownership_transfer_receipt_examples(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(["doctor", str(archive_root), "--strict"])
+        self.assertEqual(code, 0, output)
+        self.assertIn("0 error(s), 0 warning(s)", output)
+
+    def test_doctor_flags_malformed_ownership_transfer_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            receipt_path = (
+                archive_root
+                / "receipts"
+                / "lineage"
+                / "broken.ownership-transfer.json"
+            )
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_text(
+                json.dumps(
+                    {
+                        "receipt_id": "receipt:ownership-transfer:broken",
+                        "action": "wrong_action",
+                        "dry_run": True,
+                        "source_archive": "archive:family:broken",
+                        "previous_owner": {"owner_id": "family:old", "owner_kind": "family"},
+                        "new_owner": {"owner_id": "person:new", "owner_kind": "person"},
+                        "operators_before": [],
+                        "operators_after": [],
+                        "approval_actors": [],
+                        "trust_gate": {},
+                        "ownership_gate": {},
+                        "lineage": {},
+                        "blockers": [],
+                        "warnings": [],
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(["doctor", str(archive_root)])
+            self.assertEqual(code, 1)
+            self.assertIn("ownership-transfer-receipt.schema.json", output)
+            self.assertIn("$.scope_manifest is required", output)
+            self.assertIn("ownership_transfer_receipt_action_invalid", output)
+
+    def test_doctor_flags_provider_binding_secret_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            provider_path = archive_root / "provider-bindings.yml"
+            data = archive_cli.load_yaml(provider_path.read_text(encoding="utf-8"))
+            data["bindings"][0]["auth"] = {"token": "ghp_fakeActualSecretValue1234567890"}
+            provider_path.write_text(archive_cli.dump_yaml(data), encoding="utf-8")
+
+            code, output = self.run_cli(["doctor", str(archive_root)])
+            self.assertEqual(code, 1)
+            self.assertIn("provider_bindings_secret_field", output)
+
+    def test_doctor_json_paths_are_posix_style(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:path-test")
+            self.assertEqual(init_code, 0, init_output)
+            (archive_root / "views" / "homebase.yml").unlink()
+
+            code, output = self.run_cli(["doctor", str(archive_root), "--json"])
+            self.assertEqual(code, 1)
+            diagnostics = json.loads(output)
+            missing_paths = {
+                item["path"]
+                for item in diagnostics
+                if item["code"] == "required_file_missing"
+            }
+            self.assertIn("views/homebase.yml", missing_paths)
+            self.assertNotIn("views\\homebase.yml", missing_paths)
+
+    def test_doctor_flags_posix_local_absolute_paths_inside_zettels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:absolute-path-test")
+            self.assertEqual(init_code, 0, init_output)
+            frontmatter = {
+                "id": "zet_20260520_bad_absolute_path",
+                "title": "Bad absolute path",
+                "created_at": "2026-05-20T00:00:00+09:00",
+                "updated_at": "2026-05-20T00:00:00+09:00",
+                "archive_id": "archive:personal:absolute-path-test",
+                "status": "draft",
+                "kind": "fleeting_capture",
+                "facets": {},
+                "assets": [],
+                "edges": [],
+                "provenance": {
+                    "created_by": "test",
+                    "created_in": "archive:personal:absolute-path-test",
+                    "source": "test",
+                    "derived_from": [],
+                },
+                "visibility": {
+                    "scope": "private",
+                    "allowed_archives": [],
+                    "source_visibility": "private",
+                },
+                "promotion": {
+                    "stage": "captured",
+                    "ready_for_promotion": False,
+                },
+            }
+            zettel_path = archive_root / "inbox" / "zet_20260520_bad_absolute_path.md"
+            zettel_path.write_text(
+                "---\n"
+                + archive_cli.dump_yaml(frontmatter)
+                + "---\n\nThis draft mentions /home/example/private.txt.\n",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(["doctor", str(archive_root)])
+            self.assertEqual(code, 1)
+            self.assertIn("provider_url_in_zettel", output)
+
+    def test_doctor_warns_when_gitignore_lacks_local_profile_patterns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:gitignore-warn")
+            self.assertEqual(init_code, 0, init_output)
+
+            gitignore = archive_root / ".gitignore"
+            lines = [
+                line
+                for line in gitignore.read_text(encoding="utf-8").splitlines()
+                if line not in {"profiles/local/", "keyrings/local/"}
+            ]
+            gitignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+            code, output = self.run_cli(["doctor", str(archive_root)])
+            self.assertEqual(code, 0, output)
+            self.assertIn("local_profile_gitignore_incomplete", output)
+
+    def test_doctor_flags_secret_like_file_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:secret-file")
+            self.assertEqual(init_code, 0, init_output)
+
+            (archive_root / ".env").write_text("TOKEN=secretvalue1234567890\n", encoding="utf-8")
+            code, output = self.run_cli(["doctor", str(archive_root)])
+            self.assertEqual(code, 1)
+            self.assertIn("secret_file_detected", output)
+
+    def test_doctor_flags_secret_like_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:secret-value")
+            self.assertEqual(init_code, 0, init_output)
+
+            config = archive_root / "workbench" / "local-config.yml"
+            config.write_text("api_key: sk_test_1234567890abcdef\n", encoding="utf-8")
+            code, output = self.run_cli(["doctor", str(archive_root)])
+            self.assertEqual(code, 1)
+            self.assertIn("secret_value_detected", output)
+
+    def test_doctor_warns_when_local_profile_contains_env_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:local-profile")
+            self.assertEqual(init_code, 0, init_output)
+
+            profile = archive_root / "profiles" / "local" / "life.yml"
+            profile.parent.mkdir(parents=True)
+            profile.write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "profile_id": "keyring:local:test",
+                        "name": "Local test profile",
+                        "env": {
+                            "required": ["ARCHIVE_ROOT"],
+                            "ARCHIVE_ROOT": "C:/Users/example/archive",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            code, output = self.run_cli(["doctor", str(archive_root)])
+            self.assertEqual(code, 0, output)
+            self.assertIn("local_profile_env_values", output)
+
+    def test_doctor_schema_flags_missing_archive_principal_field(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:schema-archive")
+            self.assertEqual(init_code, 0, init_output)
+
+            path = archive_root / "archive.yml"
+            data = archive_cli.load_yaml(path.read_text(encoding="utf-8"))
+            del data["principal"]["display_name"]
+            path.write_text(archive_cli.dump_yaml(data), encoding="utf-8")
+
+            code, output = self.run_cli(["doctor", str(archive_root)])
+            self.assertEqual(code, 1)
+            self.assertIn("schema_required", output)
+            self.assertIn("$.principal.display_name", output)
+
+    def test_doctor_schema_flags_malformed_object_manifest_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:schema-object")
+            self.assertEqual(init_code, 0, init_output)
+
+            manifest = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "object_id": "sha256:" + "a" * 64,
+                        "sha256": "a" * 64,
+                        "logical_key": "objects/sample/example.txt",
+                        "locations": "not-a-list",
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(["doctor", str(archive_root)])
+            self.assertEqual(code, 1)
+            self.assertIn("schema_required", output)
+            self.assertIn("$.provenance", output)
+            self.assertIn("schema_type", output)
+            self.assertIn("$.locations", output)
+
+    def test_doctor_schema_flags_malformed_view(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:schema-view")
+            self.assertEqual(init_code, 0, init_output)
+
+            path = archive_root / "views" / "homebase.yml"
+            data = archive_cli.load_yaml(path.read_text(encoding="utf-8"))
+            del data["context_policy"]
+            path.write_text(archive_cli.dump_yaml(data), encoding="utf-8")
+
+            code, output = self.run_cli(["doctor", str(archive_root)])
+            self.assertEqual(code, 1)
+            self.assertIn("schema_required", output)
+            self.assertIn("$.context_policy", output)
+
+    def test_doctor_schema_flags_malformed_workpack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:schema-workpack")
+            self.assertEqual(init_code, 0, init_output)
+
+            package = archive_root / "workpacks" / "bad-package" / "package.yml"
+            package.parent.mkdir(parents=True)
+            package.write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "package_id": "workpack_bad",
+                        "source_archive": "archive:personal:schema-workpack",
+                        "mode": "teleport",
+                        "purpose": "Exercise schema validation.",
+                        "contents": {},
+                        "permissions": {},
+                        "provenance": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(["doctor", str(archive_root)])
+            self.assertEqual(code, 1)
+            self.assertIn("schema_enum", output)
+            self.assertIn("$.mode", output)
+
+    def test_doctor_schema_flags_malformed_zettel_kasten_layer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:schema-layer")
+            self.assertEqual(init_code, 0, init_output)
+
+            path = archive_root / "zettel-kasten" / "actions.yml"
+            data = archive_cli.load_yaml(path.read_text(encoding="utf-8"))
+            data["actions"] = "not-a-list"
+            path.write_text(archive_cli.dump_yaml(data), encoding="utf-8")
+
+            code, output = self.run_cli(["doctor", str(archive_root)])
+            self.assertEqual(code, 1)
+            self.assertIn("schema_type", output)
+            self.assertIn("$.actions", output)
+
+
+if __name__ == "__main__":
+    unittest.main()
+

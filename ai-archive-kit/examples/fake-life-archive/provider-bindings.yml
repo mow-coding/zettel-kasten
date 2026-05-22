@@ -1,0 +1,99 @@
+version: provider-bindings/v0.1
+archive_id: archive:personal:fake-life
+bindings:
+  - binding_id: github:fake-life-archive
+    provider: github
+    enabled: true
+    purpose: fake_zettels_specs_code_and_view_definitions
+    resource:
+      org: fake-archive-lab
+      repo: fake-life-archive
+    auth:
+      token_env: GITHUB_TOKEN
+    owner_mapping:
+      admin_team: fake-archive-admins
+      operator_team: fake-archive-operators
+  - binding_id: cloudflare_r2:fake-objects
+    provider: cloudflare_r2
+    enabled: true
+    purpose: fake_large_original_object_storage
+    resource:
+      account_id_ref: CLOUDFLARE_ACCOUNT_ID
+      bucket: fake-life-archive-objects
+      jurisdiction: default
+    auth:
+      api_token_env: CF_R2_API_TOKEN
+      access_key_id_env: CF_R2_ACCESS_KEY_ID
+      secret_access_key_env: CF_R2_SECRET_ACCESS_KEY
+    owner_mapping:
+      bucket_admin_role: fake-storage-admin
+  - binding_id: backblaze_b2:fake-objects
+    provider: backblaze_b2
+    enabled: true
+    purpose: fake_alternate_object_storage
+    resource:
+      bucket: fake-life-archive-objects
+    auth:
+      key_id_env: B2_KEY_ID
+      application_key_env: B2_APPLICATION_KEY
+    owner_mapping:
+      bucket_admin_role: fake-storage-admin
+  - binding_id: neon:fake-coordination
+    provider: neon
+    enabled: true
+    purpose: optional_shared_coordination_db_not_source_of_truth
+    resource:
+      project_id_ref: NEON_PROJECT_ID
+      branch: production
+      database: fake_archive_coordination
+      role: fake_archive_app
+    auth:
+      database_url_env: NEON_DATABASE_URL
+    owner_mapping:
+      database_admin_role: fake-db-admin
+  - binding_id: external_ssd:fake-local-backup
+    provider: external_ssd
+    enabled: true
+    purpose: durable_local_backup
+    resource:
+      drive_label: FAKE_ARCHIVE_BACKUP
+      path_hint: archives/fake-life
+    auth:
+      custody_record: manual
+    owner_mapping:
+      custodian: person:fake-user
+  - binding_id: rclone:fake-object-sync
+    provider: rclone
+    enabled: true
+    purpose: replaceable_object_storage_sync
+    resource:
+      remote_name: fake-life-archive-objects
+    auth:
+      config_env: RCLONE_CONFIG
+    owner_mapping:
+      remote_admin: fake-storage-admin
+  - binding_id: restic:fake-encrypted-backup
+    provider: restic
+    enabled: true
+    purpose: encrypted_backup_repository
+    resource:
+      repository_ref: RESTIC_REPOSITORY
+    auth:
+      repository_env: RESTIC_REPOSITORY
+      password_env: RESTIC_PASSWORD
+    owner_mapping:
+      backup_admin: fake-backup-admin
+  - binding_id: keepassxc:fake-secrets
+    provider: keepassxc
+    enabled: true
+    purpose: external_secret_vault
+    resource:
+      database_hint: fake-vault.kdbx
+    auth:
+      unlock: manual
+    owner_mapping:
+      entry_refs:
+        - GitHub fake archive token
+        - R2 fake archive credentials
+        - B2 fake archive credentials
+        - Neon fake coordination database URL

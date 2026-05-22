@@ -1,0 +1,12 @@
+# Container-only dependency lock.
+# Installed with: pip install --require-hashes -r requirements-container.txt
+
+pip==26.1.1 \
+    --hash=sha256:99cb1c2899893b075ff56e4ed0af55669a955b49ad7fb8d8603ecdaf4ed653fb
+
+setuptools==82.0.1 \
+    --hash=sha256:a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb
+
+PyYAML==6.0.3 \
+    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc \
+    --hash=sha256:9149cad251584d5fb4981be1ecde53a1ca46c891a79788c0df828d2f166bda28

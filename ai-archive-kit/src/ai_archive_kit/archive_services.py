@@ -1,0 +1,4823 @@
+"""Shared archive operations used by CLI and MCP tools."""
+
+from __future__ import annotations
+
+import json
+import hashlib
+import fnmatch
+import mimetypes
+import os
+import re
+import shutil
+import sqlite3
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any
+
+from .paths import (
+    ArchivePathError,
+    archive_relative_path,
+    contains_forbidden_location_reference,
+    is_path_within_root,
+    resolve_archive_relative_path,
+)
+from .schema_validator import validate_schema
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - exercised only when dependency is absent.
+    yaml = None
+
+
+FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n", re.DOTALL)
+VALID_ZETTEL_FOLDERS = ("zettels/", "inbox/")
+INDEX_RELATIVE_PATH = "db/archive-index.sqlite"
+KIT_ROOT = Path(__file__).resolve().parents[2]
+WORKPACK_MODES = {"reference", "copy", "mount", "derive", "handover", "return"}
+ARCHIVE_SCOPES = {"personal", "relationship", "family", "child", "project", "company", "business_unit"}
+OWNER_KINDS = {
+    "person",
+    "relationship",
+    "family",
+    "household",
+    "child",
+    "project",
+    "company",
+    "business_unit",
+    "team",
+    "role",
+    "client",
+    "server",
+}
+SENSITIVE_SHARE_CATEGORIES = {"medical", "psychological", "journal", "relationship-private"}
+SENSITIVE_CATEGORY_ALIASES = {"diary": "journal", "therapy": "psychological", "mental-health": "psychological"}
+EXTERNAL_IMPORT_SOURCES = {"notion", "google_drive"}
+EXTERNAL_IMPORT_EXTENSIONS = {".md", ".markdown", ".txt"}
+SOURCE_TYPES = {"local_folder", "external_ssd", "notion_export", "google_drive_export", "object_manifest"}
+SOURCE_MAPS_DIR = "source-maps"
+SOURCE_SCAN_RECEIPTS_DIR = "receipts/sources"
+RESTORE_DRILL_RECEIPTS_DIR = "receipts/recovery"
+SOURCE_SCAN_MODE = "metadata_only"
+SOURCE_ROOTS_LOCAL_PROFILE = "profiles/local/source-roots.local.yml"
+RESTORE_DRILL_EXCLUDED_PATHS = [
+    ".git/",
+    ".env",
+    ".env.*",
+    "db/archive-index.sqlite",
+    "profiles/local/",
+    "keyrings/local/",
+    ".archive-local/",
+    "__pycache__/",
+    ".pytest_cache/",
+    ".mypy_cache/",
+    ".ruff_cache/",
+]
+PROVIDER_TYPES = {
+    "github",
+    "cloudflare_r2",
+    "backblaze_b2",
+    "neon",
+    "external_ssd",
+    "rclone",
+    "restic",
+    "keepassxc",
+}
+PROVIDER_REFERENCE_URLS = {
+    "github": "https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization",
+    "cloudflare_r2": "https://developers.cloudflare.com/r2/api/tokens/",
+    "backblaze_b2": "https://www.backblaze.com/docs/cloud-storage-application-key-capabilities",
+    "neon": "https://neon.com/docs/get-started-with-neon/connect-neon",
+    "external_ssd": "local-operations-manual",
+    "rclone": "https://rclone.org/docs/",
+    "restic": "https://restic.readthedocs.io/",
+    "keepassxc": "https://keepassxc.org/docs/",
+}
+ONBOARDING_PROVIDER_PROFILES = {
+    "local_only": {
+        "description": "Local archive plus physical/local backup and external secret vault guidance.",
+        "enabled_providers": ["external_ssd", "keepassxc"],
+    },
+    "object_storage_planned": {
+        "description": "Plan replaceable object storage and backup tooling without enabling GitHub or Neon by default.",
+        "enabled_providers": ["cloudflare_r2", "backblaze_b2", "external_ssd", "rclone", "restic", "keepassxc"],
+    },
+    "full_provider_plan": {
+        "description": "Plan GitHub, object storage, optional Neon coordination, backup tooling, and keyring references.",
+        "enabled_providers": [
+            "github",
+            "cloudflare_r2",
+            "backblaze_b2",
+            "neon",
+            "external_ssd",
+            "rclone",
+            "restic",
+            "keepassxc",
+        ],
+    },
+}
+PILOT_SOURCE_PLANS = {
+    "personal_life": [
+        {
+            "source_id": "local:personal-documents",
+            "source_type": "local_folder",
+            "description": "Personal documents folder, selected explicitly by the archive owner.",
+            "root_ref": "ARCHIVE_SOURCE_PERSONAL_DOCUMENTS_ROOT",
+        },
+        {
+            "source_id": "ssd:personal-originals",
+            "source_type": "external_ssd",
+            "description": "Personal external SSD originals and backups.",
+            "root_ref": "ARCHIVE_SOURCE_PERSONAL_SSD_ROOT",
+        },
+        {
+            "source_id": "notion:personal-export",
+            "source_type": "notion_export",
+            "description": "Personal Notion export folder.",
+            "root_ref": "ARCHIVE_SOURCE_NOTION_PERSONAL_EXPORT_ROOT",
+        },
+        {
+            "source_id": "google_drive:personal-export",
+            "source_type": "google_drive_export",
+            "description": "Personal Google Drive export or manifest folder.",
+            "root_ref": "ARCHIVE_SOURCE_GOOGLE_DRIVE_PERSONAL_EXPORT_ROOT",
+        },
+        {
+            "source_id": "object:personal-media-manifest",
+            "source_type": "object_manifest",
+            "description": "Versioned manifest for large personal media stored elsewhere.",
+            "root_ref": "archive:objects/manifests/files.jsonl",
+        },
+    ],
+    "team": [
+        {
+            "source_id": "local:team-workspace",
+            "source_type": "local_folder",
+            "description": "Team working folder selected explicitly by the team operator.",
+            "root_ref": "ARCHIVE_SOURCE_TEAM_WORKSPACE_ROOT",
+        },
+        {
+            "source_id": "notion:team-export",
+            "source_type": "notion_export",
+            "description": "Team Notion export folder.",
+            "root_ref": "ARCHIVE_SOURCE_NOTION_TEAM_EXPORT_ROOT",
+        },
+        {
+            "source_id": "google_drive:team-export",
+            "source_type": "google_drive_export",
+            "description": "Team Google Drive export or manifest folder.",
+            "root_ref": "ARCHIVE_SOURCE_GOOGLE_DRIVE_TEAM_EXPORT_ROOT",
+        },
+        {
+            "source_id": "object:team-media-manifest",
+            "source_type": "object_manifest",
+            "description": "Versioned manifest for team large objects stored elsewhere.",
+            "root_ref": "archive:objects/manifests/files.jsonl",
+        },
+    ],
+}
+PROMOTION_CHECKLIST_PASS_VALUES = {"pass", "passed", "true", "yes", "done", "complete", "completed"}
+PROMOTION_CHECKLIST_FAIL_VALUES = {"fail", "failed", "false", "no", "blocked", "missing"}
+REQUIRED_ZETTEL_FIELDS = [
+    "id",
+    "title",
+    "created_at",
+    "updated_at",
+    "archive_id",
+    "status",
+    "facets",
+    "assets",
+    "edges",
+    "provenance",
+    "visibility",
+]
+
+
+class ArchiveServiceError(Exception):
+    pass
+
+
+def require_yaml() -> None:
+    if yaml is None:
+        raise ArchiveServiceError("PyYAML is required. Install it with: python -m pip install PyYAML")
+
+
+def load_yaml(text: str) -> Any:
+    require_yaml()
+    return yaml.safe_load(text)  # type: ignore[union-attr]
+
+
+def dump_yaml(data: Any) -> str:
+    require_yaml()
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)  # type: ignore[union-attr]
+
+
+def parse_frontmatter(text: str) -> str | None:
+    match = FRONTMATTER_RE.match(text)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def split_zettel_text(text: str) -> tuple[dict[str, Any], str]:
+    frontmatter_text = parse_frontmatter(text)
+    frontmatter = load_yaml(frontmatter_text) if frontmatter_text else {}
+    if not isinstance(frontmatter, dict):
+        frontmatter = {}
+    body = text[FRONTMATTER_RE.match(text).end() :].lstrip() if frontmatter_text and FRONTMATTER_RE.match(text) else text
+    return frontmatter, body
+
+
+def require_existing_archive_root(archive_root: Path | str) -> Path:
+    root = Path(archive_root).resolve()
+    if not root.is_dir():
+        raise ArchiveServiceError(f"Archive root does not exist or is not a directory: {root}")
+    return root
+
+
+def archive_internal_path(archive_root: Path, relative_path: str) -> Path:
+    try:
+        return resolve_archive_relative_path(archive_root, relative_path)
+    except ArchivePathError as exc:
+        raise ArchiveServiceError(f"Archive path is unsafe: {relative_path} ({exc})") from exc
+
+
+def read_archive_text(archive_root: Path, relative_path: str) -> str:
+    path = archive_internal_path(archive_root, relative_path)
+    if not path.is_file():
+        raise ArchiveServiceError(f"Archive file is missing: {relative_path}")
+    return path.read_text(encoding="utf-8")
+
+
+def list_zettels(archive_root: Path | str, status: str = "canonical", limit: int = 100) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    if status not in {"all", "draft", "canonical"}:
+        raise ArchiveServiceError("status must be one of: all, draft, canonical")
+    limit = max(1, min(int(limit), 500))
+
+    if status == "all":
+        folders = [("zettels", "canonical"), ("inbox", "draft")]
+    elif status == "draft":
+        folders = [("inbox", "draft")]
+    else:
+        folders = [("zettels", "canonical")]
+
+    zettels: list[dict[str, Any]] = []
+    for folder, expected_status in folders:
+        folder_root = root / folder
+        if not folder_root.is_dir():
+            continue
+        for path in safe_archive_glob(folder_root, "*.md", root, recursive=True):
+            zettels.append(zettel_summary(path, root, expected_status))
+            if len(zettels) >= limit:
+                break
+        if len(zettels) >= limit:
+            break
+
+    return {"zettels": zettels, "count": len(zettels)}
+
+
+def zettel_summary(path: Path, archive_root: Path, expected_status: str) -> dict[str, Any]:
+    frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
+    frontmatter = json_safe(frontmatter)
+    return {
+        "path": archive_relative_path(path, archive_root),
+        "id": frontmatter.get("id"),
+        "title": frontmatter.get("title"),
+        "status": frontmatter.get("status", expected_status),
+        "kind": frontmatter.get("kind"),
+        "created_at": frontmatter.get("created_at"),
+        "updated_at": frontmatter.get("updated_at"),
+        "facets": frontmatter.get("facets", {}),
+        "visibility": frontmatter.get("visibility", {}),
+    }
+
+
+def read_zettel(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    if not zettel_id and not relative_path:
+        raise ArchiveServiceError("Provide zettel_id or path.")
+
+    path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
+    frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
+    frontmatter = json_safe(frontmatter)
+    return {
+        "path": archive_relative_path(path, root),
+        "frontmatter": frontmatter,
+        "body": body,
+    }
+
+
+def resolve_zettel_path(archive_root: Path, zettel_id: str | None, relative_path: str | None) -> Path:
+    if relative_path:
+        try:
+            candidate = resolve_archive_relative_path(archive_root, relative_path)
+        except ArchivePathError as exc:
+            raise ArchiveServiceError(f"Zettel path is unsafe: {exc}") from exc
+        relative = archive_relative_path(candidate, archive_root)
+        if not relative.startswith(VALID_ZETTEL_FOLDERS) or candidate.suffix.lower() != ".md":
+            raise ArchiveServiceError("Zettel path must point to a Markdown file inside inbox/ or zettels/.")
+        if not candidate.is_file():
+            raise ArchiveServiceError(f"Zettel path not found: {relative_path}")
+        return candidate
+
+    assert zettel_id is not None
+    for path in iter_zettel_paths(archive_root):
+        frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
+        if frontmatter.get("id") == zettel_id:
+            return path
+    raise ArchiveServiceError(f"Zettel id not found: {zettel_id}")
+
+
+def create_draft_zettel(
+    archive_root: Path | str,
+    *,
+    title: str,
+    body: str,
+    archive_id: str | None = None,
+    kind: str = "fleeting_capture",
+    facets: dict[str, Any] | None = None,
+    visibility: dict[str, Any] | None = None,
+    created_by: str = "cli:archive",
+    source: str = "cli_command",
+) -> dict[str, Any]:
+    require_yaml()
+    root = require_existing_archive_root(archive_root)
+    if not title:
+        raise ArchiveServiceError("title is required.")
+    if not body:
+        raise ArchiveServiceError("body is required.")
+    if contains_forbidden_location_reference(body):
+        raise ArchiveServiceError("Draft body appears to contain a provider URL or local absolute path.")
+
+    resolved_archive_id = archive_id or read_archive_id(root)
+    now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    zettel_id = make_zettel_id(title, now)
+    inbox = archive_internal_path(root, "inbox")
+    inbox.mkdir(parents=True, exist_ok=True)
+    path = inbox / f"{zettel_id}.md"
+    suffix = 2
+    while path.exists():
+        zettel_id = f"{make_zettel_id(title, now)}_{suffix}"
+        path = inbox / f"{zettel_id}.md"
+        suffix += 1
+
+    frontmatter = {
+        "id": zettel_id,
+        "title": title,
+        "created_at": now,
+        "updated_at": now,
+        "archive_id": resolved_archive_id,
+        "status": "draft",
+        "kind": kind or "fleeting_capture",
+        "facets": facets or {},
+        "assets": [],
+        "edges": [],
+        "provenance": {
+            "created_by": created_by,
+            "created_in": resolved_archive_id,
+            "source": source,
+            "derived_from": [],
+        },
+        "visibility": visibility or default_private_visibility(),
+        "promotion": {
+            "stage": "captured",
+            "ready_for_promotion": False,
+        },
+    }
+    path.write_text("---\n" + dump_yaml(frontmatter) + "---\n\n" + body.rstrip() + "\n", encoding="utf-8")
+    return {
+        "zettel_id": zettel_id,
+        "path": archive_relative_path(path, root),
+        "status": "draft",
+        "frontmatter": frontmatter,
+    }
+
+
+def promote_zettel_dry_run(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
+    draft_relative = archive_relative_path(path, root)
+    frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
+    frontmatter = json_safe(frontmatter)
+    rules = load_zettel_rules(root)
+    promotion_rules = rules.get("promotion_rules") if isinstance(rules.get("promotion_rules"), dict) else {}
+    paths = rules.get("paths") if isinstance(rules.get("paths"), dict) else {}
+    note_kinds = note_kind_rules(rules)
+    allowed_link_types = load_allowed_link_types(root)
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    target_folder = normalize_rule_folder(
+        root,
+        promotion_rules.get("default_target_path") if isinstance(promotion_rules, dict) else None,
+        "zettels/",
+        blockers,
+        "Promotion target",
+    )
+    receipt_folder = normalize_rule_folder(
+        root,
+        paths.get("receipts") if isinstance(paths, dict) else None,
+        "receipts/",
+        warnings,
+        "Receipt",
+    )
+
+    if not draft_relative.startswith("inbox/"):
+        blockers.append("Only drafts inside inbox/ can be promoted.")
+    if frontmatter.get("status") != "draft":
+        blockers.append("Draft status must be draft.")
+    for field in REQUIRED_ZETTEL_FIELDS:
+        if field not in frontmatter:
+            blockers.append(f"Missing required frontmatter field: {field}.")
+
+    kind = frontmatter.get("kind")
+    if not kind:
+        warnings.append("Recommended frontmatter field is missing: kind.")
+    elif isinstance(kind, str):
+        kind_rule = note_kinds.get(kind)
+        if isinstance(kind_rule, dict) and kind_rule.get("canonical_allowed") is False:
+            blockers.append(f"Note kind cannot be promoted to canonical memory: {kind}.")
+        elif kind_rule is None:
+            warnings.append(f"Unknown note kind in zettel-rules.yml: {kind}.")
+
+    if "promotion" not in frontmatter:
+        warnings.append("Recommended frontmatter field is missing: promotion.")
+    if not str(frontmatter.get("title") or "").strip():
+        blockers.append("Title must be present.")
+    if not body.strip():
+        blockers.append("Body must be present.")
+    if contains_forbidden_location_reference(body):
+        blockers.append("Body appears to contain a provider URL or local absolute path.")
+
+    provenance = frontmatter.get("provenance")
+    if not isinstance(provenance, dict):
+        blockers.append("Provenance must be an object.")
+    else:
+        for field in ["created_by", "created_in", "source", "derived_from"]:
+            if field not in provenance:
+                blockers.append(f"Provenance is missing required field: {field}.")
+
+    visibility = frontmatter.get("visibility")
+    if not isinstance(visibility, dict):
+        blockers.append("Visibility must be an object.")
+    else:
+        for field in ["scope", "source_visibility"]:
+            if not visibility.get(field):
+                blockers.append(f"Visibility is missing required field: {field}.")
+
+    proposed_path = f"{target_folder}{path.name}"
+    proposed_file = resolve_archive_relative_path(root, proposed_path)
+    if proposed_file.exists():
+        blockers.append(f"Proposed canonical path already exists: {proposed_path}.")
+
+    checklist = build_promotion_checklist(frontmatter, body, promotion_rules, allowed_link_types)
+    requires_checklist = bool(promotion_rules.get("requires_checklist", True)) if isinstance(promotion_rules, dict) else True
+    if requires_checklist:
+        for item in checklist:
+            if item["required"] and item["status"] != "passed":
+                blockers.append(
+                    f"Required promotion checklist item is not passed: {item['id']} ({item['status']})."
+                )
+
+    near_duplicates = find_promotion_duplicates(root, path, frontmatter, body, proposed_path)
+    for duplicate in near_duplicates:
+        message = (
+            f"Possible duplicate canonical zettel: {duplicate['path']} "
+            f"({duplicate['reason']})."
+        )
+        if duplicate["severity"] == "blocker":
+            blockers.append(message)
+        else:
+            warnings.append(message)
+
+    zettel_id_value = str(frontmatter.get("id") or path.stem)
+    proposed_receipt_path = f"{receipt_folder}promotion/{zettel_id_value}.promotion.json"
+    receipt_preview = build_promotion_receipt_preview(
+        zettel_id=zettel_id_value,
+        title=frontmatter.get("title"),
+        draft_path=draft_relative,
+        proposed_canonical_path=proposed_path,
+        proposed_receipt_path=proposed_receipt_path,
+        checklist=checklist,
+        near_duplicates=near_duplicates,
+        blockers=blockers,
+        warnings=warnings,
+        requires_human_approval=bool(promotion_rules.get("requires_human_approval", True))
+        if isinstance(promotion_rules, dict)
+        else True,
+    )
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "draft_path": draft_relative,
+        "zettel_id": frontmatter.get("id"),
+        "title": frontmatter.get("title"),
+        "proposed_canonical_path": proposed_path,
+        "proposed_receipt_path": proposed_receipt_path,
+        "blockers": blockers,
+        "warnings": warnings,
+        "checklist": checklist,
+        "near_duplicates": near_duplicates,
+        "receipt_preview": receipt_preview,
+        "would_change": [
+            "status -> canonical",
+            "promotion.stage -> promoted",
+            "updated_at -> current time",
+            f"write {proposed_path}",
+            f"write {proposed_receipt_path}",
+        ],
+    }
+
+
+def promote_zettel(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    reviewed_by: str,
+    allow_warnings: bool = False,
+) -> dict[str, Any]:
+    reviewer = reviewed_by.strip()
+    if not reviewer:
+        raise ArchiveServiceError("Real promotion requires --reviewed-by.")
+
+    root = require_existing_archive_root(archive_root)
+    dry_run = promote_zettel_dry_run(root, zettel_id=zettel_id, relative_path=relative_path)
+    if dry_run["blockers"]:
+        raise ArchiveServiceError("Promotion blocked by dry-run: " + "; ".join(dry_run["blockers"]))
+    if dry_run["warnings"] and not allow_warnings:
+        raise ArchiveServiceError(
+            "Promotion has warnings; rerun with --allow-warnings to approve them: "
+            + "; ".join(dry_run["warnings"])
+        )
+
+    source_path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
+    source_frontmatter, body = split_zettel_text(source_path.read_text(encoding="utf-8"))
+    source_frontmatter = json_safe(source_frontmatter)
+
+    canonical_relative = dry_run["proposed_canonical_path"]
+    receipt_relative = dry_run["proposed_receipt_path"]
+    canonical_path = resolve_archive_relative_path(root, canonical_relative)
+    receipt_path = resolve_archive_relative_path(root, receipt_relative)
+    if canonical_path.exists():
+        raise ArchiveServiceError(f"Target canonical path already exists: {canonical_relative}.")
+    if receipt_path.exists():
+        raise ArchiveServiceError(f"Promotion receipt path already exists: {receipt_relative}.")
+
+    now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    promotion = source_frontmatter.get("promotion")
+    if not isinstance(promotion, dict):
+        promotion = {}
+    promotion.update(
+        {
+            "stage": "promoted",
+            "reviewed_by": reviewer,
+            "reviewed_at": now,
+            "checklist_version": "zettel-promotion/v0.2",
+        }
+    )
+    canonical_frontmatter = dict(source_frontmatter)
+    canonical_frontmatter["status"] = "canonical"
+    canonical_frontmatter["updated_at"] = now
+    canonical_frontmatter["promotion"] = promotion
+    canonical_text = "---\n" + dump_yaml(canonical_frontmatter) + "---\n\n" + body.rstrip() + "\n"
+
+    zettel_id_value = str(source_frontmatter.get("id") or source_path.stem)
+    title = source_frontmatter.get("title")
+    created_paths = [canonical_relative, receipt_relative]
+    receipt = {
+        "receipt_id": f"receipt:promotion:{zettel_id_value}",
+        "action": "promote_zettel",
+        "dry_run": False,
+        "timestamp": now,
+        "reviewed_by": reviewer,
+        "source": {
+            "path": dry_run["draft_path"],
+        },
+        "target": {
+            "path": canonical_relative,
+        },
+        "zettel": {
+            "id": zettel_id_value,
+            "title": title,
+        },
+        "checklist": dry_run["checklist"],
+        "near_duplicates": dry_run["near_duplicates"],
+        "warnings": dry_run["warnings"],
+        "result": {
+            "created_paths": created_paths,
+        },
+    }
+
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    created_canonical = False
+    created_receipt = False
+    try:
+        with canonical_path.open("x", encoding="utf-8") as handle:
+            created_canonical = True
+            handle.write(canonical_text)
+        with receipt_path.open("x", encoding="utf-8") as handle:
+            created_receipt = True
+            handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+    except OSError:
+        if created_canonical and canonical_path.exists():
+            canonical_path.unlink()
+        if created_receipt and receipt_path.exists():
+            receipt_path.unlink()
+        raise
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "draft_path": dry_run["draft_path"],
+        "zettel_id": zettel_id_value,
+        "title": title,
+        "canonical_path": canonical_relative,
+        "receipt_path": receipt_relative,
+        "reviewed_by": reviewer,
+        "warnings": dry_run["warnings"],
+        "near_duplicates": dry_run["near_duplicates"],
+        "checklist": dry_run["checklist"],
+        "created_paths": created_paths,
+        "receipt": json_safe(receipt),
+    }
+
+
+def load_zettel_rules(archive_root: Path) -> dict[str, Any]:
+    for path in [
+        archive_internal_path(archive_root, "zettel-kasten/zettel-rules.yml"),
+        KIT_ROOT / "zettel-kasten" / "zettel-rules.yml",
+    ]:
+        if path.is_file():
+            data = load_yaml(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    return {}
+
+
+def load_allowed_link_types(archive_root: Path) -> set[str]:
+    for path in [
+        archive_internal_path(archive_root, "zettel-kasten/types.yml"),
+        KIT_ROOT / "zettel-kasten" / "types.yml",
+    ]:
+        if not path.is_file():
+            continue
+        data = load_yaml(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            continue
+        link_types = data.get("link_types") or []
+        if isinstance(link_types, list):
+            return {item.get("id") for item in link_types if isinstance(item, dict) and item.get("id")}
+    return set()
+
+
+def note_kind_rules(rules: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    note_kinds = rules.get("note_kinds") or []
+    if not isinstance(note_kinds, list):
+        return {}
+    return {
+        item["id"]: item
+        for item in note_kinds
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+
+
+def normalize_rule_folder(
+    archive_root: Path,
+    raw_path: Any,
+    fallback: str,
+    issues: list[str],
+    label: str,
+) -> str:
+    candidate = raw_path if isinstance(raw_path, str) and raw_path.strip() else fallback
+    try:
+        resolved = resolve_archive_relative_path(archive_root, candidate)
+        relative = archive_relative_path(resolved, archive_root)
+    except ArchivePathError as exc:
+        issues.append(f"{label} path in zettel-rules.yml is unsafe: {candidate} ({exc}).")
+        relative = fallback.strip("/")
+    return relative.rstrip("/") + "/"
+
+
+def build_promotion_checklist(
+    frontmatter: dict[str, Any],
+    body: str,
+    promotion_rules: dict[str, Any],
+    allowed_link_types: set[str],
+) -> list[dict[str, Any]]:
+    raw_items = promotion_rules.get("checklist") if isinstance(promotion_rules, dict) else []
+    if not isinstance(raw_items, list):
+        return []
+
+    promotion = frontmatter.get("promotion") if isinstance(frontmatter.get("promotion"), dict) else {}
+    results: list[dict[str, Any]] = []
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict) or not isinstance(raw_item.get("id"), str):
+            continue
+        item_id = raw_item["id"]
+        required = bool(raw_item.get("required", False))
+        explicit = promotion_checklist_decision(promotion, item_id)
+        if explicit is True:
+            status = "passed"
+            message = "Marked as passed in frontmatter."
+            source = "frontmatter"
+        elif explicit is False:
+            status = "blocked"
+            message = "Marked as not passed in frontmatter."
+            source = "frontmatter"
+        else:
+            status, message = infer_promotion_checklist_item(item_id, frontmatter, body, allowed_link_types)
+            source = "machine"
+        results.append(
+            {
+                "id": item_id,
+                "question": raw_item.get("question"),
+                "required": required,
+                "status": status,
+                "source": source,
+                "message": message,
+            }
+        )
+    return results
+
+
+def promotion_checklist_decision(promotion: dict[str, Any], item_id: str) -> bool | None:
+    checklist = promotion.get("checklist")
+    if isinstance(checklist, dict):
+        return interpret_promotion_checklist_value(checklist.get(item_id))
+    if isinstance(checklist, list):
+        for entry in checklist:
+            if isinstance(entry, dict) and entry.get("id") == item_id:
+                if "passed" in entry:
+                    return interpret_promotion_checklist_value(entry.get("passed"))
+                return interpret_promotion_checklist_value(entry.get("status"))
+    return None
+
+
+def interpret_promotion_checklist_value(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in PROMOTION_CHECKLIST_PASS_VALUES:
+            return True
+        if normalized in PROMOTION_CHECKLIST_FAIL_VALUES:
+            return False
+    if isinstance(value, dict):
+        if "passed" in value:
+            return interpret_promotion_checklist_value(value.get("passed"))
+        if "status" in value:
+            return interpret_promotion_checklist_value(value.get("status"))
+    return None
+
+
+def infer_promotion_checklist_item(
+    item_id: str,
+    frontmatter: dict[str, Any],
+    body: str,
+    allowed_link_types: set[str],
+) -> tuple[str, str]:
+    title = str(frontmatter.get("title") or "").strip()
+    facets = frontmatter.get("facets")
+    provenance = frontmatter.get("provenance")
+    visibility = frontmatter.get("visibility")
+    edges = frontmatter.get("edges")
+
+    if item_id == "understandable_title":
+        if len(title) >= 5 and title.lower() not in {"draft", "untitled", "note"}:
+            return "passed", "Title is present and specific enough for a machine check."
+        return "blocked", "Title is missing or too vague."
+    if item_id == "future_self_contained":
+        if len(body.strip()) >= 40:
+            return "passed", "Body has enough content for a first self-contained check."
+        return "blocked", "Body is too short to stand alone."
+    if item_id == "source_clarity":
+        if isinstance(provenance, dict) and provenance.get("source"):
+            return "passed", "Provenance includes a source."
+        return "blocked", "Provenance source is missing."
+    if item_id == "object_id_only":
+        if contains_forbidden_location_reference(body):
+            return "blocked", "Body contains a provider URL or local absolute path."
+        return "passed", "No provider URL or local absolute path was detected."
+    if item_id == "stable_facets":
+        if isinstance(facets, dict) and bool(facets):
+            return "passed", "Facets are present."
+        return "blocked", "Facets are missing or empty."
+    if item_id == "allowed_edges":
+        if not isinstance(edges, list):
+            return "blocked", "Edges must be a list."
+        unknown_edges = [
+            edge.get("type")
+            for edge in edges
+            if isinstance(edge, dict)
+            and edge.get("type")
+            and allowed_link_types
+            and edge.get("type") not in allowed_link_types
+        ]
+        if unknown_edges:
+            return "blocked", "Unknown edge type(s): " + ", ".join(str(item) for item in unknown_edges)
+        return "passed", "Edges are empty or use allowed types."
+    if item_id == "explicit_visibility":
+        if isinstance(visibility, dict) and visibility.get("scope") and visibility.get("source_visibility"):
+            return "passed", "Visibility fields are explicit."
+        return "blocked", "Visibility scope or source visibility is missing."
+    if item_id == "provenance_present":
+        if isinstance(provenance, dict) and provenance.get("created_by") and provenance.get("created_in") and provenance.get("source"):
+            return "passed", "Provenance has creator, archive, and source."
+        return "blocked", "Provenance is incomplete."
+    if item_id in {"one_clear_purpose", "sensitive_content_reviewed"}:
+        return "needs_human_review", "This checklist item needs explicit human review."
+    return "needs_human_review", "No machine check exists for this checklist item yet."
+
+
+def find_promotion_duplicates(
+    archive_root: Path,
+    draft_path: Path,
+    frontmatter: dict[str, Any],
+    body: str,
+    proposed_path: str,
+) -> list[dict[str, Any]]:
+    canonical_root = archive_root / "zettels"
+    if not canonical_root.is_dir():
+        return []
+
+    zettel_id = str(frontmatter.get("id") or "")
+    title_key = normalize_compare_text(str(frontmatter.get("title") or ""))
+    body_key = normalize_compare_text(body)[:500]
+    duplicates: list[dict[str, Any]] = []
+    for candidate in safe_archive_glob(canonical_root, "*.md", archive_root, recursive=True):
+        if candidate.resolve() == draft_path.resolve():
+            continue
+        candidate_relative = archive_relative_path(candidate, archive_root)
+        candidate_frontmatter, candidate_body = split_zettel_text(candidate.read_text(encoding="utf-8"))
+        candidate_frontmatter = json_safe(candidate_frontmatter)
+
+        if candidate_relative == proposed_path:
+            duplicates.append(
+                {
+                    "path": candidate_relative,
+                    "reason": "target_path_exists",
+                    "severity": "blocker",
+                }
+            )
+            continue
+        if zettel_id and candidate_frontmatter.get("id") == zettel_id:
+            duplicates.append(
+                {
+                    "path": candidate_relative,
+                    "reason": "same_zettel_id",
+                    "severity": "blocker",
+                }
+            )
+            continue
+        if title_key and normalize_compare_text(str(candidate_frontmatter.get("title") or "")) == title_key:
+            duplicates.append(
+                {
+                    "path": candidate_relative,
+                    "reason": "same_title",
+                    "severity": "warning",
+                }
+            )
+            continue
+        if len(body_key) >= 120 and normalize_compare_text(candidate_body)[:500] == body_key:
+            duplicates.append(
+                {
+                    "path": candidate_relative,
+                    "reason": "very_similar_body_start",
+                    "severity": "warning",
+                }
+            )
+    return duplicates
+
+
+def normalize_compare_text(text: str) -> str:
+    return re.sub(r"[^a-z0-9가-힣]+", " ", text.lower()).strip()
+
+
+def build_promotion_receipt_preview(
+    *,
+    zettel_id: str,
+    title: Any,
+    draft_path: str,
+    proposed_canonical_path: str,
+    proposed_receipt_path: str,
+    checklist: list[dict[str, Any]],
+    near_duplicates: list[dict[str, Any]],
+    blockers: list[str],
+    warnings: list[str],
+    requires_human_approval: bool,
+) -> dict[str, Any]:
+    return {
+        "receipt_id": f"receipt:promotion:{zettel_id}",
+        "receipt_path": proposed_receipt_path,
+        "action": "promote_zettel",
+        "dry_run": True,
+        "timestamp": "<execution-time>",
+        "requires_human_approval": requires_human_approval,
+        "source": {
+            "path": draft_path,
+            "status": "draft",
+        },
+        "target": {
+            "path": proposed_canonical_path,
+            "status": "canonical",
+        },
+        "zettel": {
+            "id": zettel_id,
+            "title": title,
+        },
+        "checklist": checklist,
+        "near_duplicates": near_duplicates,
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+
+def list_views(archive_root: Path | str) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    views_root = root / "views"
+    views: list[dict[str, Any]] = []
+    if views_root.is_dir():
+        for path in safe_archive_glob(views_root, "*.yml", root):
+            data = load_yaml(path.read_text(encoding="utf-8"))
+            views.append(
+                {
+                    "path": archive_relative_path(path, root),
+                    "id": data.get("id") if isinstance(data, dict) else None,
+                    "name": data.get("name") if isinstance(data, dict) else None,
+                    "for": data.get("for") if isinstance(data, dict) else None,
+                }
+            )
+    return {"views": views, "count": len(views)}
+
+
+def pack_work_context(
+    archive_root: Path | str,
+    *,
+    view_id: str,
+    purpose: str,
+    mode: str = "reference",
+    target_archive: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    if mode not in WORKPACK_MODES:
+        raise ArchiveServiceError("mode must be one of: " + ", ".join(sorted(WORKPACK_MODES)))
+    if not view_id:
+        raise ArchiveServiceError("view_id is required.")
+    if not purpose.strip():
+        raise ArchiveServiceError("purpose is required.")
+
+    view = resolve_view(root, view_id)
+    selected = select_zettels_for_view(root, view)
+    source_archive = read_archive_id(root)
+    identity_doc = load_archive_identity(root)
+    ownership = identity_doc.get("ownership") if isinstance(identity_doc.get("ownership"), dict) else {}
+    now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    package_id = unique_workpack_id(root, view_id, now)
+    package_root = archive_internal_path(root, f"workpacks/{package_id}")
+    zettels_root = package_root / "zettels"
+    manifests_root = package_root / "manifests"
+    views_root = package_root / "views"
+    for folder in [zettels_root, manifests_root, views_root]:
+        folder.mkdir(parents=True, exist_ok=False)
+
+    zettel_entries: list[dict[str, Any]] = []
+    object_ids: set[str] = set()
+    for zettel in selected:
+        source_path = zettel["path"]
+        destination = zettels_root / source_path.name
+        shutil.copy2(source_path, destination)
+        frontmatter = zettel["frontmatter"]
+        zettel_entries.append(
+            {
+                "id": frontmatter.get("id"),
+                "title": frontmatter.get("title"),
+                "source_path": archive_relative_path(source_path, root),
+                "package_path": archive_relative_path(destination, package_root),
+            }
+        )
+        for object_id in zettel_object_ids(frontmatter):
+            object_ids.add(object_id)
+
+    manifest_records = load_manifest_records(root)
+    selected_manifest_records = [record for record in manifest_records if record.get("object_id") in object_ids]
+    manifest_path = manifests_root / "files.jsonl"
+    manifest_path.write_text(
+        "".join(json.dumps(record, ensure_ascii=False, default=str, separators=(",", ":")) + "\n" for record in selected_manifest_records),
+        encoding="utf-8",
+    )
+
+    view_path = views_root / f"{safe_slug(view_id)}.yml"
+    view_snapshot = {
+        "id": view["id"],
+        "name": view.get("name"),
+        "for": "workpack",
+        "filters": view.get("filters") or {},
+        "include": view.get("include") or {},
+        "context_policy": view.get("context_policy") or {},
+        "source_view_path": view.get("source_path"),
+    }
+    view_path.write_text(dump_yaml(view_snapshot), encoding="utf-8")
+
+    package = {
+        "package_id": package_id,
+        "source_archive": source_archive,
+        "target_archive": target_archive,
+        "mode": mode,
+        "purpose": purpose,
+        "contents": {
+            "view_id": view_id,
+            "view_path": archive_relative_path(view_path, package_root),
+            "zettels": zettel_entries,
+            "objects": {
+                "include_originals": False,
+                "include_metadata_only": True,
+                "manifest_path": archive_relative_path(manifest_path, package_root),
+                "object_ids": sorted(object_ids),
+            },
+            "receipts": [],
+        },
+        "permissions": {
+            "can_read": True,
+            "can_modify": False,
+            "can_import_as_derivative": mode in {"derive", "handover", "return", "copy", "reference"},
+            "can_reshare": False,
+        },
+        "provenance": {
+            "created_by": "cli:archive",
+            "created_at": now,
+            "source_view": view_id,
+            "source_paths": [entry["source_path"] for entry in zettel_entries],
+        },
+        "scope_gate": {
+            "unit": "view",
+            "view_id": view_id,
+            "source_view_path": view.get("source_path"),
+            "included_zettels": [entry["source_path"] for entry in zettel_entries],
+            "included_objects": sorted(object_ids),
+            "excluded": [],
+            "sensitive_categories_blocked_by_default": sorted(SENSITIVE_SHARE_CATEGORIES),
+        },
+        "trust_gate": {
+            "counterparty_identity_required": bool(target_archive),
+            "counterparty_fingerprint_required": bool(target_archive),
+            "verification_method": "archive_identity_fingerprint",
+            "signatures": "optional_v1",
+        },
+        "ownership_gate": {
+            "ownership_transfer": False,
+            "current_owner": ownership.get("owner_id"),
+            "current_owner_kind": ownership.get("owner_kind"),
+            "operators": ownership.get("operators") if isinstance(ownership.get("operators"), list) else [],
+            "receipt_required_for_transfer": True,
+        },
+        "lineage": {
+            "event": "share_scope",
+            "source_archive": source_archive,
+            "target_archive": target_archive,
+            "source_view": view_id,
+        },
+    }
+    if target_archive is None:
+        del package["target_archive"]
+
+    package_path = package_root / "package.yml"
+    package_path.write_text(dump_yaml(package), encoding="utf-8")
+
+    return {
+        "ok": True,
+        "package_id": package_id,
+        "package_path": archive_relative_path(package_root, root),
+        "package_file": archive_relative_path(package_path, root),
+        "source_archive": source_archive,
+        "target_archive": target_archive,
+        "mode": mode,
+        "view_id": view_id,
+        "zettels": len(zettel_entries),
+        "objects": len(selected_manifest_records),
+        "receipts": 0,
+        "contents": package["contents"],
+    }
+
+
+def import_workpack_dry_run(archive_root: Path | str, workpack_path: Path | str) -> dict[str, Any]:
+    return import_workpack_dry_run_with_trust(archive_root, workpack_path)
+
+
+def import_workpack_dry_run_with_trust(
+    archive_root: Path | str,
+    workpack_path: Path | str,
+    *,
+    counterparty_id: str | None = None,
+    counterparty_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    target_root = require_existing_archive_root(archive_root)
+    package_root, package_file = resolve_workpack_package_path(workpack_path)
+    package = load_yaml(package_file.read_text(encoding="utf-8"))
+    if not isinstance(package, dict):
+        raise ArchiveServiceError("Workpack package.yml must be a YAML object.")
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    for issue in validate_schema(package, "workpack.schema.json"):
+        blockers.append(f"{issue.code}: {issue.message}")
+
+    package_id = str(package.get("package_id") or package_root.name)
+    mode = package.get("mode")
+    if mode not in WORKPACK_MODES:
+        blockers.append(f"Invalid workpack mode: {mode}.")
+
+    permissions = package.get("permissions") if isinstance(package.get("permissions"), dict) else {}
+    if permissions.get("can_read") is not True:
+        blockers.append("Workpack permissions.can_read must be true for import dry-run.")
+    if mode == "derive" and permissions.get("can_import_as_derivative") is not True:
+        blockers.append("Derived workpack import requires permissions.can_import_as_derivative: true.")
+
+    target_archive_id = read_archive_id(target_root)
+    declared_target = package.get("target_archive")
+    if isinstance(declared_target, str) and declared_target and declared_target != target_archive_id:
+        warnings.append(f"Workpack target_archive is {declared_target}, but target archive is {target_archive_id}.")
+
+    zettel_previews = inspect_workpack_zettels(target_root, package_root, package, blockers, warnings)
+    object_previews = inspect_workpack_manifest(target_root, package_root, package, blockers, warnings)
+    scope_gate = build_import_scope_gate(package, zettel_previews, object_previews)
+    ownership_gate = package.get("ownership_gate") if isinstance(package.get("ownership_gate"), dict) else {"ownership_transfer": False}
+    trust_gate = build_import_trust_gate(
+        target_root,
+        package,
+        counterparty_id=counterparty_id,
+        counterparty_fingerprint=counterparty_fingerprint,
+        blockers=blockers,
+    )
+
+    proposed_receipt_path = f"receipts/import/{package_id}.import.json"
+    receipt_preview = {
+        "receipt_id": f"receipt:import:{package_id}",
+        "receipt_path": proposed_receipt_path,
+        "action": "import_workpack",
+        "dry_run": True,
+        "timestamp": "<execution-time>",
+        "package": {
+            "package_id": package_id,
+            "package_path": str(package_root),
+            "mode": mode,
+        },
+        "target_archive": target_archive_id,
+        "scope_gate": scope_gate,
+        "trust_gate": trust_gate,
+        "ownership_gate": ownership_gate,
+        "proposed": {
+            "zettels_to_inbox": [item["target_path"] for item in zettel_previews if item["action"] == "create_inbox_draft"],
+            "objects_to_merge": [item["object_id"] for item in object_previews if item["action"] == "append_manifest_record"],
+            "receipt_path": proposed_receipt_path,
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "package_id": package_id,
+        "package_file": str(package_file),
+        "target_archive": target_archive_id,
+        "blockers": blockers,
+        "warnings": warnings,
+        "zettels": zettel_previews,
+        "objects": object_previews,
+        "scope_gate": scope_gate,
+        "trust_gate": trust_gate,
+        "ownership_gate": ownership_gate,
+        "proposed_receipt_path": proposed_receipt_path,
+        "receipt_preview": receipt_preview,
+        "would_change": [
+            "write selected zettels to target inbox/",
+            "append new object metadata to target objects/manifests/files.jsonl",
+            f"write {proposed_receipt_path}",
+        ],
+    }
+
+
+def external_import_dry_run(
+    archive_root: Path | str,
+    export_path: Path | str,
+    *,
+    source_system: str,
+    limit: int = 200,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    source = normalize_external_import_source(source_system)
+    export_root = Path(export_path).expanduser().resolve()
+    if not export_root.exists():
+        raise ArchiveServiceError(f"External import export path does not exist: {export_root}")
+    limit = max(1, min(int(limit), 1000))
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    target_archive = read_archive_id(root)
+    discovered = discover_external_import_items(export_root, source, limit=limit, warnings=warnings)
+    if not discovered:
+        blockers.append("No importable Markdown or text items were found.")
+
+    target_ids = collect_target_zettel_ids(root)
+    previews: list[dict[str, Any]] = []
+    for item in discovered:
+        zettel_id = external_import_zettel_id(source, item)
+        target_path = f"inbox/{zettel_id}.md"
+        conflicts: list[str] = []
+        if zettel_id in target_ids:
+            conflicts.append("zettel_id_exists")
+            blockers.append(f"Target archive already has imported zettel id: {zettel_id}.")
+        if archive_internal_path(root, target_path).exists():
+            conflicts.append("target_path_exists")
+            blockers.append(f"Target inbox path already exists: {target_path}.")
+        if contains_forbidden_location_reference(item["body"]):
+            conflicts.append("forbidden_location_reference")
+            blockers.append(f"External item contains a forbidden provider/local path reference: {item['source_path']}.")
+        previews.append(
+            {
+                "external_id": item["external_id"],
+                "title": item["title"],
+                "source_path": item["source_path"],
+                "source_url": item.get("source_url"),
+                "sha256": item["sha256"],
+                "zettel_id": zettel_id,
+                "target_path": target_path,
+                "action": "create_inbox_draft",
+                "conflicts": conflicts,
+            }
+        )
+
+    export_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "source": source,
+                "export_path": str(export_root),
+                "items": [item["sha256"] for item in discovered],
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    proposed_receipt_path = f"receipts/import/{source}_{export_fingerprint}.external-import.json"
+    if archive_internal_path(root, proposed_receipt_path).exists():
+        blockers.append(f"Proposed external import receipt already exists: {proposed_receipt_path}.")
+
+    scope_gate = {
+        "unit": "external_export",
+        "source_system": source,
+        "source_export_path": str(export_root),
+        "item_count": len(previews),
+        "included": [item["source_path"] for item in previews],
+        "excluded": [],
+        "sensitive_categories_blocked_by_default": sorted(SENSITIVE_SHARE_CATEGORIES),
+    }
+    trust_gate = {
+        "required": False,
+        "ok": True,
+        "status": "local_export_input",
+        "external_api_called": False,
+        "secret_values_required": False,
+    }
+    lineage = {
+        "event": "external_import",
+        "source_system": source,
+        "target_archive": target_archive,
+        "source_export_path": str(export_root),
+    }
+    receipt_preview = {
+        "receipt_id": f"receipt:external-import:{source}:{export_fingerprint}",
+        "receipt_path": proposed_receipt_path,
+        "action": "import_external_archive",
+        "dry_run": True,
+        "timestamp": "<execution-time>",
+        "source_system": source,
+        "source_export": {
+            "path": str(export_root),
+            "fingerprint": export_fingerprint,
+            "mode": "manifest_or_export_folder",
+            "external_api_called": False,
+        },
+        "target_archive": target_archive,
+        "items": previews,
+        "scope_gate": scope_gate,
+        "trust_gate": trust_gate,
+        "lineage": lineage,
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "source_system": source,
+        "source_export": str(export_root),
+        "target_archive": target_archive,
+        "items": previews,
+        "item_count": len(previews),
+        "blockers": blockers,
+        "warnings": warnings,
+        "scope_gate": scope_gate,
+        "trust_gate": trust_gate,
+        "lineage": lineage,
+        "proposed_receipt_path": proposed_receipt_path,
+        "receipt_preview": receipt_preview,
+        "would_change": [
+            "write imported records as draft zettels under inbox/",
+            f"write {proposed_receipt_path}",
+        ],
+    }
+
+
+def import_external_archive(
+    archive_root: Path | str,
+    export_path: Path | str,
+    *,
+    source_system: str,
+    reviewed_by: str,
+    limit: int = 200,
+) -> dict[str, Any]:
+    reviewer = reviewed_by.strip()
+    if not reviewer:
+        raise ArchiveServiceError("External import requires --reviewed-by.")
+
+    root = require_existing_archive_root(archive_root)
+    dry_run = external_import_dry_run(root, export_path, source_system=source_system, limit=limit)
+    if dry_run["blockers"]:
+        raise ArchiveServiceError("External import blocked by dry-run: " + "; ".join(dry_run["blockers"]))
+
+    now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    source = dry_run["source_system"]
+    discovered_by_id = {
+        external_import_zettel_id(source, item): item
+        for item in discover_external_import_items(
+            Path(export_path).expanduser().resolve(),
+            source,
+            limit=limit,
+            warnings=[],
+        )
+    }
+    receipt_relative = dry_run["proposed_receipt_path"]
+    receipt_path = archive_internal_path(root, receipt_relative)
+    if receipt_path.exists():
+        raise ArchiveServiceError(f"Proposed external import receipt already exists: {receipt_relative}.")
+
+    created_paths: list[Path] = []
+    created_relative_paths: list[str] = []
+    receipt = dict(dry_run["receipt_preview"])
+    receipt["dry_run"] = False
+    receipt["timestamp"] = now
+    receipt["reviewed_by"] = reviewer
+    receipt["reviewed_at"] = now
+    receipt["result"] = {
+        "created_paths": [],
+        "imported_count": len(dry_run["items"]),
+        "external_api_called": False,
+    }
+
+    try:
+        for preview in dry_run["items"]:
+            item = discovered_by_id.get(preview["zettel_id"])
+            if item is None:
+                raise ArchiveServiceError(f"External import item disappeared before apply: {preview['source_path']}")
+            target_path = archive_internal_path(root, preview["target_path"])
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            text = build_external_import_zettel_text(
+                target_archive=dry_run["target_archive"],
+                source_system=source,
+                item=item,
+                zettel_id=preview["zettel_id"],
+                now=now,
+                reviewed_by=reviewer,
+            )
+            with target_path.open("x", encoding="utf-8") as handle:
+                handle.write(text)
+            created_paths.append(target_path)
+            created_relative_paths.append(preview["target_path"])
+
+        receipt["result"]["created_paths"] = created_relative_paths + [receipt_relative]
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        with receipt_path.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+        created_paths.append(receipt_path)
+    except Exception:
+        for path in reversed(created_paths):
+            try:
+                if path.exists():
+                    path.unlink()
+            except OSError:
+                pass
+        raise
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "source_system": source,
+        "source_export": dry_run["source_export"],
+        "target_archive": dry_run["target_archive"],
+        "imported_count": len(dry_run["items"]),
+        "reviewed_by": reviewer,
+        "created_paths": created_relative_paths + [receipt_relative],
+        "receipt_path": receipt_relative,
+        "receipt": json_safe(receipt),
+    }
+
+
+def normalize_external_import_source(source_system: str) -> str:
+    source = (source_system or "").strip().lower().replace("-", "_")
+    aliases = {"gdrive": "google_drive", "google": "google_drive"}
+    source = aliases.get(source, source)
+    if source not in EXTERNAL_IMPORT_SOURCES:
+        raise ArchiveServiceError("source_system must be one of: " + ", ".join(sorted(EXTERNAL_IMPORT_SOURCES)))
+    return source
+
+
+def discover_external_import_items(
+    export_path: Path,
+    source_system: str,
+    *,
+    limit: int,
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    if export_path.is_file() and export_path.suffix.lower() in {".json", ".yml", ".yaml"}:
+        return discover_external_import_manifest_items(export_path, source_system, limit=limit, warnings=warnings)
+    if export_path.is_file():
+        return external_import_item_from_file(export_path.parent, export_path, source_system, metadata=None, warnings=warnings)[:limit]
+    items: list[dict[str, Any]] = []
+    for path in sorted(export_path.rglob("*")):
+        if len(items) >= limit:
+            warnings.append(f"Import item limit reached: {limit}.")
+            break
+        if not path.is_file() or not is_path_within_root(path, export_path):
+            continue
+        if path.suffix.lower() not in EXTERNAL_IMPORT_EXTENSIONS:
+            continue
+        items.extend(external_import_item_from_file(export_path, path, source_system, metadata=None, warnings=warnings))
+    return items
+
+
+def discover_external_import_manifest_items(
+    manifest_path: Path,
+    source_system: str,
+    *,
+    limit: int,
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    data = load_external_import_manifest_data(manifest_path)
+    if not isinstance(data, dict):
+        raise ArchiveServiceError("External import manifest must be a JSON/YAML object.")
+    declared_source = data.get("source_system") or data.get("source")
+    if declared_source and normalize_external_import_source(str(declared_source)) != source_system:
+        raise ArchiveServiceError(f"External import manifest source does not match --source: {declared_source}")
+    raw_items = data.get("items")
+    if not isinstance(raw_items, list):
+        raise ArchiveServiceError("External import manifest must contain an items list.")
+
+    root = manifest_path.parent
+    items: list[dict[str, Any]] = []
+    for raw_item in raw_items[:limit]:
+        if not isinstance(raw_item, dict):
+            warnings.append("Skipping manifest item that is not an object.")
+            continue
+        content = raw_item.get("content")
+        if isinstance(content, str) and content.strip():
+            items.append(external_import_item_from_content(root, source_system, raw_item, warnings))
+            continue
+        raw_path = raw_item.get("path") or raw_item.get("file")
+        if not isinstance(raw_path, str):
+            warnings.append("Skipping manifest item without path or content.")
+            continue
+        item_path = resolve_external_export_path(root, raw_path)
+        items.extend(external_import_item_from_file(root, item_path, source_system, metadata=raw_item, warnings=warnings))
+    if len(raw_items) > limit:
+        warnings.append(f"Import item limit reached: {limit}.")
+    return items
+
+
+def load_external_import_manifest_data(manifest_path: Path) -> Any:
+    if manifest_path.suffix.lower() == ".json":
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+    return load_yaml(manifest_path.read_text(encoding="utf-8"))
+
+
+def resolve_external_export_path(root: Path, raw_path: str) -> Path:
+    try:
+        normalized = raw_path.replace("\\", "/").strip()
+        if normalized.startswith("/") or ".." in normalized.split("/"):
+            raise ArchivePathError("External export item path must stay inside the export folder.")
+        candidate = root.joinpath(*normalized.split("/")).resolve()
+    except (OSError, ValueError) as exc:
+        raise ArchiveServiceError(f"External export path is unsafe: {raw_path} ({exc})") from exc
+    if not candidate.is_relative_to(root.resolve()):
+        raise ArchiveServiceError(f"External export path escapes export folder: {raw_path}")
+    return candidate
+
+
+def external_import_item_from_file(
+    export_root: Path,
+    path: Path,
+    source_system: str,
+    *,
+    metadata: dict[str, Any] | None,
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    if path.suffix.lower() not in EXTERNAL_IMPORT_EXTENSIONS:
+        warnings.append(f"Skipping unsupported external import file type: {path.name}.")
+        return []
+    if not path.is_file() or not is_path_within_root(path, export_root):
+        warnings.append(f"Skipping unsafe external import path: {path}.")
+        return []
+    text = path.read_text(encoding="utf-8")
+    if not text.strip():
+        warnings.append(f"Skipping empty external import file: {path.name}.")
+        return []
+    relative = archive_relative_path(path, export_root)
+    meta = metadata or {}
+    title = str(meta.get("title") or extract_external_import_title(text, path))
+    external_id = str(meta.get("external_id") or meta.get("id") or f"{source_system}:{relative}")
+    return [
+        {
+            "external_id": external_id,
+            "title": title,
+            "body": text.rstrip() + "\n",
+            "source_path": relative,
+            "source_url": meta.get("url") or meta.get("source_url"),
+            "created_at": meta.get("created_at"),
+            "updated_at": meta.get("updated_at"),
+            "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        }
+    ]
+
+
+def external_import_item_from_content(
+    export_root: Path,
+    source_system: str,
+    metadata: dict[str, Any],
+    warnings: list[str],
+) -> dict[str, Any]:
+    text = str(metadata.get("content") or "")
+    title = str(metadata.get("title") or "Untitled external import")
+    external_id = str(metadata.get("external_id") or metadata.get("id") or f"{source_system}:{safe_slug(title)}")
+    if not text.strip():
+        warnings.append(f"Manifest item has empty content: {external_id}.")
+    return {
+        "external_id": external_id,
+        "title": title,
+        "body": text.rstrip() + "\n",
+        "source_path": str(metadata.get("path") or f"manifest:{external_id}"),
+        "source_url": metadata.get("url") or metadata.get("source_url"),
+        "created_at": metadata.get("created_at"),
+        "updated_at": metadata.get("updated_at"),
+        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    }
+
+
+def extract_external_import_title(text: str, path: Path) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            return stripped[2:].strip() or path.stem
+        if stripped:
+            return stripped[:80]
+    return path.stem
+
+
+def external_import_zettel_id(source_system: str, item: dict[str, Any]) -> str:
+    digest = hashlib.sha256(
+        f"{source_system}\n{item.get('external_id')}\n{item.get('source_path')}\n{item.get('sha256')}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"zet_import_{source_system}_{digest}"
+
+
+def build_external_import_zettel_text(
+    *,
+    target_archive: str,
+    source_system: str,
+    item: dict[str, Any],
+    zettel_id: str,
+    now: str,
+    reviewed_by: str,
+) -> str:
+    frontmatter = {
+        "id": zettel_id,
+        "title": item["title"],
+        "created_at": now,
+        "updated_at": now,
+        "archive_id": target_archive,
+        "status": "draft",
+        "kind": "imported_external_record",
+        "facets": {
+            "source_system": source_system,
+            "external_id": item["external_id"],
+        },
+        "assets": [],
+        "edges": [],
+        "provenance": {
+            "created_by": "cli:archive",
+            "created_in": target_archive,
+            "source": f"external_import:{source_system}",
+            "derived_from": [
+                {
+                    "source_system": source_system,
+                    "external_id": item["external_id"],
+                    "source_path": item["source_path"],
+                    "source_url": item.get("source_url"),
+                    "sha256": item["sha256"],
+                }
+            ],
+        },
+        "visibility": default_private_visibility(),
+        "promotion": {
+            "stage": "imported_to_inbox",
+            "ready_for_promotion": False,
+            "reviewed_by": reviewed_by,
+        },
+        "external_import": {
+            "source_system": source_system,
+            "external_id": item["external_id"],
+            "source_path": item["source_path"],
+            "source_url": item.get("source_url"),
+            "source_created_at": item.get("created_at"),
+            "source_updated_at": item.get("updated_at"),
+            "sha256": item["sha256"],
+        },
+    }
+    return "---\n" + dump_yaml(frontmatter) + "---\n\n" + item["body"].rstrip() + "\n"
+
+
+def share_archive_scope_dry_run(
+    archive_root: Path | str,
+    *,
+    view_id: str,
+    target_archive: str,
+    counterparty_id: str | None = None,
+    counterparty_fingerprint: str | None = None,
+    allow_sensitive: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    if not view_id:
+        raise ArchiveServiceError("view_id is required.")
+    if not target_archive.strip():
+        raise ArchiveServiceError("target_archive is required.")
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    source_archive = read_archive_id(root)
+    identity_doc = load_archive_identity(root)
+    ownership = identity_doc.get("ownership") if isinstance(identity_doc.get("ownership"), dict) else {}
+    view = resolve_view(root, view_id)
+    selected = select_zettels_for_view(root, view)
+    trust_gate = validate_counterparty_trust(
+        root,
+        counterparty_id=counterparty_id or target_archive,
+        counterparty_fingerprint=counterparty_fingerprint,
+        blockers=blockers,
+    )
+
+    included: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    for zettel in selected:
+        path = zettel["path"]
+        frontmatter = zettel["frontmatter"]
+        relative = archive_relative_path(path, root)
+        sensitive_categories = sensitive_categories_for_frontmatter(frontmatter)
+        item = {
+            "path": relative,
+            "zettel_id": frontmatter.get("id"),
+            "title": frontmatter.get("title"),
+            "sensitive_categories": sensitive_categories,
+        }
+        if sensitive_categories and not allow_sensitive:
+            item["reason"] = "sensitive_category_blocked_by_default"
+            excluded.append(item)
+            blockers.append(
+                f"Sensitive zettel is excluded by default: {relative} ({', '.join(sensitive_categories)})."
+            )
+        else:
+            if sensitive_categories:
+                warnings.append(f"Sensitive zettel allowed by explicit flag: {relative}.")
+            included.append(item)
+
+    if not selected:
+        warnings.append(f"View selected no canonical zettels: {view_id}.")
+
+    proposed_receipt_path = (
+        f"receipts/share/{safe_slug(source_archive)}__{safe_slug(target_archive)}__{safe_slug(view_id)}.share.json"
+    )
+    scope_gate = {
+        "unit": "view",
+        "view_id": view_id,
+        "source_view_path": view.get("source_path"),
+        "target_archive": target_archive,
+        "sensitive_categories_blocked_by_default": sorted(SENSITIVE_SHARE_CATEGORIES),
+        "allow_sensitive": allow_sensitive,
+        "included": included,
+        "excluded": excluded,
+    }
+    ownership_gate = {
+        "ownership_transfer": False,
+        "current_owner": ownership.get("owner_id"),
+        "current_owner_kind": ownership.get("owner_kind"),
+        "operators": ownership.get("operators") if isinstance(ownership.get("operators"), list) else [],
+        "receipt_required_for_transfer": True,
+    }
+    receipt_preview = {
+        "receipt_id": f"receipt:share:{safe_slug(source_archive)}:{safe_slug(target_archive)}:{safe_slug(view_id)}",
+        "receipt_path": proposed_receipt_path,
+        "action": "share_archive_scope",
+        "dry_run": True,
+        "timestamp": "<execution-time>",
+        "source_archive": source_archive,
+        "target_archive": target_archive,
+        "scope_gate": scope_gate,
+        "trust_gate": trust_gate,
+        "ownership_gate": ownership_gate,
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "source_archive": source_archive,
+        "target_archive": target_archive,
+        "view_id": view_id,
+        "blockers": blockers,
+        "warnings": warnings,
+        "scope_gate": scope_gate,
+        "trust_gate": trust_gate,
+        "ownership_gate": ownership_gate,
+        "proposed_receipt_path": proposed_receipt_path,
+        "receipt_preview": receipt_preview,
+        "would_change": [
+            "create share workpack from selected view",
+            f"write {proposed_receipt_path}",
+        ],
+    }
+
+
+def onboarding_plan(
+    target_root: Path | str,
+    *,
+    archive_type: str,
+    archive_id: str,
+    principal_id: str,
+    principal_name: str | None = None,
+    principal_kind: str | None = None,
+    name: str | None = None,
+    provider_profile: str | None = None,
+) -> dict[str, Any]:
+    resolved_type = (archive_type or "").strip()
+    resolved_archive_id = (archive_id or "").strip()
+    resolved_principal_id = (principal_id or "").strip()
+    resolved_profile = provider_profile or "local_only"
+    resolved_principal_kind = principal_kind or default_principal_kind_for_archive_type(resolved_type)
+    resolved_target = Path(target_root).expanduser().resolve()
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if resolved_type not in {"personal", "family", "company"}:
+        blockers.append("archive_type must be one of: personal, family, company.")
+    if not resolved_archive_id:
+        blockers.append("archive_id is required.")
+    if not resolved_principal_id:
+        blockers.append("principal_id is required.")
+    if resolved_profile not in ONBOARDING_PROVIDER_PROFILES:
+        blockers.append(
+            "provider_profile must be one of: "
+            + ", ".join(sorted(ONBOARDING_PROVIDER_PROFILES))
+            + "."
+        )
+    if resolved_target.exists():
+        if not resolved_target.is_dir():
+            blockers.append(f"Target archive root must be a folder or absent: {resolved_target}.")
+        elif any(resolved_target.iterdir()):
+            blockers.append(f"Target archive folder must be empty or absent: {resolved_target}.")
+
+    enabled_providers = provider_profile_enabled_providers(resolved_profile)
+    disabled_providers = sorted(PROVIDER_TYPES - set(enabled_providers))
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "action": "onboard_archive",
+        "target_root": str(resolved_target),
+        "archive_type": resolved_type,
+        "archive_id": resolved_archive_id,
+        "principal_id": resolved_principal_id,
+        "principal_kind": resolved_principal_kind,
+        "principal_name": principal_name or resolved_principal_id,
+        "name": name or default_archive_name(resolved_type, principal_name, resolved_principal_id),
+        "provider_profile": resolved_profile,
+        "provider_profile_description": ONBOARDING_PROVIDER_PROFILES.get(resolved_profile, {}).get("description"),
+        "provider_bindings": {
+            "path": "provider-bindings.yml",
+            "enabled_providers": enabled_providers,
+            "disabled_providers": disabled_providers,
+            "secret_values_allowed": False,
+            "secret_refs_only": True,
+        },
+        "docker_runtime": {
+            "strategy": "docker_first_hybrid",
+            "container_os": "linux",
+            "compose_file": "compose.yaml",
+            "archive_mount": "/archives",
+            "cli_service": "archive-cli",
+            "mcp_service": "archive-mcp",
+        },
+        "keyring_guidance": [
+            "Store long-lived provider secrets in KeePassXC, an OS keychain, or another external secret store.",
+            "Keep archive files limited to env var names, role names, bucket names, repository names, and keyring entry references.",
+            "Use provider-bindings.yml to describe external services without storing token, password, or database URL values.",
+        ],
+        "doctor_plan": {
+            "command": f"archive doctor {resolved_target} --strict",
+            "strict": True,
+            "runs_after_approve": True,
+        },
+        "would_create": [
+            "archive.yml",
+            "archive-identity.yml",
+            "provider-bindings.yml",
+            "source-bindings.yml",
+            "AGENTS.md",
+            "zettel-kasten/",
+            "inbox/",
+            "zettels/",
+            "views/",
+            "source-maps/",
+            "objects/manifests/files.jsonl",
+            "db/schema.sql",
+            "receipts/",
+            ".gitignore",
+        ],
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+
+def real_pilot_plan(
+    *,
+    personal_root: Path | str,
+    team_root: Path | str,
+    personal_archive_id: str = "archive:personal:life",
+    personal_principal_id: str = "person:me",
+    personal_principal_name: str | None = None,
+    team_archive_id: str = "archive:company:founding-team",
+    team_principal_id: str = "team:founding-team",
+    team_principal_name: str | None = None,
+    personal_provider_profile: str = "object_storage_planned",
+    team_provider_profile: str = "full_provider_plan",
+) -> dict[str, Any]:
+    personal_target = Path(personal_root).expanduser().resolve()
+    team_target = Path(team_root).expanduser().resolve()
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    separation_checks = archive_separation_checks(
+        personal_target,
+        team_target,
+        personal_archive_id=personal_archive_id,
+        team_archive_id=team_archive_id,
+        personal_principal_id=personal_principal_id,
+        team_principal_id=team_principal_id,
+    )
+    blockers.extend(separation_checks["blockers"])
+    warnings.extend(separation_checks["warnings"])
+
+    personal_onboarding = onboarding_plan(
+        personal_target,
+        archive_type="personal",
+        archive_id=personal_archive_id,
+        principal_id=personal_principal_id,
+        principal_name=personal_principal_name,
+        principal_kind="person",
+        name=default_archive_name("personal", personal_principal_name, personal_principal_id),
+        provider_profile=personal_provider_profile,
+    )
+    team_onboarding = onboarding_plan(
+        team_target,
+        archive_type="company",
+        archive_id=team_archive_id,
+        principal_id=team_principal_id,
+        principal_name=team_principal_name,
+        principal_kind="team",
+        name=team_principal_name or "Founding Team Archive",
+        provider_profile=team_provider_profile,
+    )
+    for plan in [personal_onboarding, team_onboarding]:
+        blockers.extend(plan.get("blockers", []))
+        warnings.extend(plan.get("warnings", []))
+
+    archives = [
+        pilot_archive_plan(
+            role="personal_life",
+            label="Personal life archive",
+            onboarding=personal_onboarding,
+        ),
+        pilot_archive_plan(
+            role="team",
+            label="Team/company archive",
+            onboarding=team_onboarding,
+        ),
+    ]
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "action": "plan_real_archive_pilot",
+        "safety_model": {
+            "metadata_first": True,
+            "content_read_default": False,
+            "full_hash_default": False,
+            "live_provider_api_default": False,
+            "mcp_apply_tools": False,
+            "secrets_in_versioned_files": False,
+        },
+        "archives": archives,
+        "separation_gate": {
+            "ok": not separation_checks["blockers"],
+            "checks": separation_checks["checks"],
+            "blockers": separation_checks["blockers"],
+            "warnings": separation_checks["warnings"],
+        },
+        "first_30_minute_loop": [
+            "Run pilot-plan and read the blockers/warnings.",
+            "Create the personal archive with onboard --approve only if the plan is clean.",
+            "Create the team archive separately; do not nest it inside the personal archive.",
+            "Run preflight on each archive before registering real sources.",
+            "Register one narrow source at a time with add-source --dry-run first.",
+            "Run scan-source --dry-run and review the item count before any approved scan.",
+            "Run doctor --strict, index, then search to confirm the map is useful.",
+        ],
+        "do_not_do_yet": [
+            "Do not mount or scan an entire drive as the first source.",
+            "Do not store tokens, database URLs, or passwords in archive files.",
+            "Do not mix private personal sources into the team archive.",
+            "Do not call live provider APIs from the default Docker runtime.",
+        ],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def pilot_archive_plan(*, role: str, label: str, onboarding: dict[str, Any]) -> dict[str, Any]:
+    archive_root = onboarding["target_root"]
+    suggestions = [pilot_source_suggestion(archive_root, item) for item in PILOT_SOURCE_PLANS[role]]
+    return {
+        "role": role,
+        "label": label,
+        "archive_type": onboarding["archive_type"],
+        "archive_id": onboarding["archive_id"],
+        "principal_id": onboarding["principal_id"],
+        "target_root": archive_root,
+        "provider_profile": onboarding["provider_profile"],
+        "enabled_providers": onboarding["provider_bindings"]["enabled_providers"],
+        "onboarding": onboarding,
+        "suggested_sources": suggestions,
+        "commands": {
+            "onboard_dry_run": (
+                "archive onboard "
+                f"--target-root {archive_root} "
+                f"--type {onboarding['archive_type']} "
+                f"--archive-id {onboarding['archive_id']} "
+                f"--principal-id {onboarding['principal_id']} "
+                f"--provider-profile {onboarding['provider_profile']} "
+                "--dry-run"
+            ),
+            "preflight": f"archive preflight {archive_root} --strict",
+            "doctor": f"archive doctor {archive_root} --strict",
+            "index": f"archive index {archive_root}",
+        },
+    }
+
+
+def pilot_source_suggestion(archive_root: str, item: dict[str, str]) -> dict[str, Any]:
+    source_id = item["source_id"]
+    source_type = item["source_type"]
+    root_ref = item["root_ref"]
+    register_command = (
+        f"archive add-source {archive_root} "
+        f"--source-id {source_id} "
+        f"--type {source_type} "
+        f"--root-ref {root_ref} "
+        "--dry-run"
+    )
+    scan_command = f"archive scan-source {archive_root} --source {source_id} --dry-run"
+    if not root_ref.startswith("archive:"):
+        scan_command += " --source-root <real-local-or-export-path>"
+    return {
+        "source_id": source_id,
+        "source_type": source_type,
+        "description": item["description"],
+        "root_ref": root_ref,
+        "metadata_only": True,
+        "content_read": False,
+        "full_hash_calculated": False,
+        "live_provider_api_called": False,
+        "register_command": register_command,
+        "scan_command": scan_command,
+    }
+
+
+def archive_separation_checks(
+    personal_root: Path,
+    team_root: Path,
+    *,
+    personal_archive_id: str,
+    team_archive_id: str,
+    personal_principal_id: str,
+    team_principal_id: str,
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    checks: list[dict[str, Any]] = []
+
+    roots_distinct = personal_root != team_root
+    checks.append({"check": "archive_roots_distinct", "ok": roots_distinct})
+    if not roots_distinct:
+        blockers.append("Personal and team archive roots must be different folders.")
+
+    roots_non_overlapping = not paths_overlap(personal_root, team_root)
+    checks.append({"check": "archive_roots_not_nested", "ok": roots_non_overlapping})
+    if not roots_non_overlapping:
+        blockers.append("Personal and team archive roots must not be nested inside each other.")
+
+    ids_distinct = personal_archive_id != team_archive_id
+    checks.append({"check": "archive_ids_distinct", "ok": ids_distinct})
+    if not ids_distinct:
+        blockers.append("Personal and team archive ids must be different.")
+
+    principals_distinct = personal_principal_id != team_principal_id
+    checks.append({"check": "principal_ids_distinct", "ok": principals_distinct})
+    if not principals_distinct:
+        blockers.append("Personal owner/principal id and team principal id should be different.")
+
+    if personal_root.name.lower() in {"team", "company", "work"}:
+        warnings.append("Personal archive folder name looks like a team/work folder; double-check separation.")
+    if team_root.name.lower() in {"personal", "life", "private"}:
+        warnings.append("Team archive folder name looks personal/private; double-check separation.")
+
+    return {"checks": checks, "blockers": blockers, "warnings": warnings}
+
+
+def paths_overlap(left: Path, right: Path) -> bool:
+    return left == right or left in right.parents or right in left.parents
+
+
+def default_principal_kind_for_archive_type(archive_type: str) -> str:
+    if archive_type == "family":
+        return "family"
+    if archive_type == "company":
+        return "company"
+    return "person"
+
+
+def default_archive_name(archive_type: str, principal_name: str | None, principal_id: str) -> str:
+    display = principal_name or principal_id or archive_type.title()
+    if archive_type == "family":
+        return f"{display} Family Archive"
+    if archive_type == "company":
+        return f"{display} Company Archive"
+    return f"{display} Personal Archive"
+
+
+def provider_profile_enabled_providers(provider_profile: str | None) -> list[str]:
+    profile = provider_profile or "local_only"
+    config = ONBOARDING_PROVIDER_PROFILES.get(profile)
+    if not isinstance(config, dict):
+        return []
+    return [provider for provider in config.get("enabled_providers", []) if provider in PROVIDER_TYPES]
+
+
+def provider_bindings_summary(archive_root: Path | str) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    bindings_doc = load_provider_bindings(root)
+    bindings = provider_bindings_list(bindings_doc)
+    providers = [summarize_provider_binding(binding) for binding in bindings]
+    change_plan = build_provider_change_plan(
+        root,
+        source_archive=archive_id,
+        previous_owner=None,
+        new_owner=None,
+        new_owner_archive=None,
+        operators_after=[],
+        reason=None,
+    )
+    return {
+        "ok": True,
+        "archive_id": archive_id,
+        "bindings_present": archive_internal_path(root, "provider-bindings.yml").is_file(),
+        "provider_bindings_path": "provider-bindings.yml",
+        "binding_count": len(bindings),
+        "providers": providers,
+        "provider_change_plan": change_plan,
+    }
+
+
+def load_provider_bindings(archive_root: Path) -> dict[str, Any]:
+    path = archive_internal_path(archive_root, "provider-bindings.yml")
+    if not path.is_file():
+        return {
+            "version": "provider-bindings/v0.1",
+            "archive_id": read_archive_id(archive_root),
+            "bindings": [],
+        }
+    data = load_yaml(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ArchiveServiceError("provider-bindings.yml must be a YAML object.")
+    return json_safe(data)
+
+
+def provider_bindings_list(bindings_doc: dict[str, Any]) -> list[dict[str, Any]]:
+    bindings = bindings_doc.get("bindings") or []
+    if not isinstance(bindings, list):
+        return []
+    return [item for item in bindings if isinstance(item, dict)]
+
+
+def summarize_provider_binding(binding: dict[str, Any]) -> dict[str, Any]:
+    provider = str(binding.get("provider") or "unknown")
+    resource = binding.get("resource") if isinstance(binding.get("resource"), dict) else {}
+    auth = binding.get("auth") if isinstance(binding.get("auth"), dict) else {}
+    owner_mapping = binding.get("owner_mapping") if isinstance(binding.get("owner_mapping"), dict) else {}
+    return {
+        "binding_id": binding.get("binding_id"),
+        "provider": provider,
+        "enabled": binding.get("enabled") is not False,
+        "purpose": binding.get("purpose"),
+        "resource": resource,
+        "auth_refs": auth,
+        "owner_mapping": owner_mapping,
+        "manual_required": True,
+        "reference": PROVIDER_REFERENCE_URLS.get(provider),
+    }
+
+
+def build_provider_change_plan(
+    archive_root: Path,
+    *,
+    source_archive: str,
+    previous_owner: Any,
+    new_owner: str | None,
+    new_owner_archive: str | None,
+    operators_after: list[str],
+    reason: str | None,
+) -> dict[str, Any]:
+    bindings_doc = load_provider_bindings(archive_root)
+    bindings = provider_bindings_list(bindings_doc)
+    warnings: list[str] = []
+    if not archive_internal_path(archive_root, "provider-bindings.yml").is_file():
+        warnings.append("provider-bindings.yml is missing; external provider changes cannot be planned.")
+
+    provider_steps = [
+        provider_change_step(
+            binding,
+            source_archive=source_archive,
+            previous_owner=previous_owner,
+            new_owner=new_owner,
+            new_owner_archive=new_owner_archive,
+            operators_after=operators_after,
+            reason=reason,
+        )
+        for binding in bindings
+        if binding.get("enabled") is not False
+    ]
+    status = "manual_required" if provider_steps else "not_configured"
+    return {
+        "action": "provider_access_change_plan",
+        "status": status,
+        "external_changes_are_manual": True,
+        "source_archive": source_archive,
+        "previous_owner": previous_owner,
+        "new_owner": new_owner,
+        "new_owner_archive": new_owner_archive,
+        "operators_after": operators_after,
+        "binding_count": len(provider_steps),
+        "providers": provider_steps,
+        "warnings": warnings,
+    }
+
+
+def provider_change_step(
+    binding: dict[str, Any],
+    *,
+    source_archive: str,
+    previous_owner: Any,
+    new_owner: str | None,
+    new_owner_archive: str | None,
+    operators_after: list[str],
+    reason: str | None,
+) -> dict[str, Any]:
+    provider = str(binding.get("provider") or "unknown")
+    resource = binding.get("resource") if isinstance(binding.get("resource"), dict) else {}
+    auth = binding.get("auth") if isinstance(binding.get("auth"), dict) else {}
+    owner_mapping = binding.get("owner_mapping") if isinstance(binding.get("owner_mapping"), dict) else {}
+    return {
+        "binding_id": binding.get("binding_id"),
+        "provider": provider,
+        "status": "manual_required",
+        "automated": False,
+        "source_archive": source_archive,
+        "previous_owner": previous_owner,
+        "new_owner": new_owner,
+        "new_owner_archive": new_owner_archive,
+        "operators_after": operators_after,
+        "reason": reason,
+        "resource": resource,
+        "auth_refs": auth,
+        "owner_mapping": owner_mapping,
+        "required_actions": provider_required_actions(provider, owner_mapping),
+        "reference": PROVIDER_REFERENCE_URLS.get(provider),
+    }
+
+
+def provider_required_actions(provider: str, owner_mapping: dict[str, Any]) -> list[str]:
+    if provider == "github":
+        return [
+            "Review GitHub organization, repository, team, and collaborator roles for the archive repository.",
+            "Grant the new owner/operator team the intended repository role before relying on the transfer.",
+            "Remove or reduce previous owner/operator access after the transfer receipt is verified.",
+            "Rotate deploy keys or tokens that were tied to the previous owner.",
+        ]
+    if provider == "cloudflare_r2":
+        return [
+            "Review the Cloudflare account, R2 bucket, and API token access policy.",
+            "Create or rotate scoped R2 credentials for the new owner/operator.",
+            "Update the external secret store entry referenced by the configured env vars.",
+            "Revoke previous credentials only after object sync and restore checks pass.",
+        ]
+    if provider == "backblaze_b2":
+        return [
+            "Review Backblaze B2 bucket access and application key capabilities.",
+            "Create or rotate a bucket-scoped application key for the new owner/operator.",
+            "Update rclone/restic or app env refs outside the archive.",
+            "Revoke previous application keys after verification.",
+        ]
+    if provider == "neon":
+        return [
+            "Review Neon project, branch, database, and role ownership outside the archive.",
+            "Create or rotate the Postgres role or connection string for shared coordination use.",
+            "Use a branch for rehearsal or spin-out verification before production changes.",
+            "Update the external secret store entry referenced by the database URL env var.",
+        ]
+    if provider == "external_ssd":
+        return [
+            "Confirm the physical drive label and backup set to hand over.",
+            "Record custody transfer outside the archive receipt if the drive changes hands.",
+            "Verify checksums after copying or receiving the physical backup.",
+        ]
+    if provider == "rclone":
+        return [
+            "Review the rclone remote name and config location outside the archive.",
+            "Create or update the remote credentials in the external secret store.",
+            "Run a dry-run sync before enabling writes for the new owner/operator.",
+        ]
+    if provider == "restic":
+        return [
+            "Review the restic repository and password env refs outside the archive.",
+            "Rotate repository credentials if they were tied to the previous owner.",
+            "Run restic check after handover.",
+        ]
+    if provider == "keepassxc":
+        entries = owner_mapping.get("entry_refs") if isinstance(owner_mapping.get("entry_refs"), list) else []
+        suffix = f" Entries: {', '.join(map(str, entries))}." if entries else ""
+        return [
+            "Review KeePassXC entries referenced by this archive binding." + suffix,
+            "Move, share, or rotate secrets in KeePassXC outside the archive.",
+            "Never write copied secret values into archive files or receipts.",
+        ]
+    return ["Review this provider manually because AI Archive Kit does not automate external account changes."]
+
+
+def ownership_transfer_dry_run(
+    archive_root: Path | str,
+    *,
+    new_owner: str,
+    new_owner_kind: str | None = None,
+    new_owner_archive: str | None = None,
+    operators_after: list[str] | None = None,
+    approved_by: list[str] | None = None,
+    subject: str | None = None,
+    counterparty_id: str | None = None,
+    counterparty_fingerprint: str | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    resolved_new_owner = new_owner.strip()
+    if not resolved_new_owner:
+        raise ArchiveServiceError("new_owner is required.")
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    source_archive = read_archive_id(root)
+    identity_doc = load_archive_identity(root)
+    ownership = identity_doc.get("ownership") if isinstance(identity_doc.get("ownership"), dict) else {}
+    transfer_policy = ownership.get("transfer_policy") if isinstance(ownership.get("transfer_policy"), dict) else {}
+    operators_before = ownership.get("operators") if isinstance(ownership.get("operators"), list) else []
+    subjects = ownership.get("subjects") if isinstance(ownership.get("subjects"), list) else []
+    previous_owner = ownership.get("owner_id")
+    previous_owner_kind = ownership.get("owner_kind")
+    resolved_new_owner_kind = new_owner_kind or infer_owner_kind(resolved_new_owner)
+    resolved_operators_after = normalize_unique_strings(operators_after)
+    approval_actors = normalize_unique_strings(approved_by)
+    resolved_subject = subject or default_transfer_subject(subjects, transfer_policy, resolved_new_owner)
+
+    if resolved_new_owner_kind not in OWNER_KINDS:
+        blockers.append(
+            "new_owner_kind is required or must be one of: "
+            + ", ".join(sorted(OWNER_KINDS))
+            + "."
+        )
+    if previous_owner == resolved_new_owner:
+        blockers.append("New owner is already the current owner.")
+    if transfer_policy.get("ownership_transfer_allowed") is not True:
+        blockers.append("archive-identity.yml transfer_policy does not allow ownership transfer.")
+    if transfer_policy.get("requires_receipt") is not True:
+        blockers.append("Ownership transfer must require a receipt.")
+    if not resolved_operators_after:
+        blockers.append("At least one --operator-after value is required for the post-transfer operator list.")
+    if transfer_policy.get("requires_human_approval", True) and not approval_actors:
+        blockers.append("At least one --approved-by value is required by the transfer policy.")
+
+    approval_checks = build_approval_actor_checks(approval_actors, previous_owner, operators_before, blockers, warnings)
+    trust_gate = validate_counterparty_trust(
+        root,
+        counterparty_id=counterparty_id or new_owner_archive or resolved_new_owner,
+        counterparty_fingerprint=counterparty_fingerprint,
+        blockers=blockers,
+    )
+
+    proposed_receipt_path = (
+        "receipts/lineage/"
+        f"{safe_slug(source_archive)}__to__{safe_slug(resolved_new_owner)}.ownership-transfer.json"
+    )
+    if (root / proposed_receipt_path).exists():
+        blockers.append(f"Proposed ownership transfer receipt already exists: {proposed_receipt_path}.")
+
+    scope_gate = {
+        "unit": "archive_ownership",
+        "archive_id": source_archive,
+        "manifest": "archive-identity.yml",
+        "record_transfer": False,
+        "included": [
+            "archive-identity.yml ownership block",
+            "archive-identity.yml lineage hints",
+            proposed_receipt_path,
+        ],
+        "excluded": [
+            "zettels/",
+            "inbox/",
+            "objects/",
+            "workpacks/",
+        ],
+        "sensitive_categories_blocked_by_default": sorted(SENSITIVE_SHARE_CATEGORIES),
+    }
+    ownership_gate = {
+        "ownership_transfer": True,
+        "status": "passed" if not blockers else "blocked",
+        "current_owner": previous_owner,
+        "current_owner_kind": previous_owner_kind,
+        "new_owner": resolved_new_owner,
+        "new_owner_kind": resolved_new_owner_kind,
+        "new_owner_archive": new_owner_archive,
+        "operators_before": operator_ids(operators_before),
+        "operators_after": resolved_operators_after,
+        "subjects": subjects,
+        "subject": resolved_subject,
+        "approval_actors": approval_actors,
+        "approval_checks": approval_checks,
+        "transfer_policy": transfer_policy,
+        "receipt_required_for_transfer": True,
+    }
+    lineage = {
+        "event": "ownership_transfer",
+        "source_archive": source_archive,
+        "previous_owner": previous_owner,
+        "new_owner": resolved_new_owner,
+        "subject": resolved_subject,
+        "new_owner_archive": new_owner_archive,
+        "reason": reason,
+    }
+    provider_change_plan = build_provider_change_plan(
+        root,
+        source_archive=source_archive,
+        previous_owner=previous_owner,
+        new_owner=resolved_new_owner,
+        new_owner_archive=new_owner_archive,
+        operators_after=resolved_operators_after,
+        reason=reason,
+    )
+    receipt_preview = {
+        "receipt_id": f"receipt:ownership-transfer:{safe_slug(source_archive)}:{safe_slug(resolved_new_owner)}",
+        "receipt_path": proposed_receipt_path,
+        "action": transfer_policy.get("receipt_action") or "transfer_archive_ownership",
+        "dry_run": True,
+        "timestamp": "<execution-time>",
+        "source_archive": source_archive,
+        "previous_owner": {
+            "owner_id": previous_owner,
+            "owner_kind": previous_owner_kind,
+            "owner_archive_id": ownership.get("owner_archive_id"),
+        },
+        "new_owner": {
+            "owner_id": resolved_new_owner,
+            "owner_kind": resolved_new_owner_kind,
+            "owner_archive_id": new_owner_archive,
+        },
+        "operators_before": operator_ids(operators_before),
+        "operators_after": resolved_operators_after,
+        "subject": resolved_subject,
+        "scope_manifest": scope_gate,
+        "approval_actors": approval_actors,
+        "trust_gate": trust_gate,
+        "ownership_gate": ownership_gate,
+        "lineage": lineage,
+        "provider_change_plan": provider_change_plan,
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "source_archive": source_archive,
+        "previous_owner": previous_owner,
+        "previous_owner_kind": previous_owner_kind,
+        "new_owner": resolved_new_owner,
+        "new_owner_kind": resolved_new_owner_kind,
+        "new_owner_archive": new_owner_archive,
+        "subject": resolved_subject,
+        "blockers": blockers,
+        "warnings": warnings,
+        "scope_gate": scope_gate,
+        "trust_gate": trust_gate,
+        "ownership_gate": ownership_gate,
+        "lineage": lineage,
+        "provider_change_plan": provider_change_plan,
+        "proposed_receipt_path": proposed_receipt_path,
+        "receipt_preview": receipt_preview,
+        "would_change": [
+            "update archive-identity.yml ownership.owner_id",
+            "update archive-identity.yml ownership.owner_kind",
+            "replace archive-identity.yml ownership.operators",
+            "append ownership transfer lineage metadata",
+            "record provider_change_plan without calling external provider APIs",
+            f"write {proposed_receipt_path}",
+        ],
+    }
+
+
+def transfer_archive_ownership(
+    archive_root: Path | str,
+    *,
+    new_owner: str,
+    new_owner_kind: str | None = None,
+    new_owner_archive: str | None = None,
+    operators_after: list[str] | None = None,
+    approved_by: list[str] | None = None,
+    subject: str | None = None,
+    counterparty_id: str | None = None,
+    counterparty_fingerprint: str | None = None,
+    reason: str | None = None,
+    reviewed_by: str,
+) -> dict[str, Any]:
+    reviewer = reviewed_by.strip()
+    if not reviewer:
+        raise ArchiveServiceError("Real ownership transfer requires --reviewed-by.")
+
+    root = require_existing_archive_root(archive_root)
+    dry_run = ownership_transfer_dry_run(
+        root,
+        new_owner=new_owner,
+        new_owner_kind=new_owner_kind,
+        new_owner_archive=new_owner_archive,
+        operators_after=operators_after,
+        approved_by=approved_by,
+        subject=subject,
+        counterparty_id=counterparty_id,
+        counterparty_fingerprint=counterparty_fingerprint,
+        reason=reason,
+    )
+    if dry_run["blockers"]:
+        raise ArchiveServiceError("Ownership transfer blocked by dry-run: " + "; ".join(dry_run["blockers"]))
+
+    ownership_gate = dry_run["ownership_gate"]
+    if not actor_can_approve_transfer(reviewer, ownership_gate):
+        raise ArchiveServiceError("Real ownership transfer reviewer must be the current owner, an operator, or an approved actor.")
+
+    identity_path = archive_internal_path(root, "archive-identity.yml")
+    original_identity_text = identity_path.read_text(encoding="utf-8")
+    identity_doc = load_archive_identity(root)
+    ownership = identity_doc.get("ownership") if isinstance(identity_doc.get("ownership"), dict) else {}
+    if not isinstance(ownership, dict):
+        ownership = {}
+    lineage_doc = identity_doc.get("lineage") if isinstance(identity_doc.get("lineage"), dict) else {}
+    if not isinstance(lineage_doc, dict):
+        lineage_doc = {}
+
+    now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    receipt_relative = dry_run["proposed_receipt_path"]
+    receipt_path = resolve_archive_relative_path(root, receipt_relative)
+    if receipt_path.exists():
+        raise ArchiveServiceError(f"Proposed ownership transfer receipt already exists: {receipt_relative}.")
+
+    previous_owner_display_name = ownership.get("owner_display_name")
+    operators_after_records = build_operator_records(dry_run["ownership_gate"]["operators_after"], dry_run["new_owner"], now)
+    ownership["owner_id"] = dry_run["new_owner"]
+    ownership["owner_kind"] = dry_run["new_owner_kind"]
+    ownership["owner_display_name"] = dry_run["new_owner"]
+    if dry_run.get("new_owner_archive"):
+        ownership["owner_archive_id"] = dry_run["new_owner_archive"]
+    else:
+        ownership.pop("owner_archive_id", None)
+    ownership["operators"] = operators_after_records
+    identity_doc["ownership"] = ownership
+
+    ownership_transfers = lineage_doc.get("ownership_transfers")
+    if not isinstance(ownership_transfers, list):
+        ownership_transfers = []
+    transfer_event = {
+        "event": "ownership_transfer",
+        "receipt_id": dry_run["receipt_preview"]["receipt_id"],
+        "receipt_path": receipt_relative,
+        "timestamp": now,
+        "source_archive": dry_run["source_archive"],
+        "previous_owner": dry_run["previous_owner"],
+        "new_owner": dry_run["new_owner"],
+        "new_owner_archive": dry_run["new_owner_archive"],
+        "subject": dry_run["subject"],
+        "reviewed_by": reviewer,
+        "reason": reason,
+    }
+    ownership_transfers.append(transfer_event)
+    lineage_doc["ownership_transfers"] = ownership_transfers
+    identity_doc["lineage"] = lineage_doc
+
+    receipt = dict(dry_run["receipt_preview"])
+    receipt["dry_run"] = False
+    receipt["timestamp"] = now
+    receipt["reviewed_by"] = reviewer
+    receipt["reviewed_at"] = now
+    receipt["scope_manifest"] = dict(receipt["scope_manifest"])
+    receipt["scope_manifest"]["record_transfer"] = True
+    receipt["ownership_gate"] = dict(receipt["ownership_gate"])
+    receipt["ownership_gate"]["status"] = "passed"
+    receipt["lineage"] = dict(receipt["lineage"])
+    receipt["lineage"]["timestamp"] = now
+    receipt["result"] = {
+        "changed_paths": ["archive-identity.yml", receipt_relative],
+        "previous_owner_display_name": previous_owner_display_name,
+        "operators_after_records": operators_after_records,
+        "provider_changes_applied": False,
+        "provider_changes_status": receipt["provider_change_plan"]["status"],
+    }
+
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    created_receipt = False
+    try:
+        with receipt_path.open("x", encoding="utf-8") as handle:
+            created_receipt = True
+            handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+        write_text_atomic(identity_path, dump_yaml(identity_doc))
+    except OSError:
+        if created_receipt and receipt_path.exists():
+            receipt_path.unlink()
+        if identity_path.read_text(encoding="utf-8") != original_identity_text:
+            write_text_atomic(identity_path, original_identity_text)
+        raise
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "source_archive": dry_run["source_archive"],
+        "previous_owner": dry_run["previous_owner"],
+        "new_owner": dry_run["new_owner"],
+        "new_owner_kind": dry_run["new_owner_kind"],
+        "new_owner_archive": dry_run["new_owner_archive"],
+        "subject": dry_run["subject"],
+        "reviewed_by": reviewer,
+        "receipt_path": receipt_relative,
+        "changed_paths": ["archive-identity.yml", receipt_relative],
+        "provider_change_plan": dry_run["provider_change_plan"],
+        "receipt": json_safe(receipt),
+    }
+
+
+def actor_can_approve_transfer(actor: str, ownership_gate: dict[str, Any]) -> bool:
+    allowed = {str(value) for value in ownership_gate.get("approval_actors") or []}
+    allowed.update(str(value) for value in ownership_gate.get("operators_before") or [])
+    current_owner = ownership_gate.get("current_owner")
+    if current_owner:
+        allowed.add(str(current_owner))
+    return actor in allowed
+
+
+def build_operator_records(operator_ids_after: list[str], new_owner: str, iso_now: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for operator_id in operator_ids_after:
+        role = "owner_operator" if operator_id == new_owner else "delegated_operator"
+        records.append(
+            {
+                "operator_id": operator_id,
+                "role": role,
+                "permissions": ["capture", "curate", "approve", "transfer_request"],
+                "starts_at": iso_now,
+                "ends_at": None,
+            }
+        )
+    return records
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    temporary_path = path.with_name(path.name + ".tmp")
+    try:
+        temporary_path.write_text(text, encoding="utf-8")
+        temporary_path.replace(path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
+
+
+def normalize_unique_strings(values: list[str] | None) -> list[str]:
+    result: list[str] = []
+    for value in values or []:
+        item = str(value).strip()
+        if item and item not in result:
+            result.append(item)
+    return result
+
+
+def infer_owner_kind(owner_id: str) -> str | None:
+    prefix = owner_id.split(":", 1)[0].strip()
+    return prefix if prefix in OWNER_KINDS else None
+
+
+def default_transfer_subject(
+    subjects: list[Any],
+    transfer_policy: dict[str, Any],
+    new_owner: str,
+) -> str | None:
+    policy_target = transfer_policy.get("default_transfer_target")
+    if isinstance(policy_target, str) and policy_target:
+        return policy_target
+    subject_ids = [
+        item.get("subject_id")
+        for item in subjects
+        if isinstance(item, dict) and isinstance(item.get("subject_id"), str)
+    ]
+    if new_owner in subject_ids:
+        return new_owner
+    if len(subject_ids) == 1:
+        return subject_ids[0]
+    return None
+
+
+def operator_ids(operators: list[Any]) -> list[str]:
+    return [
+        item["operator_id"]
+        for item in operators
+        if isinstance(item, dict) and isinstance(item.get("operator_id"), str)
+    ]
+
+
+def build_approval_actor_checks(
+    approval_actors: list[str],
+    previous_owner: Any,
+    operators_before: list[Any],
+    blockers: list[str],
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    operators_by_id = {
+        item.get("operator_id"): item
+        for item in operators_before
+        if isinstance(item, dict) and isinstance(item.get("operator_id"), str)
+    }
+    checks: list[dict[str, Any]] = []
+    for actor in approval_actors:
+        check = {
+            "actor": actor,
+            "recognized": False,
+            "role": None,
+            "permissions": [],
+            "status": "blocked",
+        }
+        if actor == previous_owner:
+            check.update({"recognized": True, "role": "owner", "status": "recognized_owner"})
+            checks.append(check)
+            continue
+
+        operator = operators_by_id.get(actor)
+        if operator is None:
+            blockers.append(f"Approval actor is not the current owner or an operator: {actor}.")
+            checks.append(check)
+            continue
+
+        permissions = operator.get("permissions") if isinstance(operator.get("permissions"), list) else []
+        check["recognized"] = True
+        check["role"] = operator.get("role")
+        check["permissions"] = permissions
+        if not permissions:
+            warnings.append(f"Approval actor has no explicit permissions list: {actor}.")
+            check["status"] = "recognized_operator_without_permissions"
+        elif "approve" in permissions or "transfer_request" in permissions:
+            check["status"] = "recognized_operator"
+        else:
+            blockers.append(f"Approval actor lacks approve or transfer_request permission: {actor}.")
+        checks.append(check)
+    return checks
+
+
+def resolve_view(archive_root: Path, view_id: str) -> dict[str, Any]:
+    views_root = archive_root / "views"
+    if not views_root.is_dir():
+        raise ArchiveServiceError("views/ directory is missing.")
+    for path in safe_archive_glob(views_root, "*.yml", archive_root):
+        data = load_yaml(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            continue
+        if data.get("id") == view_id:
+            result = json_safe(data)
+            result["source_path"] = archive_relative_path(path, archive_root)
+            return result
+        saved_views = data.get("saved_views") or []
+        if isinstance(saved_views, list):
+            for saved_view in saved_views:
+                if isinstance(saved_view, dict) and saved_view.get("id") == view_id:
+                    result = json_safe(saved_view)
+                    result.setdefault("include", data.get("include") or {})
+                    result.setdefault("context_policy", data.get("context_policy") or {})
+                    result["source_path"] = archive_relative_path(path, archive_root)
+                    return result
+    raise ArchiveServiceError(f"View id not found: {view_id}")
+
+
+def select_zettels_for_view(archive_root: Path, view: dict[str, Any]) -> list[dict[str, Any]]:
+    filters = view.get("filters") or {}
+    if not isinstance(filters, dict):
+        raise ArchiveServiceError("View filters must be an object.")
+    max_zettels = 50
+    context_policy = view.get("context_policy") or {}
+    if isinstance(context_policy, dict) and isinstance(context_policy.get("max_zettels"), int):
+        max_zettels = max(1, min(context_policy["max_zettels"], 500))
+
+    selected: list[dict[str, Any]] = []
+    for path in iter_zettel_paths(archive_root):
+        relative = archive_relative_path(path, archive_root)
+        if not relative.startswith("zettels/"):
+            continue
+        frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
+        frontmatter = json_safe(frontmatter)
+        if frontmatter.get("status") != "canonical":
+            continue
+        if not zettel_matches_filters(frontmatter, filters):
+            continue
+        selected.append({"path": path, "frontmatter": frontmatter, "body": body})
+        if len(selected) >= max_zettels:
+            break
+    return selected
+
+
+def zettel_matches_filters(frontmatter: dict[str, Any], filters: dict[str, Any]) -> bool:
+    for key, expected in filters.items():
+        actual = nested_value(frontmatter, str(key).split("."))
+        if isinstance(actual, list):
+            if expected not in actual:
+                return False
+        elif actual != expected:
+            return False
+    return True
+
+
+def nested_value(data: Any, parts: list[str]) -> Any:
+    current = data
+    for part in parts:
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def zettel_object_ids(frontmatter: dict[str, Any]) -> set[str]:
+    object_ids: set[str] = set()
+    assets = frontmatter.get("assets") or []
+    if isinstance(assets, list):
+        for asset in assets:
+            if isinstance(asset, dict) and isinstance(asset.get("object_id"), str):
+                object_ids.add(asset["object_id"])
+    return object_ids
+
+
+def load_manifest_records(archive_root: Path) -> list[dict[str, Any]]:
+    manifest_path = archive_internal_path(archive_root, "objects/manifests/files.jsonl")
+    if not manifest_path.is_file():
+        return []
+    records: list[dict[str, Any]] = []
+    for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+    return records
+
+
+def load_source_bindings(archive_root: Path) -> dict[str, Any]:
+    path = archive_internal_path(archive_root, "source-bindings.yml")
+    if not path.is_file():
+        return {
+            "version": "source-bindings/v0.1",
+            "archive_id": read_archive_id(archive_root),
+            "sources": [],
+        }
+    data = load_yaml(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ArchiveServiceError("source-bindings.yml must be a YAML object.")
+    return json_safe(data)
+
+
+def source_bindings_list(bindings_doc: dict[str, Any]) -> list[dict[str, Any]]:
+    sources = bindings_doc.get("sources") or []
+    if not isinstance(sources, list):
+        return []
+    return [item for item in sources if isinstance(item, dict)]
+
+
+def source_binding_by_id(archive_root: Path, source_id: str) -> dict[str, Any]:
+    normalized = (source_id or "").strip()
+    if not normalized:
+        raise ArchiveServiceError("source id is required.")
+    bindings = source_bindings_list(load_source_bindings(archive_root))
+    for binding in bindings:
+        if binding.get("source_id") == normalized:
+            return binding
+    raise ArchiveServiceError(f"Source id not found in source-bindings.yml: {normalized}")
+
+
+def source_map_relative_path(source_id: str) -> str:
+    return f"{SOURCE_MAPS_DIR}/{safe_slug(source_id)}.jsonl"
+
+
+def source_scan_receipt_relative_path(source_id: str, fingerprint: str) -> str:
+    return f"{SOURCE_SCAN_RECEIPTS_DIR}/{safe_slug(source_id)}_{fingerprint}.source-scan.json"
+
+
+def list_sources(archive_root: Path | str) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    bindings_doc = load_source_bindings(root)
+    local_roots = load_local_source_roots(root)
+    sources = []
+    for binding in source_bindings_list(bindings_doc):
+        source_id = str(binding.get("source_id") or "")
+        map_relative = source_map_relative_path(source_id)
+        entries = load_source_map_entries(root, map_relative)
+        sources.append(
+            {
+                "source_id": source_id,
+                "source_type": binding.get("source_type"),
+                "enabled": binding.get("enabled") is not False,
+                "description": binding.get("description"),
+                "root_ref": binding.get("root_ref"),
+                "scope_policy": binding.get("scope_policy") if isinstance(binding.get("scope_policy"), dict) else {},
+                "visibility": binding.get("visibility") if isinstance(binding.get("visibility"), dict) else default_private_visibility(),
+                "source_map_path": map_relative,
+                "source_map_present": archive_internal_path(root, map_relative).is_file(),
+                "mapped_items": len(entries),
+                "local_root_profile_present": source_id in local_roots,
+            }
+        )
+    return {
+        "ok": True,
+        "archive_id": archive_id,
+        "source_bindings_present": archive_internal_path(root, "source-bindings.yml").is_file(),
+        "source_bindings_path": "source-bindings.yml",
+        "source_count": len(sources),
+        "sources": sources,
+    }
+
+
+def add_source_dry_run(
+    archive_root: Path | str,
+    *,
+    source_id: str,
+    source_type: str,
+    description: str | None = None,
+    root_ref: str | None = None,
+    local_root: Path | str | None = None,
+    write_local_profile: bool = False,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    max_items: int = 2000,
+    visibility_scope: str = "private",
+    source_visibility: str = "private",
+    replace: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    resolved_source_id = (source_id or "").strip()
+    resolved_type = (source_type or "").strip()
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not resolved_source_id:
+        blockers.append("source_id is required.")
+    if resolved_type not in SOURCE_TYPES:
+        blockers.append("source_type must be one of: " + ", ".join(sorted(SOURCE_TYPES)) + ".")
+
+    bindings_doc = load_source_bindings(root)
+    existing = {item.get("source_id"): item for item in source_bindings_list(bindings_doc)}
+    exists = resolved_source_id in existing
+    if exists and not replace:
+        blockers.append(f"Source already exists. Use --replace to update it: {resolved_source_id}.")
+
+    resolved_root_ref = normalize_source_root_ref(resolved_source_id, resolved_type, root_ref)
+    validate_source_root_ref(root, resolved_root_ref, blockers)
+    if local_root is not None:
+        local_root_path = Path(local_root).expanduser().resolve()
+        if not local_root_path.exists():
+            warnings.append("Provided local root does not exist yet; registration can still be planned.")
+    else:
+        local_root_path = None
+        if write_local_profile:
+            blockers.append("--write-local-profile requires --local-root.")
+
+    source_binding = build_source_binding(
+        source_id=resolved_source_id,
+        source_type=resolved_type,
+        description=description,
+        root_ref=resolved_root_ref,
+        include=include,
+        exclude=exclude,
+        max_items=max_items,
+        visibility_scope=visibility_scope,
+        source_visibility=source_visibility,
+    )
+    local_profile_plan = {
+        "write": bool(write_local_profile and local_root_path is not None),
+        "path": SOURCE_ROOTS_LOCAL_PROFILE,
+        "path_recorded": bool(write_local_profile and local_root_path is not None),
+        "local_root_provided": local_root_path is not None,
+    }
+    would_change = ["source-bindings.yml"]
+    if local_profile_plan["write"]:
+        would_change.append(SOURCE_ROOTS_LOCAL_PROFILE)
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "action": "add_archive_source",
+        "archive_id": archive_id,
+        "source_id": resolved_source_id,
+        "source_type": resolved_type,
+        "replace": replace,
+        "already_exists": exists,
+        "source_binding": source_binding,
+        "local_profile": local_profile_plan,
+        "mount_plan": source_mount_step(source_binding, local_profile_present=local_profile_plan["write"]),
+        "would_change": would_change,
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+
+def add_source_binding(
+    archive_root: Path | str,
+    *,
+    source_id: str,
+    source_type: str,
+    reviewed_by: str,
+    description: str | None = None,
+    root_ref: str | None = None,
+    local_root: Path | str | None = None,
+    write_local_profile: bool = False,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    max_items: int = 2000,
+    visibility_scope: str = "private",
+    source_visibility: str = "private",
+    replace: bool = False,
+) -> dict[str, Any]:
+    reviewer = reviewed_by.strip()
+    if not reviewer:
+        raise ArchiveServiceError("Source registration requires --reviewed-by.")
+    root = require_existing_archive_root(archive_root)
+    plan = add_source_dry_run(
+        root,
+        source_id=source_id,
+        source_type=source_type,
+        description=description,
+        root_ref=root_ref,
+        local_root=local_root,
+        write_local_profile=write_local_profile,
+        include=include,
+        exclude=exclude,
+        max_items=max_items,
+        visibility_scope=visibility_scope,
+        source_visibility=source_visibility,
+        replace=replace,
+    )
+    if plan["blockers"]:
+        raise ArchiveServiceError("Source registration blocked by dry-run: " + "; ".join(plan["blockers"]))
+
+    source_bindings_path = archive_internal_path(root, "source-bindings.yml")
+    bindings_doc = load_source_bindings(root)
+    bindings_doc["archive_id"] = plan["archive_id"]
+    sources = source_bindings_list(bindings_doc)
+    source_binding = dict(plan["source_binding"])
+    replaced = False
+    for index, existing in enumerate(sources):
+        if existing.get("source_id") == source_binding["source_id"]:
+            sources[index] = source_binding
+            replaced = True
+            break
+    if not replaced:
+        sources.append(source_binding)
+    bindings_doc["sources"] = sources
+    source_bindings_path.write_text(dump_yaml(bindings_doc), encoding="utf-8")
+
+    changed_paths = ["source-bindings.yml"]
+    local_profile_path: str | None = None
+    if plan["local_profile"]["write"] and local_root is not None:
+        local_profile_path = write_local_source_root_profile(
+            root,
+            source_id=source_binding["source_id"],
+            root_ref=source_binding["root_ref"],
+            local_root=Path(local_root).expanduser().resolve(),
+            reviewed_by=reviewer,
+        )
+        changed_paths.append(local_profile_path)
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "action": "add_archive_source",
+        "archive_id": plan["archive_id"],
+        "source_id": source_binding["source_id"],
+        "source_type": source_binding["source_type"],
+        "reviewed_by": reviewer,
+        "changed_paths": changed_paths,
+        "source_binding": source_binding,
+        "local_profile_path": local_profile_path,
+        "mount_plan": source_mount_step(source_binding, local_profile_present=local_profile_path is not None),
+    }
+
+
+def build_source_binding(
+    *,
+    source_id: str,
+    source_type: str,
+    description: str | None,
+    root_ref: str,
+    include: list[str] | None,
+    exclude: list[str] | None,
+    max_items: int,
+    visibility_scope: str,
+    source_visibility: str,
+) -> dict[str, Any]:
+    return {
+        "source_id": source_id,
+        "source_type": source_type,
+        "enabled": True,
+        "description": description or f"{source_type} source {source_id}",
+        "root_ref": root_ref,
+        "scope_policy": {
+            "mode": SOURCE_SCAN_MODE,
+            "include": include or ["**/*"],
+            "exclude": exclude if exclude is not None else [".git/**", "__pycache__/**"],
+            "max_items": max(1, min(int(max_items), 10000)),
+        },
+        "visibility": {
+            "scope": visibility_scope or "private",
+            "allowed_archives": [],
+            "source_visibility": source_visibility or "private",
+        },
+        "provenance": {
+            "registered_by": "archive:add-source",
+        },
+    }
+
+
+def normalize_source_root_ref(source_id: str, source_type: str, root_ref: str | None) -> str:
+    if root_ref:
+        return root_ref.strip()
+    if source_type == "object_manifest":
+        return "archive:objects/manifests/files.jsonl"
+    return f"ARCHIVE_SOURCE_{safe_slug(source_id).upper()}_ROOT"
+
+
+def validate_source_root_ref(archive_root: Path, root_ref: str, blockers: list[str]) -> None:
+    if not root_ref:
+        blockers.append("root_ref is required.")
+        return
+    if root_ref.startswith("archive:"):
+        try:
+            archive_internal_path(archive_root, root_ref.removeprefix("archive:"))
+        except ArchiveServiceError as exc:
+            blockers.append(str(exc))
+        return
+    normalized = root_ref.replace("\\", "/").strip()
+    if contains_forbidden_location_reference(root_ref) or normalized.startswith("/") or re.match(r"^[A-Za-z]:/", normalized):
+        blockers.append("root_ref must be an env/root ref or archive:relative ref, not an absolute path or provider URL.")
+
+
+def load_local_source_roots(archive_root: Path) -> dict[str, dict[str, Any]]:
+    path = archive_internal_path(archive_root, SOURCE_ROOTS_LOCAL_PROFILE)
+    if not path.is_file():
+        return {}
+    data = load_yaml(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return {}
+    sources = data.get("sources")
+    if not isinstance(sources, dict):
+        return {}
+    return {str(key): value for key, value in sources.items() if isinstance(value, dict)}
+
+
+def local_source_root_path(archive_root: Path, source_id: str) -> Path | None:
+    entry = load_local_source_roots(archive_root).get(source_id)
+    if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+        return None
+    return Path(entry["path"]).expanduser().resolve()
+
+
+def write_local_source_root_profile(
+    archive_root: Path,
+    *,
+    source_id: str,
+    root_ref: str,
+    local_root: Path,
+    reviewed_by: str,
+) -> str:
+    path = archive_internal_path(archive_root, SOURCE_ROOTS_LOCAL_PROFILE)
+    data: dict[str, Any]
+    if path.is_file():
+        loaded = load_yaml(path.read_text(encoding="utf-8"))
+        data = loaded if isinstance(loaded, dict) else {}
+    else:
+        data = {"version": "source-roots-local/v0.1", "sources": {}}
+    data.setdefault("version", "source-roots-local/v0.1")
+    sources = data.get("sources") if isinstance(data.get("sources"), dict) else {}
+    sources[source_id] = {
+        "root_ref": root_ref,
+        "path": str(local_root),
+        "path_is_local_only": True,
+        "reviewed_by": reviewed_by,
+        "updated_at": datetime.now().astimezone().replace(microsecond=0).isoformat(),
+    }
+    data["sources"] = sources
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(dump_yaml(data), encoding="utf-8")
+    return SOURCE_ROOTS_LOCAL_PROFILE
+
+
+def source_mount_plan(archive_root: Path | str) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    local_roots = load_local_source_roots(root)
+    sources = []
+    for binding in source_bindings_list(load_source_bindings(root)):
+        sources.append(source_mount_step(binding, local_profile_present=str(binding.get("source_id") or "") in local_roots))
+    return {
+        "ok": True,
+        "archive_id": archive_id,
+        "strategy": "docker_compose_override_or_host_native_cli",
+        "local_profile_path": SOURCE_ROOTS_LOCAL_PROFILE,
+        "secrets_required": False,
+        "sources": sources,
+        "notes": [
+            "Host-native CLI can use ignored local profile paths or --source-root directly.",
+            "Docker scans need each source mounted read-only under the suggested container_source_root.",
+            "Do not mount your whole drive unless you intentionally choose a trusted broad discovery mode.",
+        ],
+    }
+
+
+def recovery_plan(archive_root: Path | str) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    sources = list_sources(root)
+    providers = provider_bindings_summary(root)
+    latest_receipt = latest_successful_restore_drill_receipt(root)
+    return {
+        "ok": True,
+        "action": "archive_recovery_plan",
+        "archive_root": str(root),
+        "archive_id": archive_id,
+        "local_only": True,
+        "external_api_called": False,
+        "secret_values_required": False,
+        "control_plane_units": [
+            "archive.yml",
+            "archive-identity.yml",
+            "provider-bindings.yml",
+            "source-bindings.yml",
+            "zettels/",
+            "inbox/",
+            "views/",
+            "source-maps/",
+            "objects/manifests/files.jsonl",
+            "receipts/",
+            "zettel-kasten/",
+            "AGENTS.md",
+        ],
+        "excluded_from_restore_copy": RESTORE_DRILL_EXCLUDED_PATHS,
+        "does_not_copy": [
+            "external PC/SSD/SaaS/object-storage originals",
+            "local-only profiles and keyrings",
+            "generated SQLite search indexes",
+            "provider secrets",
+            "git history",
+        ],
+        "source_summary": {
+            "source_count": sources["source_count"],
+            "mapped_sources": [
+                source["source_id"]
+                for source in sources["sources"]
+                if source.get("source_map_present")
+            ],
+            "unmapped_sources": [
+                source["source_id"]
+                for source in sources["sources"]
+                if not source.get("source_map_present")
+            ],
+        },
+        "provider_summary": {
+            "binding_count": providers["binding_count"],
+            "manual_required": True,
+            "providers": [
+                provider["provider"]
+                for provider in providers["providers"]
+                if provider.get("enabled") is not False
+            ],
+        },
+        "latest_successful_restore_drill": latest_receipt,
+        "next_steps": [
+            "Run restore-drill --dry-run against an empty target folder.",
+            "Run restore-drill --approve --reviewed-by <actor> before first real source scan.",
+            "Keep external originals in their current systems; restore drill verifies the archive control plane.",
+        ],
+    }
+
+
+def restore_drill_dry_run(archive_root: Path | str, target: Path | str) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    target_path = Path(target).expanduser().resolve()
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    validate_restore_drill_target(root, target_path, blockers)
+    copy_plan = restore_drill_copy_plan(root)
+    receipt_preview = {
+        "receipt_id": f"receipt:restore-drill:{safe_slug(archive_id)}:<execution-time>",
+        "action": "restore_drill",
+        "dry_run": True,
+        "timestamp": "<execution-time>",
+        "source_archive": archive_id,
+        "source_archive_root": str(root),
+        "target_root": str(target_path),
+        "copy_plan": copy_plan,
+        "validation": {
+            "doctor_strict": "planned",
+            "index": "planned",
+            "search_smoke": "planned",
+        },
+        "result": {
+            "status": "planned",
+            "changed_paths": [],
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "action": "restore_drill",
+        "archive_id": archive_id,
+        "archive_root": str(root),
+        "target_root": str(target_path),
+        "target_exists": target_path.exists(),
+        "copy_plan": copy_plan,
+        "receipt_preview": receipt_preview,
+        "proposed_receipt_path": f"{RESTORE_DRILL_RECEIPTS_DIR}/<timestamp>.restore-drill.json",
+        "would_change": [
+            str(target_path),
+            f"{RESTORE_DRILL_RECEIPTS_DIR}/<timestamp>.restore-drill.json",
+        ],
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+
+def validate_restore_drill_target(archive_root: Path, target: Path, blockers: list[str]) -> None:
+    if target.exists() and not target.is_dir():
+        blockers.append(f"Restore target must be a folder or absent: {target}.")
+        return
+    if target.exists() and any(target.iterdir()):
+        blockers.append(f"Restore target must be empty or absent: {target}.")
+
+    anchor = Path(target.anchor) if target.anchor else None
+    if anchor is not None and target == anchor:
+        blockers.append(f"Restore target must not be a filesystem or drive root: {target}.")
+
+    kit_root = KIT_ROOT.resolve()
+    if target == kit_root or target.is_relative_to(kit_root):
+        blockers.append(f"Restore target must not be inside the Archive Kit repository: {target}.")
+
+    if target == archive_root or target.is_relative_to(archive_root):
+        blockers.append(f"Restore target must not be inside the source archive: {target}.")
+
+    if archive_root.is_relative_to(target):
+        blockers.append(f"Restore target must not contain the source archive: {target}.")
+
+    system_reason = local_source_system_path_reason(target)
+    if system_reason:
+        blockers.append(f"Restore target must not be inside a system directory: {target} ({system_reason}).")
+
+
+def restore_drill_copy_plan(archive_root: Path) -> dict[str, Any]:
+    included_files = 0
+    included_bytes = 0
+    excluded_files = 0
+    for path in sorted(archive_root.rglob("*")):
+        if not path.is_file() or not is_path_within_root(path, archive_root):
+            continue
+        relative = archive_relative_path(path, archive_root)
+        if restore_drill_should_exclude(relative):
+            excluded_files += 1
+            continue
+        included_files += 1
+        try:
+            included_bytes += path.stat().st_size
+        except OSError:
+            pass
+    return {
+        "mode": "control_plane_copy",
+        "metadata_only": True,
+        "copies_external_originals": False,
+        "included_files": included_files,
+        "included_bytes": included_bytes,
+        "excluded_files": excluded_files,
+        "excluded_paths": RESTORE_DRILL_EXCLUDED_PATHS,
+    }
+
+
+def restore_drill_should_exclude(relative_path: str) -> bool:
+    normalized = relative_path.replace("\\", "/").lstrip("/")
+    for pattern in RESTORE_DRILL_EXCLUDED_PATHS:
+        if pattern.endswith("/"):
+            prefix = pattern.rstrip("/")
+            if normalized == prefix or normalized.startswith(prefix + "/"):
+                return True
+            continue
+        if fnmatch.fnmatch(normalized, pattern):
+            return True
+    return False
+
+
+def copy_restore_drill_tree(archive_root: Path, target: Path) -> list[str]:
+    changed_paths: list[str] = []
+    target.mkdir(parents=True, exist_ok=True)
+    for path in sorted(archive_root.rglob("*")):
+        if not path.is_file() or not is_path_within_root(path, archive_root):
+            continue
+        relative = archive_relative_path(path, archive_root)
+        if restore_drill_should_exclude(relative):
+            continue
+        destination = target / Path(relative)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, destination)
+        changed_paths.append(relative)
+    return changed_paths
+
+
+def latest_successful_restore_drill_receipt(archive_root: Path | str) -> dict[str, Any] | None:
+    root = require_existing_archive_root(archive_root)
+    receipts_root = archive_internal_path(root, RESTORE_DRILL_RECEIPTS_DIR)
+    if not receipts_root.is_dir():
+        return None
+    latest: dict[str, Any] | None = None
+    for path in sorted(receipts_root.glob("*.restore-drill.json")):
+        if not is_path_within_root(path, root):
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        result = data.get("result") if isinstance(data.get("result"), dict) else {}
+        if data.get("dry_run") is False and result.get("status") == "passed":
+            latest = {
+                "receipt_path": archive_relative_path(path, root),
+                "receipt_id": data.get("receipt_id"),
+                "reviewed_by": data.get("reviewed_by"),
+                "reviewed_at": data.get("reviewed_at"),
+                "target_root": data.get("target_root"),
+                "status": result.get("status"),
+            }
+    return latest
+
+
+def preflight_check(
+    archive_root: Path | str,
+    *,
+    diagnostics: list[dict[str, Any]] | None = None,
+    peer_archive_root: Path | str | None = None,
+    require_source_maps: bool = False,
+    require_restore_drill: bool = False,
+    strict: bool = False,
+    docker_runtime: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    findings: list[dict[str, Any]] = []
+
+    def add_finding(severity: str, code: str, message: str, path: str | None = None) -> None:
+        finding = {"severity": severity, "code": code, "message": message}
+        if path:
+            finding["path"] = path
+        findings.append(finding)
+        if severity == "BLOCKER":
+            blockers.append(message)
+        elif severity == "WARN":
+            warnings.append(message)
+
+    doctor_diagnostics = diagnostics or []
+    doctor_errors = [item for item in doctor_diagnostics if item.get("severity") == "ERROR"]
+    doctor_warnings = [item for item in doctor_diagnostics if item.get("severity") == "WARN"]
+    if doctor_errors:
+        add_finding("BLOCKER", "doctor_errors", f"archive doctor reported {len(doctor_errors)} error(s).")
+    if doctor_warnings:
+        add_finding("WARN", "doctor_warnings", f"archive doctor reported {len(doctor_warnings)} warning(s).")
+
+    sources = list_sources(root)
+    source_by_id = {source["source_id"]: source for source in sources["sources"]}
+    for source in sources["sources"]:
+        if source.get("enabled") and require_source_maps and not source.get("source_map_present"):
+            add_finding(
+                "BLOCKER",
+                "source_map_missing",
+                f"Required source map is missing for source: {source['source_id']}.",
+                str(source.get("source_map_path") or ""),
+            )
+
+    local_profile_checks = []
+    for source_id, entry in load_local_source_roots(root).items():
+        path_value = entry.get("path") if isinstance(entry, dict) else None
+        if not isinstance(path_value, str) or not path_value.strip():
+            add_finding("BLOCKER", "local_source_root_missing", f"Local profile path is missing for source: {source_id}.")
+            continue
+        path = Path(path_value).expanduser().resolve()
+        source_type = str(source_by_id.get(source_id, {}).get("source_type") or "")
+        check = classify_local_source_root(path, archive_root=root, source_id=source_id, source_type=source_type)
+        local_profile_checks.append(check)
+        if check["severity"] == "BLOCKER":
+            add_finding("BLOCKER", check["code"], check["message"], check.get("path"))
+        elif check["severity"] == "WARN":
+            add_finding("WARN", check["code"], check["message"], check.get("path"))
+        if not path.exists():
+            add_finding("WARN", "local_source_root_not_found", f"Local source root does not exist yet: {source_id}.", str(path))
+
+    peer_summary = None
+    if peer_archive_root is not None:
+        peer = Path(peer_archive_root).expanduser().resolve()
+        peer_summary = {"path": str(peer), "exists": peer.exists()}
+        if paths_overlap(root, peer):
+            add_finding("BLOCKER", "peer_archive_root_overlaps", "Peer archive root overlaps this archive root.", str(peer))
+        if not peer.exists():
+            add_finding("WARN", "peer_archive_missing", "Peer archive root does not exist yet; create it before team/personal separation testing.", str(peer))
+        elif not peer.is_dir():
+            add_finding("BLOCKER", "peer_archive_not_directory", "Peer archive root is not a directory.", str(peer))
+        else:
+            try:
+                peer_id = read_archive_id(peer)
+                peer_summary["archive_id"] = peer_id
+                if peer_id == archive_id:
+                    add_finding("BLOCKER", "peer_archive_id_duplicate", "Peer archive id must not match this archive id.", str(peer))
+            except ArchiveServiceError as exc:
+                add_finding("BLOCKER", "peer_archive_unreadable", f"Peer archive could not be read: {exc}", str(peer))
+
+    provider_summary: dict[str, Any] | None = None
+    try:
+        provider_summary = provider_bindings_summary(root)
+    except ArchiveServiceError as exc:
+        add_finding("BLOCKER", "provider_bindings_unreadable", f"Provider bindings could not be read: {exc}")
+
+    mounts = source_mount_plan(root)
+    docker = docker_runtime or {"checked": False, "ok": None, "status": "not_checked"}
+    if docker.get("checked") and not docker.get("ok"):
+        add_finding("BLOCKER", "docker_runtime_unavailable", str(docker.get("message") or "Docker runtime is not available."))
+
+    latest_restore = latest_successful_restore_drill_receipt(root)
+    if require_restore_drill and latest_restore is None:
+        add_finding(
+            "BLOCKER",
+            "restore_drill_required",
+            "A successful restore drill receipt is required before real source pilot.",
+            RESTORE_DRILL_RECEIPTS_DIR,
+        )
+
+    ok = not blockers and not (strict and warnings)
+    return {
+        "ok": ok,
+        "action": "archive_preflight_check",
+        "archive_root": str(root),
+        "archive_id": archive_id,
+        "strict": strict,
+        "require_source_maps": require_source_maps,
+        "require_restore_drill": require_restore_drill,
+        "doctor": {
+            "checked": bool(diagnostics is not None),
+            "errors": len(doctor_errors),
+            "warnings": len(doctor_warnings),
+            "diagnostics": doctor_diagnostics,
+        },
+        "sources": {
+            "source_count": sources["source_count"],
+            "missing_source_maps": [
+                source["source_id"]
+                for source in sources["sources"]
+                if source.get("enabled") and not source.get("source_map_present")
+            ],
+            "local_profile_checks": local_profile_checks,
+            "mount_plan": mounts,
+        },
+        "providers": provider_summary,
+        "peer_archive": peer_summary,
+        "restore_drill": {
+            "required": require_restore_drill,
+            "latest_successful": latest_restore,
+        },
+        "docker_runtime": docker,
+        "findings": findings,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "next_safe_actions": preflight_next_actions(blockers, warnings),
+    }
+
+
+def classify_local_source_root(
+    path: Path,
+    *,
+    archive_root: Path,
+    source_id: str,
+    source_type: str,
+) -> dict[str, Any]:
+    resolved = path.expanduser().resolve()
+    severity = "OK"
+    code = "local_source_root_ok"
+    message = f"Local source root looks narrow enough for first pilot: {source_id}."
+
+    def result(new_severity: str, new_code: str, new_message: str) -> dict[str, Any]:
+        return {
+            "source_id": source_id,
+            "source_type": source_type,
+            "path": str(resolved),
+            "exists": resolved.exists(),
+            "severity": new_severity,
+            "code": new_code,
+            "message": new_message,
+        }
+
+    anchor = Path(resolved.anchor) if resolved.anchor else None
+    if anchor is not None and resolved == anchor:
+        return result("BLOCKER", "local_source_root_too_broad", f"Local source root is a filesystem or drive root: {source_id}.")
+
+    home = Path.home().resolve()
+    if resolved == home:
+        return result("BLOCKER", "local_source_root_home", f"Local source root is the whole home folder: {source_id}.")
+
+    system_reason = local_source_system_path_reason(resolved)
+    if system_reason:
+        return result("BLOCKER", "local_source_root_system_path", f"Local source root points into a system directory: {source_id} ({system_reason}).")
+
+    kit_root = KIT_ROOT.resolve()
+    if resolved == kit_root or kit_root.is_relative_to(resolved):
+        return result("BLOCKER", "local_source_root_contains_repo", f"Local source root contains the Archive Kit repository: {source_id}.")
+
+    if resolved == archive_root or archive_root.is_relative_to(resolved):
+        return result("BLOCKER", "local_source_root_contains_archive", f"Local source root contains the archive itself: {source_id}.")
+
+    broad_home_children = [
+        home / "Documents",
+        home / "Desktop",
+        home / "Downloads",
+        home / "OneDrive",
+        home / "Google Drive",
+    ]
+    if any(resolved == item.resolve() for item in broad_home_children if item.exists()):
+        return result("WARN", "local_source_root_broad_user_folder", f"Local source root is a broad user folder; first pilot should prefer a narrower subfolder: {source_id}.")
+
+    if resolved.is_relative_to(kit_root):
+        return result("WARN", "local_source_root_inside_repo", f"Local source root is inside the Archive Kit repository checkout: {source_id}.")
+
+    if resolved.is_relative_to(archive_root):
+        return result("WARN", "local_source_root_inside_archive", f"Local source root is inside the archive; prefer archive: refs for internal folders: {source_id}.")
+
+    return result(severity, code, message)
+
+
+def local_source_system_path_reason(path: Path) -> str | None:
+    windows_roots = [
+        os.environ.get("SystemRoot"),
+        os.environ.get("WINDIR"),
+        os.environ.get("ProgramFiles"),
+        os.environ.get("ProgramFiles(x86)"),
+    ]
+    for raw in windows_roots:
+        if not raw:
+            continue
+        root = Path(raw).resolve()
+        if path == root or path.is_relative_to(root):
+            return str(root)
+
+    posix_blocked = [Path(item) for item in ["/etc", "/usr", "/bin", "/sbin", "/var", "/opt", "/root"]]
+    for root in posix_blocked:
+        try:
+            resolved = root.resolve()
+        except OSError:
+            resolved = root
+        if path == resolved or path.is_relative_to(resolved):
+            return str(resolved)
+    return None
+
+
+def preflight_next_actions(blockers: list[str], warnings: list[str]) -> list[str]:
+    if blockers:
+        return [
+            "Fix blockers before touching real personal or team data.",
+            "Run archive doctor --strict after fixing structural or secret-safety problems.",
+            "Use add-source --dry-run before registering any real source.",
+        ]
+    if warnings:
+        return [
+            "Review warnings with the human owner/operator.",
+            "Prefer one narrow source for the first scan.",
+            "Run scan-source --dry-run and check item_count before approving a scan.",
+        ]
+    return [
+        "Start with one narrow source registration dry-run.",
+        "Run metadata-only scan-source --dry-run.",
+        "Approve only after reviewing item_count, source root, and receipt preview.",
+    ]
+
+
+def source_mount_step(binding: dict[str, Any], *, local_profile_present: bool) -> dict[str, Any]:
+    source_id = str(binding.get("source_id") or "")
+    source_type = str(binding.get("source_type") or "")
+    root_ref = str(binding.get("root_ref") or "")
+    container_root = f"/sources/{safe_slug(source_id)}"
+    archive_relative = root_ref.startswith("archive:") or source_type == "object_manifest"
+    if archive_relative:
+        container_root = root_ref.removeprefix("archive:") if root_ref.startswith("archive:") else "objects/manifests/files.jsonl"
+    docker_command = f"docker compose run --rm archive-cli scan-source /archives/<archive-folder> --source {source_id} --dry-run"
+    if not archive_relative:
+        docker_command = f"docker compose run --rm archive-cli scan-source /archives/<archive-folder> --source {source_id} --source-root {container_root} --dry-run"
+    return {
+        "source_id": source_id,
+        "source_type": source_type,
+        "root_ref": root_ref,
+        "enabled": binding.get("enabled") is not False,
+        "needs_host_mount": not archive_relative,
+        "local_profile_present": local_profile_present,
+        "container_source_root": container_root,
+        "compose_volume_hint": None
+        if archive_relative
+        else f"${{{root_ref}}}:{container_root}:ro",
+        "host_native_scan_command": f"archive scan-source <archive> --source {source_id} --dry-run",
+        "docker_scan_command": docker_command,
+        "manual_required": not archive_relative,
+    }
+
+
+def load_source_map_entries(archive_root: Path, relative_path: str) -> list[dict[str, Any]]:
+    path = archive_internal_path(archive_root, relative_path)
+    if not path.is_file():
+        return []
+    entries: list[dict[str, Any]] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            entries.append(record)
+    return entries
+
+
+def source_scan_dry_run(
+    archive_root: Path | str,
+    *,
+    source_id: str,
+    source_root: Path | str | None = None,
+    limit: int = 2000,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    binding = source_binding_by_id(root, source_id)
+    source_type = str(binding.get("source_type") or "")
+    if source_type not in SOURCE_TYPES:
+        raise ArchiveServiceError("source_type must be one of: " + ", ".join(sorted(SOURCE_TYPES)))
+    limit = max(1, min(int(limit), 10000))
+    scope_policy = binding.get("scope_policy") if isinstance(binding.get("scope_policy"), dict) else {}
+    policy_max = scope_policy.get("max_items")
+    if isinstance(policy_max, int):
+        limit = min(limit, max(1, min(policy_max, 10000)))
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if binding.get("enabled") is False:
+        blockers.append(f"Source is disabled in source-bindings.yml: {source_id}.")
+
+    resolved_root, root_resolution = resolve_source_scan_root(root, binding, source_root, blockers, warnings)
+    scan_now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    items: list[dict[str, Any]] = []
+    if not blockers:
+        items = discover_source_map_items(
+            archive_root=root,
+            binding=binding,
+            resolved_root=resolved_root,
+            scanned_at=scan_now,
+            limit=limit,
+            warnings=warnings,
+        )
+        items = [drop_none_values(item) for item in items]
+        if not items:
+            warnings.append(f"Source scan found no metadata items: {source_id}.")
+
+    source_map_path = source_map_relative_path(source_id)
+    fingerprint = source_scan_fingerprint(source_id, source_type, items)
+    proposed_receipt_path = source_scan_receipt_relative_path(source_id, fingerprint)
+    if archive_internal_path(root, proposed_receipt_path).exists():
+        blockers.append(f"Proposed source scan receipt already exists: {proposed_receipt_path}.")
+
+    scope_gate = {
+        "unit": "source",
+        "source_id": source_id,
+        "source_type": source_type,
+        "scan_mode": SOURCE_SCAN_MODE,
+        "metadata_only": True,
+        "content_read": False,
+        "full_hash_calculated": False,
+        "root_ref": binding.get("root_ref"),
+        "item_count": len(items),
+        "limit": limit,
+    }
+    trust_gate = {
+        "required": False,
+        "ok": True,
+        "status": "local_or_export_metadata_only",
+        "external_api_called": False,
+        "secret_values_required": False,
+    }
+    lineage = {
+        "event": "source_scan",
+        "source_archive": archive_id,
+        "source_id": source_id,
+        "source_type": source_type,
+        "scan_mode": SOURCE_SCAN_MODE,
+    }
+    receipt_preview = {
+        "receipt_id": f"receipt:source-scan:{safe_slug(archive_id)}:{safe_slug(source_id)}:{fingerprint}",
+        "receipt_path": proposed_receipt_path,
+        "action": "scan_archive_source",
+        "dry_run": True,
+        "timestamp": "<execution-time>",
+        "source_archive": archive_id,
+        "source_id": source_id,
+        "source_type": source_type,
+        "scan_mode": SOURCE_SCAN_MODE,
+        "source_root_resolution": root_resolution,
+        "item_count": len(items),
+        "source_map_path": source_map_path,
+        "scope_gate": scope_gate,
+        "trust_gate": trust_gate,
+        "lineage": lineage,
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "action": "scan_archive_source",
+        "source_archive": archive_id,
+        "source_id": source_id,
+        "source_type": source_type,
+        "scan_mode": SOURCE_SCAN_MODE,
+        "source_root_resolution": root_resolution,
+        "source_map_path": source_map_path,
+        "proposed_source_map_path": source_map_path,
+        "proposed_receipt_path": proposed_receipt_path,
+        "item_count": len(items),
+        "items": items,
+        "scope_gate": scope_gate,
+        "trust_gate": trust_gate,
+        "lineage": lineage,
+        "receipt_preview": receipt_preview,
+        "would_change": [source_map_path, proposed_receipt_path],
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+
+def scan_source(
+    archive_root: Path | str,
+    *,
+    source_id: str,
+    reviewed_by: str,
+    source_root: Path | str | None = None,
+    limit: int = 2000,
+) -> dict[str, Any]:
+    reviewer = reviewed_by.strip()
+    if not reviewer:
+        raise ArchiveServiceError("Source scan requires --reviewed-by.")
+    root = require_existing_archive_root(archive_root)
+    dry_run = source_scan_dry_run(root, source_id=source_id, source_root=source_root, limit=limit)
+    if dry_run["blockers"]:
+        raise ArchiveServiceError("Source scan blocked by dry-run: " + "; ".join(dry_run["blockers"]))
+
+    now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    source_map_relative = dry_run["source_map_path"]
+    source_map_path = archive_internal_path(root, source_map_relative)
+    receipt_relative = dry_run["proposed_receipt_path"]
+    receipt_path = archive_internal_path(root, receipt_relative)
+    if receipt_path.exists():
+        raise ArchiveServiceError(f"Proposed source scan receipt already exists: {receipt_relative}.")
+
+    old_source_map_text = source_map_path.read_text(encoding="utf-8") if source_map_path.is_file() else None
+    receipt = dict(dry_run["receipt_preview"])
+    receipt["dry_run"] = False
+    receipt["timestamp"] = now
+    receipt["reviewed_by"] = reviewer
+    receipt["reviewed_at"] = now
+    receipt["result"] = {
+        "changed_paths": [source_map_relative, receipt_relative],
+        "source_map_written": True,
+        "external_api_called": False,
+    }
+    try:
+        source_map_path.parent.mkdir(parents=True, exist_ok=True)
+        source_map_text = "".join(
+            json.dumps(json_safe(item), ensure_ascii=False, sort_keys=True, default=str) + "\n"
+            for item in dry_run["items"]
+        )
+        source_map_path.write_text(source_map_text, encoding="utf-8")
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        with receipt_path.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        if old_source_map_text is None:
+            try:
+                if source_map_path.exists():
+                    source_map_path.unlink()
+            except OSError:
+                pass
+        else:
+            try:
+                source_map_path.write_text(old_source_map_text, encoding="utf-8")
+            except OSError:
+                pass
+        try:
+            if receipt_path.exists():
+                receipt_path.unlink()
+        except OSError:
+            pass
+        raise
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "action": "scan_archive_source",
+        "source_archive": dry_run["source_archive"],
+        "source_id": dry_run["source_id"],
+        "source_type": dry_run["source_type"],
+        "scan_mode": dry_run["scan_mode"],
+        "item_count": dry_run["item_count"],
+        "source_map_path": source_map_relative,
+        "receipt_path": receipt_relative,
+        "reviewed_by": reviewer,
+        "changed_paths": [source_map_relative, receipt_relative],
+        "receipt": json_safe(receipt),
+    }
+
+
+def resolve_source_scan_root(
+    archive_root: Path,
+    binding: dict[str, Any],
+    source_root: Path | str | None,
+    blockers: list[str],
+    warnings: list[str],
+) -> tuple[Path | None, dict[str, Any]]:
+    source_type = str(binding.get("source_type") or "")
+    source_id = str(binding.get("source_id") or "")
+    root_ref = str(binding.get("root_ref") or "")
+    resolution: dict[str, Any] = {
+        "method": None,
+        "root_ref": root_ref,
+        "path_recorded": False,
+        "exists": False,
+    }
+    if source_type == "object_manifest":
+        manifest_path = archive_internal_path(archive_root, "objects/manifests/files.jsonl")
+        resolution.update({"method": "archive_object_manifest", "exists": manifest_path.is_file()})
+        if not manifest_path.is_file():
+            blockers.append("Object manifest source requires objects/manifests/files.jsonl.")
+        return manifest_path, resolution
+
+    candidate: Path | None = None
+    if source_root is not None:
+        candidate = Path(source_root).expanduser().resolve()
+        resolution["method"] = "cli_argument"
+    elif root_ref.startswith("archive:"):
+        try:
+            candidate = archive_internal_path(archive_root, root_ref.removeprefix("archive:"))
+            resolution["method"] = "archive_relative_root_ref"
+        except ArchiveServiceError as exc:
+            blockers.append(str(exc))
+    elif root_ref and os.environ.get(root_ref):
+        candidate = Path(os.environ[root_ref]).expanduser().resolve()
+        resolution["method"] = f"env:{root_ref}"
+    elif source_id and local_source_root_path(archive_root, source_id) is not None:
+        candidate = local_source_root_path(archive_root, source_id)
+        resolution["method"] = "ignored_local_profile"
+    else:
+        blockers.append(f"Source requires --source-root or an environment variable named by root_ref: {root_ref}.")
+        resolution["method"] = "unresolved"
+
+    if candidate is None:
+        return None, resolution
+    resolution["exists"] = candidate.exists()
+    if not candidate.exists():
+        blockers.append("Resolved source root does not exist.")
+        return candidate, resolution
+    if source_type in {"local_folder", "external_ssd", "notion_export"} and not candidate.is_dir():
+        blockers.append(f"Source type {source_type} requires a directory root.")
+    if source_type == "google_drive_export" and not (candidate.is_dir() or candidate.is_file()):
+        blockers.append("Google Drive export source requires a directory or manifest file.")
+    if candidate == archive_root:
+        warnings.append("Source root is the archive root; this is allowed for examples but should be explicit for real archives.")
+    return candidate, resolution
+
+
+def discover_source_map_items(
+    *,
+    archive_root: Path,
+    binding: dict[str, Any],
+    resolved_root: Path | None,
+    scanned_at: str,
+    limit: int,
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    source_type = str(binding.get("source_type") or "")
+    if source_type == "object_manifest":
+        return object_manifest_source_map_items(archive_root, binding, scanned_at, limit, warnings)
+    if resolved_root is None:
+        return []
+    if source_type == "google_drive_export" and resolved_root.is_file():
+        return google_drive_manifest_source_map_items(resolved_root, binding, scanned_at, limit, warnings)
+    return filesystem_source_map_items(resolved_root, binding, scanned_at, limit, warnings)
+
+
+def object_manifest_source_map_items(
+    archive_root: Path,
+    binding: dict[str, Any],
+    scanned_at: str,
+    limit: int,
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    source_id = str(binding.get("source_id") or "")
+    visibility = source_visibility(binding)
+    entries: list[dict[str, Any]] = []
+    for record in load_manifest_records(archive_root)[:limit]:
+        object_id = str(record.get("object_id") or "")
+        logical_key = record.get("logical_key") if isinstance(record.get("logical_key"), str) else None
+        entries.append(
+            {
+                "source_id": source_id,
+                "item_id": object_id or stable_source_item_id(source_id, logical_key or "object"),
+                "item_kind": "object",
+                "relative_path": logical_key,
+                "object_id": object_id or None,
+                "size_bytes": record.get("size_bytes") if isinstance(record.get("size_bytes"), int) else None,
+                "mime": record.get("mime"),
+                "visibility": visibility,
+                "scan_status": "seen",
+                "provenance": {
+                    "source_type": "object_manifest",
+                    "scan_mode": SOURCE_SCAN_MODE,
+                    "scanned_at": scanned_at,
+                    "content_read": False,
+                    "full_hash_calculated": False,
+                    "external_api_called": False,
+                },
+            }
+        )
+    if len(load_manifest_records(archive_root)) > limit:
+        warnings.append(f"Object manifest source scan was limited to {limit} item(s).")
+    return entries
+
+
+def google_drive_manifest_source_map_items(
+    manifest_path: Path,
+    binding: dict[str, Any],
+    scanned_at: str,
+    limit: int,
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    data = load_external_import_manifest_data(manifest_path)
+    raw_items = data.get("items") if isinstance(data, dict) else []
+    if not isinstance(raw_items, list):
+        warnings.append("Google Drive source manifest has no items list.")
+        return []
+    source_id = str(binding.get("source_id") or "")
+    visibility = source_visibility(binding)
+    entries: list[dict[str, Any]] = []
+    for raw_item in raw_items[:limit]:
+        if not isinstance(raw_item, dict):
+            continue
+        external_id = str(raw_item.get("external_id") or raw_item.get("id") or raw_item.get("url") or raw_item.get("path") or "")
+        relative_path = str(raw_item.get("path") or "") or None
+        entries.append(
+            {
+                "source_id": source_id,
+                "item_id": stable_source_item_id(source_id, external_id or relative_path or str(len(entries))),
+                "item_kind": str(raw_item.get("kind") or "file"),
+                "relative_path": relative_path,
+                "external_url": raw_item.get("url") or raw_item.get("source_url"),
+                "provider_id": external_id or None,
+                "size_bytes": raw_item.get("size_bytes") if isinstance(raw_item.get("size_bytes"), int) else None,
+                "modified_at": raw_item.get("modified_at") or raw_item.get("updated_at"),
+                "mime": raw_item.get("mime"),
+                "title": raw_item.get("title") or raw_item.get("name"),
+                "visibility": visibility,
+                "scan_status": "seen",
+                "provenance": {
+                    "source_type": "google_drive_export",
+                    "scan_mode": SOURCE_SCAN_MODE,
+                    "scanned_at": scanned_at,
+                    "content_read": False,
+                    "full_hash_calculated": False,
+                    "external_api_called": False,
+                },
+            }
+        )
+    if len(raw_items) > limit:
+        warnings.append(f"Google Drive source scan was limited to {limit} item(s).")
+    return entries
+
+
+def filesystem_source_map_items(
+    root: Path,
+    binding: dict[str, Any],
+    scanned_at: str,
+    limit: int,
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    source_id = str(binding.get("source_id") or "")
+    source_type = str(binding.get("source_type") or "")
+    visibility = source_visibility(binding)
+    scope_policy = binding.get("scope_policy") if isinstance(binding.get("scope_policy"), dict) else {}
+    include_patterns = scope_patterns(scope_policy.get("include"), ["**/*"])
+    exclude_patterns = scope_patterns(scope_policy.get("exclude"), [".git/**", "__pycache__/**"])
+    entries: list[dict[str, Any]] = []
+    skipped = 0
+    for path in sorted(root.rglob("*")):
+        if len(entries) >= limit:
+            skipped += 1
+            continue
+        if not path.is_file():
+            continue
+        if not is_path_within_root(path, root):
+            skipped += 1
+            continue
+        relative = path.relative_to(root).as_posix()
+        if not matches_any_pattern(relative, include_patterns):
+            skipped += 1
+            continue
+        if matches_any_pattern(relative, exclude_patterns):
+            skipped += 1
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            skipped += 1
+            continue
+        entries.append(
+            {
+                "source_id": source_id,
+                "item_id": stable_source_item_id(source_id, relative),
+                "item_kind": "file",
+                "relative_path": relative,
+                "size_bytes": int(stat.st_size),
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).astimezone().replace(microsecond=0).isoformat(),
+                "mime": mimetypes.guess_type(path.name)[0],
+                "title": path.stem,
+                "visibility": visibility,
+                "scan_status": "seen",
+                "provenance": {
+                    "source_type": source_type,
+                    "scan_mode": SOURCE_SCAN_MODE,
+                    "scanned_at": scanned_at,
+                    "content_read": False,
+                    "full_hash_calculated": False,
+                    "external_api_called": False,
+                },
+            }
+        )
+    if skipped:
+        warnings.append(f"Source scan skipped or deferred {skipped} item(s) because of limits, filters, or path safety.")
+    return entries
+
+
+def source_visibility(binding: dict[str, Any]) -> dict[str, Any]:
+    visibility = binding.get("visibility")
+    if isinstance(visibility, dict):
+        return json_safe(visibility)
+    return default_private_visibility()
+
+
+def scope_patterns(value: Any, default: list[str]) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if isinstance(item, str) and item]
+    if isinstance(value, str) and value:
+        return [value]
+    return default
+
+
+def matches_any_pattern(relative_path: str, patterns: list[str]) -> bool:
+    normalized = relative_path.replace("\\", "/")
+    for pattern in patterns:
+        normalized_pattern = pattern.replace("\\", "/")
+        if normalized_pattern in {"*", "**", "**/*"}:
+            return True
+        if fnmatch.fnmatch(normalized, normalized_pattern):
+            return True
+        if normalized_pattern.endswith("/**") and normalized.startswith(normalized_pattern[:-3]):
+            return True
+    return False
+
+
+def stable_source_item_id(source_id: str, key: str) -> str:
+    digest = hashlib.sha256(f"{source_id}\n{key}".encode("utf-8")).hexdigest()[:16]
+    return f"sourceitem:{safe_slug(source_id)}:{digest}"
+
+
+def source_scan_fingerprint(source_id: str, source_type: str, items: list[dict[str, Any]]) -> str:
+    payload = {
+        "source_id": source_id,
+        "source_type": source_type,
+        "items": [
+            {
+                "item_id": item.get("item_id"),
+                "relative_path": item.get("relative_path"),
+                "external_url": item.get("external_url"),
+                "object_id": item.get("object_id"),
+                "size_bytes": item.get("size_bytes"),
+                "modified_at": item.get("modified_at"),
+            }
+            for item in items
+        ],
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+
+
+def unique_workpack_id(archive_root: Path, view_id: str, iso_now: str) -> str:
+    base = f"workpack_{iso_now[:10].replace('-', '')}_{safe_slug(view_id)}"
+    candidate = base
+    suffix = 2
+    while (archive_root / "workpacks" / candidate).exists():
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    return candidate
+
+
+def safe_slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")[:64] or "item"
+
+
+def resolve_workpack_package_path(workpack_path: Path | str) -> tuple[Path, Path]:
+    candidate = Path(workpack_path).resolve()
+    package_file = candidate / "package.yml" if candidate.is_dir() else candidate
+    if package_file.name != "package.yml":
+        raise ArchiveServiceError("Workpack path must be a workpack directory or package.yml file.")
+    if not package_file.is_file():
+        raise ArchiveServiceError(f"Workpack package.yml not found: {package_file}")
+    return package_file.parent, package_file
+
+
+def inspect_workpack_zettels(
+    target_root: Path,
+    package_root: Path,
+    package: dict[str, Any],
+    blockers: list[str],
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    entries = extract_workpack_zettel_entries(package, package_root, blockers)
+    target_ids = collect_target_zettel_ids(target_root)
+    previews: list[dict[str, Any]] = []
+    for entry in entries:
+        package_path = entry["package_path"]
+        try:
+            zettel_path = resolve_archive_relative_path(package_root, package_path)
+        except ArchivePathError as exc:
+            blockers.append(f"Workpack zettel path is unsafe: {package_path} ({exc}).")
+            continue
+        if not zettel_path.is_file():
+            blockers.append(f"Workpack zettel file is missing: {package_path}.")
+            continue
+        frontmatter, _body = split_zettel_text(zettel_path.read_text(encoding="utf-8"))
+        frontmatter = json_safe(frontmatter)
+        zettel_id = frontmatter.get("id")
+        filename = zettel_path.name
+        target_path = f"inbox/{filename}"
+        preview = {
+            "id": zettel_id,
+            "title": frontmatter.get("title"),
+            "package_path": archive_relative_path(zettel_path, package_root),
+            "target_path": target_path,
+            "action": "create_inbox_draft",
+            "conflicts": [],
+        }
+        if zettel_id in target_ids:
+            preview["conflicts"].append("zettel_id_exists")
+            blockers.append(f"Target archive already has zettel id: {zettel_id}.")
+        if (target_root / target_path).exists():
+            preview["conflicts"].append("target_path_exists")
+            blockers.append(f"Target inbox path already exists: {target_path}.")
+        if contains_forbidden_location_reference(zettel_path.read_text(encoding="utf-8")):
+            warnings.append(f"Workpack zettel may contain a provider URL or local absolute path: {package_path}.")
+        previews.append(preview)
+    return previews
+
+
+def extract_workpack_zettel_entries(
+    package: dict[str, Any],
+    package_root: Path,
+    blockers: list[str],
+) -> list[dict[str, str]]:
+    contents = package.get("contents") if isinstance(package.get("contents"), dict) else {}
+    raw_entries = contents.get("zettels") if isinstance(contents, dict) else None
+    entries: list[dict[str, str]] = []
+    if isinstance(raw_entries, list):
+        for item in raw_entries:
+            if isinstance(item, dict) and isinstance(item.get("package_path"), str):
+                entries.append({"package_path": item["package_path"]})
+            elif isinstance(item, str):
+                entries.append({"package_path": item})
+            else:
+                blockers.append("Workpack contents.zettels contains an unsupported entry.")
+    if entries:
+        return entries
+
+    zettels_root = package_root / "zettels"
+    if zettels_root.is_dir():
+        for path in safe_archive_glob(zettels_root, "*.md", package_root):
+            entries.append({"package_path": archive_relative_path(path, package_root)})
+    return entries
+
+
+def collect_target_zettel_ids(target_root: Path) -> set[Any]:
+    zettel_ids: set[Any] = set()
+    for path in iter_zettel_paths(target_root):
+        frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
+        if frontmatter.get("id"):
+            zettel_ids.add(frontmatter.get("id"))
+    return zettel_ids
+
+
+def inspect_workpack_manifest(
+    target_root: Path,
+    package_root: Path,
+    package: dict[str, Any],
+    blockers: list[str],
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    contents = package.get("contents") if isinstance(package.get("contents"), dict) else {}
+    objects = contents.get("objects") if isinstance(contents.get("objects"), dict) else {}
+    manifest_relative = objects.get("manifest_path") if isinstance(objects.get("manifest_path"), str) else "manifests/files.jsonl"
+    try:
+        manifest_path = resolve_archive_relative_path(package_root, manifest_relative)
+    except ArchivePathError as exc:
+        blockers.append(f"Workpack manifest path is unsafe: {manifest_relative} ({exc}).")
+        return []
+    if not manifest_path.is_file():
+        if objects.get("object_ids"):
+            blockers.append(f"Workpack object manifest is missing: {manifest_relative}.")
+        return []
+
+    target_objects = {record.get("object_id"): record for record in load_manifest_records(target_root)}
+    previews: list[dict[str, Any]] = []
+    for line_number, raw_line in enumerate(manifest_path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            blockers.append(f"Workpack manifest invalid JSON on line {line_number}: {exc}.")
+            continue
+        object_id = record.get("object_id") if isinstance(record, dict) else None
+        if not object_id:
+            blockers.append(f"Workpack manifest entry missing object_id on line {line_number}.")
+            continue
+        action = "already_present" if object_id in target_objects else "append_manifest_record"
+        preview = {
+            "object_id": object_id,
+            "logical_key": record.get("logical_key") if isinstance(record, dict) else None,
+            "action": action,
+            "include_original": False,
+        }
+        if action == "already_present":
+            warnings.append(f"Target manifest already has object_id: {object_id}.")
+        previews.append(preview)
+    return previews
+
+
+def build_import_scope_gate(
+    package: dict[str, Any],
+    zettel_previews: list[dict[str, Any]],
+    object_previews: list[dict[str, Any]],
+) -> dict[str, Any]:
+    package_scope = package.get("scope_gate") if isinstance(package.get("scope_gate"), dict) else {}
+    included_paths = [item["package_path"] for item in zettel_previews if item.get("action") == "create_inbox_draft"]
+    return {
+        "unit": package_scope.get("unit") or "workpack",
+        "view_id": package_scope.get("view_id") or nested_value(package, ["contents", "view_id"]),
+        "included_zettels": included_paths,
+        "included_objects": [item["object_id"] for item in object_previews if item.get("action") == "append_manifest_record"],
+        "excluded": package_scope.get("excluded") or [],
+        "sensitive_categories_blocked_by_default": package_scope.get("sensitive_categories_blocked_by_default")
+        or sorted(SENSITIVE_SHARE_CATEGORIES),
+    }
+
+
+def build_import_trust_gate(
+    target_root: Path,
+    package: dict[str, Any],
+    *,
+    counterparty_id: str | None,
+    counterparty_fingerprint: str | None,
+    blockers: list[str],
+) -> dict[str, Any]:
+    trust_policy = package.get("trust_gate") if isinstance(package.get("trust_gate"), dict) else {}
+    if not trust_policy.get("counterparty_identity_required"):
+        return {"required": False, "ok": True, "status": "not_required"}
+    return validate_counterparty_trust(
+        target_root,
+        counterparty_id=counterparty_id or str(package.get("source_archive") or ""),
+        counterparty_fingerprint=counterparty_fingerprint,
+        blockers=blockers,
+    )
+
+
+def load_archive_identity(archive_root: Path) -> dict[str, Any]:
+    data = load_yaml(read_archive_text(archive_root, "archive-identity.yml"))
+    if not isinstance(data, dict):
+        raise ArchiveServiceError("archive-identity.yml must be a YAML object.")
+    return json_safe(data)
+
+
+def validate_counterparty_trust(
+    archive_root: Path,
+    *,
+    counterparty_id: str | None,
+    counterparty_fingerprint: str | None,
+    blockers: list[str],
+) -> dict[str, Any]:
+    identity_doc = load_archive_identity(archive_root)
+    counterparty = (counterparty_id or "").strip()
+    fingerprint = (counterparty_fingerprint or "").strip()
+    result = {
+        "required": True,
+        "ok": False,
+        "counterparty_id": counterparty or None,
+        "provided_fingerprint": fingerprint or None,
+        "matched": None,
+        "status": "blocked",
+    }
+    if not counterparty:
+        blockers.append("Counterparty identity is required for archive sharing.")
+        return result
+    if not fingerprint:
+        blockers.append("Counterparty fingerprint is required for trust gate verification.")
+        return result
+
+    trusted = identity_doc.get("trusted_counterparties") or []
+    if not isinstance(trusted, list):
+        blockers.append("archive-identity.yml trusted_counterparties must be a list.")
+        return result
+    for item in trusted:
+        if not isinstance(item, dict):
+            continue
+        identifiers = {
+            str(value)
+            for value in [item.get("identity_id"), item.get("archive_id"), item.get("principal_id")]
+            if value
+        }
+        if counterparty not in identifiers:
+            continue
+        expected = str(item.get("expected_fingerprint") or "")
+        result["matched"] = {
+            "identity_id": item.get("identity_id"),
+            "archive_id": item.get("archive_id"),
+            "principal_id": item.get("principal_id"),
+            "trust_level": item.get("trust_level"),
+            "expected_fingerprint": expected or None,
+        }
+        if expected != fingerprint:
+            blockers.append("Counterparty fingerprint does not match trusted identity.")
+            return result
+        result["ok"] = True
+        result["status"] = "verified"
+        return result
+
+    blockers.append(f"Counterparty identity is not trusted by this archive: {counterparty}.")
+    return result
+
+
+def sensitive_categories_for_frontmatter(frontmatter: dict[str, Any]) -> list[str]:
+    raw_values: list[Any] = [frontmatter.get("kind")]
+    facets = frontmatter.get("facets")
+    if isinstance(facets, dict):
+        for key in ["domain", "record_type", "category", "sensitivity", "privacy", "tags"]:
+            raw_values.append(facets.get(key))
+    visibility = frontmatter.get("visibility")
+    if isinstance(visibility, dict):
+        raw_values.append(visibility.get("scope"))
+
+    found: set[str] = set()
+    for value in raw_values:
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            if not isinstance(item, str):
+                continue
+            normalized = re.sub(r"[^a-z0-9]+", "-", item.lower()).strip("-")
+            normalized = SENSITIVE_CATEGORY_ALIASES.get(normalized, normalized)
+            if normalized in SENSITIVE_SHARE_CATEGORIES:
+                found.add(normalized)
+    return sorted(found)
+
+
+def index_archive(archive_root: Path | str) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    db_path = archive_internal_path(root, INDEX_RELATIVE_PATH)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    zettel_count = 0
+    object_count = 0
+    view_count = 0
+    source_map_count = 0
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS zettels (
+              path TEXT PRIMARY KEY,
+              zettel_id TEXT,
+              title TEXT,
+              status TEXT,
+              kind TEXT,
+              body TEXT,
+              frontmatter_json TEXT
+            );
+            CREATE TABLE IF NOT EXISTS objects (
+              object_id TEXT PRIMARY KEY,
+              logical_key TEXT,
+              mime TEXT,
+              manifest_json TEXT
+            );
+            CREATE TABLE IF NOT EXISTS views (
+              path TEXT PRIMARY KEY,
+              view_id TEXT,
+              name TEXT,
+              view_for TEXT,
+              view_json TEXT
+            );
+            CREATE TABLE IF NOT EXISTS source_map_entries (
+              item_id TEXT PRIMARY KEY,
+              source_id TEXT,
+              item_kind TEXT,
+              relative_path TEXT,
+              external_url TEXT,
+              scan_status TEXT,
+              source_json TEXT
+            );
+            DELETE FROM zettels;
+            DELETE FROM objects;
+            DELETE FROM views;
+            DELETE FROM source_map_entries;
+            """
+        )
+
+        for path in iter_zettel_paths(root):
+            frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
+            frontmatter = json_safe(frontmatter)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO zettels(path, zettel_id, title, status, kind, body, frontmatter_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    archive_relative_path(path, root),
+                    frontmatter.get("id"),
+                    frontmatter.get("title"),
+                    frontmatter.get("status"),
+                    frontmatter.get("kind"),
+                    body,
+                    json.dumps(frontmatter, ensure_ascii=False, default=str),
+                ),
+            )
+            zettel_count += 1
+
+        manifest_path = root / "objects" / "manifests" / "files.jsonl"
+        if manifest_path.is_file():
+            for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO objects(object_id, logical_key, mime, manifest_json)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        record.get("object_id"),
+                        record.get("logical_key"),
+                        record.get("mime"),
+                        json.dumps(record, ensure_ascii=False, default=str),
+                    ),
+                )
+                object_count += 1
+
+        views_root = root / "views"
+        if views_root.is_dir():
+            for path in safe_archive_glob(views_root, "*.yml", root):
+                data = load_yaml(path.read_text(encoding="utf-8"))
+                safe_data = json_safe(data)
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO views(path, view_id, name, view_for, view_json)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        archive_relative_path(path, root),
+                        safe_data.get("id") if isinstance(safe_data, dict) else None,
+                        safe_data.get("name") if isinstance(safe_data, dict) else None,
+                        safe_data.get("for") if isinstance(safe_data, dict) else None,
+                        json.dumps(safe_data, ensure_ascii=False, default=str),
+                    ),
+                )
+                view_count += 1
+
+        source_maps_root = root / SOURCE_MAPS_DIR
+        if source_maps_root.is_dir():
+            for path in safe_archive_glob(source_maps_root, "*.jsonl", root):
+                for raw_line in path.read_text(encoding="utf-8").splitlines():
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(record, dict):
+                        continue
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO source_map_entries(
+                          item_id, source_id, item_kind, relative_path, external_url, scan_status, source_json
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            record.get("item_id"),
+                            record.get("source_id"),
+                            record.get("item_kind"),
+                            record.get("relative_path"),
+                            record.get("external_url"),
+                            record.get("scan_status"),
+                            json.dumps(record, ensure_ascii=False, default=str),
+                        ),
+                    )
+                    source_map_count += 1
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "ok": True,
+        "index_path": archive_relative_path(db_path, root),
+        "zettels": zettel_count,
+        "objects": object_count,
+        "views": view_count,
+        "source_map_entries": source_map_count,
+    }
+
+
+def search_archive(archive_root: Path | str, query: str, limit: int = 20) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    if not query.strip():
+        raise ArchiveServiceError("query is required.")
+    db_path = root / INDEX_RELATIVE_PATH
+    if not db_path.is_file():
+        raise ArchiveServiceError("Archive index is missing. Run archive index first.")
+
+    like = f"%{query.lower()}%"
+    limit = max(1, min(int(limit), 100))
+    results: list[dict[str, Any]] = []
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        for row in conn.execute(
+            """
+            SELECT path, zettel_id, title, status, kind, body, frontmatter_json
+            FROM zettels
+            WHERE lower(coalesce(zettel_id, '') || ' ' || coalesce(title, '') || ' ' || coalesce(status, '') || ' ' ||
+                        coalesce(kind, '') || ' ' || coalesce(body, '') || ' ' || coalesce(frontmatter_json, '')) LIKE ?
+            ORDER BY path
+            LIMIT ?
+            """,
+            (like, limit),
+        ):
+            results.append(
+                {
+                    "type": "zettel",
+                    "path": row["path"],
+                    "id": row["zettel_id"],
+                    "title": row["title"],
+                    "status": row["status"],
+                    "kind": row["kind"],
+                    "snippet": make_snippet(row["body"] or row["frontmatter_json"] or "", query),
+                }
+            )
+
+        remaining = limit - len(results)
+        if remaining > 0:
+            for row in conn.execute(
+                """
+                SELECT object_id, logical_key, mime, manifest_json
+                FROM objects
+                WHERE lower(coalesce(object_id, '') || ' ' || coalesce(logical_key, '') || ' ' ||
+                            coalesce(mime, '') || ' ' || coalesce(manifest_json, '')) LIKE ?
+                ORDER BY logical_key
+                LIMIT ?
+                """,
+                (like, remaining),
+            ):
+                results.append(
+                    {
+                        "type": "object",
+                        "path": row["logical_key"],
+                        "id": row["object_id"],
+                        "title": row["logical_key"],
+                        "mime": row["mime"],
+                        "snippet": make_snippet(row["manifest_json"] or "", query),
+                    }
+                )
+
+        remaining = limit - len(results)
+        if remaining > 0:
+            for row in conn.execute(
+                """
+                SELECT path, view_id, name, view_for, view_json
+                FROM views
+                WHERE lower(coalesce(view_id, '') || ' ' || coalesce(name, '') || ' ' ||
+                            coalesce(view_for, '') || ' ' || coalesce(view_json, '')) LIKE ?
+                ORDER BY path
+                LIMIT ?
+                """,
+                (like, remaining),
+            ):
+                results.append(
+                    {
+                        "type": "view",
+                        "path": row["path"],
+                        "id": row["view_id"],
+                        "title": row["name"],
+                        "for": row["view_for"],
+                        "snippet": make_snippet(row["view_json"] or "", query),
+                    }
+                )
+
+        remaining = limit - len(results)
+        if remaining > 0:
+            for row in conn.execute(
+                """
+                SELECT item_id, source_id, item_kind, relative_path, external_url, scan_status, source_json
+                FROM source_map_entries
+                WHERE lower(coalesce(item_id, '') || ' ' || coalesce(source_id, '') || ' ' ||
+                            coalesce(item_kind, '') || ' ' || coalesce(relative_path, '') || ' ' ||
+                            coalesce(external_url, '') || ' ' || coalesce(scan_status, '') || ' ' ||
+                            coalesce(source_json, '')) LIKE ?
+                ORDER BY source_id, relative_path, external_url
+                LIMIT ?
+                """,
+                (like, remaining),
+            ):
+                title = row["relative_path"] or row["external_url"] or row["item_id"]
+                results.append(
+                    {
+                        "type": "source_map",
+                        "path": row["relative_path"] or row["external_url"],
+                        "id": row["item_id"],
+                        "title": title,
+                        "source_id": row["source_id"],
+                        "item_kind": row["item_kind"],
+                        "scan_status": row["scan_status"],
+                        "snippet": make_snippet(row["source_json"] or "", query),
+                    }
+                )
+    finally:
+        conn.close()
+
+    return {"query": query, "count": len(results), "results": results}
+
+
+def iter_zettel_paths(archive_root: Path) -> list[Path]:
+    archive_root = archive_root.resolve()
+    paths: list[Path] = []
+    for folder in ["zettels", "inbox"]:
+        root = archive_root / folder
+        if root.is_dir():
+            paths.extend(safe_archive_glob(root, "*.md", archive_root, recursive=True))
+    return paths
+
+
+def safe_archive_glob(root: Path, pattern: str, archive_root: Path, *, recursive: bool = False) -> list[Path]:
+    """Return matching files whose resolved target stays inside the archive root."""
+
+    iterator = root.rglob(pattern) if recursive else root.glob(pattern)
+    return sorted(path for path in iterator if path.is_file() and is_path_within_root(path, archive_root))
+
+
+def make_snippet(text: str, query: str, size: int = 160) -> str:
+    compact = " ".join(text.split())
+    index = compact.lower().find(query.lower())
+    if index < 0:
+        return compact[:size]
+    start = max(0, index - size // 3)
+    end = min(len(compact), start + size)
+    return compact[start:end]
+
+
+def read_archive_id(archive_root: Path) -> str:
+    data = load_yaml(read_archive_text(archive_root, "archive.yml"))
+    if not isinstance(data, dict) or not isinstance(data.get("archive_id"), str):
+        raise ArchiveServiceError("archive.yml does not contain archive_id and archive_id was not provided.")
+    return data["archive_id"]
+
+
+def default_private_visibility() -> dict[str, Any]:
+    return {"scope": "private", "allowed_archives": [], "source_visibility": "private"}
+
+
+def make_zettel_id(title: str, iso_now: str) -> str:
+    day = iso_now[:10].replace("-", "")
+    time_part = iso_now[11:19].replace(":", "")
+    slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:32] or "draft"
+    return f"zet_{day}_{time_part}_{slug}"
+
+
+def json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_safe(item) for item in value]
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return value
+
+
+def unique_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def drop_none_values(value: dict[str, Any]) -> dict[str, Any]:
+    return {key: item for key, item in value.items() if item is not None}

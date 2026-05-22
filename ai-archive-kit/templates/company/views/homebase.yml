@@ -1,0 +1,30 @@
+id: view.company.homebase
+name: Company Homebase
+for: ai_context
+filters: {}
+include:
+  zettels: true
+  originals: references_only
+  relations: true
+sort:
+  - field: updated_at
+    direction: descending
+context_policy:
+  max_zettels: 100
+  include_large_media: never_directly
+  prefer_summaries: true
+saved_views:
+  - id: view.company.projects
+    name: Projects
+    filters:
+      facets.domain: work
+      facets.scope: project
+  - id: view.company.handover
+    name: Handover
+    filters:
+      facets.record_type: handover
+  - id: view.company.decisions
+    name: Decisions
+    filters:
+      facets.record_type: decision
+

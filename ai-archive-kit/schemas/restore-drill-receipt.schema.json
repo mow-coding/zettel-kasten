@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Archive Kit restore drill receipt",
+  "type": "object",
+  "required": [
+    "receipt_id",
+    "action",
+    "dry_run",
+    "timestamp",
+    "source_archive",
+    "source_archive_root",
+    "target_root",
+    "copy_plan",
+    "validation",
+    "result",
+    "blockers",
+    "warnings"
+  ],
+  "properties": {
+    "receipt_id": {"type": "string"},
+    "action": {"type": "string", "enum": ["restore_drill"]},
+    "dry_run": {"type": "boolean"},
+    "timestamp": {"type": "string"},
+    "reviewed_by": {"type": "string"},
+    "reviewed_at": {"type": "string"},
+    "source_archive": {"type": "string"},
+    "source_archive_root": {"type": "string"},
+    "target_root": {"type": "string"},
+    "copy_plan": {"type": "object"},
+    "validation": {"type": "object"},
+    "result": {"type": "object"},
+    "blockers": {"type": "array"},
+    "warnings": {"type": "array"}
+  }
+}

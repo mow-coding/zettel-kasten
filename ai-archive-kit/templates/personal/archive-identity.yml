@@ -1,0 +1,34 @@
+identity:
+  archive_id: archive:personal:template
+  identity_id: identity:archive:personal:template
+  scope: personal
+  principal_id: person:template
+  display_name: Template Person
+  public_keys: []
+ownership:
+  owner_id: person:template
+  owner_kind: person
+  owner_display_name: Template Person
+  owner_archive_id: archive:personal:template
+  operators:
+    - operator_id: person:template
+      role: owner_operator
+      permissions:
+        - capture
+        - curate
+        - approve
+        - transfer_request
+  subjects: []
+  transfer_policy:
+    ownership_transfer_allowed: true
+    requires_human_approval: true
+    requires_receipt: true
+    receipt_action: transfer_archive_ownership
+    default_transfer_target:
+trusted_counterparties: []
+lineage:
+  parents: []
+  children: []
+  forked_from:
+  merged_from: []
+  exited_from:

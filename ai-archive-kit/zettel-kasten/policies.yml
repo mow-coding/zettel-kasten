@@ -1,0 +1,265 @@
+schema_version: ai-archive-kit/zettel-kasten-policies/v0.2-draft
+zettel_kasten_id: zettel-kasten:ai-archive-kit:base
+status: draft
+description: >
+  Base policies for AI Archive Kit. These are human-readable policy definitions
+  for future CLI, MCP, or local AI runtimes. v0.2 records the rules but does not
+  yet enforce them automatically.
+
+policy_decisions:
+  - allow
+  - deny
+  - require_human_approval
+  - require_receipt
+  - allow_with_constraints
+
+policies:
+  - policy_id: mounted_archives_only
+    decision: deny
+    applies_to:
+      actions:
+        - "*"
+    condition: AI attempts to read or write an archive not mounted by the active keyring profile.
+    enforcement: Block access unless the active keyring mounts the archive with sufficient access.
+    reason: The AI may only know what the active keyring allows it to know.
+
+  - policy_id: ai_default_write_inbox_only
+    decision: allow_with_constraints
+    applies_to:
+      actions:
+        - create_draft_zettel
+    condition: AI creates a zettel without explicit human promotion approval.
+    enforcement: Write only to root_policy.ai_inbox.
+    reason: Drafts are useful, but canonical memory should not be silently mutated.
+
+  - policy_id: canonical_zettel_requires_human_promotion
+    decision: require_human_approval
+    applies_to:
+      actions:
+        - promote_zettel
+        - archive_init
+    condition: A zettel is created or moved into canonical zettels/.
+    enforcement: Require explicit human approval or an archive-level policy override.
+    reason: Canonical zettels are durable human memory, not temporary AI scratch work.
+
+  - policy_id: zettel_required_frontmatter
+    decision: deny
+    applies_to:
+      entities:
+        - Zettel
+      actions:
+        - create_draft_zettel
+        - promote_zettel
+    condition: Required zettel frontmatter fields are missing.
+    enforcement: Block promotion and warn on draft creation.
+    reason: AI retrieval and future tools need consistent metadata.
+
+  - policy_id: drafts_may_be_incomplete
+    decision: allow_with_constraints
+    applies_to:
+      actions:
+        - create_draft_zettel
+    condition: A draft has uncertainty, TODOs, multiple ideas, or unresolved questions.
+    enforcement: Allow in inbox, but mark promotion.ready_for_promotion as false until reviewed.
+    reason: Capture should be easy, but rough drafts should not become canonical by accident.
+
+  - policy_id: promotion_checklist_required
+    decision: require_human_approval
+    applies_to:
+      actions:
+        - promote_zettel
+        - archive_doctor
+    condition: A draft is promoted into zettels/ or archive doctor checks promotion readiness.
+    enforcement: Require the zettel promotion checklist in zettel-kasten/zettel-rules.yml.
+    reason: Promotion is the boundary between temporary AI draft and durable memory.
+
+  - policy_id: canonical_zettel_must_be_self_contained
+    decision: deny
+    applies_to:
+      entities:
+        - Zettel
+      actions:
+        - promote_zettel
+    condition: A canonical candidate cannot be understood without the original chat or hidden context.
+    enforcement: Keep it in inbox or workbench until context, source, and purpose are clear.
+    reason: Future AI agents and future humans need records that survive context loss.
+
+  - policy_id: one_idea_or_explicit_record
+    decision: allow_with_constraints
+    applies_to:
+      actions:
+        - promote_zettel
+    condition: A promotion candidate contains multiple ideas, events, sources, or visibility scopes.
+    enforcement: Split idea notes by idea; keep record notes whole only when they represent one event, source, object, decision, or meeting.
+    reason: Zettels should be reusable without becoming too fragmented to understand.
+
+  - policy_id: provider_urls_forbidden_in_zettels
+    decision: deny
+    applies_to:
+      entities:
+        - Zettel
+      actions:
+        - create_draft_zettel
+        - promote_zettel
+        - attach_object
+    condition: Zettel frontmatter or body stores provider-specific object URLs as canonical references.
+    forbidden_examples:
+      - s3://
+      - b2://
+      - r2://
+      - https://storage-provider.example/
+      - E:/
+      - C:/
+    enforcement: Use object_id in zettels and store locations in manifests.
+    reason: Object storage providers must remain replaceable.
+
+  - policy_id: source_claims_require_source_reference
+    decision: allow_with_constraints
+    applies_to:
+      entities:
+        - Zettel
+      actions:
+        - promote_zettel
+        - revise_canonical_zettel
+    condition: A zettel makes a factual claim based on a source, file, or previous conversation.
+    enforcement: Add source zettel, object_id, provenance entry, or mark the claim as interpretation/uncertain.
+    reason: Durable memory should distinguish evidence from interpretation.
+
+  - policy_id: object_identity_by_sha256
+    decision: deny
+    applies_to:
+      entities:
+        - OriginalObject
+      actions:
+        - attach_object
+        - pack_work_context
+        - import_workpack
+    condition: An original file is referenced without sha256 object identity.
+    enforcement: Require object_id formatted as sha256:<hash>.
+    reason: Physical replication is allowed, but logical identity must stay stable.
+
+  - policy_id: allowed_link_type_only
+    decision: deny
+    applies_to:
+      actions:
+        - link_zettels
+    condition: A relationship uses a link type not defined in zettel-kasten/types.yml.
+    enforcement: Block the edge or require zettel-kasten model update first.
+    reason: Links must be explicit and queryable, not vague one-off strings.
+
+  - policy_id: provenance_required
+    decision: deny
+    applies_to:
+      actions:
+        - derive_zettel
+        - share_to_archive
+        - transfer_to_archive
+        - inherit_to_archive
+        - import_workpack
+    condition: Shared, derived, transferred, inherited, or imported records omit provenance.
+    enforcement: Require provenance fields before completing the action.
+    reason: Future users need to know where records came from and what may be shared.
+
+  - policy_id: private_source_not_revealed_by_default
+    decision: deny
+    applies_to:
+      actions:
+        - derive_zettel
+        - share_to_archive
+        - pack_work_context
+        - inherit_to_archive
+    condition: A private source would be exposed to another archive without explicit permission.
+    enforcement: Redact private source details or create a derivative summary.
+    reason: Personal insight may move across boundaries, but private sources should not leak.
+
+  - policy_id: cross_archive_share_requires_explicit_mode
+    decision: require_human_approval
+    applies_to:
+      actions:
+        - derive_zettel
+        - share_to_archive
+        - transfer_to_archive
+        - pack_work_context
+    condition: A record, object, view, or package crosses archive boundaries.
+    enforcement: Require an explicit mode such as reference, copy, mount, derive, handover, or return.
+    reason: Archives share, derive, transfer, inherit, and federate. They do not casually merge.
+
+  - policy_id: workpack_import_requires_receipt
+    decision: require_receipt
+    applies_to:
+      actions:
+        - import_workpack
+        - share_to_archive
+    condition: A workpack is imported, mounted, or shared with another archive.
+    enforcement: Create an import or share receipt recording results and warnings.
+    reason: Workpacks move context between trust boundaries and need an audit trail.
+
+  - policy_id: destructive_transfer_requires_human_confirmation
+    decision: require_human_approval
+    applies_to:
+      actions:
+        - transfer_to_archive
+        - inherit_to_archive
+    condition: Authority, ownership, deletion, redaction, or irreversible state may change.
+    enforcement: Require explicit human confirmation and a receipt.
+    reason: Succession and transfer are high-impact archive operations.
+
+  - policy_id: canonical_revision_preserves_history
+    decision: require_receipt
+    applies_to:
+      actions:
+        - revise_canonical_zettel
+    condition: A canonical zettel receives a meaning-changing edit.
+    enforcement: Create a receipt, revision note, or superseding zettel instead of silently overwriting.
+    reason: The archive should preserve mistakes, reversals, and decision history when they matter.
+
+  - policy_id: large_media_references_only_by_default
+    decision: allow_with_constraints
+    applies_to:
+      entities:
+        - OriginalObject
+      actions:
+        - pack_work_context
+        - create_draft_zettel
+    condition: Large media files are included in an AI context or workpack.
+    enforcement: Include object metadata and references by default; include originals only when explicitly requested.
+    reason: AI context should stay portable and should not accidentally copy huge private media.
+
+  - policy_id: secrets_never_committed
+    decision: deny
+    applies_to:
+      actions:
+        - archive_init
+        - import_workpack
+        - pack_work_context
+    condition: Long-lived secrets, API keys, rclone credentials, or password-manager exports are written into the archive.
+    enforcement: Store secrets in KeePassXC or another external credential store; keep env files temporary and ignored.
+    reason: The public kit and private archives must not leak credentials.
+
+  - policy_id: safe_defaults_required
+    decision: allow_with_constraints
+    applies_to:
+      actions:
+        - archive_init
+    condition: A new archive is initialized.
+    enforcement: Cloud off, telemetry off, inbox-only AI writing, provider URLs forbidden, secrets ignored.
+    reason: New users should start from safe local-first defaults.
+
+  - policy_id: read_only_by_default_for_doctor
+    decision: allow_with_constraints
+    applies_to:
+      actions:
+        - archive_doctor
+    condition: Archive doctor inspects an archive.
+    enforcement: Run read-only unless the user passes an explicit fix option.
+    reason: Diagnostics should not mutate archives unexpectedly.
+
+  - policy_id: project_memory_required
+    decision: require_receipt
+    applies_to:
+      actions:
+        - record_project_minutes
+        - record_decision_log
+    condition: Substantial conversation, decision, implementation, correction, doubt, or design shift occurs.
+    enforcement: Update meeting minutes and decision log where appropriate.
+    reason: The project exists to prove that important AI conversation context should not evaporate.

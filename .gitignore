@@ -1,0 +1,56 @@
+# Local agent instructions
+/AGENTS.md
+
+# Provider secrets and local credentials
+.notion-*-login.txt
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+token.json
+secrets/
+
+# Private archive data and local-only source material
+archives/
+archive-data/
+private-archive/
+private-archives/
+real-archive/
+real-archives/
+.local-archive/
+.archive-local/
+source-dumps/
+provider-exports/
+raw-data/
+
+# Public release safety: keep detailed private meeting records local by default.
+/meeting-minutes/
+/archive-infra-decision-log-*.md
+/*-zettel-kasten-mapping-*.md
+
+# Public release safety: portfolio/private strategy drafts are not part of the showcase repo.
+/ai-archive-kit/specs/*context-brief*.md
+/ai-archive-kit/specs/local-*.md
+/ai-archive-kit/specs/portfolio-operating-manual-*.md
+
+# Python/cache/build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Node/editor/OS noise
+node_modules/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

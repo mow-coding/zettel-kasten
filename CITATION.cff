@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use or discuss this project, please cite it as below."
+title: "Zettel-Kasten + Zet"
+abstract: "A local-first AI-native zettel-kasten archive and text-centered zet sharing protocol."
+authors:
+  - family-names: "Kim"
+    given-names: "Seong Kyun"
+    affiliation: "Department of Urban Sociology, University of Seoul"
+    email: "mow.coding@gmail.com"
+repository-code: "https://github.com/mow-coding/zettel-kasten"
+license: "MIT"
+version: "0.2.2"
+date-released: "2026-05-23"
+keywords:
+  - "zettelkasten"
+  - "local-first"
+  - "AI-native"
+  - "personal archive"
+  - "knowledge management"
+  - "web3"

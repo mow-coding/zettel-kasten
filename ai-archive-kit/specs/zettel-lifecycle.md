@@ -1,0 +1,349 @@
+# Zettel Lifecycle Spec v0.2 Draft
+
+This spec defines how zettels are written, reviewed, promoted, revised, and retired in AI Archive Kit.
+
+For beginners: think of this as the rulebook for when an AI note is still a rough memo and when it becomes durable archive memory.
+
+## Design Sources
+
+This lifecycle is adapted for a PC-first AI archive from several public note-system ideas:
+
+- The Niklas Luhmann Archive describes Luhmann's Zettelkasten as about 90,000 notes with a specific organizational structure, used as a theory-development and publication machine.
+- The Luhmann digital archive exposes note complexes and link structures, which supports the idea that durable notes need relationships, not only folders.
+- Zettelkasten.de and the Ahrens workflow distinguish quick captures from permanent zettels, and emphasize self-contained notes written in one's own words.
+- Obsidian's public documentation shows that YAML frontmatter is a practical standard for structured Markdown properties.
+
+Project translation:
+
+```text
+Capture freely.
+Draft safely.
+Promote deliberately.
+Preserve provenance.
+Link explicitly.
+Revise without erasing history.
+```
+
+## Paths
+
+```text
+inbox/
+  Temporary captures and AI drafts.
+
+zettels/
+  Canonical zettels that passed promotion.
+
+workbench/
+  Optional working area for summaries, outlines, merge drafts, and temporary processing.
+
+receipts/
+  Optional audit records for promotion, import, transfer, redaction, and other significant actions.
+```
+
+`workbench/` and `receipts/` are recommended but not required by v0.1 templates yet.
+
+## Zettel Kinds
+
+The word `zettel` is broad in this project. Not every zettel must be an abstract idea note.
+
+Recommended kinds:
+
+```text
+fleeting_capture
+  A quick capture. Usually lives in inbox and may be deleted or promoted later.
+
+source_note
+  A note about a book, paper, video, web page, document, scan, or original object.
+
+permanent_note
+  A self-contained thought or explanation intended to remain useful later.
+
+record_note
+  A durable record of an event, document, health record, school record, meeting, or life fact.
+
+decision_note
+  A compact decision record with context and consequences.
+
+meeting_minutes
+  Chronological notes from a substantial conversation or meeting.
+
+object_summary
+  A human-readable summary of one or more original files.
+
+project_note
+  A working note tied to an active project. It may later produce permanent notes.
+```
+
+For this project, `permanent_note` is not the only canonical zettel kind. A school record, family document summary, or decision log can also be canonical if it is durable, understandable, sourced, and policy-compliant.
+
+## Lifecycle
+
+```text
+captured
+  Raw idea, file note, conversation fragment, or AI-created draft.
+
+draft
+  Structured enough to have frontmatter, but not yet canonical.
+
+promotion_candidate
+  Draft is ready for human review.
+
+canonical
+  Approved durable zettel in zettels/.
+
+revised
+  Canonical zettel was edited while preserving history or receipt.
+
+superseded
+  Newer zettel replaces this zettel for current use.
+
+archived
+  Kept for history but not active.
+
+redacted
+  Sensitive content removed or narrowed for a target archive.
+```
+
+The existing `status` field remains simple:
+
+```text
+draft
+canonical
+archived
+redacted
+```
+
+More detailed lifecycle information may live in:
+
+```yaml
+promotion:
+  stage: promotion_candidate
+  reviewed_by: person:example
+  reviewed_at: 2026-05-19T12:00:00+09:00
+```
+
+## Draft Creation Rules
+
+AI may create drafts freely when the archive is mounted with write access, but drafts must stay in `inbox/` by default.
+
+A draft should have valid frontmatter even if some values are still empty or tentative.
+
+Minimum draft frontmatter:
+
+```yaml
+id: zet_20260519_example
+title: Draft title
+created_at: 2026-05-19T12:00:00+09:00
+updated_at: 2026-05-19T12:00:00+09:00
+archive_id: archive:personal:example
+status: draft
+kind: fleeting_capture
+facets: {}
+assets: []
+edges: []
+provenance:
+  created_by: ai_runtime
+  created_in: archive:personal:example
+  source: user_conversation
+  derived_from: []
+visibility:
+  scope: private
+  allowed_archives: []
+  source_visibility: private
+promotion:
+  stage: captured
+  ready_for_promotion: false
+```
+
+Drafts may contain:
+
+- rough language
+- uncertainty
+- TODO markers
+- unresolved questions
+- multiple ideas
+- temporary tags
+
+Drafts must not contain:
+
+- provider URLs as canonical file references
+- secrets
+- cross-archive private source leakage
+- fake certainty about sources
+
+## Promotion Rules
+
+A zettel may be promoted from `inbox/` to `zettels/` only when the user explicitly approves.
+
+Promotion means:
+
+```text
+This note is now durable archive memory.
+Future AI agents may treat it as part of the canonical record.
+```
+
+Promotion checklist:
+
+```text
+1. The note has one clear purpose.
+2. The title is understandable outside the original chat.
+3. The body is understandable months later.
+4. Claims are sourced or marked as personal interpretation.
+5. Original files are referenced by object_id, not provider URL.
+6. Facets are stable enough for retrieval.
+7. Edges use allowed link types.
+8. Visibility and source visibility are explicit.
+9. Provenance explains where the zettel came from.
+10. Sensitive content has been reviewed.
+```
+
+## One-Idea Rule With Record Exception
+
+Classic zettel practice favors small, self-contained notes. This project follows that spirit, but it also stores life and company records.
+
+Rule:
+
+```text
+If the zettel is an idea note, prefer one idea.
+If the zettel is a record note, prefer one event, object, meeting, decision, or source.
+```
+
+Split a draft when:
+
+- it contains unrelated ideas
+- it mixes private diary content with shareable company insight
+- it combines source summary and personal conclusion in a way that would leak sources
+- it tries to serve several views with incompatible visibility
+
+Do not split only to be clever. A usable record is better than five tiny notes nobody can understand.
+
+## Canonical Body Rules
+
+A canonical zettel body should be:
+
+```text
+self-contained
+plainly written
+short enough to reuse
+explicit about uncertainty
+linked to related records
+clear about sources
+```
+
+Recommended body sections:
+
+```markdown
+# Title
+
+Main note in plain language.
+
+## Context
+
+Why this exists.
+
+## Evidence Or Source
+
+Source zettels, object_ids, or user conversation context.
+
+## Links
+
+Related zettels and typed relationships.
+```
+
+Do not force every zettel to use every heading. Use headings when they make the note easier to understand later.
+
+## Promotion Output
+
+When a draft is promoted:
+
+```text
+status becomes canonical
+promotion.stage becomes promoted
+promotion.reviewed_by is recorded
+promotion.reviewed_at is recorded
+updated_at is updated
+the canonical file is written to zettels/
+the original draft is preserved, moved, or linked according to archive policy
+```
+
+Recommended canonical frontmatter:
+
+```yaml
+id: zet_20260519_example
+title: Example canonical zettel
+created_at: 2026-05-19T12:00:00+09:00
+updated_at: 2026-05-19T12:30:00+09:00
+archive_id: archive:personal:example
+status: canonical
+kind: permanent_note
+facets:
+  domain: personal
+  record_type: thought
+assets: []
+edges:
+  - type: derived_from
+    target: zet_20260519_draft_example
+    visibility: private_source
+provenance:
+  created_by: person:example
+  created_in: archive:personal:example
+  source: user_conversation
+  derived_from:
+    - zet_20260519_draft_example
+visibility:
+  scope: private
+  allowed_archives: []
+  source_visibility: private
+promotion:
+  stage: promoted
+  reviewed_by: person:example
+  reviewed_at: 2026-05-19T12:30:00+09:00
+  checklist_version: zettel-promotion/v0.2
+```
+
+## Revision Rules
+
+Canonical zettels may be revised, but revision should not erase important history.
+
+Small corrections may update the existing zettel:
+
+- typo fix
+- formatting fix
+- obvious metadata correction
+- adding a missing object_id
+
+Meaning-changing edits should create either:
+
+```text
+a receipt
+a superseding zettel
+or an explicit revision note
+```
+
+Create a new zettel instead of overwriting when:
+
+- the conclusion changes
+- the old note is historically important
+- the visibility boundary changes
+- the note is used by another archive or workpack
+- the edit would hide a mistake, failed idea, or decision reversal
+
+## AI Behavior
+
+When helping the user write zettels, the AI should:
+
+- write drafts first
+- ask for promotion only after a checklist pass
+- preserve the user's intent, not just conclusions
+- record uncertainty instead of smoothing it away
+- suggest splits when one draft has multiple purposes
+- prefer explicit typed edges over vague inline links
+- preserve private sources when deriving shareable zettels
+- update meeting minutes and decision logs for substantial project work
+
+## Core Principle
+
+```text
+AI can help write memory, but the user decides what becomes durable memory.
+```
+

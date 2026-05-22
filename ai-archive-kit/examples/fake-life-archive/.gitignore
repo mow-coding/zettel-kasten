@@ -1,0 +1,23 @@
+# AI Archive Kit safe defaults
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.kdbx
+secrets/
+profiles/local/
+profiles/*.local.yml
+keyrings/local/
+keyrings/*.local.yml
+.archive-local/
+rclone.conf
+credentials.json
+token.json
+tmp/
+tmp-*/
+
+# Generated archive search indexes
+**/db/archive-index.sqlite

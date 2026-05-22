@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Archive Kit archive.yml",
+  "type": "object",
+  "required": ["archive_id", "name", "type", "principal", "root_policy", "ai_write_policy", "storage_policy"],
+  "properties": {
+    "archive_id": {"type": "string"},
+    "name": {"type": "string"},
+    "type": {"type": "string", "enum": ["personal", "company", "family", "child", "project", "business_unit", "relationship", "handover", "workpack"]},
+    "principal": {
+      "type": "object",
+      "required": ["principal_id", "display_name", "kind"],
+      "properties": {
+        "principal_id": {"type": "string"},
+        "display_name": {"type": "string"},
+        "kind": {"type": "string"}
+      }
+    },
+    "root_policy": {
+      "type": "object",
+      "required": ["canonical_zettels", "ai_inbox", "views", "object_manifest", "sqlite_schema"],
+      "properties": {
+        "canonical_zettels": {"type": "string"},
+        "ai_inbox": {"type": "string"},
+        "views": {"type": "string"},
+        "object_manifest": {"type": "string"},
+        "sqlite_schema": {"type": "string"}
+      }
+    },
+    "ai_write_policy": {
+      "type": "object",
+      "required": ["default", "canonical_requires"],
+      "properties": {
+        "default": {"type": "string"},
+        "canonical_requires": {"type": "string"}
+      }
+    },
+    "storage_policy": {
+      "type": "object",
+      "required": ["object_identity", "provider_urls_in_zettels", "locations_live_in_manifest"],
+      "properties": {
+        "object_identity": {"type": "string"},
+        "provider_urls_in_zettels": {"type": "string"},
+        "locations_live_in_manifest": {"type": "boolean"}
+      }
+    },
+    "mounted_archives": {"type": "array"}
+  }
+}

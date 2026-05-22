@@ -1,0 +1,154 @@
+{
+  "receipt_id": "receipt:ownership-transfer:archive_family_fake_household:person_fake_child",
+  "receipt_path": "receipts/lineage/archive_family_fake_household__to__person_fake_child.ownership-transfer.json",
+  "action": "transfer_archive_ownership",
+  "dry_run": true,
+  "timestamp": "<example-preview>",
+  "source_archive": "archive:family:fake-household",
+  "previous_owner": {
+    "owner_id": "family:fake-household",
+    "owner_kind": "family",
+    "owner_archive_id": "archive:family:fake-household"
+  },
+  "new_owner": {
+    "owner_id": "person:fake-child",
+    "owner_kind": "person",
+    "owner_archive_id": "archive:child:fake-child"
+  },
+  "operators_before": [
+    "person:fake-parent-a",
+    "person:fake-parent-b"
+  ],
+  "operators_after": [
+    "person:fake-child"
+  ],
+  "subject": "person:fake-child",
+  "scope_manifest": {
+    "unit": "archive_ownership",
+    "archive_id": "archive:family:fake-household",
+    "manifest": "archive-identity.yml",
+    "record_transfer": false,
+    "included": [
+      "archive-identity.yml ownership block",
+      "archive-identity.yml lineage hints",
+      "receipts/lineage/archive_family_fake_household__to__person_fake_child.ownership-transfer.json"
+    ],
+    "excluded": [
+      "zettels/",
+      "inbox/",
+      "objects/",
+      "workpacks/"
+    ],
+    "sensitive_categories_blocked_by_default": [
+      "journal",
+      "medical",
+      "psychological",
+      "relationship-private"
+    ]
+  },
+  "approval_actors": [
+    "person:fake-parent-a",
+    "person:fake-parent-b"
+  ],
+  "trust_gate": {
+    "required": true,
+    "ok": true,
+    "counterparty_id": "person:fake-child",
+    "provided_fingerprint": "SHA256:fake-child-primary",
+    "matched": {
+      "identity_id": "identity:archive:child:fake-child",
+      "archive_id": "archive:child:fake-child",
+      "principal_id": "person:fake-child",
+      "trust_level": "out_of_band_verified",
+      "expected_fingerprint": "SHA256:fake-child-primary"
+    },
+    "status": "verified"
+  },
+  "ownership_gate": {
+    "ownership_transfer": true,
+    "status": "passed",
+    "current_owner": "family:fake-household",
+    "current_owner_kind": "family",
+    "new_owner": "person:fake-child",
+    "new_owner_kind": "person",
+    "new_owner_archive": "archive:child:fake-child",
+    "operators_before": [
+      "person:fake-parent-a",
+      "person:fake-parent-b"
+    ],
+    "operators_after": [
+      "person:fake-child"
+    ],
+    "subjects": [
+      {
+        "subject_id": "person:fake-child",
+        "relationship": "child_subject"
+      }
+    ],
+    "subject": "person:fake-child",
+    "approval_actors": [
+      "person:fake-parent-a",
+      "person:fake-parent-b"
+    ],
+    "approval_checks": [],
+    "transfer_policy": {
+      "ownership_transfer_allowed": true,
+      "requires_human_approval": true,
+      "requires_receipt": true,
+      "receipt_action": "transfer_archive_ownership",
+      "default_transfer_target": "person:fake-child"
+    },
+    "receipt_required_for_transfer": true
+  },
+  "lineage": {
+    "event": "ownership_transfer",
+    "source_archive": "archive:family:fake-household",
+    "previous_owner": "family:fake-household",
+    "new_owner": "person:fake-child",
+    "subject": "person:fake-child",
+    "new_owner_archive": "archive:child:fake-child",
+    "reason": "family_to_child_independence_preview"
+  },
+  "provider_change_plan": {
+    "action": "provider_access_change_plan",
+    "status": "manual_required",
+    "external_changes_are_manual": true,
+    "source_archive": "archive:family:fake-household",
+    "previous_owner": "family:fake-household",
+    "new_owner": "person:fake-child",
+    "new_owner_archive": "archive:child:fake-child",
+    "operators_after": [
+      "person:fake-child"
+    ],
+    "binding_count": 3,
+    "providers": [
+      {
+        "provider": "github",
+        "status": "manual_required",
+        "automated": false,
+        "required_actions": [
+          "Review repository roles outside the archive."
+        ]
+      },
+      {
+        "provider": "cloudflare_r2",
+        "status": "manual_required",
+        "automated": false,
+        "required_actions": [
+          "Review bucket token access outside the archive."
+        ]
+      },
+      {
+        "provider": "neon",
+        "status": "manual_required",
+        "automated": false,
+        "required_actions": [
+          "Review project, branch, database, and role access outside the archive."
+        ]
+      }
+    ],
+    "warnings": []
+  },
+  "blockers": [],
+  "warnings": []
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Archive Kit workpack package",
+  "type": "object",
+  "required": ["package_id", "source_archive", "mode", "purpose", "contents", "permissions", "provenance"],
+  "properties": {
+    "package_id": {"type": "string"},
+    "source_archive": {"type": "string"},
+    "target_archive": {"type": "string"},
+    "mode": {"type": "string", "enum": ["reference", "copy", "mount", "derive", "handover", "return"]},
+    "purpose": {"type": "string"},
+    "contents": {"type": "object"},
+    "permissions": {"type": "object"},
+    "provenance": {"type": "object"},
+    "scope_gate": {"type": "object"},
+    "trust_gate": {"type": "object"},
+    "ownership_gate": {"type": "object"},
+    "lineage": {"type": "object"},
+    "expires_at": {"type": "string"}
+  }
+}

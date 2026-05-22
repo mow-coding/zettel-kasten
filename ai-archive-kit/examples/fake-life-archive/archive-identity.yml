@@ -1,0 +1,61 @@
+identity:
+  archive_id: archive:personal:fake-life
+  identity_id: identity:archive:personal:fake-life
+  scope: personal
+  principal_id: person:fake-user
+  display_name: Fake User
+  public_keys:
+    - key_id: key:fake-user:primary
+      algorithm: ssh-ed25519
+      fingerprint: SHA256:fake-user-primary
+      status: active
+ownership:
+  owner_id: person:fake-user
+  owner_kind: person
+  owner_display_name: Fake User
+  owner_archive_id: archive:personal:fake-life
+  operators:
+    - operator_id: person:fake-user
+      role: owner_operator
+      permissions:
+        - capture
+        - curate
+        - approve
+        - transfer_request
+  subjects: []
+  transfer_policy:
+    ownership_transfer_allowed: true
+    requires_human_approval: true
+    requires_receipt: true
+    receipt_action: transfer_archive_ownership
+    default_transfer_target:
+trusted_counterparties:
+  - identity_id: identity:archive:company:fake-blue
+    archive_id: archive:company:fake-blue
+    principal_id: company:fake-blue
+    expected_fingerprint: SHA256:fake-company-blue
+    trust_level: out_of_band_verified
+  - identity_id: identity:archive:family:fake-household
+    archive_id: archive:family:fake-household
+    principal_id: family:fake-household
+    expected_fingerprint: SHA256:fake-family-household
+    trust_level: out_of_band_verified
+  - identity_id: identity:archive:child:fake-child
+    archive_id: archive:child:fake-child
+    principal_id: person:fake-child
+    expected_fingerprint: SHA256:fake-child-primary
+    trust_level: out_of_band_verified
+  - identity_id: identity:archive:company:fake-spinout
+    archive_id: archive:company:fake-spinout
+    principal_id: company:fake-spinout
+    expected_fingerprint: SHA256:fake-spinout-primary
+    trust_level: out_of_band_verified
+lineage:
+  parents: []
+  children:
+    - archive_id: archive:family:fake-household
+      relationship: shared_family_archive
+      since: "2026-05-21"
+  forked_from:
+  merged_from: []
+  exited_from:

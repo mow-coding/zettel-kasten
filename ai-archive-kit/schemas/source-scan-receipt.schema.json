@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Archive Kit source scan receipt",
+  "type": "object",
+  "required": [
+    "receipt_id",
+    "action",
+    "dry_run",
+    "source_archive",
+    "source_id",
+    "source_type",
+    "scan_mode",
+    "source_root_resolution",
+    "item_count",
+    "source_map_path",
+    "scope_gate",
+    "trust_gate",
+    "lineage",
+    "blockers",
+    "warnings"
+  ],
+  "properties": {
+    "receipt_id": {"type": "string"},
+    "action": {"type": "string", "enum": ["scan_archive_source"]},
+    "dry_run": {"type": "boolean"},
+    "timestamp": {"type": "string"},
+    "reviewed_by": {"type": "string"},
+    "reviewed_at": {"type": "string"},
+    "source_archive": {"type": "string"},
+    "source_id": {"type": "string"},
+    "source_type": {"type": "string"},
+    "scan_mode": {"type": "string"},
+    "source_root_resolution": {"type": "object"},
+    "item_count": {"type": "integer"},
+    "source_map_path": {"type": "string"},
+    "scope_gate": {"type": "object"},
+    "trust_gate": {"type": "object"},
+    "lineage": {"type": "object"},
+    "result": {"type": "object"},
+    "blockers": {"type": "array"},
+    "warnings": {"type": "array"}
+  }
+}

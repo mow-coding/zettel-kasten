@@ -1,0 +1,24 @@
+version: pilot-source-plan/v0.1
+role: team
+description: First real team/company archive source plan. Keep personal-private sources out of this archive.
+sources:
+  - source_id: local:team-workspace
+    source_type: local_folder
+    root_ref: ARCHIVE_SOURCE_TEAM_WORKSPACE_ROOT
+    first_scan: metadata_only
+    note: Pick a shared or team-specific folder, not a founder's private home folder.
+  - source_id: notion:team-export
+    source_type: notion_export
+    root_ref: ARCHIVE_SOURCE_NOTION_TEAM_EXPORT_ROOT
+    first_scan: metadata_only
+    note: Start with an export folder; live provider sync is a later opt-in phase.
+  - source_id: google_drive:team-export
+    source_type: google_drive_export
+    root_ref: ARCHIVE_SOURCE_GOOGLE_DRIVE_TEAM_EXPORT_ROOT
+    first_scan: metadata_only
+    note: Start with an export or manifest containing file links and metadata.
+  - source_id: object:team-media-manifest
+    source_type: object_manifest
+    root_ref: archive:objects/manifests/files.jsonl
+    first_scan: metadata_only
+    note: Team media originals stay in object storage or shared drives; the archive versions the map.

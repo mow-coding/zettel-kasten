@@ -1,0 +1,24 @@
+package_id: workpack_20240505_fake_company_onboarding
+source_archive: archive:personal:fake-life
+target_archive: archive:company:fake-blue
+mode: derive
+purpose: "Move a sanitized onboarding insight into a company archive without exposing the private source zettel."
+contents:
+  zettels:
+    - zet_20240505_fake_company_onboarding_insight
+  objects:
+    include_originals: false
+    include_metadata_only: true
+permissions:
+  can_read: true
+  can_modify: false
+  can_import_as_derivative: true
+  can_reshare: false
+provenance:
+  preserve_source: true
+  reveal_private_source: false
+  source_zettels:
+    - zettel_id: zet_20240504_fake_lunch_thought
+      visibility: private
+expires_at: 2024-06-05T00:00:00+09:00
+

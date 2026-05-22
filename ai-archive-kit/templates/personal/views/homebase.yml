@@ -1,0 +1,29 @@
+id: view.personal.homebase
+name: Personal Homebase
+for: ai_context
+filters: {}
+include:
+  zettels: true
+  originals: references_only
+  relations: true
+sort:
+  - field: updated_at
+    direction: descending
+context_policy:
+  max_zettels: 100
+  include_large_media: never_directly
+  prefer_summaries: true
+saved_views:
+  - id: view.personal.education
+    name: Education
+    filters:
+      facets.domain: education
+  - id: view.personal.work
+    name: Work
+    filters:
+      facets.domain: work
+  - id: view.personal.thoughts
+    name: Personal Thoughts
+    filters:
+      facets.domain: personal
+

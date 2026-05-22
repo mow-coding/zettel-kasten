@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Archive Kit zettel frontmatter",
+  "type": "object",
+  "required": ["id", "title", "created_at", "updated_at", "archive_id", "status", "facets", "assets", "edges", "provenance", "visibility"],
+  "properties": {
+    "id": {"type": "string"},
+    "title": {"type": "string"},
+    "created_at": {"type": "string"},
+    "updated_at": {"type": "string"},
+    "archive_id": {"type": "string"},
+    "status": {"type": "string", "enum": ["draft", "canonical", "archived", "redacted"]},
+    "kind": {"type": "string"},
+    "facets": {"type": "object"},
+    "assets": {"type": "array"},
+    "edges": {"type": "array"},
+    "provenance": {
+      "type": "object",
+      "required": ["created_by", "created_in", "source", "derived_from"],
+      "properties": {
+        "created_by": {"type": "string"},
+        "created_in": {"type": "string"},
+        "source": {"type": "string"},
+        "derived_from": {"type": "array"}
+      }
+    },
+    "visibility": {
+      "type": "object",
+      "required": ["scope", "allowed_archives", "source_visibility"],
+      "properties": {
+        "scope": {"type": "string"},
+        "allowed_archives": {"type": "array"},
+        "source_visibility": {"type": "string"}
+      }
+    },
+    "promotion": {"type": "object"}
+  }
+}

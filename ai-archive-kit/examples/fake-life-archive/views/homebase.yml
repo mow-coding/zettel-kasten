@@ -1,0 +1,36 @@
+id: view.fake.homebase
+name: Fake Life Homebase
+for: ai_context
+filters: {}
+include:
+  zettels: true
+  originals: references_only
+  relations: true
+sort:
+  - field: created_at
+    direction: ascending
+context_policy:
+  max_zettels: 50
+  include_large_media: never_directly
+  prefer_summaries: true
+saved_views:
+  - id: view.fake.education.gilwon
+    name: Seoul Gilwon Elementary School
+    filters:
+      facets.domain: education
+      facets.institution: Seoul Gilwon Elementary School
+  - id: view.fake.personal.thoughts
+    name: Personal Thoughts
+    filters:
+      facets.domain: personal
+      facets.record_type: thought
+  - id: view.fake.company.derived
+    name: Company-Derived Insights
+    filters:
+      facets.domain: work
+      facets.record_type: strategy_note
+  - id: view.fake.family.shared
+    name: Shared Family Memories
+    filters:
+      facets.domain: family
+

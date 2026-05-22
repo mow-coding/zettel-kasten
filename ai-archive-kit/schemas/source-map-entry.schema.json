@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Archive Kit source map entry",
+  "type": "object",
+  "required": ["source_id", "item_id", "item_kind", "visibility", "scan_status", "provenance"],
+  "properties": {
+    "source_id": {"type": "string"},
+    "item_id": {"type": "string"},
+    "item_kind": {"type": "string"},
+    "relative_path": {"type": "string"},
+    "external_url": {"type": "string"},
+    "provider_id": {"type": "string"},
+    "object_id": {"type": "string"},
+    "size_bytes": {"type": "integer"},
+    "modified_at": {"type": "string"},
+    "mime": {"type": "string"},
+    "title": {"type": "string"},
+    "visibility": {"type": "object"},
+    "scan_status": {"type": "string"},
+    "provenance": {"type": "object"}
+  }
+}

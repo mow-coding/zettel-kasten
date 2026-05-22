@@ -1,0 +1,163 @@
+{
+  "receipt_id": "receipt:ownership-transfer:archive_business_unit_fake_space:company_fake_spinout",
+  "receipt_path": "receipts/lineage/archive_business_unit_fake_space__to__company_fake_spinout.ownership-transfer.json",
+  "action": "transfer_archive_ownership",
+  "dry_run": true,
+  "timestamp": "<example-preview>",
+  "source_archive": "archive:business_unit:fake-space",
+  "previous_owner": {
+    "owner_id": "company:fake-blue",
+    "owner_kind": "company",
+    "owner_archive_id": "archive:company:fake-blue"
+  },
+  "new_owner": {
+    "owner_id": "company:fake-spinout",
+    "owner_kind": "company",
+    "owner_archive_id": "archive:company:fake-spinout"
+  },
+  "operators_before": [
+    "role:business-unit-admin",
+    "person:fake-founder"
+  ],
+  "operators_after": [
+    "role:spinout-admin",
+    "person:fake-founder"
+  ],
+  "subject": "business_unit:fake-space",
+  "scope_manifest": {
+    "unit": "archive_ownership",
+    "archive_id": "archive:business_unit:fake-space",
+    "manifest": "archive-identity.yml",
+    "record_transfer": false,
+    "included": [
+      "archive-identity.yml ownership block",
+      "archive-identity.yml lineage hints",
+      "receipts/lineage/archive_business_unit_fake_space__to__company_fake_spinout.ownership-transfer.json"
+    ],
+    "excluded": [
+      "zettels/",
+      "inbox/",
+      "objects/",
+      "workpacks/"
+    ],
+    "sensitive_categories_blocked_by_default": [
+      "journal",
+      "medical",
+      "psychological",
+      "relationship-private"
+    ]
+  },
+  "approval_actors": [
+    "role:company-admin"
+  ],
+  "trust_gate": {
+    "required": true,
+    "ok": true,
+    "counterparty_id": "company:fake-spinout",
+    "provided_fingerprint": "SHA256:fake-spinout-primary",
+    "matched": {
+      "identity_id": "identity:archive:company:fake-spinout",
+      "archive_id": "archive:company:fake-spinout",
+      "principal_id": "company:fake-spinout",
+      "trust_level": "out_of_band_verified",
+      "expected_fingerprint": "SHA256:fake-spinout-primary"
+    },
+    "status": "verified"
+  },
+  "ownership_gate": {
+    "ownership_transfer": true,
+    "status": "passed",
+    "current_owner": "company:fake-blue",
+    "current_owner_kind": "company",
+    "new_owner": "company:fake-spinout",
+    "new_owner_kind": "company",
+    "new_owner_archive": "archive:company:fake-spinout",
+    "operators_before": [
+      "role:business-unit-admin",
+      "person:fake-founder"
+    ],
+    "operators_after": [
+      "role:spinout-admin",
+      "person:fake-founder"
+    ],
+    "subjects": [
+      {
+        "subject_id": "business_unit:fake-space",
+        "relationship": "business_unit_subject"
+      }
+    ],
+    "subject": "business_unit:fake-space",
+    "approval_actors": [
+      "role:company-admin"
+    ],
+    "approval_checks": [],
+    "transfer_policy": {
+      "ownership_transfer_allowed": true,
+      "requires_human_approval": true,
+      "requires_receipt": true,
+      "receipt_action": "transfer_archive_ownership",
+      "default_transfer_target": "company:fake-spinout"
+    },
+    "receipt_required_for_transfer": true
+  },
+  "lineage": {
+    "event": "ownership_transfer",
+    "source_archive": "archive:business_unit:fake-space",
+    "previous_owner": "company:fake-blue",
+    "new_owner": "company:fake-spinout",
+    "subject": "business_unit:fake-space",
+    "new_owner_archive": "archive:company:fake-spinout",
+    "reason": "business_unit_spinout_preview"
+  },
+  "provider_change_plan": {
+    "action": "provider_access_change_plan",
+    "status": "manual_required",
+    "external_changes_are_manual": true,
+    "source_archive": "archive:business_unit:fake-space",
+    "previous_owner": "company:fake-blue",
+    "new_owner": "company:fake-spinout",
+    "new_owner_archive": "archive:company:fake-spinout",
+    "operators_after": [
+      "role:spinout-admin",
+      "person:fake-founder"
+    ],
+    "binding_count": 4,
+    "providers": [
+      {
+        "provider": "github",
+        "status": "manual_required",
+        "automated": false,
+        "required_actions": [
+          "Review repository roles outside the archive."
+        ]
+      },
+      {
+        "provider": "cloudflare_r2",
+        "status": "manual_required",
+        "automated": false,
+        "required_actions": [
+          "Review bucket token access outside the archive."
+        ]
+      },
+      {
+        "provider": "backblaze_b2",
+        "status": "manual_required",
+        "automated": false,
+        "required_actions": [
+          "Review bucket-scoped application key capabilities outside the archive."
+        ]
+      },
+      {
+        "provider": "neon",
+        "status": "manual_required",
+        "automated": false,
+        "required_actions": [
+          "Review project, branch, database, and role access outside the archive."
+        ]
+      }
+    ],
+    "warnings": []
+  },
+  "blockers": [],
+  "warnings": []
+}

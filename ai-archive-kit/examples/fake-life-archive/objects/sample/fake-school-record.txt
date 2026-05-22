@@ -1,0 +1,5 @@
+Fake school record original.
+
+This file stands in for a scanned report card or school document.
+It is intentionally fake and contains no private data.
+

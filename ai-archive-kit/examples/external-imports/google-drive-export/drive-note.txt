@@ -1,0 +1,6 @@
+Google Drive Research Note
+
+This is a fake Google Drive text export used to test external archive import.
+
+The importer preserves the original path, external id, URL, and SHA-256 in provenance metadata.
+

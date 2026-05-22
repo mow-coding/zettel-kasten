@@ -1,0 +1,37 @@
+version: source-bindings/v0.1
+archive_id: archive:personal:fake-life
+sources:
+  - source_id: local:fake-sample-objects
+    source_type: local_folder
+    enabled: true
+    description: Fake archive sample object folder used for metadata-only source map tests.
+    root_ref: archive:objects/sample
+    scope_policy:
+      mode: metadata_only
+      include:
+        - "**/*"
+      exclude:
+        - ".git/**"
+        - "__pycache__/**"
+      max_items: 2000
+    visibility:
+      scope: private
+      source_visibility: private
+    provenance:
+      registered_by: fake_example
+  - source_id: object:manifest
+    source_type: object_manifest
+    enabled: true
+    description: Fake archive object manifest as a source map input.
+    root_ref: archive:objects/manifests/files.jsonl
+    scope_policy:
+      mode: metadata_only
+      include:
+        - "**/*"
+      exclude: []
+      max_items: 2000
+    visibility:
+      scope: private
+      source_visibility: private
+    provenance:
+      registered_by: fake_example

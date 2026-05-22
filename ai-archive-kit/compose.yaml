@@ -1,0 +1,44 @@
+name: zettel-kasten-archive-kit
+
+x-archive-security: &archive-security
+  user: "${ARCHIVE_UID:-10001}:${ARCHIVE_GID:-10001}"
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  network_mode: "none"
+
+services:
+  archive-cli:
+    <<: *archive-security
+    build:
+      context: .
+    image: zettel-kasten-archive-kit:local
+    working_dir: /app
+    volumes:
+      - ${ARCHIVE_HOST_ROOT:-./archives}:/archives
+    environment:
+      AI_ARCHIVE_CONTAINER: "1"
+      AI_ARCHIVE_MCP_ALLOWED_ROOTS: "/archives"
+      TZ: ${TZ:-Asia/Seoul}
+    entrypoint: ["archive"]
+    command: ["--help"]
+
+  archive-mcp:
+    <<: *archive-security
+    build:
+      context: .
+    image: zettel-kasten-archive-kit:local
+    working_dir: /app
+    volumes:
+      - ${ARCHIVE_HOST_ROOT:-./archives}:/archives
+    environment:
+      AI_ARCHIVE_CONTAINER: "1"
+      AI_ARCHIVE_MCP_ALLOWED_ROOTS: "/archives"
+      TZ: ${TZ:-Asia/Seoul}
+    entrypoint: ["archive-mcp"]
+    stdin_open: true
+    tty: false

@@ -1,0 +1,29 @@
+id: view.family.homebase
+name: Family Homebase
+for: ai_context
+filters: {}
+include:
+  zettels: true
+  originals: references_only
+  relations: true
+sort:
+  - field: updated_at
+    direction: descending
+context_policy:
+  max_zettels: 100
+  include_large_media: never_directly
+  prefer_summaries: true
+saved_views:
+  - id: view.family.documents
+    name: Documents
+    filters:
+      facets.record_type: document
+  - id: view.family.child_records
+    name: Child Records
+    filters:
+      facets.subject_kind: child
+  - id: view.family.memories
+    name: Memories
+    filters:
+      facets.domain: family
+
