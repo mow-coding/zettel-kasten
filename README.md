@@ -1,59 +1,83 @@
 # Zettel-Kasten + Zet
 
-`zettel-kasten` is a local-first, AI-native archive system.
+> A local-first, AI-native archive protocol where private memory becomes durable, inspectable, and deliberately shareable text.
 
-`zet` is the text-centered sharing layer that can later turn selected archive knowledge into private messages, social feeds, or collaborative workspaces.
+[한국어 README](README.ko.md) · [Upgrade Guide](UPGRADE.md) · [Changelog](CHANGELOG.md) · [Release Notes](ai-archive-kit/docs/releases/) · [Security](SECURITY.md)
 
-## 한국어 요약
+`zettel-kasten` is a personal and organizational archive system designed for AI-assisted work without surrendering the archive to a central SaaS server.
 
-`zettel-kasten`은 로컬 우선, AI-native 개인/조직 아카이브 시스템입니다.
+`zet` is the text-centered unit that can later power private messaging, social feeds, and collaborative workspaces.
 
-`zet`는 그 아카이브 안에서 사람이 직접 쓰거나, AI와 함께 작성하고, 사람이 승인해 민팅한 텍스트 문서입니다.
+## Status
 
-핵심 구조는 다음과 같습니다.
+Current public baseline:
 
 ```text
-원본/source 데이터 + 메타데이터 + 민팅된 zets
+v0.2.4 pre-release
 ```
 
-중요한 원칙:
+This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
 
-- `zet`는 항상 텍스트입니다.
-- 원본 파일은 별도의 source/object layer에 보관합니다.
-- `.hwp`, `.hwpx`, `.docx`, `.xlsx`, `.pdf`, `.txt`, `.md`, `.csv` 같은 문서도 원본이면 source object입니다.
-- OCR, 음성인식, AI 전사 텍스트도 보관하지만, 원래부터 존재하던 편집 가능한 텍스트와 같은 위계로 보지 않습니다.
-- 민팅은 외부 공개가 아니라, 우선 private archive에 공식 기록으로 편입하는 행위입니다.
-- 공유, 메시징, SNS, 협업은 그 private archive 위에 얹히는 별도 projection layer입니다.
+What exists today:
 
-현재 이 공개 저장소는 실제 개인 아카이브가 아니라, 공개 전시용/오픈소스 구현 작업공간입니다.
+- product and protocol specifications,
+- JSON schemas,
+- fake sample archives,
+- setup and security documentation,
+- versioned release notes,
+- early Python CLI and MCP tooling.
 
-## Core Idea
+What does not exist yet:
 
-Most tools start from an app.
+- production-grade installation flow,
+- live provider integrations,
+- final minting implementation,
+- production `zet` sharing service,
+- stable `v1.0.0` protocol guarantee.
 
-This project starts from a person's archive:
+## Core Model
+
+The base archive model is:
 
 ```text
 source/original data + metadata + minted zets
 ```
 
-A `zet` is always text: a Markdown-like document created by a human, or drafted by AI under human supervision, then minted into a private archive.
+In other words:
 
-Raw files, media, Notion pages, Google Drive folders, local SSDs, object storage, and external URLs can be referenced as source worlds. The durable human-readable unit remains the `zet`.
+- source/original data is the evidence layer,
+- metadata makes sources addressable and auditable,
+- minted zets are human-approved archive memory.
 
-## Why This Exists
+The system starts from the archive, not from a social app.
 
-The project is an experiment in durable AI-assisted memory:
+## What Is A Zet?
+
+A `zet` is always text.
+
+It is a Markdown-like document created by a human, or drafted by AI under human supervision, then minted into a private archive.
+
+Minting means:
 
 ```text
-Human talks with AI.
-AI helps draft and organize.
-Important context becomes a zet.
-Zets accumulate into a stronger zettel-kasten.
-Sharing is deliberate, permissioned, and separate from private thinking.
+draft zet -> human review -> canonical private archive record
 ```
 
-The future `zet` service is based on this projection model:
+Minting does not mean public posting. External sharing is a separate action.
+
+## Why This Matters
+
+Most tools make users adapt to an application.
+
+`zettel-kasten` takes the opposite direction:
+
+```text
+the user's archive stays primary,
+AI helps draft and connect memory,
+sharing is a deliberate projection from private memory.
+```
+
+The future `zet` sharing layer follows this projection model:
 
 ```text
 1:1 zet sharing       -> messenger
@@ -61,66 +85,25 @@ The future `zet` service is based on this projection model:
 many:many zet sharing -> collaboration workspace
 ```
 
-## Current Status
+## Storage Model
 
-This repository is a public showcase and open-source implementation workspace.
+Object storage is not only for media files.
 
-It currently contains:
+Original documents and captures are source objects when they are used as evidence:
 
-- protocol and product specs,
-- schemas,
-- fake examples,
-- setup and security docs,
-- implementation plans,
-- early Python CLI/MCP tooling.
+- `.hwp`
+- `.hwpx`
+- `.docx`
+- `.xlsx`
+- `.pdf`
+- `.txt`
+- `.md`
+- `.csv`
+- screenshots
+- audio/video
+- provider exports
 
-The system is not production-ready yet.
-
-한국어:
-
-이 저장소는 공개 전시용 오픈소스 저장소입니다. 실제 사용자의 개인 자료, 실제 source map, 실제 receipt, provider token, private zet는 여기에 올리면 안 됩니다.
-
-Current public baseline:
-
-```text
-v0.2.3 draft
-```
-
-## Versioned Compatibility
-
-`zettel-kasten` and `zet` should be understood as a versioned protocol family.
-
-Release tags such as `v0.1.0`, `v0.2.0`, and future `v1.0.0` are compatibility checkpoints. Users may follow the latest release, or stay on an older release, but sharing and verification work best when both sides understand the same major protocol version.
-
-See `VERSIONING.md`.
-
-See `UPGRADE.md` for version-by-version upgrade instructions.
-
-See `CHANGELOG.md` for release notes.
-
-한국어:
-
-`zettel-kasten`과 `zet`는 버전별 규칙을 따르는 프로토콜 계열로 관리합니다. 같은 major version을 쓰는 사람들은 같은 핵심 규칙을 이해할 수 있어야 하고, 다른 major version 사이에는 migration이나 compatibility bridge가 필요할 수 있습니다.
-
-## Repository Map
-
-```text
-ai-archive-kit/
-  specs/        product and protocol specifications
-  docs/         setup, security, onboarding, and operating notes
-  plans/        implementation plans and public-safe work logs
-  schemas/      JSON Schema files
-  src/          Python package code
-  cli/          local CLI entrypoint
-  examples/     fake sample archive data
-  templates/    personal, family, and company archive templates
-```
-
-## Source Documents And Object Storage
-
-Object storage is not only for images, audio, and video.
-
-Original documents such as `.hwp`, `.hwpx`, `.docx`, `.xlsx`, `.pdf`, `.txt`, `.md`, and `.csv` may also be source objects. The recommended default is:
+Recommended default:
 
 ```text
 original source files -> local object store and/or object storage
@@ -130,64 +113,106 @@ zets and metadata     -> Git repository
 search text           -> SQLite/search index
 ```
 
-A minted `zet` is stored as text. The original file it cites remains a source object.
+See [Source Object Storage Policy](ai-archive-kit/docs/source-object-storage-policy.md).
 
-See `ai-archive-kit/docs/source-object-storage-policy.md`.
+## Text Provenance
 
-OCR, speech-to-text, and AI transcription are also stored, but they have different authority from original editable text. See `ai-archive-kit/docs/text-provenance-hierarchy.md`.
+Not every text artifact has the same authority.
 
-한국어:
+`zettel-kasten` distinguishes:
 
-객체 스토리지는 사진/영상만 넣는 곳이 아닙니다. 원본 문서 파일도 source object로 들어갈 수 있습니다. 단, `zet` 자체는 텍스트 문서이며, 원본 문서나 OCR 결과와 섞어버리면 안 됩니다.
+```text
+L0 original source object
+L1 born-digital editable text
+L2 parser-extracted text
+L3 OCR / speech-to-text / AI transcription
+L4 human-reviewed derived text
+L5 minted zet
+```
 
-특히 OCR/AI 전사 텍스트는 모델이 발전하면 다시 생성될 수 있으므로, 원본 텍스트와 다른 provenance를 가져야 합니다.
+OCR and AI transcription are useful, but they are model-dependent derived records. They should keep source object id, derivation method, tool/model version, confidence when available, and review status.
 
-## Open Source And Attribution
+See [Text Provenance Hierarchy](ai-archive-kit/docs/text-provenance-hierarchy.md).
 
-The code and documentation in this repository are released as open source under the MIT License unless a file says otherwise.
+## Versioning
+
+`zettel-kasten` and `zet` are managed as a versioned protocol family.
+
+Release tags are compatibility checkpoints:
+
+```text
+v0.2.4
+v0.3.0
+v1.0.0
+```
+
+Same major protocol version should mean expected compatibility. Different major versions may need migration or compatibility bridges.
+
+See [Versioning](VERSIONING.md) and [Upgrade Guide](UPGRADE.md).
+
+## Repository Layout
+
+```text
+ai-archive-kit/
+  specs/        product and protocol specifications
+  docs/         setup, security, onboarding, release, and operating notes
+  plans/        implementation plans and public-safe work logs
+  schemas/      JSON Schema files
+  src/          Python package code
+  cli/          local CLI entrypoint
+  examples/     fake sample archive data
+  templates/    personal, family, and company archive templates
+```
+
+## Quick Verification
+
+```bash
+cd ai-archive-kit
+python -m unittest discover -s tests
+python cli/archive.py doctor examples/fake-life-archive --strict
+```
+
+Expected result:
+
+```text
+tests pass
+doctor reports 0 errors and 0 warnings
+```
+
+## Privacy Boundary
+
+This public repository is not a real user archive.
+
+Do not commit:
+
+- provider tokens,
+- local credentials,
+- real private zets,
+- real source maps,
+- real receipts,
+- private AI conversations,
+- personal files or media,
+- local machine paths or private filenames.
+
+Real usage should happen in a private archive repository and separate object storage.
+
+See [Open Source Publication Model](ai-archive-kit/docs/open-source-publication-model.md).
+
+## Authorship
 
 Original concept, product philosophy, naming, written design, schemas, and reference implementation:
 
 ```text
-Copyright (c) 2026 Kim Seong Kyun (김성균)
-```
-
-Creator:
-
-```text
 Kim Seong Kyun (김성균)
 Department of Urban Sociology, University of Seoul
-Undergraduate student, currently on leave
 GitHub: mow-coding
 Email: mow.coding@gmail.com
 Email: ellie0129@uos.ac.kr
 ```
 
-If this project helps you, teaches you something, or gives you an idea, a GitHub star is warmly appreciated.
+If this project helps you, a GitHub star is appreciated. Collaboration and investment inquiries are welcome by email.
 
-Messages, collaboration notes, and investment inquiries are welcome at:
+## License
 
-```text
-mow.coding@gmail.com
-ellie0129@uos.ac.kr
-```
+MIT License. See [LICENSE](LICENSE).
 
-## Privacy Boundary
-
-This public repository is not a user's real archive.
-
-Real archives should remain private by default and should not commit:
-
-- provider tokens,
-- local credentials,
-- real source maps,
-- real receipts,
-- private zets,
-- private AI conversations,
-- personal files or media.
-
-See `ai-archive-kit/docs/open-source-publication-model.md` for the intended public/private split.
-
-한국어:
-
-이 공개 저장소는 실제 사용자의 private archive가 아닙니다. 실제 개인 파일, 실제 경로, 실제 provider token, 실제 source map, 실제 receipt, private AI 대화 기록은 공개 저장소에 커밋하지 마세요.

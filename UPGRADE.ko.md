@@ -1,0 +1,105 @@
+# 업그레이드 가이드
+
+[English Upgrade Guide](UPGRADE.md)
+
+이 문서는 `zettel-kasten` / `zet`의 공개 버전 사이를 어떻게 이동해야 하는지 설명합니다.
+
+이 프로젝트는 단순한 코드 묶음이 아니라, archive 규칙, zettel metadata, object manifest, provenance record, 미래의 `zet` sharing envelope까지 함께 관리하는 버전형 프로토콜입니다.
+
+## 기본 규칙
+
+```text
+PATCH upgrade -> 문서, 검증, 호환 가능한 수정
+MINOR upgrade -> 호환 가능한 기능 추가 또는 optional field 추가
+MAJOR upgrade -> protocol/schema breaking change
+```
+
+실제 archive를 업그레이드하기 전에는:
+
+1. 대상 버전의 release note를 읽습니다.
+2. private archive repository와 object manifest를 백업합니다.
+3. `archive doctor --strict`를 실행합니다.
+4. migration command가 있다면 먼저 dry-run으로 실행합니다.
+5. 생성된 receipt를 확인한 뒤에만 private archive 변경사항을 커밋합니다.
+
+아카이브는 사용자의 기억입니다. 조용히 몰래 다시 쓰면 안 됩니다.
+
+## 공개 버전
+
+| Version | Status | Upgrade note |
+| --- | --- | --- |
+| `v0.2.4` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
+| `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
+| `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.3`에서 `v0.2.4`로
+
+문서 정돈 패치입니다.
+
+변경 사항:
+
+- `README.md`를 더 정돈된 영문 프로젝트 진입 문서로 다시 작성했습니다.
+- `README.ko.md`를 한국어 공식 진입 문서로 추가했습니다.
+- 업그레이드 문서를 영문/한국어로 분리했습니다.
+- 공개 포지셔닝, 현재 상태, privacy boundary, storage model, text provenance 설명을 정리했습니다.
+
+실제 private archive migration은 필요 없습니다.
+
+권장 명령:
+
+```bash
+git fetch --tags
+git checkout v0.2.4
+```
+
+## `v0.2.2`에서 `v0.2.3`으로
+
+한영 문서 병기 패치입니다.
+
+실제 private archive migration은 필요 없습니다.
+
+```bash
+git fetch --tags
+git checkout v0.2.3
+```
+
+## `v0.2.1`에서 `v0.2.2`로
+
+문서, provenance, 공개 히스토리 정리 패치입니다.
+
+실제 private archive migration은 필요 없습니다.
+
+중요 개념:
+
+```text
+original editable text != OCR/AI-derived text
+```
+
+둘 다 보관하지만, OCR/AI-derived text는 derivation metadata와 review status를 남겨야 합니다.
+
+## 이전 버전에 남기
+
+사용자는 오래된 버전에 남을 수 있습니다.
+
+이것도 설계의 일부입니다.
+
+```text
+old version -> old rule set
+new version -> updated rule set
+```
+
+미래의 sharing/collaboration 기능은 sender/receiver version을 명시해야 합니다.
+
+## 앞으로의 릴리스 요구사항
+
+앞으로 공개 릴리스는 반드시 다음을 포함해야 합니다.
+
+- changelog entry,
+- `ai-archive-kit/docs/releases/` 아래 release note,
+- compatibility statement,
+- migration instructions,
+- test/doctor verification status,
+- privacy scan status,
+- Git tag,
+- GitHub Release.
+
