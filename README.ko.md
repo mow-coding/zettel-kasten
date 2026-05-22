@@ -13,7 +13,7 @@
 현재 공개 기준:
 
 ```text
-v0.2.6 pre-release
+v0.2.7 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -53,6 +53,7 @@ v0.2.6 pre-release
 
 인간 데이터 원형, AX 흐름에서의 의미, Web3-like `zet` 공유 모델까지 포함한 전체 설계 철학은 다음 문서를 보세요.
 
+- [기초 제품 백서](ai-archive-kit/docs/concepts/foundational-product-whitepaper.ko.md)
 - [Product Philosophy](ai-archive-kit/docs/concepts/product-philosophy.md)
 - [한국어 Product Philosophy](ai-archive-kit/docs/concepts/product-philosophy.ko.md)
 - [공개 문서 지도](ai-archive-kit/docs/public-documentation-map.ko.md)
@@ -156,7 +157,7 @@ OCR과 AI 전사는 유용하지만, 모델에 따라 달라질 수 있는 deriv
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.2.6
+v0.2.7
 v0.3.0
 v1.0.0
 ```

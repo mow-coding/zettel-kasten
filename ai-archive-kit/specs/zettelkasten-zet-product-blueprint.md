@@ -7,6 +7,11 @@ This document consolidates the product philosophy and concept model for `zettel-
 
 It is not a runtime specification yet. It is the blueprint that implementation specs, schemas, CLI commands, tests, and future UI should align with.
 
+For the longer public philosophy narrative, see:
+
+- `ai-archive-kit/docs/concepts/foundational-product-whitepaper.md`
+- `ai-archive-kit/docs/concepts/foundational-product-whitepaper.ko.md`
+
 ## 1. One-Sentence Definition
 
 `zettel-kasten` is a subject-owned private archive made of source/original data, metadata, and minted `zet` documents.
@@ -773,4 +778,3 @@ These are implementation-scope questions, not product-philosophy questions.
 
 `zet sharing service`
 : A future protocol/client layer for sharing minted or derived zets between subjects.
-

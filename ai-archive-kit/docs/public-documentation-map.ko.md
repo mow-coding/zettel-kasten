@@ -20,6 +20,8 @@
 
 먼저 볼 문서:
 
+- [기초 제품 백서](concepts/foundational-product-whitepaper.ko.md)
+- [Foundational Product Whitepaper](concepts/foundational-product-whitepaper.md)
 - [Product Philosophy](concepts/product-philosophy.md)
 - [한국어 Product Philosophy](concepts/product-philosophy.ko.md)
 - [Zettel-Kasten And Zet Product Blueprint](../specs/zettelkasten-zet-product-blueprint.md)
@@ -40,6 +42,7 @@
 - 왜 social sharing보다 private archive memory가 먼저인지,
 - `zet` 공유가 어떻게 messenger, SNS/feed, collaboration workspace로 확장되는지,
 - 이 모델이 AX, 즉 AI Transformation 흐름에서 왜 중요한지.
+- 같은 authority model이 어떻게 HITL workflow와 제한된 AI-agent harness를 함께 지원하는지.
 
 ## 2. 구현을 위한 레퍼런스 조사
 
@@ -120,6 +123,7 @@ local archive
 - [Blueprint Consolidation Work Log](../plans/work-log-2026-05-22-zettelkasten-zet-blueprint.md)
 - [GitHub Publication Work Log](../plans/work-log-2026-05-23-github-publication.md)
 - [Versioning And Storage Work Log](../plans/work-log-2026-05-23-versioning-and-storage.md)
+- [Product Whitepaper Depth Correction Work Log](../plans/work-log-2026-05-23-product-whitepaper-depth.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
 
@@ -181,4 +185,3 @@ Schemas:
 
 - [Open Source Publication Model](open-source-publication-model.md)
 - [Security Policy](../../SECURITY.md)
-

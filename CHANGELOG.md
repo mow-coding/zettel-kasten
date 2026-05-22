@@ -4,6 +4,31 @@ All notable public releases of `zettel-kasten` and `zet` should be documented he
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.7 - 2026-05-23
+
+Foundational product whitepaper patch.
+
+Added:
+
+- detailed English foundational product whitepaper,
+- detailed Korean foundational product whitepaper,
+- public-safe product whitepaper depth correction work log.
+
+Clarified:
+
+- `zettel-kasten` is memory infrastructure, not only a note app,
+- `zet` is always text and functions as interpreted archive memory,
+- minting means private archive issuance, not posting or sharing,
+- the same authority model supports HITL workflows and scoped AI-agent harnesses,
+- object storage covers source/original documents as well as media,
+- Notion, Google Drive, local folders, GitHub, object storage, and external URLs should be handled through provenance-aware provider bindings,
+- `zet` sharing can project into messenger, SNS/feed, or collaboration workspace behavior depending on relationship topology,
+- the Web3-like property is subject-owned, portable, verifiable memory rather than token hype.
+
+Migration:
+
+- no private archive migration required.
+
 ## v0.2.6 - 2026-05-23
 
 README baseline display correction.

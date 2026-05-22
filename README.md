@@ -13,7 +13,7 @@
 Current public baseline:
 
 ```text
-v0.2.6 pre-release
+v0.2.7 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -53,6 +53,7 @@ The system starts from the archive, not from a social app.
 
 For the full design philosophy, including the human data primitive model, AX rationale, and Web3-like `zet` sharing model, see:
 
+- [Foundational Product Whitepaper](ai-archive-kit/docs/concepts/foundational-product-whitepaper.md)
 - [Product Philosophy](ai-archive-kit/docs/concepts/product-philosophy.md)
 - [Public Documentation Map](ai-archive-kit/docs/public-documentation-map.md)
 
@@ -155,7 +156,7 @@ See [Text Provenance Hierarchy](ai-archive-kit/docs/text-provenance-hierarchy.md
 Release tags are compatibility checkpoints:
 
 ```text
-v0.2.6
+v0.2.7
 v0.3.0
 v1.0.0
 ```

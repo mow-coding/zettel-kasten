@@ -7,6 +7,11 @@ This document explains the design philosophy behind `zettel-kasten` and `zet`.
 
 It is intentionally not only a technical spec. It explains why the system exists.
 
+For the longer public product planning document, read:
+
+- [Foundational Product Whitepaper](foundational-product-whitepaper.md)
+- [Korean Foundational Product Whitepaper](foundational-product-whitepaper.ko.md)
+
 ## 1. Thesis
 
 AI does not only need prompts.
@@ -256,4 +261,3 @@ local archive
 The project should not begin with the hardest social-network layer.
 
 It should first make private memory trustworthy.
-

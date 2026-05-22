@@ -7,6 +7,11 @@
 
 단순한 기술 명세가 아니라, 왜 이 시스템이 필요한지 설명하는 문서입니다.
 
+더 긴 공개 제품 기획 문서는 다음을 보세요.
+
+- [Foundational Product Whitepaper](foundational-product-whitepaper.md)
+- [한국어 Foundational Product Whitepaper](foundational-product-whitepaper.ko.md)
+
 ## 1. 핵심 주장
 
 AI에게 필요한 것은 prompt만이 아닙니다.
@@ -254,4 +259,3 @@ local archive
 가장 어려운 social-network layer부터 시작하면 안 됩니다.
 
 먼저 private memory를 신뢰할 수 있게 만들어야 합니다.
-

@@ -20,6 +20,8 @@ These documents explain the concept, product philosophy, archive model, and `zet
 
 Start here:
 
+- [Foundational Product Whitepaper](concepts/foundational-product-whitepaper.md)
+- [Korean Foundational Product Whitepaper](concepts/foundational-product-whitepaper.ko.md)
 - [Product Philosophy](concepts/product-philosophy.md)
 - [Korean Product Philosophy](concepts/product-philosophy.ko.md)
 - [Zettel-Kasten And Zet Product Blueprint](../specs/zettelkasten-zet-product-blueprint.md)
@@ -40,6 +42,7 @@ These documents cover:
 - why private archive memory comes before social sharing,
 - how `zet` sharing can later become messenger, SNS/feed, or collaboration workspace,
 - why this model is relevant to AI Transformation (AX).
+- how the same authority model supports HITL workflows and scoped AI-agent harnesses.
 
 ## 2. Implementation Reference Research
 
@@ -120,6 +123,7 @@ These documents record public-safe work already performed.
 - [Blueprint Consolidation Work Log](../plans/work-log-2026-05-22-zettelkasten-zet-blueprint.md)
 - [GitHub Publication Work Log](../plans/work-log-2026-05-23-github-publication.md)
 - [Versioning And Storage Work Log](../plans/work-log-2026-05-23-versioning-and-storage.md)
+- [Product Whitepaper Depth Correction Work Log](../plans/work-log-2026-05-23-product-whitepaper-depth.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
 
@@ -181,4 +185,3 @@ See:
 
 - [Open Source Publication Model](open-source-publication-model.md)
 - [Security Policy](../../SECURITY.md)
-
