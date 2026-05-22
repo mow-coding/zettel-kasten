@@ -2,7 +2,7 @@
 
 > 로컬 우선, AI-native 아카이브 프로토콜. 개인의 private memory를 오래 남고, 검증 가능하며, 필요한 경우에만 공유 가능한 텍스트로 바꿉니다.
 
-[English README](README.md) · [업그레이드 가이드](UPGRADE.ko.md) · [변경 기록](CHANGELOG.md) · [릴리스 노트](ai-archive-kit/docs/releases/) · [보안 정책](SECURITY.md)
+[English README](README.md) · [공개 문서 지도](ai-archive-kit/docs/public-documentation-map.ko.md) · [업그레이드 가이드](UPGRADE.ko.md) · [변경 기록](CHANGELOG.md) · [릴리스 노트](ai-archive-kit/docs/releases/) · [보안 정책](SECURITY.md)
 
 `zettel-kasten`은 중앙 SaaS 서버에 개인/조직의 기억을 통째로 맡기지 않고, 사용자가 자기 아카이브를 직접 소유하면서 AI와 함께 정리할 수 있도록 설계한 시스템입니다.
 
@@ -50,6 +50,21 @@ v0.2.4 pre-release
 - minted zet는 사람이 승인한 archive memory입니다.
 
 이 시스템은 SNS 앱에서 출발하지 않습니다. 먼저 private archive에서 출발합니다.
+
+인간 데이터 원형, AX 흐름에서의 의미, Web3-like `zet` 공유 모델까지 포함한 전체 설계 철학은 다음 문서를 보세요.
+
+- [Product Philosophy](ai-archive-kit/docs/concepts/product-philosophy.md)
+- [한국어 Product Philosophy](ai-archive-kit/docs/concepts/product-philosophy.ko.md)
+- [공개 문서 지도](ai-archive-kit/docs/public-documentation-map.ko.md)
+
+공개 프로젝트 기록은 의도적으로 다음처럼 분리합니다.
+
+```text
+제품 기획안 / 설계 철학
+구현을 위한 레퍼런스 조사
+구현 계획
+작업일지
+```
 
 ## Zet란 무엇인가?
 
@@ -164,6 +179,17 @@ ai-archive-kit/
   templates/    personal, family, company archive template
 ```
 
+## 공개 문서 지도
+
+공개 문서는 목적에 따라 나뉩니다.
+
+- 제품 기획안 / 설계 철학: [공개 문서 지도](ai-archive-kit/docs/public-documentation-map.ko.md)
+- 구현을 위한 레퍼런스 조사: [Implementation Research](ai-archive-kit/specs/zettelkasten-zet-implementation-research.md)
+- 구현 계획: [Plans Directory](ai-archive-kit/plans/)
+- 작업일지: [Work Logs](ai-archive-kit/plans/)
+
+코드부터 보기 전에 프로젝트를 이해하고 싶다면 [공개 문서 지도](ai-archive-kit/docs/public-documentation-map.ko.md)부터 읽는 것을 추천합니다.
+
 ## 빠른 검증
 
 ```bash
@@ -215,4 +241,3 @@ Email: ellie0129@uos.ac.kr
 ## 라이선스
 
 MIT License. [LICENSE](LICENSE)를 확인하세요.
-

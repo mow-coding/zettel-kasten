@@ -2,7 +2,7 @@
 
 > A local-first, AI-native archive protocol where private memory becomes durable, inspectable, and deliberately shareable text.
 
-[한국어 README](README.ko.md) · [Upgrade Guide](UPGRADE.md) · [Changelog](CHANGELOG.md) · [Release Notes](ai-archive-kit/docs/releases/) · [Security](SECURITY.md)
+[한국어 README](README.ko.md) · [Documentation Map](ai-archive-kit/docs/public-documentation-map.md) · [Upgrade Guide](UPGRADE.md) · [Changelog](CHANGELOG.md) · [Release Notes](ai-archive-kit/docs/releases/) · [Security](SECURITY.md)
 
 `zettel-kasten` is a personal and organizational archive system designed for AI-assisted work without surrendering the archive to a central SaaS server.
 
@@ -50,6 +50,20 @@ In other words:
 - minted zets are human-approved archive memory.
 
 The system starts from the archive, not from a social app.
+
+For the full design philosophy, including the human data primitive model, AX rationale, and Web3-like `zet` sharing model, see:
+
+- [Product Philosophy](ai-archive-kit/docs/concepts/product-philosophy.md)
+- [Public Documentation Map](ai-archive-kit/docs/public-documentation-map.md)
+
+The public project records are intentionally separated into:
+
+```text
+product blueprint / design philosophy
+implementation reference research
+implementation plans
+work logs
+```
 
 ## What Is A Zet?
 
@@ -164,6 +178,17 @@ ai-archive-kit/
   templates/    personal, family, and company archive templates
 ```
 
+## Documentation Map
+
+The public documentation is organized by purpose:
+
+- product blueprint / design philosophy: [Documentation Map](ai-archive-kit/docs/public-documentation-map.md)
+- implementation reference research: [Implementation Research](ai-archive-kit/specs/zettelkasten-zet-implementation-research.md)
+- implementation plans: [Plans Directory](ai-archive-kit/plans/)
+- work logs: [Work Logs](ai-archive-kit/plans/)
+
+Start with [Public Documentation Map](ai-archive-kit/docs/public-documentation-map.md) if you want to understand the project before reading code.
+
 ## Quick Verification
 
 ```bash
@@ -215,4 +240,3 @@ If this project helps you, a GitHub star is appreciated. Collaboration and inves
 ## License
 
 MIT License. See [LICENSE](LICENSE).
-

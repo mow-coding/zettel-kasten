@@ -4,6 +4,27 @@ All notable public releases of `zettel-kasten` and `zet` should be documented he
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.5 - 2026-05-23
+
+Public documentation map and philosophy patch.
+
+Added:
+
+- public documentation map,
+- Korean public documentation map,
+- product philosophy document,
+- Korean product philosophy document.
+
+Clarified:
+
+- public records are separated into product blueprint/design philosophy, implementation reference research, implementation plans, and work logs,
+- the project philosophy includes human data primitives, AX rationale, and Web3-like `zet` sharing,
+- README files now link directly to those document groups.
+
+Migration:
+
+- no private archive migration required.
+
 ## v0.2.4 - 2026-05-23
 
 Documentation polish patch.
