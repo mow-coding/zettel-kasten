@@ -4,6 +4,20 @@ All notable public releases of `zettel-kasten` and `zet` should be documented he
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.3 - 2026-05-23
+
+Bilingual documentation patch.
+
+Added:
+
+- Korean summary in `README.md`,
+- Korean upgrade guidance in `UPGRADE.md`,
+- Korean notes in the `v0.2.3` release note.
+
+Migration:
+
+- no private archive migration required.
+
 ## v0.2.2 - 2026-05-23
 
 Public history hygiene and text provenance clarification.
