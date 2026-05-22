@@ -4,6 +4,24 @@ All notable public releases of `zettel-kasten` and `zet` should be documented he
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.6 - 2026-05-23
+
+README baseline display correction.
+
+Changed:
+
+- updated the English README current public baseline from `v0.2.5` to `v0.2.6`,
+- updated the Korean README current public baseline from `v0.2.5` to `v0.2.6`,
+- aligned package and citation metadata with the new public patch release.
+
+Why:
+
+- `v0.2.5` correctly published the documentation map and philosophy patch, but the public repository page needed a follow-up patch so the visible README baseline and release chain stayed consistent without moving an already-published tag.
+
+Migration:
+
+- no private archive migration required.
+
 ## v0.2.5 - 2026-05-23
 
 Public documentation map and philosophy patch.
