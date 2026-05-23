@@ -1,4 +1,4 @@
-# Zettel-Kasten and Zet Implementation Research v0.1
+# Zettel-Kasten, zet, and ZET Implementation Research v0.1
 
 Status: research baseline
 Date: 2026-05-22
@@ -31,7 +31,7 @@ local archive
 -> capability-based sharing
 -> optional relay/P2P sync
 -> collaborative/shared archives
--> standalone zet communication client
+-> standalone ZET communication client
 ```
 
 ## 2. Implementation Stack Recommendation
@@ -40,7 +40,8 @@ local archive
 
 Use the current codebase's strengths:
 
-- Markdown + YAML frontmatter for zets.
+- v0.2 Markdown-compatible zets with YAML frontmatter.
+- WOM Safe HTML Profile as the long-term canonical/interchange/rendering direction.
 - JSON/YAML receipts for actions.
 - SHA-256 object ids for originals.
 - JSON Schema for receipts and manifests.
@@ -275,7 +276,7 @@ Sources:
 - [RO-Crate Specification](https://www.researchobject.org/ro-crate/specification/1.1/introduction.html)
 - [AT Protocol Repository Spec](https://atproto.com/specs/repository)
 
-### 3.4 Markdown Knowledge Base And AI Memory
+### 3.4 Text Knowledge Base And AI Memory
 
 Need:
 
@@ -288,17 +289,20 @@ Reference:
 - Basic Memory.
 - Obsidian properties/frontmatter.
 - Logseq/Obsidian style graph notes.
+- GitHub Flavored Markdown and HTML sanitization practices.
 
 Why it matters:
 
 Basic Memory is very close to the local AI memory part: Markdown files, AI-readable/writable memory, SQLite index, MCP tools, relations, and semantic graph. It does not include the full source/original data + mint receipt + sharing lineage model, but it is an excellent implementation reference for the local AI-memory loop.
+
+For v0.2, Markdown remains the easiest authoring/import compatibility path. For long-term custom SaaS and `ZET` surfaces, the project should study a restricted HTML profile with strong sanitization, deterministic text extraction, accessibility, and source-reference extraction.
 
 Implementation direction:
 
 Borrow the pattern:
 
 ```text
-plain Markdown files
+plain Markdown-compatible drafts
 + local index
 + AI tools
 + graph traversal
@@ -318,6 +322,8 @@ Sources:
 
 - [Basic Memory: What is Basic Memory](https://docs.basicmemory.com/start-here/what-is-basic-memory)
 - [Obsidian Properties](https://obsidian.md/help/properties)
+- [GitHub Flavored Markdown Spec](https://github.github.com/gfm/)
+- [OWASP Cross Site Scripting Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html)
 
 ### 3.5 AI Tool Runtime
 
@@ -768,4 +774,3 @@ then sharing, collaboration, lineage, and Web3-like behavior can be built as lay
 If minting is weak, the later `zet` service becomes just another messenger or social app.
 
 Therefore, the next implementation should protect the minting path.
-

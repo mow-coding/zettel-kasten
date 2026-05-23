@@ -1,14 +1,14 @@
-# 기초 제품 백서: WOM, Zettel-Kasten, And Zet
+# 기초 제품 백서: WOM, zettel-kasten, zet, and ZET
 
 상태: 공개 제품 기획 기준선
 날짜: 2026-05-23
 버전 맥락: v0.2.7 planning document
 
-이 문서는 WOM, `zettel-kasten`, `zet`의 상세한 공개 제품 철학 문서입니다.
+이 문서는 WOM, `zettel-kasten`, `zet`, `ZET`의 상세한 공개 제품 철학 문서입니다.
 
 `WOM`은 `Widesider of Modernity`의 약자입니다. modernity의 최전선에서 인간이 인식할 수 있는 지평을 넓히겠다는 의도를 담습니다.
 
-`zettel-kasten`은 역사적 뿌리와 archive method입니다. `zet`는 active product primitive입니다.
+`zettel-kasten`은 역사적 뿌리와 archive method입니다. `zet`는 그 안에서 민팅되는 단위 문서입니다. `ZET`는 미래의 zettel-kasten 기반 통신 계층입니다.
 
 구현 세부사항보다 먼저, 이 시스템이 무엇인지, 왜 필요한지, 인간과 AI에 대해 어떤 전제를 갖는지, 그리고 같은 구조가 어떻게 private archive, HITL workflow, AI-agent harness, 메신저, SNS, 협업툴로 확장될 수 있는지를 설명합니다.
 
@@ -26,7 +26,7 @@ AI에게는 오래 남고, 검증 가능하며, 출처를 확인할 수 있고, 
 
 `zet`는 원본 자료, AI와의 대화, 사용자의 판단을 durable archive memory로 바꾸는 텍스트 중심 단위입니다.
 
-미래의 `zet` 공유 레이어는 선택된 zets를 사람, 조직, 기기, agent, archive 사이에서 이동시키되 중앙 플랫폼이 사용자의 기억을 canonical하게 소유하지 않도록 설계합니다.
+미래의 `ZET` 통신 계층은 선택된 zets를 사람, 조직, 기기, agent, archive 사이에서 이동시키되 중앙 플랫폼이 사용자의 기억을 canonical하게 소유하지 않도록 설계합니다.
 
 기본 모델은 다음과 같습니다.
 
@@ -167,14 +167,15 @@ L5 minted zet
 
 나중에 OCR 성능이 좋아졌다면 OCR layer를 다시 생성할 수 있어야 합니다. 이때 원본 object를 덮어쓰거나 derived text를 original text와 혼동해서는 안 됩니다.
 
-## 6. Zet란 무엇인가
+## 6. zet란 무엇인가
 
 `zet`는 항상 텍스트입니다.
 
 더 정확히 말하면 `zet`는 다음으로 구성됩니다.
 
 ```text
-Markdown-like document body
+v0.2 Markdown-compatible document body
+long-term WOM Safe HTML Profile rendering/interchange target
 + metadata envelope
 + source references
 + relationships
@@ -187,6 +188,8 @@ Markdown-like document body
 body는 사람이 읽을 수 있어야 합니다.
 
 envelope는 소프트웨어가 검사할 수 있어야 합니다.
+
+장기 포맷 방향이 중요한 이유는 WOM이 미래 사용자 모두에게 하나의 공식 앱만 강제해서는 안 되기 때문입니다. 로컬 zettel-kasten runtime은 AI/CLI/MCP 중심이지만, 미래의 `ZET` surface는 gallery, feed, media viewer, workspace, dashboard, domain-specific SaaS가 될 수 있습니다. Markdown은 authoring/import compatibility에는 계속 유용하지만, 장기 canonical/interchange/rendering target은 arbitrary HTML이 아니라 보안 의식이 반영된 WOM Safe HTML Profile로 수렴해야 합니다.
 
 `zet`는 다음을 할 수 있습니다.
 
@@ -455,20 +458,20 @@ mint != post
 
 archive가 먼저 memory가 되고, 그 다음에 communication이 되도록 합니다.
 
-## 13. Zet 공유
+## 13. ZET 공유
 
-미래의 `zet` 서비스는 archive model 위에 올라가는 sharing and communication layer입니다.
+미래의 `ZET` 서비스는 archive model 위에 올라가는 sharing and communication layer입니다.
 
 같은 `zet` abstraction은 관계 topology에 따라 다른 social form을 만듭니다.
 
 ```text
-1:1 zet sharing
+1:1 ZET relation
   -> messenger
 
-1:many zet sharing
+1:many ZET relation
   -> SNS feed, channel, newsletter-like stream
 
-many:many zet sharing
+many:many ZET relation
   -> collaboration workspace
 ```
 
@@ -538,7 +541,7 @@ source code
 
 다른 major version은 migration이나 bridge가 필요할 수 있습니다.
 
-이것이 버전이 맞는 `zet` 시스템끼리 같은 주파수를 맞춘다는 말의 실질적 의미입니다.
+이것이 버전이 맞는 `ZET` 시스템끼리 같은 주파수를 맞춘다는 말의 실질적 의미입니다.
 
 ## 15. 조합 가능한 Archives
 
@@ -683,7 +686,7 @@ blueprint, schemas, reference implementation, research notes, implementation pla
 - 모든 collaboration tool을 즉시 대체하는 제품,
 - `zet`를 쓰기 위해 모두에게 zettel-kasten 사용을 강제하는 시스템.
 
-`zet`는 나중에 full archive system을 원하지 않는 사람도 쓸 수 있는 standalone messenger/collaboration/SNS layer가 되어야 합니다.
+`ZET`는 나중에 full archive system을 원하지 않는 사람도 쓸 수 있는 standalone messenger/collaboration/SNS layer가 되어야 합니다.
 
 하지만 그 깊은 architecture는 zettel-kasten에서 옵니다.
 

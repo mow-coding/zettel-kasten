@@ -1,4 +1,4 @@
-# Work Log: Zettel-Kasten and Zet Blueprint Consolidation
+# Work Log: Zettel-Kasten, zet, and ZET Blueprint Consolidation
 
 Date: 2026-05-22
 
@@ -29,7 +29,7 @@ Purpose:
 Consolidates the product philosophy and concept model:
 
 - `zettel-kasten = source/original data + metadata + zets`
-- `zet = Markdown-like text document + metadata envelope`
+- `zet = v0.2 Markdown-compatible text document + metadata envelope`
 - minting = private archive issuance
 - sharing = separate future layer
 - shared zets can become messenger/SNS/collaboration objects

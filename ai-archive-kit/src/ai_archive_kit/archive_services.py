@@ -2485,7 +2485,7 @@ def delegate_zets(
         target_policy=target_policy,
     )
     if dry_run["blockers"]:
-        raise ArchiveServiceError("Zet delegation blocked by dry-run: " + "; ".join(dry_run["blockers"]))
+        raise ArchiveServiceError("zet delegation blocked by dry-run: " + "; ".join(dry_run["blockers"]))
 
     receipt_relative = dry_run["proposed_delegate_receipt_path"]
     receipt_path = archive_internal_path(root, receipt_relative)

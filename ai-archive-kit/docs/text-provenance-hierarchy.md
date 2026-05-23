@@ -120,7 +120,7 @@ human-reviewed transcript
 review receipt
 ```
 
-### L5: Minted Zet
+### L5: Minted zet
 
 A human-approved text document that interprets, summarizes, connects, or records conclusions from source material.
 
@@ -191,7 +191,7 @@ Allowed `review_status` values should include:
 - `human_reviewed`,
 - `superseded`.
 
-## 6. Zet Boundary
+## 6. zet Boundary
 
 A `zet` can quote or summarize OCR text.
 
@@ -204,4 +204,3 @@ But the `zet` should know whether it is based on:
 - human-reviewed correction.
 
 That distinction belongs in provenance.
-

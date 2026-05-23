@@ -11,18 +11,19 @@
 WOM 안에서:
 
 - `zettel-kasten`은 역사적 뿌리이자 local archive method입니다.
-- `zet`는 active text primitive입니다.
+- `zet`는 zettel-kasten 안에서 민팅되는 단위 문서입니다.
+- `ZET`는 zettel-kasten 기반 통신 계층입니다. 1:1이면 메신저, 1:다수면 SNS/feed, 다수:다수면 협업툴이 될 수 있습니다.
 - `node`는 subject/archive participant입니다.
 - 선호 lifecycle은 `mint -> delegate -> attest -> anchor`입니다.
 
-`zettel-kasten`은 repository와 archive system의 뿌리로 남지만, 제품 언어는 `WOM`, `zet`, `node`를 중심으로 정리합니다.
+`zettel-kasten`은 repository와 archive system의 뿌리로 남지만, 제품 언어는 `WOM`, `zet`, `ZET`, `node`를 중심으로 정리합니다.
 
 ## 현재 상태
 
 현재 공개 기준:
 
 ```text
-v0.2.13 pre-release
+v0.2.14 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -38,12 +39,14 @@ v0.2.13 pre-release
 - draft zet을 canonical archive memory로 민팅하고 mint receipt/draft snapshot을 남기는 CLI 구현.
 - scoped zet delegation을 delegate proof/receipt로 실제 기록하는 CLI 구현.
 - `claimable_once` delegate capability preview를 포함한 dry-run `attest-zet`, `anchor-zet` lifecycle preview.
+- 장기 canonical/interchange/rendering target으로서의 WOM Safe HTML Profile 설계 문서.
 
 아직 없는 것:
 
 - production-grade 설치 흐름,
 - 실제 provider 연동,
-- production `zet` 공유 서비스,
+- production `ZET` 공유 서비스,
+- Markdown에서 WOM Safe HTML로 변환하거나 검증하는 구현,
 - 안정판 `v1.0.0` 프로토콜 보장.
 
 ## 핵심 모델
@@ -64,11 +67,12 @@ v0.2.13 pre-release
 
 현재 명칭 기준은 [Naming And Terminology](ai-archive-kit/docs/concepts/naming-and-terminology.ko.md)를 보세요.
 
-인간 데이터 원형, AX 흐름에서의 의미, Web3-like `zet` 공유 모델까지 포함한 전체 설계 철학은 다음 문서를 보세요.
+인간 데이터 원형, AX 흐름에서의 의미, Web3-like `ZET` 통신 모델까지 포함한 전체 설계 철학은 다음 문서를 보세요.
 
 - [기초 제품 백서](ai-archive-kit/docs/concepts/foundational-product-whitepaper.ko.md)
 - [Product Philosophy](ai-archive-kit/docs/concepts/product-philosophy.md)
 - [한국어 Product Philosophy](ai-archive-kit/docs/concepts/product-philosophy.ko.md)
+- [WOM Safe HTML Profile](ai-archive-kit/docs/concepts/wom-safe-html-profile.ko.md)
 - [공개 문서 지도](ai-archive-kit/docs/public-documentation-map.ko.md)
 
 공개 프로젝트 기록은 의도적으로 다음처럼 분리합니다.
@@ -80,11 +84,13 @@ v0.2.13 pre-release
 작업일지
 ```
 
-## Zet란 무엇인가?
+## zet란 무엇인가?
 
 `zet`는 항상 텍스트입니다.
 
-사람이 직접 쓰거나, AI가 초안을 만들고 사람이 감독/승인한 Markdown-like 문서입니다. 민팅되면 private archive 안의 공식 기록이 됩니다.
+사람이 직접 쓰거나, AI가 초안을 만들고 사람이 감독/승인한 문서입니다. 민팅되면 private archive 안의 공식 기록이 됩니다.
+
+v0.2에서는 authoring/import compatibility를 위해 Markdown 기반 zets를 유지합니다. 장기 canonical/interchange/rendering target은 arbitrary HTML이 아니라 [WOM Safe HTML Profile](ai-archive-kit/docs/concepts/wom-safe-html-profile.ko.md)입니다.
 
 민팅이란:
 
@@ -106,12 +112,12 @@ AI는 기억을 정리하고 연결하는 조력자이며,
 공유는 private memory에서 의도적으로 떼어내는 projection입니다.
 ```
 
-미래의 `zet` 공유 레이어는 다음 모델을 따릅니다.
+미래의 `ZET` 통신 계층은 다음 모델을 따릅니다.
 
 ```text
-1:1 zet 공유       -> 메신저
-1:다수 zet 공유    -> SNS / feed
-다수:다수 zet 공유 -> 협업 워크스페이스
+1:1 ZET 관계       -> 메신저
+1:다수 ZET 관계    -> SNS / feed
+다수:다수 ZET 관계 -> 협업 워크스페이스
 ```
 
 ## 저장 모델
@@ -165,11 +171,12 @@ OCR과 AI 전사는 유용하지만, 모델에 따라 달라질 수 있는 deriv
 
 ## 버전 관리
 
-WOM, `zettel-kasten`, `zet`는 버전이 있는 protocol family로 관리합니다.
+WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리합니다.
 
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.14
 v0.2.13
 v0.2.12
 v0.2.11

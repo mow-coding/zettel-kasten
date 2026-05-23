@@ -1,4 +1,4 @@
-# Next Thread Prompt: Zet Sharing Lifecycle Terminology
+# Next Thread Prompt: ZET Sharing Lifecycle Terminology
 
 Use this prompt when continuing the next design/implementation batch.
 

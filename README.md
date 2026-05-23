@@ -11,18 +11,19 @@ The name expresses the ambition to stand near the frontier of modernity and wide
 Inside WOM:
 
 - `zettel-kasten` is the historical root and local archive method,
-- `zet` is the active text primitive,
+- `zet` is the unit document minted inside a zettel-kasten,
+- `ZET` is the zettel-kasten-based communication layer that can become messaging, SNS/feed, or collaboration,
 - `node` is the subject/archive participant,
 - the preferred lifecycle is `mint -> delegate -> attest -> anchor`.
 
-`zettel-kasten` remains the repository and archive-system root, but the product language should center `WOM`, `zet`, and `node`.
+`zettel-kasten` remains the repository and archive-system root, but the product language should center `WOM`, `zet`, `ZET`, and `node`.
 
 ## Status
 
 Current public baseline:
 
 ```text
-v0.2.13 pre-release
+v0.2.14 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -38,12 +39,14 @@ What exists today:
 - CLI-backed private minting from draft zet to canonical archive memory, currently recorded with mint receipts and draft snapshots,
 - CLI-backed real delegate proof/receipt writes for scoped zet delegation,
 - dry-run `attest-zet` and `anchor-zet` lifecycle previews, including `claimable_once` delegate capability previews.
+- WOM Safe HTML Profile design notes for the long-term canonical/interchange/rendering target.
 
 What does not exist yet:
 
 - production-grade installation flow,
 - live provider integrations,
-- production `zet` sharing service,
+- production `ZET` sharing service,
+- Markdown-to-WOM-Safe-HTML conversion or validation,
 - stable `v1.0.0` protocol guarantee.
 
 ## Core Model
@@ -64,10 +67,11 @@ The system starts from the archive node, not from a social app.
 
 See [Naming And Terminology](ai-archive-kit/docs/concepts/naming-and-terminology.md) for the current naming freeze.
 
-For the full design philosophy, including the human data primitive model, AX rationale, and Web3-like `zet` sharing model, see:
+For the full design philosophy, including the human data primitive model, AX rationale, and Web3-like `ZET` sharing model, see:
 
 - [Foundational Product Whitepaper](ai-archive-kit/docs/concepts/foundational-product-whitepaper.md)
 - [Product Philosophy](ai-archive-kit/docs/concepts/product-philosophy.md)
+- [WOM Safe HTML Profile](ai-archive-kit/docs/concepts/wom-safe-html-profile.md)
 - [Public Documentation Map](ai-archive-kit/docs/public-documentation-map.md)
 
 The public project records are intentionally separated into:
@@ -79,11 +83,13 @@ implementation plans
 work logs
 ```
 
-## What Is A Zet?
+## What Is `zet`?
 
 A `zet` is always text.
 
-It is a Markdown-like document created by a human, or drafted by AI under human supervision, then minted into a private archive.
+It is a document created by a human, or drafted by AI under human supervision, then minted into a private archive.
+
+In v0.2, zets remain Markdown-compatible for authoring and import compatibility. The long-term canonical/interchange/rendering target is the [WOM Safe HTML Profile](ai-archive-kit/docs/concepts/wom-safe-html-profile.md), not arbitrary HTML.
 
 Minting means:
 
@@ -105,12 +111,12 @@ AI helps draft and connect memory,
 sharing is a deliberate projection from private memory.
 ```
 
-The future `zet` sharing layer follows this projection model:
+The future `ZET` communication layer follows this projection model:
 
 ```text
-1:1 zet sharing       -> messenger
-1:many zet sharing    -> social feed / SNS
-many:many zet sharing -> collaboration workspace
+1:1 ZET relation       -> messenger
+1:many ZET relation    -> social feed / SNS
+many:many ZET relation -> collaboration workspace
 ```
 
 ## Storage Model
@@ -164,11 +170,12 @@ See [Text Provenance Hierarchy](ai-archive-kit/docs/text-provenance-hierarchy.md
 
 ## Versioning
 
-WOM, `zettel-kasten`, and `zet` are managed as a versioned protocol family.
+WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol family.
 
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.14
 v0.2.13
 v0.2.12
 v0.2.11

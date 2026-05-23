@@ -20,14 +20,15 @@ The name means: if modernity is a spectrum, WOM stands near its frontier and tri
 
 WOM is broader than a note app, a SaaS archive, or a blockchain token project. It is the worldview around a local-first, AI-native, Web3-oriented archive and communication system.
 
-## Root, Primitive, Node
+## Root, Primitive, Communication Layer, Node
 
 Canonical public language:
 
 ```text
 WOM              -> overall umbrella / worldview
 zettel-kasten    -> historical root and local archive method
-zet              -> active text primitive
+zet              -> unit document minted from a zettel-kasten
+ZET              -> zettel-kasten-based communication method / service / protocol layer
 node             -> subject/archive participant
 tie              -> candidate relationship/capability term between nodes
 ```
@@ -36,6 +37,12 @@ tie              -> candidate relationship/capability term between nodes
 
 But the active product unit is `zet`, not `zettel`.
 
+`ZET` is different from `zet`.
+
+`zet` names the unit minted inside a zettel-kasten.
+
+`ZET` names the communication layer built from zets: it can behave like a messenger in 1:1 topology, a feed/SNS in 1:many topology, or a collaboration workspace in many:many topology.
+
 Use:
 
 ```text
@@ -43,17 +50,23 @@ zet
 minted zet
 draft zet
 foreign zet
+ZET protocol
+ZET communication layer
+ZET-based SaaS
 ```
 
 Avoid as current product language:
 
 ```text
+the capitalized singular form of zet
+mixed-case spellings of WOM
+lowercase spellings of WOM
 zettel as the active unit
 canonical zettel in public copy
 mint-zettel as the preferred command name
 ```
 
-Implementation compatibility note: current v0.2 file paths and code still contain `zettel`, `zettels/`, `mint-zettel`, and related schema names. As of `v0.2.13`, `mint-zet` exists as the preferred CLI alias, but the older names remain compatibility surfaces.
+Implementation compatibility note: current v0.2 file paths and code still contain `zettel`, `zettels/`, `mint-zettel`, and related schema names. As of `v0.2.13`, `mint-zet` exists as the preferred CLI alias, but the older names remain compatibility surfaces. As of `v0.2.14`, public-facing documents distinguish `WOM`, `zet`, and `ZET`.
 
 ## Lifecycle
 
@@ -159,16 +172,20 @@ proof or credential -> core evidence layer
 
 ## Current Compatibility Position
 
-As of `v0.2.13`:
+As of `v0.2.14`:
 
 - `delegate-zet` is already aligned with product language.
 - `attest-zet` and `anchor-zet` are aligned with product language.
 - `mint-zet` is the preferred CLI surface for minting; `mint-zettel` remains a compatibility alias.
+- `zet` is always lowercase when referring to the minted unit.
+- `ZET` is uppercase when referring to the communication method/service/protocol layer.
+- `WOM` is always uppercase.
 - `promote` and `share` should remain legacy compatibility commands only.
 - `parcel` is the preferred CLI surface for creating a portable bounded unit; `pack` remains a compatibility alias.
 - `admit --dry-run` is the preferred CLI surface for previewing governed parcel/workpack admission; `import --dry-run` remains a compatibility alias.
 - `workpack` remains the v0.2 storage path/folder compatibility term until a safe migration exists.
 - `receipt` should remain implementation-compatible while product copy begins introducing `proof` and `credential`.
+- Markdown remains an authoring/import compatibility format while WOM Safe HTML Profile becomes the long-term canonical/interchange/rendering direction.
 
 Short form:
 
@@ -176,7 +193,9 @@ Short form:
 WOM
 node
 zet
+ZET
 mint -> delegate -> attest -> anchor
 parcel -> admit
 proof / credential / attestation
+WOM Safe HTML Profile
 ```

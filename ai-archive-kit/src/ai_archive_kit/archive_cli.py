@@ -1538,7 +1538,7 @@ def command_pack(args: argparse.Namespace) -> int:
         print(f"Created parcel {result['package_id']} at {result['package_path']}")
         print(f"View: {result['view_id']}")
         print(f"Mode: {result['mode']}")
-        print(f"Zets: {result['zettels']}")
+        print(f"zets: {result['zettels']}")
         print(f"Objects: {result['objects']} metadata record(s)")
     return 0
 
@@ -1565,7 +1565,7 @@ def command_import_workpack(args: argparse.Namespace) -> int:
         print(f"Parcel admit dry-run {state}: {result['package_id']}")
         print(f"Target archive: {result['target_archive']}")
         print(f"Proposed receipt path: {result['proposed_receipt_path']}")
-        print(f"Zets: {len(result['zettels'])}")
+        print(f"zets: {len(result['zettels'])}")
         print(f"Objects: {len(result['objects'])}")
         print(f"Scope gate included zettels: {len(result['scope_gate']['included_zettels'])}")
         print(f"Trust gate: {result['trust_gate']['status']}")
@@ -1682,7 +1682,7 @@ def command_delegate_zet(args: argparse.Namespace) -> int:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
     if not args.dry_run and not args.approve:
-        print("Zet delegation requires --dry-run or --approve. Use --dry-run to preview.", file=sys.stderr)
+        print("zet delegation requires --dry-run or --approve. Use --dry-run to preview.", file=sys.stderr)
         return 1
     if args.approve and not args.reviewed_by:
         print("Real zet delegation requires --reviewed-by.", file=sys.stderr)
@@ -1718,9 +1718,9 @@ def command_delegate_zet(args: argparse.Namespace) -> int:
     else:
         if result["dry_run"]:
             state = "passed" if result["ok"] else "blocked"
-            print(f"Zet delegate dry-run {state}.")
+            print(f"zet delegate dry-run {state}.")
         else:
-            print("Zet delegate receipt written.")
+            print("zet delegate receipt written.")
         print(f"Source archive: {result['source_archive']}")
         print(f"Target policy: {result['target_policy']}")
         print(f"Target archive: {result['target_archive'] or '<deferred until attestation>'}")
@@ -1762,7 +1762,7 @@ def command_attest_zet(args: argparse.Namespace) -> int:
         print_json(result)
     else:
         state = "passed" if result["ok"] else "blocked"
-        print(f"Zet attest dry-run {state}.")
+        print(f"zet attest dry-run {state}.")
         print(f"Archive: {result['archive_id']}")
         print(f"Source archive: {result['source_archive']}")
         print(f"Delegated zets: {len(result['delegated_zets'])}")
@@ -1796,7 +1796,7 @@ def command_anchor_zet(args: argparse.Namespace) -> int:
         print_json(result)
     else:
         state = "passed" if result["ok"] else "blocked"
-        print(f"Zet anchor dry-run {state}.")
+        print(f"zet anchor dry-run {state}.")
         print(f"Archive: {result['archive_id']}")
         print(f"Source archive: {result['source_archive']}")
         print(f"Anchored zets: {len(result['anchored_zets'])}")

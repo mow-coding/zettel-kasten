@@ -1,6 +1,6 @@
 # Versioning And Compatibility
 
-`zettel-kasten` and `zet` are designed as a versioned protocol family, not just a loose collection of scripts.
+`zettel-kasten`, `zet`, and `ZET` are designed as a versioned protocol family, not just a loose collection of scripts.
 
 This matters because two people can only share, verify, and interpret zets safely when they understand which version of the system they are using.
 
@@ -96,7 +96,7 @@ The archive should never silently rewrite a user's memory.
 Current public baseline:
 
 ```text
-v0.2.13 public showcase baseline
+v0.2.14 public showcase baseline
 ```
 
 This baseline is for early review and prototyping. It is not yet a stable `v1.0.0` protocol.
@@ -106,11 +106,11 @@ This baseline is for early review and prototyping. It is not yet a stable `v1.0.
 The current `ai-archive-kit` package metadata is:
 
 ```text
-0.2.13
+0.2.14
 ```
 
 Therefore the first public compatibility tag for this repository should be:
 
 ```text
-v0.2.13
+v0.2.14
 ```

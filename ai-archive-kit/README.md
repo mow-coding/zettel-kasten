@@ -13,7 +13,7 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 ```text
 Human talks.
 AI drafts and organizes.
-Zets persist.
+zets persist.
 Original files stay addressable.
 Nodes can delegate, attest, and anchor.
 UI is optional.
@@ -24,7 +24,7 @@ The archive has four layers:
 
 1. Original data layer: raw files and external objects.
 2. Metadata/relation layer: SQLite and manifests.
-3. Zet layer: Markdown zets with YAML frontmatter.
+3. zet layer: v0.2 Markdown-compatible zets with YAML frontmatter, with the long-term canonical/interchange/rendering target defined by the WOM Safe HTML Profile.
 4. View/perspective layer: AI-facing saved filters and context policies.
 
 ## Contents
@@ -44,6 +44,8 @@ Canonical product terminology is documented in:
 ```text
 docs/concepts/naming-and-terminology.md
 docs/concepts/naming-and-terminology.ko.md
+docs/concepts/wom-safe-html-profile.md
+docs/concepts/wom-safe-html-profile.ko.md
 ```
 
 v0.1 established the file protocol: specs, templates, and fake examples.
@@ -269,7 +271,7 @@ The kit still intentionally does not include a web UI. Notion and Google Drive i
 db/archive-index.sqlite
 ```
 
-This file is a rebuildable map, not the archive itself. The durable archive still lives in Markdown zettels, YAML files, object manifests, and original files.
+This file is a rebuildable map, not the archive itself. The durable archive still lives in zets, YAML files, object manifests, receipts, and original files. In v0.2, zets remain Markdown-compatible; the long-term target is the WOM Safe HTML Profile.
 
 `archive mint-zet --dry-run` checks the minting gate using `minting_rules` in `zettel-kasten/zettel-rules.yml`, with legacy `promotion_rules` as a v0.2 fallback. It reports blockers, warnings, missing human-review items, near duplicates, the proposed canonical path, the proposed mint receipt path, and the proposed draft snapshot path. It writes nothing. `archive mint-zettel` remains a v0.2 compatibility alias.
 
@@ -373,7 +375,7 @@ plans/phase-3-implementation-plan.md
 plans/phase-4-lineage-trust-plan.md
 ```
 
-Phase 2 is complete for the safe local toolkit subset. Phase 3 added real promotion. v0.2.8 added the product-facing minting lifecycle with canonical zettel, mint receipt, and draft snapshot outputs. v0.2.9 stabilizes minting terminology while preserving promotion compatibility. v0.2.10 adds dry-run `delegate-zet`, `attest-zet`, and `anchor-zet` lifecycle previews. v0.2.11 adds the delegate capability contract with `counterparty_bound` and `claimable_once` dry-run policies. v0.2.12 adds CLI-only real delegate receipt writes. v0.2.13 adds the WOM naming baseline and compatibility-safe aliases: `mint-zet`, `parcel`, and `admit`. Phase 4 adds the lineage/trust dry-run baseline and the first owner/operator identity model. Phase 7B adds CLI-only real ownership transfer plus provider change planning. Phase 8B adds one-command setup orchestration above the Docker-first runtime. Phase 8C hardens the local installer and container runtime. Phase 9 starts Notion and Google Drive export import. Real parcel/workpack import, real share/merge/fork, live external provider API sync, OS keyring integration, UI, and CI matrix remain future work.
+Phase 2 is complete for the safe local toolkit subset. Phase 3 added real promotion. v0.2.8 added the product-facing minting lifecycle with canonical zettel, mint receipt, and draft snapshot outputs. v0.2.9 stabilizes minting terminology while preserving promotion compatibility. v0.2.10 adds dry-run `delegate-zet`, `attest-zet`, and `anchor-zet` lifecycle previews. v0.2.11 adds the delegate capability contract with `counterparty_bound` and `claimable_once` dry-run policies. v0.2.12 adds CLI-only real delegate receipt writes. v0.2.13 adds the WOM naming baseline and compatibility-safe aliases: `mint-zet`, `parcel`, and `admit`. v0.2.14 records the `WOM`/`zet`/`ZET` distinction and defines the WOM Safe HTML Profile as a compatibility-safe documentation baseline. Phase 4 adds the lineage/trust dry-run baseline and the first owner/operator identity model. Phase 7B adds CLI-only real ownership transfer plus provider change planning. Phase 8B adds one-command setup orchestration above the Docker-first runtime. Phase 8C hardens the local installer and container runtime. Phase 9 starts Notion and Google Drive export import. Real parcel/workpack import, real share/merge/fork, live external provider API sync, OS keyring integration, UI, Markdown-to-WOM-Safe-HTML conversion, and CI matrix remain future work.
 
 ## Minimal MCP Server
 

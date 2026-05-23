@@ -1,9 +1,11 @@
-# Zet Sharing Lifecycle Terminology
+# ZET Sharing Lifecycle Terminology
 
 Status: public terminology candidate
 Date: 2026-05-23
 
-This document records the product-language direction for the future `zet` sharing layer.
+This document records the product-language direction for the future `ZET` communication layer.
+
+In this document, `zet` means the unit document minted inside a zettel-kasten. `ZET` means the communication method/service/protocol layer built from zets.
 
 It does not implement sharing, P2P transport, social feeds, or collaboration yet. It defines the philosophical verbs that future specs, schemas, receipts, and UI should align with.
 
@@ -21,9 +23,9 @@ create -> share -> download -> save
 
 That language treats data as files moving through a platform.
 
-The `zet` model treats each subject as an archive-bearing actor that can issue, delegate, verify, and place records within its own memory boundary.
+The `ZET` model treats each subject as an archive-bearing actor that can issue, delegate, verify, and place records within its own memory boundary.
 
-The preferred `zet` flow is:
+The preferred `ZET` lifecycle flow is:
 
 ```text
 mint -> delegate -> attest -> anchor
@@ -153,7 +155,7 @@ anchor proof / anchor mark
 
 Current v0.2 implementation still uses `receipt` in file paths and schemas for compatibility.
 
-As of `v0.2.13`, the lifecycle is still early, but minting and delegation have real local write paths:
+As of `v0.2.14`, the lifecycle is still early, but minting and delegation have real local write paths, and the `WOM`/`zet`/`ZET` naming boundary is now documented:
 
 - `mint-zet --dry-run` previews private archive minting. `mint-zettel` remains a compatibility alias.
 - `mint-zet --approve --reviewed-by <actor>` writes canonical private archive memory, a mint receipt, and a draft snapshot.
@@ -161,6 +163,8 @@ As of `v0.2.13`, the lifecycle is still early, but minting and delegation have r
 - `delegate-zet --approve --reviewed-by <actor>` writes a local delegate receipt.
 - `attest-zet --dry-run` returns an attestation receipt preview.
 - `anchor-zet --dry-run` returns anchor metadata preview.
+- `ZET` names the future communication layer, while `zet` remains the minted unit document.
+- WOM Safe HTML Profile is the long-term canonical/interchange/rendering direction for zets that may be rendered by future `ZET` surfaces.
 
 `delegate-zet --target-policy claimable_once --dry-run` can preview a one-time claimable capability without naming the recipient archive yet. The later `attest-zet --dry-run` preview binds that capability to the attesting archive through `claim_binding`.
 
@@ -199,6 +203,7 @@ Current status:
 - `v0.2.11` adds `counterparty_bound` and `claimable_once` delegate capability previews.
 - `v0.2.12` adds CLI-only real delegate receipt writes.
 - `v0.2.13` adds the WOM naming baseline and compatibility-safe CLI aliases: `mint-zet`, `parcel`, and `admit`.
+- `v0.2.14` adds the `WOM`/`zet`/`ZET` distinction and WOM Safe HTML Profile design baseline.
 
 Short form:
 

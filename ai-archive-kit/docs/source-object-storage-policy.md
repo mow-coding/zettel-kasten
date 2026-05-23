@@ -19,7 +19,8 @@ That means:
 
 ```text
 zet
-  -> Markdown-like text + metadata envelope
+  -> v0.2 Markdown-compatible text + metadata envelope
+  -> long-term WOM Safe HTML Profile canonical/interchange target
 
 source/original object
   -> hwp, hwpx, docx, xlsx, pdf, txt, md, images, audio, video, exports, and other files
@@ -65,7 +66,7 @@ Default policy:
 Original files -> local object store and/or object storage
 Object identity -> object manifest
 Derived text -> derived text records with provenance
-Zets and metadata -> Git repository
+zets and metadata -> Git repository
 Search text -> SQLite/search index
 Human conclusions -> minted zets
 ```
@@ -76,7 +77,7 @@ In practical terms:
 - Object storage should store original binary or document files when they are real archive sources.
 - Derived OCR/transcription/extraction text should be stored with provenance and review status.
 - SQLite/search indexes may store extracted text for search, but indexes are rebuildable.
-- Zets should cite original objects through `object_id`, not by embedding the file itself.
+- zets should cite original objects through `object_id`, not by embedding the file itself.
 
 ## 4. File-Type Guidance
 
@@ -239,4 +240,3 @@ These are all text-like artifacts, but they do not have the same authority.
 OCR and AI transcription can improve as models improve, so they must remain traceable to the original object and tool/model that produced them.
 
 See `text-provenance-hierarchy.md`.
-

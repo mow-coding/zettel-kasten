@@ -238,7 +238,7 @@ It should not immediately:
 - hash huge files without approval,
 - call provider APIs repeatedly without clear scope.
 
-### Stage 8: First Zet Draft And Mint
+### Stage 8: First zet Draft And Mint
 
 After sources are registered, the user can say:
 
@@ -372,4 +372,3 @@ Provider setup should follow official provider documentation:
 - GitHub CLI supports browser-based `gh auth login` and secure credential storage where available.
 - S3-compatible object storage can use AWS CLI-compatible workflows, Cloudflare R2, Backblaze B2, or similar providers.
 - rclone can be a practical CLI bridge for Google Drive and other cloud storage backends.
-

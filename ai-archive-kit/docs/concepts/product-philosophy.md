@@ -1,13 +1,13 @@
-# Product Philosophy: WOM, Zettel-Kasten, And Zet
+# Product Philosophy: WOM, zettel-kasten, zet, and ZET
 
 Status: public philosophy baseline
 Date: 2026-05-23
 
-This document explains the design philosophy behind WOM, `zettel-kasten`, and `zet`.
+This document explains the design philosophy behind WOM, `zettel-kasten`, `zet`, and `ZET`.
 
 `WOM` is the umbrella name: `Widesider of Modernity`.
 
-`zettel-kasten` is the historical root and local archive method. `zet` is the active product primitive.
+`zettel-kasten` is the historical root and local archive method. `zet` is the unit document minted inside it. `ZET` is the future zettel-kasten-based communication layer.
 
 It is intentionally not only a technical spec. It explains why the system exists.
 
@@ -16,7 +16,8 @@ For the longer public product planning document, read:
 - [Foundational Product Whitepaper](foundational-product-whitepaper.md)
 - [Korean Foundational Product Whitepaper](foundational-product-whitepaper.ko.md)
 - [Naming And Terminology](naming-and-terminology.md)
-- [Zet Sharing Lifecycle Terminology](zet-sharing-lifecycle.md)
+- [ZET Sharing Lifecycle Terminology](zet-sharing-lifecycle.md)
+- [WOM Safe HTML Profile](wom-safe-html-profile.md)
 
 ## 1. Thesis
 
@@ -28,7 +29,7 @@ WOM uses a local-first archive node for that memory.
 
 `zet` is the text unit that lets a person or organization turn source material, AI conversations, and human judgment into durable archive memory.
 
-The future `zet` sharing layer then lets selected zets move between people, teams, and archives without making a central platform the source of truth.
+The future `ZET` communication layer then lets selected zets move between people, teams, and archives without making a central platform the source of truth.
 
 ## 2. Human Data Primitives
 
@@ -174,9 +175,9 @@ Minting is not publishing to a feed.
 
 This protects the thinking process. A private archive should not become performative social media by accident.
 
-## 7. Zet Sharing And Web3
+## 7. ZET Sharing And Web3
 
-The future `zet` sharing layer is Web3-like in the infrastructural sense, not in the hype sense.
+The future `ZET` communication layer is Web3-like in the infrastructural sense, not in the hype sense.
 
 It does not need to start with tokens, coins, or a public blockchain.
 
@@ -193,9 +194,9 @@ The relevant Web3 principles are:
 In this model:
 
 ```text
-1:1 zet sharing       -> messenger
-1:many zet sharing    -> social feed / SNS
-many:many zet sharing -> collaboration workspace
+1:1 ZET relation       -> messenger
+1:many ZET relation    -> social feed / SNS
+many:many ZET relation -> collaboration workspace
 ```
 
 But all of them begin from the same root:
@@ -221,7 +222,17 @@ The server, if one exists, should help transport, discovery, relay, or sync.
 
 It should not become the canonical owner of the user's archive.
 
-## 8. Versioned Public Chain
+## 8. Format And SaaS Surface
+
+`zet` is always text, but text does not have to mean Markdown-only forever.
+
+The local zettel-kasten experience is CLI/MCP/AI-runtime first. That is powerful for AI-assisted writing and inspection, but it is not a finished visual UI for every human workflow.
+
+WOM should therefore encourage developers and users to build their own zettel-kasten and `ZET`-based SaaS surfaces: galleries, media viewers, feeds, workspaces, dashboards, research tools, and collaboration apps.
+
+That is why the format question matters. Markdown remains excellent for v0.2 authoring and import compatibility, while the long-term canonical/interchange/rendering target should be the security-conscious [WOM Safe HTML Profile](wom-safe-html-profile.md). This does not allow arbitrary HTML inside archive memory. It defines a governed, AI-readable, deterministic, provenance-preserving profile that a future SaaS layer can render safely.
+
+## 9. Versioned Public Chain
 
 The public repository is the reference chain for:
 
@@ -238,7 +249,7 @@ Same major protocol version should mean expected compatibility. Different major 
 
 This is why the public repository must be carefully versioned.
 
-## 9. What This Project Is Not
+## 10. What This Project Is Not
 
 This project is not:
 
@@ -255,9 +266,9 @@ It is a foundation for:
 - provenance-aware zettels,
 - local-first memory,
 - controlled sharing,
-- future messenger/SNS/collaboration layers built from zets.
+- future messenger/SNS/collaboration layers built from zets through `ZET`.
 
-## 10. Implementation Implication
+## 11. Implementation Implication
 
 The correct implementation order is:
 

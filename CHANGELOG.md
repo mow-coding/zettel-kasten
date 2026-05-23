@@ -1,8 +1,25 @@
 # Changelog
 
-All notable public releases of `zettel-kasten` and `zet` should be documented here.
+All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be documented here.
 
 This project uses semantic versioning for public compatibility checkpoints.
+
+## v0.2.14 - 2026-05-23
+
+WOM Safe HTML Profile documentation/spec baseline patch.
+
+Added:
+
+- WOM Safe HTML Profile documents in English and Korean,
+- public distinction between `WOM`, `zet`, and `ZET`,
+- documentation that keeps Markdown as an authoring/import compatibility format while setting WOM Safe HTML Profile as the long-term canonical/interchange/rendering target,
+- stronger explanation that `ZET` is the communication layer that can become messaging, SNS/feed, or collaboration.
+
+Compatibility:
+
+- no private archive migration is required,
+- existing Markdown-compatible zets remain valid in the v0.2 compatibility line,
+- no Markdown-to-HTML converter, validator, UI, live sharing, or P2P transport is implemented in this release.
 
 ## v0.2.13 - 2026-05-23
 
@@ -61,7 +78,7 @@ Compatibility:
 
 ## v0.2.10 - 2026-05-23
 
-Zet sharing dry-run lifecycle contract.
+ZET sharing dry-run lifecycle contract.
 
 Added:
 

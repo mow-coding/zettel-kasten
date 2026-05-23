@@ -4,7 +4,7 @@
 
 This guide explains how to move between public `zettel-kasten` / `zet` versions.
 
-The project is versioned because archive rules, zettel metadata, object manifests, provenance records, and future `zet` sharing envelopes must be understandable across users and tools.
+The project is versioned because archive rules, zettel metadata, object manifests, provenance records, and future `ZET` sharing envelopes must be understandable across users and tools.
 
 ## Quick Rule
 
@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.13` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.13.md` |
+| `v0.2.14` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.14.md` |
+| `v0.2.13` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.13.md` |
 | `v0.2.12` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.12.md` |
 | `v0.2.11` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.11.md` |
 | `v0.2.10` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.10.md` |
@@ -40,6 +41,27 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.13` To `v0.2.14`
+
+This is a compatible documentation/spec baseline patch for the WOM Safe HTML Profile.
+
+What changed:
+
+- documented the distinction between `WOM`, `zet`, and `ZET`,
+- clarified that `zet` is the unit document minted inside a zettel-kasten,
+- clarified that `ZET` is the future communication layer that can become messenger, SNS/feed, or collaboration,
+- documented WOM Safe HTML Profile as the long-term canonical/interchange/rendering target,
+- kept Markdown as the v0.2 authoring/import compatibility format.
+
+No private archive migration is required.
+
+This release does not add a Markdown-to-HTML converter, profile validator, UI, live sharing, P2P transport, or external provider sync.
+
+```bash
+git fetch --tags
+git checkout v0.2.14
+```
 
 ## From `v0.2.12` To `v0.2.13`
 

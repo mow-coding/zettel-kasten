@@ -2406,7 +2406,7 @@ class ArchiveCliTests(unittest.TestCase):
                 ]
             )
             self.assertEqual(duplicate_code, 1)
-            self.assertIn("Zet delegation blocked by dry-run", duplicate_output)
+            self.assertIn("zet delegation blocked by dry-run", duplicate_output)
 
     def test_delegate_zet_claimable_once_approve_writes_receipt_without_target_archive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

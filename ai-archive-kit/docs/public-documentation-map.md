@@ -16,7 +16,7 @@ This separation is part of the project philosophy. The public repository should 
 
 ## 1. Product Blueprint / Design Philosophy
 
-These documents explain the concept, product philosophy, archive model, and `zet` sharing model.
+These documents explain the concept, product philosophy, archive model, and `ZET` communication model.
 
 Start here:
 
@@ -26,9 +26,11 @@ Start here:
 - [Korean Foundational Product Whitepaper](concepts/foundational-product-whitepaper.ko.md)
 - [Product Philosophy](concepts/product-philosophy.md)
 - [Korean Product Philosophy](concepts/product-philosophy.ko.md)
-- [Zet Sharing Lifecycle Terminology](concepts/zet-sharing-lifecycle.md)
-- [Korean Zet Sharing Lifecycle Terminology](concepts/zet-sharing-lifecycle.ko.md)
-- [Zettel-Kasten And Zet Product Blueprint](../specs/zettelkasten-zet-product-blueprint.md)
+- [WOM Safe HTML Profile](concepts/wom-safe-html-profile.md)
+- [Korean WOM Safe HTML Profile](concepts/wom-safe-html-profile.ko.md)
+- [ZET Sharing Lifecycle Terminology](concepts/zet-sharing-lifecycle.md)
+- [Korean ZET Sharing Lifecycle Terminology](concepts/zet-sharing-lifecycle.ko.md)
+- [Zettel-Kasten, zet, and ZET Product Blueprint](../specs/zettelkasten-zet-product-blueprint.md)
 
 Supporting philosophy and model docs:
 
@@ -44,9 +46,10 @@ These documents cover:
 - why `zet` is always text,
 - why source/original data remains separate from minted zets,
 - why private archive memory comes before social sharing,
-- why `WOM`, `zet`, and `node` are the preferred product-language anchors,
+- why `WOM`, `zet`, `ZET`, and `node` are the preferred product-language anchors,
 - why future sharing verbs are framed as `mint -> delegate -> attest -> anchor`,
-- how `zet` sharing can later become messenger, SNS/feed, or collaboration workspace,
+- how `ZET` sharing can later become messenger, SNS/feed, or collaboration workspace,
+- why Markdown remains an authoring/import compatibility format while WOM Safe HTML Profile becomes the long-term canonical/interchange/rendering target,
 - why this model is relevant to AI Transformation (AX).
 - how the same authority model supports HITL workflows and scoped AI-agent harnesses.
 
@@ -130,8 +133,9 @@ These documents record public-safe work already performed.
 - [GitHub Publication Work Log](../plans/work-log-2026-05-23-github-publication.md)
 - [Versioning And Storage Work Log](../plans/work-log-2026-05-23-versioning-and-storage.md)
 - [Product Whitepaper Depth Correction Work Log](../plans/work-log-2026-05-23-product-whitepaper-depth.md)
-- [Zet Sharing Lifecycle Terminology Work Log](../plans/work-log-2026-05-23-zet-sharing-lifecycle-terminology.md)
-- [Zet Sharing Dry-Run Lifecycle Work Log](../plans/work-log-2026-05-23-zet-sharing-dry-run-lifecycle.md)
+- [ZET Sharing Lifecycle Terminology Work Log](../plans/work-log-2026-05-23-zet-sharing-lifecycle-terminology.md)
+- [ZET Sharing Dry-Run Lifecycle Work Log](../plans/work-log-2026-05-23-zet-sharing-dry-run-lifecycle.md)
+- [WOM Safe HTML Profile Work Log](../plans/work-log-2026-05-23-wom-safe-html-profile.md)
 - [Delegate Capability Binding Work Log](../plans/work-log-2026-05-23-delegate-capability-binding.md)
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)

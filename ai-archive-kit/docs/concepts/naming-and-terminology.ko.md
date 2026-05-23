@@ -20,14 +20,15 @@ WOM이 전체 umbrella name입니다.
 
 WOM은 단순 note app, SaaS archive, blockchain token project가 아닙니다. local-first, AI-native, Web3 지향 archive/communication system을 둘러싼 worldview입니다.
 
-## 뿌리, 기본 단위, 노드
+## 뿌리, 기본 단위, 통신 계층, 노드
 
 공식 public language:
 
 ```text
 WOM              -> 전체 umbrella / worldview
 zettel-kasten    -> 역사적 뿌리와 local archive method
-zet              -> active text primitive
+zet              -> zettel-kasten 안에서 민팅되는 단위 문서
+ZET              -> zettel-kasten 기반 통신 계층 / 서비스 / 프로토콜 layer
 node             -> subject/archive participant
 tie              -> node 사이의 relationship/capability 후보 용어
 ```
@@ -36,6 +37,11 @@ tie              -> node 사이의 relationship/capability 후보 용어
 
 하지만 active product unit은 `zettel`이 아니라 `zet`입니다.
 
+`zet`와 `ZET`는 다릅니다.
+
+- `zet`는 zettel-kasten 안에서 발행되는 단위 문서입니다.
+- `ZET`는 그 `zet`를 바탕으로 1:1 메신저, 1:다수 SNS/feed, 다수:다수 협업툴이 될 수 있는 통신 방식입니다.
+
 사용:
 
 ```text
@@ -43,6 +49,9 @@ zet
 minted zet
 draft zet
 foreign zet
+ZET protocol
+ZET communication layer
+ZET-based SaaS
 ```
 
 현재 제품 언어로 피할 것:
@@ -51,9 +60,12 @@ foreign zet
 active unit으로서의 zettel
 public copy에서 canonical zettel
 선호 command name으로서의 mint-zettel
+zet의 첫 글자만 대문자로 쓰는 표기
+WOM의 mixed-case 표기
+WOM의 lowercase 표기
 ```
 
-구현 호환성 note: 현재 v0.2 file path와 code에는 아직 `zettel`, `zettels/`, `mint-zettel`, 관련 schema name이 남아 있습니다. `v0.2.13`부터 `mint-zet`이 선호 CLI alias로 존재하지만, 옛 이름은 compatibility surface로 유지합니다.
+구현 호환성 note: 현재 v0.2 file path와 code에는 아직 `zettel`, `zettels/`, `mint-zettel`, 관련 schema name이 남아 있습니다. `v0.2.13`부터 `mint-zet`이 선호 CLI alias로 존재하지만, 옛 이름은 compatibility surface로 유지합니다. `v0.2.14`부터 public-facing 문서는 `WOM`, `zet`, `ZET` 표기를 구분합니다.
 
 ## Lifecycle
 
@@ -159,11 +171,15 @@ proof or credential -> core evidence layer
 
 ## 현재 호환성 상태
 
-`v0.2.13` 기준:
+`v0.2.14` 기준:
 
 - `delegate-zet`은 이미 제품 언어와 맞습니다.
 - `attest-zet`, `anchor-zet`도 제품 언어와 맞습니다.
 - `mint-zet`은 민팅의 선호 CLI surface입니다. `mint-zettel`은 compatibility alias로 남습니다.
+- `zet`는 항상 소문자 단위 문서입니다.
+- `ZET`는 항상 대문자 통신 계층입니다.
+- 장기 canonical/interchange/rendering target은 [WOM Safe HTML Profile](wom-safe-html-profile.ko.md)입니다.
+- Markdown은 v0.2 authoring/import compatibility로 유지합니다.
 - `promote`, `share`는 legacy compatibility command로만 남겨야 합니다.
 - `parcel`은 범위가 정해진 portable unit을 만드는 선호 CLI surface입니다. `pack`은 compatibility alias로 남습니다.
 - `admit --dry-run`은 parcel/workpack을 검증 후 들여오는 과정을 preview하는 선호 CLI surface입니다. `import --dry-run`은 compatibility alias로 남습니다.
@@ -176,6 +192,7 @@ proof or credential -> core evidence layer
 WOM
 node
 zet
+ZET
 mint -> delegate -> attest -> anchor
 parcel -> admit
 proof / credential / attestation

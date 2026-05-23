@@ -1,4 +1,4 @@
-# Work Log: Zet Sharing Lifecycle Terminology
+# Work Log: ZET Sharing Lifecycle Terminology
 
 Date: 2026-05-23
 Status: public-safe work log

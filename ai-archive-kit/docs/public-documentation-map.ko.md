@@ -16,7 +16,7 @@
 
 ## 1. 제품 기획안 / 설계 철학
 
-이 문서들은 concept, 제품 철학, archive model, `zet` 공유 모델을 설명합니다.
+이 문서들은 concept, 제품 철학, archive model, `ZET` 통신 모델을 설명합니다.
 
 먼저 볼 문서:
 
@@ -26,9 +26,11 @@
 - [Foundational Product Whitepaper](concepts/foundational-product-whitepaper.md)
 - [Product Philosophy](concepts/product-philosophy.md)
 - [한국어 Product Philosophy](concepts/product-philosophy.ko.md)
-- [Zet Sharing Lifecycle Terminology](concepts/zet-sharing-lifecycle.md)
-- [한국어 Zet Sharing Lifecycle Terminology](concepts/zet-sharing-lifecycle.ko.md)
-- [Zettel-Kasten And Zet Product Blueprint](../specs/zettelkasten-zet-product-blueprint.md)
+- [WOM Safe HTML Profile](concepts/wom-safe-html-profile.md)
+- [한국어 WOM Safe HTML Profile](concepts/wom-safe-html-profile.ko.md)
+- [ZET Sharing Lifecycle Terminology](concepts/zet-sharing-lifecycle.md)
+- [한국어 ZET Sharing Lifecycle Terminology](concepts/zet-sharing-lifecycle.ko.md)
+- [Zettel-Kasten, zet, and ZET Product Blueprint](../specs/zettelkasten-zet-product-blueprint.md)
 
 보조 철학/모델 문서:
 
@@ -44,9 +46,10 @@
 - 왜 `zet`는 항상 텍스트인지,
 - 왜 source/original data와 minted zet를 분리해야 하는지,
 - 왜 social sharing보다 private archive memory가 먼저인지,
-- 왜 `WOM`, `zet`, `node`를 제품 언어의 중심축으로 삼는지,
+- 왜 `WOM`, `zet`, `ZET`, `node`를 제품 언어의 중심축으로 삼는지,
 - 왜 미래 공유 동사를 `mint -> delegate -> attest -> anchor`로 잡는지,
-- `zet` 공유가 어떻게 messenger, SNS/feed, collaboration workspace로 확장되는지,
+- `ZET` 공유가 어떻게 messenger, SNS/feed, collaboration workspace로 확장되는지,
+- 왜 Markdown은 authoring/import compatibility로 유지하고 WOM Safe HTML Profile은 장기 canonical/interchange/rendering target으로 삼는지,
 - 이 모델이 AX, 즉 AI Transformation 흐름에서 왜 중요한지.
 - 같은 authority model이 어떻게 HITL workflow와 제한된 AI-agent harness를 함께 지원하는지.
 
@@ -130,8 +133,9 @@ local archive
 - [GitHub Publication Work Log](../plans/work-log-2026-05-23-github-publication.md)
 - [Versioning And Storage Work Log](../plans/work-log-2026-05-23-versioning-and-storage.md)
 - [Product Whitepaper Depth Correction Work Log](../plans/work-log-2026-05-23-product-whitepaper-depth.md)
-- [Zet Sharing Lifecycle Terminology Work Log](../plans/work-log-2026-05-23-zet-sharing-lifecycle-terminology.md)
-- [Zet Sharing Dry-Run Lifecycle Work Log](../plans/work-log-2026-05-23-zet-sharing-dry-run-lifecycle.md)
+- [ZET Sharing Lifecycle Terminology Work Log](../plans/work-log-2026-05-23-zet-sharing-lifecycle-terminology.md)
+- [ZET Sharing Dry-Run Lifecycle Work Log](../plans/work-log-2026-05-23-zet-sharing-dry-run-lifecycle.md)
+- [WOM Safe HTML Profile Work Log](../plans/work-log-2026-05-23-wom-safe-html-profile.md)
 - [Delegate Capability Binding Work Log](../plans/work-log-2026-05-23-delegate-capability-binding.md)
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)

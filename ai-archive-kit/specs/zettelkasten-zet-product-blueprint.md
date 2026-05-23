@@ -1,9 +1,9 @@
-# Zettel-Kasten and Zet Product Blueprint v0.1
+# Zettel-Kasten, zet, and ZET Product Blueprint v0.1
 
 Status: planning baseline
 Date: 2026-05-22
 
-This document consolidates the product philosophy and concept model for `zettel-kasten`, `zet`, and the future `zet` sharing service.
+This document consolidates the product philosophy and concept model for `zettel-kasten`, `zet`, and the future `ZET` communication layer.
 
 It is not a runtime specification yet. It is the blueprint that implementation specs, schemas, CLI commands, tests, and future UI should align with.
 
@@ -16,9 +16,9 @@ For the longer public philosophy narrative, see:
 
 `zettel-kasten` is a subject-owned private archive made of source/original data, metadata, and minted `zet` documents.
 
-`zet` is a Markdown-like text document plus metadata envelope, created by a user or under user-supervised AI collaboration, then minted into the private archive.
+`zet` is a text document plus metadata envelope, created by a user or under user-supervised AI collaboration, then minted into the private archive. In v0.2 it remains Markdown-compatible; the long-term canonical/interchange/rendering target is the WOM Safe HTML Profile.
 
-The future `zet` sharing service is a separate layer that lets minted zets move between subjects and compose into messages, feeds, workspaces, and new archives.
+The future `ZET` communication layer is a separate layer that lets minted zets move between subjects and compose into messages, feeds, workspaces, and new archives.
 
 ## 2. Product Philosophy
 
@@ -130,14 +130,14 @@ Examples:
 
 Metadata is the map around the archive's materials.
 
-### 3.3 Zets
+### 3.3 zets
 
 A `zet` is a text document.
 
-The easiest user mental model is:
+The easiest v0.2 user mental model is:
 
 ```text
-zet ~= Markdown document
+zet ~= Markdown-compatible text document + metadata envelope
 ```
 
 But conceptually every `zet` is:
@@ -156,7 +156,7 @@ A `zet` is not:
 - a generic file transfer packet,
 - an external social post by default.
 
-## 4. Zet Definition
+## 4. zet Definition
 
 A `zet` is the basic interpreted map unit of a `zettel-kasten`.
 
@@ -172,6 +172,8 @@ It may be:
 The body is always text.
 
 The envelope records context, source references, relationships, authority, visibility, and lifecycle.
+
+The long-term body target is not arbitrary HTML. It is WOM Safe HTML Profile: a security-conscious, AI-readable, deterministic, provenance-aware HTML profile that future custom zettel-kasten and `ZET` SaaS surfaces can render safely.
 
 ## 5. Human Data Primitive Model
 
@@ -229,6 +231,7 @@ integrity: {}
 The implementation may use:
 
 - Markdown with YAML frontmatter,
+- safe HTML profile plus metadata envelope,
 - Markdown plus adjacent JSON/YAML envelope,
 - SQLite records plus Markdown export,
 - or a package format later.
@@ -492,9 +495,9 @@ External sharing is always a separate action:
 share/export/publish != mint
 ```
 
-## 14. Future Zet Sharing Service
+## 14. Future ZET Communication Layer
 
-The future `zet` sharing service is built on top of private minted zets.
+The future `ZET` communication layer is built on top of private minted zets.
 
 It lets a user deliberately share a selected zet, or a derived/redacted shareable zet, with another subject.
 
@@ -515,9 +518,9 @@ The same underlying object should not be casually leaked from the private archiv
 
 Sharing should usually create a share package or share envelope that is distinct from the private minted zet.
 
-### 14.1 Sharing Lifecycle Terminology
+### 14.1 ZET Lifecycle Terminology
 
-The preferred terminology candidate for future `zet` sharing is:
+The preferred terminology candidate for future `ZET` sharing is:
 
 ```text
 mint -> delegate -> attest -> anchor
@@ -612,7 +615,7 @@ payment may grant access/capability/license;
 payment does not silently rewrite who minted the zet.
 ```
 
-This keeps `zet` usable as private communication, messenger, SNS, and collaboration infrastructure while leaving a clean bridge toward future blockchain, licensing, or knowledge-market experiments.
+This keeps `ZET` usable as private communication, messenger, SNS, and collaboration infrastructure while leaving a clean bridge toward future blockchain, licensing, or knowledge-market experiments.
 
 ## 15. Sharing Payload Policies
 
@@ -852,7 +855,10 @@ These are implementation-scope questions, not product-philosophy questions.
 : Structured information that makes records searchable, verifiable, governable, and linkable.
 
 `zet`
-: A Markdown-like text document plus metadata envelope, used as the archive's human-readable interpreted map unit.
+: A text document plus metadata envelope, used as the archive's human-readable interpreted map unit. v0.2 keeps Markdown-compatible zets; the long-term canonical/interchange/rendering target is WOM Safe HTML Profile.
+
+`ZET`
+: The future zettel-kasten-based communication method, service, or protocol layer built from zets. It can behave like a messenger, SNS/feed, or collaboration workspace depending on relationship topology.
 
 `draft zet`
 : A working text object that may be AI-assisted and freely edited before minting.
@@ -875,5 +881,5 @@ These are implementation-scope questions, not product-philosophy questions.
 `workpack`
 : A portable archive slice for sharing, derivation, transfer, or collaboration.
 
-`zet sharing service`
-: A future protocol/client layer for sharing minted or derived zets between subjects.
+`ZET communication layer`
+: A future protocol/client layer for delegating, attesting, anchoring, and composing minted or derived zets between subjects.

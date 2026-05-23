@@ -1,14 +1,14 @@
-# Foundational Product Whitepaper: WOM, Zettel-Kasten, And Zet
+# Foundational Product Whitepaper: WOM, zettel-kasten, zet, and ZET
 
 Status: public product planning baseline
 Date: 2026-05-23
 Version context: v0.2.7 planning document
 
-This document is the detailed public product philosophy for WOM, `zettel-kasten`, and `zet`.
+This document is the detailed public product philosophy for WOM, `zettel-kasten`, `zet`, and `ZET`.
 
 `WOM` means `Widesider of Modernity`: the ambition to widen the horizon humans can perceive at the frontier of modernity.
 
-`zettel-kasten` is the historical root and archive method. `zet` is the active product primitive.
+`zettel-kasten` is the historical root and archive method. `zet` is the unit document minted inside it. `ZET` is the future zettel-kasten-based communication layer.
 
 It explains the product idea before implementation details: what the system is, why it exists, what it assumes about humans and AI, and how the same structure can support private archives, HITL workflows, AI-agent harnesses, messaging, social feeds, and collaboration.
 
@@ -24,7 +24,7 @@ Humans also need memory that does not disappear into scattered chats, folders, c
 
 `zet` is the text-centered unit that turns source material, AI conversation, and user judgment into durable archive memory.
 
-The future `zet` sharing layer lets selected zets move between people, organizations, devices, agents, and archives without making a central platform the canonical owner of the user's memory.
+The future `ZET` communication layer lets selected zets move between people, organizations, devices, agents, and archives without making a central platform the canonical owner of the user's memory.
 
 The root model is:
 
@@ -167,14 +167,15 @@ This distinction is crucial because AI tools will improve.
 
 If OCR quality improves later, the system should be able to regenerate the OCR layer without overwriting the original object or confusing derived text with original text.
 
-## 6. What A Zet Is
+## 6. What `zet` Is
 
 A `zet` is always text.
 
 More precisely, a `zet` is:
 
 ```text
-Markdown-like document body
+v0.2 Markdown-compatible document body
+long-term WOM Safe HTML Profile rendering/interchange target
 + metadata envelope
 + source references
 + relationships
@@ -187,6 +188,8 @@ Markdown-like document body
 The body should be readable by a human.
 
 The envelope should be inspectable by software.
+
+The long-term format direction matters because WOM should not force every future user into one official app. The local zettel-kasten runtime is AI/CLI/MCP first, while future `ZET` surfaces may be galleries, feeds, media viewers, workspaces, dashboards, or domain-specific SaaS products. Markdown remains useful for authoring and import compatibility, but the canonical/interchange/rendering target should converge toward a security-conscious WOM Safe HTML Profile rather than arbitrary HTML.
 
 A `zet` may:
 
@@ -455,20 +458,20 @@ This protects thought before performance.
 
 It lets the archive become memory before it becomes communication.
 
-## 13. Zet Sharing
+## 13. ZET Sharing
 
-The future `zet` service is a sharing and communication layer built from the archive model.
+The future `ZET` service is a sharing and communication layer built from the archive model.
 
 The same `zet` abstraction can produce different social forms depending on topology:
 
 ```text
-1:1 zet sharing
+1:1 ZET relation
   -> messenger
 
-1:many zet sharing
+1:many ZET relation
   -> SNS feed, channel, newsletter-like stream
 
-many:many zet sharing
+many:many ZET relation
   -> collaboration workspace
 ```
 
@@ -538,7 +541,7 @@ Same major version should imply expected compatibility.
 
 Different major versions may need migration or bridges.
 
-This is the practical meaning of versioned `zet` systems "tuning to the same frequency."
+This is the practical meaning of versioned `ZET` systems "tuning to the same frequency."
 
 ## 15. Composable Archives
 
@@ -683,7 +686,7 @@ This project is not trying to be:
 - a replacement for every collaboration tool immediately,
 - or a system that forces everyone to use zettel-kasten before using `zet`.
 
-`zet` should eventually work as a standalone messenger/collaboration/SNS layer for people who do not want the full archive system.
+`ZET` should eventually work as a standalone messenger/collaboration/SNS layer for people who do not want the full archive system.
 
 But the deeper architecture comes from zettel-kasten.
 

@@ -1,13 +1,13 @@
-# 제품 철학: WOM, Zettel-Kasten, And Zet
+# 제품 철학: WOM, zettel-kasten, zet, and ZET
 
 상태: 공개 철학 baseline
 날짜: 2026-05-23
 
-이 문서는 WOM, `zettel-kasten`, `zet`의 설계 철학을 설명합니다.
+이 문서는 WOM, `zettel-kasten`, `zet`, `ZET`의 설계 철학을 설명합니다.
 
 `WOM`은 `Widesider of Modernity`의 약자입니다.
 
-`zettel-kasten`은 역사적 뿌리와 local archive method입니다. `zet`는 active product primitive입니다.
+`zettel-kasten`은 역사적 뿌리와 local archive method입니다. `zet`는 그 안에서 민팅되는 단위 문서입니다. `ZET`는 미래의 zettel-kasten 기반 통신 계층입니다.
 
 단순한 기술 명세가 아니라, 왜 이 시스템이 필요한지 설명하는 문서입니다.
 
@@ -16,7 +16,8 @@
 - [Foundational Product Whitepaper](foundational-product-whitepaper.md)
 - [한국어 Foundational Product Whitepaper](foundational-product-whitepaper.ko.md)
 - [WOM 명칭과 용어 기준](naming-and-terminology.ko.md)
-- [Zet 공유 Lifecycle 용어](zet-sharing-lifecycle.ko.md)
+- [ZET 공유 Lifecycle 용어](zet-sharing-lifecycle.ko.md)
+- [WOM Safe HTML Profile](wom-safe-html-profile.ko.md)
 
 ## 1. 핵심 주장
 
@@ -28,7 +29,7 @@ WOM은 그 memory를 위한 local-first archive node에서 출발합니다.
 
 `zet`는 원본 자료, AI와의 대화, 사람의 판단을 durable archive memory로 바꾸는 텍스트 단위입니다.
 
-미래의 `zet` 공유 레이어는 선택된 `zet`를 사람, 팀, archive 사이에서 이동시킵니다. 이때 중앙 플랫폼이 유일한 진실의 원천이 되지 않도록 설계합니다.
+미래의 `ZET` 통신 계층은 선택된 `zet`를 사람, 팀, archive 사이에서 이동시킵니다. 이때 중앙 플랫폼이 유일한 진실의 원천이 되지 않도록 설계합니다.
 
 ## 2. 인간이 생성하는 데이터의 세 가지 원형
 
@@ -172,9 +173,9 @@ draft zet -> human review -> private canonical archive record
 
 이 원칙은 사용자의 생각 과정을 보호합니다. private archive가 실수로 performative social media가 되어서는 안 됩니다.
 
-## 7. Zet 공유와 Web3
+## 7. ZET 공유와 Web3
 
-미래의 `zet` 공유 레이어는 hype가 아니라 인프라 의미에서 Web3-like합니다.
+미래의 `ZET` 통신 계층은 hype가 아니라 인프라 의미에서 Web3-like합니다.
 
 처음부터 token, coin, public blockchain이 필요하다는 뜻이 아닙니다.
 
@@ -191,9 +192,9 @@ draft zet -> human review -> private canonical archive record
 이 모델에서:
 
 ```text
-1:1 zet 공유       -> 메신저
-1:다수 zet 공유    -> SNS / feed
-다수:다수 zet 공유 -> 협업 워크스페이스
+1:1 ZET 관계       -> 메신저
+1:다수 ZET 관계    -> SNS / feed
+다수:다수 ZET 관계 -> 협업 워크스페이스
 ```
 
 하지만 모두 같은 뿌리에서 시작합니다.
@@ -219,7 +220,17 @@ mint -> delegate -> attest -> anchor
 
 하지만 서버가 사용자의 archive를 canonical하게 소유해서는 안 됩니다.
 
-## 8. 버전이 있는 공개 체인
+## 8. 포맷과 SaaS 표면
+
+`zet`는 항상 텍스트입니다. 하지만 텍스트라는 말이 영원히 Markdown-only라는 뜻은 아닙니다.
+
+zettel-kasten의 기본 경험은 CLI/MCP/AI runtime 중심입니다. AI와 함께 쓰고 검사하기에는 강력하지만, 모든 사용자가 원하는 시각적 UI/UX를 처음부터 제공하는 완성형 앱은 아닙니다.
+
+따라서 WOM은 개발자와 사용자가 자기 zettel-kasten 및 `ZET` 기반 SaaS를 직접 만들 수 있도록 열려 있어야 합니다. 예를 들어 gallery, media viewer, feed, workspace, dashboard, research tool, collaboration app을 각자 만들 수 있어야 합니다.
+
+그래서 포맷 문제가 중요합니다. Markdown은 v0.2 authoring/import compatibility에는 좋지만, 장기 canonical/interchange/rendering target은 보안 의식이 반영된 [WOM Safe HTML Profile](wom-safe-html-profile.ko.md)이 되어야 합니다. 이것은 arbitrary HTML을 archive memory에 허용한다는 뜻이 아니라, AI가 읽을 수 있고 deterministic하며 provenance를 보존하고 안전하게 렌더링 가능한 profile을 정의하겠다는 뜻입니다.
+
+## 9. 버전이 있는 공개 체인
 
 공개 repository는 다음의 reference chain입니다.
 
@@ -236,7 +247,7 @@ mint -> delegate -> attest -> anchor
 
 그래서 공개 repository는 신중하게 versioning되어야 합니다.
 
-## 9. 이 프로젝트가 아닌 것
+## 10. 이 프로젝트가 아닌 것
 
 이 프로젝트는 다음이 아닙니다.
 
@@ -253,9 +264,9 @@ mint -> delegate -> attest -> anchor
 - provenance-aware zettels,
 - local-first memory,
 - controlled sharing,
-- zets에서 출발하는 future messenger/SNS/collaboration layer.
+- zets에서 출발해 `ZET`로 확장되는 future messenger/SNS/collaboration layer.
 
-## 10. 구현 순서에 주는 의미
+## 11. 구현 순서에 주는 의미
 
 올바른 구현 순서는 다음입니다.
 

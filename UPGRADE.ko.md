@@ -4,7 +4,7 @@
 
 이 문서는 `zettel-kasten` / `zet`의 공개 버전 사이를 어떻게 이동해야 하는지 설명합니다.
 
-이 프로젝트는 단순한 코드 묶음이 아니라, archive 규칙, zettel metadata, object manifest, provenance record, 미래의 `zet` sharing envelope까지 함께 관리하는 버전형 프로토콜입니다.
+이 프로젝트는 단순한 코드 묶음이 아니라, archive 규칙, zettel metadata, object manifest, provenance record, 미래의 `ZET` sharing envelope까지 함께 관리하는 버전형 프로토콜입니다.
 
 ## 기본 규칙
 
@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.13` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.13.md` |
+| `v0.2.14` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.14.md` |
+| `v0.2.13` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.13.md` |
 | `v0.2.12` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.12.md` |
 | `v0.2.11` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.11.md` |
 | `v0.2.10` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.10.md` |
@@ -40,6 +41,27 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.13`에서 `v0.2.14`로
+
+WOM Safe HTML Profile을 위한 호환 가능한 문서/스펙 기준선 패치입니다.
+
+변경 사항:
+
+- `WOM`, `zet`, `ZET`의 차이를 문서화했습니다.
+- `zet`는 zettel-kasten 안에서 민팅되는 단위 문서라고 명확히 했습니다.
+- `ZET`는 메신저, SNS/feed, 협업툴로 확장될 수 있는 미래 통신 계층이라고 명확히 했습니다.
+- WOM Safe HTML Profile을 장기 canonical/interchange/rendering target으로 기록했습니다.
+- Markdown은 v0.2 authoring/import compatibility format으로 유지했습니다.
+
+실제 private archive migration은 필요 없습니다.
+
+이번 릴리스는 Markdown-to-HTML converter, profile validator, UI, live sharing, P2P transport, external provider sync를 구현하지 않습니다.
+
+```bash
+git fetch --tags
+git checkout v0.2.14
+```
 
 ## `v0.2.12`에서 `v0.2.13`으로
 

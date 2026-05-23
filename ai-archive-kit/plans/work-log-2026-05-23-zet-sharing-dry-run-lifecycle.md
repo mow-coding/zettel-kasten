@@ -1,4 +1,4 @@
-# Work Log: v0.2.10 Zet Sharing Dry-Run Lifecycle
+# Work Log: v0.2.10 ZET Sharing Dry-Run Lifecycle
 
 Date: 2026-05-23
 Status: public-safe work log
