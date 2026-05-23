@@ -120,6 +120,7 @@ REQUIRED_ZETTEL_FIELDS = [
 ]
 
 ALLOWED_ZETTEL_STATUS = {"draft", "canonical", "archived", "redacted"}
+CANONICAL_REQUIRES_VALUES = {"human_minting", "human_promotion"}
 OBJECT_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n", re.DOTALL)
@@ -317,8 +318,12 @@ class Doctor:
         if isinstance(ai_policy, dict):
             if ai_policy.get("default") != "inbox_only":
                 self.warn("unsafe_ai_write_default", "ai_write_policy.default should be inbox_only.", path)
-            if ai_policy.get("canonical_requires") != "human_promotion":
-                self.warn("unsafe_promotion_policy", "ai_write_policy.canonical_requires should be human_promotion.", path)
+            if ai_policy.get("canonical_requires") not in CANONICAL_REQUIRES_VALUES:
+                self.warn(
+                    "unsafe_minting_policy",
+                    "ai_write_policy.canonical_requires should be human_minting. Legacy human_promotion is also accepted.",
+                    path,
+                )
 
         storage_policy = data.get("storage_policy") or {}
         if isinstance(storage_policy, dict):
@@ -660,7 +665,7 @@ class Doctor:
         if mint.get("stage") != "minted":
             self.error("mint_stage_invalid", "Zettel mint.stage must be minted.", path)
         if mint.get("authority_mode") != archive_services.MINT_AUTHORITY_MODE:
-            self.error("mint_authority_mode_invalid", "Zettel mint.authority_mode must be basic in v0.2.8.", path)
+            self.error("mint_authority_mode_invalid", "Zettel mint.authority_mode must be basic in the current v0.2 line.", path)
         for field in ["minted_at", "reviewed_by", "receipt_path", "draft_snapshot_path", "checklist_version"]:
             if not mint.get(field):
                 self.error("mint_metadata_field_missing", f"Zettel mint metadata missing field: {field}.", path)
@@ -862,7 +867,7 @@ class Doctor:
             if data.get("action") != "mint_zettel":
                 self.error("mint_receipt_action_invalid", "Mint receipt action must be mint_zettel.", path)
             if data.get("authority_mode") != archive_services.MINT_AUTHORITY_MODE:
-                self.error("mint_receipt_authority_mode_invalid", "Mint receipt authority_mode must be basic in v0.2.8.", path)
+                self.error("mint_receipt_authority_mode_invalid", "Mint receipt authority_mode must be basic in the current v0.2 line.", path)
             if data.get("dry_run") is False and not data.get("reviewed_by"):
                 self.error("mint_receipt_reviewer_missing", "Applied mint receipt must include reviewed_by.", path)
             for field in ["source", "target", "snapshot", "zettel", "result"]:
@@ -2446,7 +2451,7 @@ def update_archive_yml(target: Path, args: argparse.Namespace) -> None:
     data["root_policy"].setdefault("sqlite_schema", "db/schema.sql")
     data.setdefault("ai_write_policy", {})
     data["ai_write_policy"]["default"] = "inbox_only"
-    data["ai_write_policy"]["canonical_requires"] = "human_promotion"
+    data["ai_write_policy"]["canonical_requires"] = "human_minting"
     data.setdefault("storage_policy", {})
     data["storage_policy"]["object_identity"] = "sha256"
     data["storage_policy"]["provider_urls_in_zettels"] = "forbidden"

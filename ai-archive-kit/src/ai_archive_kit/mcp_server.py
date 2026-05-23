@@ -256,7 +256,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "create_draft_zettel",
-        "description": "Create an AI draft zettel in inbox/. This does not promote to canonical memory.",
+        "description": "Create an AI draft zettel in inbox/. This does not mint to canonical memory.",
         "inputSchema": {
             "type": "object",
             "properties": {

@@ -21,7 +21,7 @@ root_policy:
   sqlite_schema: db/schema.sql
 ai_write_policy:
   default: inbox_only
-  canonical_requires: human_promotion
+  canonical_requires: human_minting
 storage_policy:
   object_identity: sha256
   provider_urls_in_zettels: forbidden

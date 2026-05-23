@@ -28,13 +28,33 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.8` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.8.md` |
+| `v0.2.9` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.9.md` |
+| `v0.2.8` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.8.md` |
 | `v0.2.7` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.7.md` |
 | `v0.2.6` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.6.md` |
 | `v0.2.5` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.5.md` |
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.8` To `v0.2.9`
+
+This is a compatible terminology stabilization patch.
+
+What changed:
+
+- new archives default to `human_minting`,
+- existing `human_promotion` archives remain valid,
+- `minting_rules` may be used in zettel rules,
+- `promotion_rules` remains available as the v0.2 legacy fallback,
+- user-facing docs now prefer minting language.
+
+No private archive migration is required.
+
+```bash
+git fetch --tags
+git checkout v0.2.9
+```
 
 ## From `v0.2.7` To `v0.2.8`
 

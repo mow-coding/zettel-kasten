@@ -326,7 +326,7 @@ basic
 
 auto_review
   AI may create drafts or private candidates,
-  but sharing and canonical promotion require review gates.
+  but sharing and canonical minting require review gates.
 
 full_authority
   AI may mint/share within an explicitly bounded scope,

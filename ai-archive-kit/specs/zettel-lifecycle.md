@@ -349,7 +349,7 @@ Create a new zettel instead of overwriting when:
 When helping the user write zettels, the AI should:
 
 - write drafts first
-- ask for promotion only after a checklist pass
+- ask for minting only after a checklist pass
 - preserve the user's intent, not just conclusions
 - record uncertainty instead of smoothing it away
 - suggest splits when one draft has multiple purposes

@@ -199,6 +199,9 @@ class ArchiveCliTests(unittest.TestCase):
             init_code, init_output = self.init_personal_archive(archive_root)
             self.assertEqual(init_code, 0, init_output)
 
+            archive_yml = archive_cli.load_yaml((archive_root / "archive.yml").read_text(encoding="utf-8"))
+            self.assertEqual(archive_yml["ai_write_policy"]["canonical_requires"], "human_minting")
+
             doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
             self.assertEqual(doctor_code, 0, doctor_output)
             self.assertIn("0 error(s), 0 warning(s)", doctor_output)
@@ -797,6 +800,55 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(id_code, 0, id_output)
             id_result = json.loads(id_output)
             self.assertEqual(id_result["draft_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+
+    def test_mint_zettel_dry_run_prefers_minting_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            rules_path = archive_root / "zettel-kasten" / "zettel-rules.yml"
+            rules = archive_cli.load_yaml(rules_path.read_text(encoding="utf-8"))
+            rules["minting_rules"] = dict(rules["promotion_rules"])
+            rules["minting_rules"]["default_target_path"] = "minted-zettels/"
+            rules_path.write_text(archive_cli.dump_yaml(rules), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "mint-zettel",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["proposed_canonical_path"], "minted-zettels/zet_20260519_draft_ai_lunch_note.md")
+
+    def test_mint_zettel_dry_run_falls_back_to_legacy_promotion_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            rules_path = archive_root / "zettel-kasten" / "zettel-rules.yml"
+            rules = archive_cli.load_yaml(rules_path.read_text(encoding="utf-8"))
+            rules.pop("minting_rules", None)
+            rules_path.write_text(archive_cli.dump_yaml(rules), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "mint-zettel",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["proposed_canonical_path"], "zettels/zet_20260519_draft_ai_lunch_note.md")
 
     def test_mint_zettel_real_requires_approval_and_reviewer(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"

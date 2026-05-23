@@ -281,12 +281,12 @@ private source leakage
 fake certainty about sources
 ```
 
-## Flow 4: Human Reviews Promotion
+## Flow 4: Human Reviews Minting
 
 Always start with dry-run. Think of it as a rehearsal that tells you whether a draft is safe to make canonical.
 
 ```powershell
-python ai-archive-kit\cli\archive.py promote .\tmp-my-archive `
+python ai-archive-kit\cli\archive.py mint-zettel .\tmp-my-archive `
   --path inbox\PUT-THE-DRAFT-FILENAME-HERE.md `
   --dry-run `
   --format json
@@ -303,25 +303,26 @@ warnings
 checklist
 near_duplicates
 proposed_canonical_path
-proposed_receipt_path
+proposed_mint_receipt_path
+proposed_draft_snapshot_path
 receipt_preview
 would_change
 ```
 
 If `ok` is false, the draft needs more human review or editing.
 
-If `ok` is true and you intentionally reviewed the draft, real promotion is available through the CLI:
+If `ok` is true and you intentionally reviewed the draft, real minting is available through the CLI:
 
 ```powershell
-python ai-archive-kit\cli\archive.py promote .\tmp-my-archive `
+python ai-archive-kit\cli\archive.py mint-zettel .\tmp-my-archive `
   --path inbox\PUT-THE-DRAFT-FILENAME-HERE.md `
   --approve `
   --reviewed-by person:me
 ```
 
-Real promotion writes a canonical zettel under `zettels/` and a receipt under `receipts/promotion/`. It leaves the original inbox draft in place.
+Real minting writes a canonical zettel under `zettels/`, a mint receipt under `receipts/mint/`, and a draft snapshot under `receipts/mint/drafts/`. It leaves the original inbox draft in place.
 
-If dry-run reports warnings, real promotion stops unless you add `--allow-warnings`. Use that flag only when you have read and accepted the warnings.
+If dry-run reports warnings, real minting stops unless you add `--allow-warnings`. Use that flag only when you have read and accepted the warnings.
 
 ## Flow 5: Search Existing Memory
 
@@ -457,11 +458,12 @@ source_scan_plan
 source_registration_plan
 source_mount_plan
 promotion_check
+mint_zettel_check
 share_check
 ownership_transfer_check
 ```
 
-MCP can create drafts, inspect archives, search, plan onboarding, preview external imports, list sources, preview source registration, preview source mount plans, preview source scans, preview promotion, preview archive sharing, and check ownership transfer. It cannot perform real onboarding apply, source registration apply, source scan apply, canonical promotion, real share, merge, fork, or ownership transfer. Use the CLI for explicit human-approved steps.
+MCP can create drafts, inspect archives, search, plan onboarding, preview external imports, list sources, preview source registration, preview source mount plans, preview source scans, preview minting, preview legacy promotion, preview archive sharing, and check ownership transfer. It cannot perform real onboarding apply, source registration apply, source scan apply, canonical minting, real share, merge, fork, or ownership transfer. Use the CLI for explicit human-approved steps.
 
 ## Flow 8: Keep Secrets Out
 
@@ -499,7 +501,7 @@ Before changing anything important:
 1. Run doctor.
 2. Use onboarding dry-run before creating a new archive.
 3. Create drafts in inbox.
-4. Use dry-run before real promotion, transfer, sharing, or import.
+4. Use dry-run before real minting, transfer, sharing, or import.
 5. Read blockers and warnings.
 6. Record substantial decisions in meeting minutes and decision logs.
 7. Run tests after implementation work.

@@ -4,6 +4,25 @@ All notable public releases of `zettel-kasten` and `zet` should be documented he
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.9 - 2026-05-23
+
+Terminology stabilization patch.
+
+Changed:
+
+- made `mint` the preferred product language for current CLI and user-facing docs,
+- changed newly initialized archives to use `ai_write_policy.canonical_requires: human_minting`,
+- kept `human_promotion` valid for legacy archives without doctor warnings,
+- added optional `minting_rules` to zettel rules while keeping `promotion_rules` for v0.2 compatibility,
+- made mint dry-runs prefer `minting_rules` and fall back to legacy `promotion_rules`,
+- kept `promote`, `promotion_check`, `promotion` frontmatter, and old promotion receipts as compatibility surfaces.
+
+Migration:
+
+- no private archive migration required,
+- existing archives that still use `human_promotion` remain valid,
+- new archives should use `human_minting`.
+
 ## v0.2.8 - 2026-05-23
 
 Minting lifecycle implementation.

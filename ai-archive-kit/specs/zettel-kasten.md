@@ -108,7 +108,7 @@ Examples:
 
 ```text
 AI writes to inbox by default.
-Canonical zettels require human promotion.
+Canonical zettels require human minting.
 Provider URLs are forbidden inside zettels.
 AI may only access mounted archives.
 Workpack imports require receipts.

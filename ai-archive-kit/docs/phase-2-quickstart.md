@@ -2,7 +2,7 @@
 
 This quickstart is for a first safe local run of AI Archive Kit v0.2.
 
-The goal is not to build a web app. The goal is to check an archive, create an inbox draft, preview promotion, build search, and understand the safety rails.
+The goal is not to build a web app. The goal is to check an archive, create an inbox draft, preview minting, build search, and understand the safety rails.
 
 ## What Exists Now
 
@@ -15,6 +15,8 @@ archive init
 archive list-zettels
 archive read-zettel
 archive create-draft
+archive mint-zettel --dry-run
+archive mint-zettel --approve --reviewed-by
 archive promote --dry-run
 archive promote --approve --reviewed-by
 archive index
@@ -60,7 +62,7 @@ cd ..
 Expected result:
 
 ```text
-55 tests passed
+all tests pass
 ```
 
 ## 2. Create A Temporary Archive
@@ -98,14 +100,14 @@ List drafts:
 python ai-archive-kit\cli\archive.py list-zettels .\tmp-my-archive --status draft
 ```
 
-## 4. Preview Promotion
+## 4. Preview Minting
 
 Start with dry-run. It is the safe review step before canonical memory is written.
 
 Use the path printed by `create-draft`, then run:
 
 ```powershell
-python ai-archive-kit\cli\archive.py promote .\tmp-my-archive `
+python ai-archive-kit\cli\archive.py mint-zettel .\tmp-my-archive `
   --path inbox\PUT-THE-DRAFT-FILENAME-HERE.md `
   --dry-run
 ```
@@ -118,29 +120,32 @@ warnings
 checklist status
 near duplicate hints
 proposed canonical path
-proposed receipt path
+proposed mint receipt path
+proposed draft snapshot path
 ```
 
 If the draft is rough, dry-run should block it. That is expected.
 
-If dry-run passes and you have intentionally reviewed the draft, real promotion is available through the CLI:
+If dry-run passes and you have intentionally reviewed the draft, real minting is available through the CLI:
 
 ```powershell
-python ai-archive-kit\cli\archive.py promote .\tmp-my-archive `
+python ai-archive-kit\cli\archive.py mint-zettel .\tmp-my-archive `
   --path inbox\PUT-THE-DRAFT-FILENAME-HERE.md `
   --approve `
   --reviewed-by person:me
 ```
 
-Real promotion keeps the inbox draft, writes the canonical zettel under `zettels/`, and writes a receipt under `receipts/promotion/`.
+Real minting keeps the inbox draft, writes the canonical zettel under `zettels/`, writes a mint receipt under `receipts/mint/`, and writes the exact draft snapshot under `receipts/mint/drafts/`.
 
-If dry-run reports warnings, real promotion requires:
+If dry-run reports warnings, real minting requires:
 
 ```powershell
 --allow-warnings
 ```
 
 Only use that flag after reading the warnings.
+
+`archive promote` still exists as a v0.2 legacy compatibility command, but new users should start with `archive mint-zettel`.
 
 ## 5. Build And Search The Index
 
@@ -201,9 +206,10 @@ The server speaks JSON-RPC over stdio. It is meant to be launched by an AI clien
 
 - Use fake or temporary archives while learning.
 - AI writes drafts to `inbox/`.
-- Canonical `zettels/` require human review.
-- `promote --dry-run` writes nothing.
-- Real `promote` requires `--approve` and `--reviewed-by`.
+- Canonical `zettels/` require human minting.
+- `mint-zettel --dry-run` writes nothing.
+- Real `mint-zettel` requires `--approve` and `--reviewed-by`.
+- `promote` remains available for legacy v0.2 compatibility.
 - `import --dry-run` writes nothing.
 - `share --dry-run` writes nothing and checks scope plus counterparty trust.
 - Archive ownership and archive operation are separate; real ownership transfer is future work.

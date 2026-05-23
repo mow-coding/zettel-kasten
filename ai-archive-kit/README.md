@@ -47,7 +47,7 @@ zettel-kasten/zettel-rules.yml
 
 These files describe the governed model. The CLI and MCP server enforce a small safe subset; a full policy engine and database migration layer do not exist yet.
 
-Zettel writing and promotion rules are documented in:
+Zettel writing and minting lifecycle rules are documented in:
 
 ```text
 specs/zettel-lifecycle.md
@@ -89,7 +89,7 @@ onboard
   Plan or apply first archive setup. Dry-run writes nothing; --approve creates the archive, provider-bindings.yml, and runs strict doctor.
 
 doctor
-  Inspect an archive for missing files, invalid frontmatter, schema problems, manifest problems, unsafe zettel references, and promotion-rule warnings.
+  Inspect an archive for missing files, invalid frontmatter, schema problems, manifest problems, unsafe zettel references, and minting-rule warnings.
 
 init
   Initialize a personal, company, or family archive from a safe template.
@@ -238,7 +238,7 @@ db/archive-index.sqlite
 
 This file is a rebuildable map, not the archive itself. The durable archive still lives in Markdown zettels, YAML files, object manifests, and original files.
 
-`archive mint-zettel --dry-run` checks the minting gate by reusing the existing promotion checklist in `zettel-kasten/zettel-rules.yml`. It reports blockers, warnings, missing human-review items, near duplicates, the proposed canonical path, the proposed mint receipt path, and the proposed draft snapshot path. It writes nothing.
+`archive mint-zettel --dry-run` checks the minting gate using `minting_rules` in `zettel-kasten/zettel-rules.yml`, with legacy `promotion_rules` as a v0.2 fallback. It reports blockers, warnings, missing human-review items, near duplicates, the proposed canonical path, the proposed mint receipt path, and the proposed draft snapshot path. It writes nothing.
 
 Real minting is CLI-only and intentionally explicit:
 
@@ -337,7 +337,7 @@ plans/phase-3-implementation-plan.md
 plans/phase-4-lineage-trust-plan.md
 ```
 
-Phase 2 is complete for the safe local toolkit subset. Phase 3 added real promotion. v0.2.8 adds the product-facing `mint-zettel` lifecycle with canonical zettel, mint receipt, and draft snapshot outputs. Phase 4 adds the lineage/trust dry-run baseline and the first owner/operator identity model. Phase 7B adds CLI-only real ownership transfer plus provider change planning. Phase 8B adds one-command setup orchestration above the Docker-first runtime. Phase 8C hardens the local installer and container runtime. Phase 9 starts Notion and Google Drive export import. Real workpack import, real share/merge/fork, live external provider API sync, OS keyring integration, UI, and CI matrix remain future work.
+Phase 2 is complete for the safe local toolkit subset. Phase 3 added real promotion. v0.2.8 added the product-facing `mint-zettel` lifecycle with canonical zettel, mint receipt, and draft snapshot outputs. v0.2.9 stabilizes minting terminology while preserving promotion compatibility. Phase 4 adds the lineage/trust dry-run baseline and the first owner/operator identity model. Phase 7B adds CLI-only real ownership transfer plus provider change planning. Phase 8B adds one-command setup orchestration above the Docker-first runtime. Phase 8C hardens the local installer and container runtime. Phase 9 starts Notion and Google Drive export import. Real workpack import, real share/merge/fork, live external provider API sync, OS keyring integration, UI, and CI matrix remain future work.
 
 ## Minimal MCP Server
 
@@ -377,7 +377,7 @@ share_check
 ownership_transfer_check
 ```
 
-The MCP server is intentionally local and stdio-only. It exposes `promotion_check`, `mint_zettel_check`, `share_check`, and `ownership_transfer_check` as dry-run only and does not expose real canonical promotion, real minting, real sharing, real merge, real fork, or real ownership transfer; AI-created zettels go to `inbox/`. The ownership transfer check includes a provider change plan, but MCP still cannot apply local ownership changes or external provider account changes.
+The MCP server is intentionally local and stdio-only. It exposes `mint_zettel_check`, legacy `promotion_check`, `share_check`, and `ownership_transfer_check` as dry-run only and does not expose real minting, legacy real promotion, real sharing, real merge, real fork, or real ownership transfer; AI-created zettels go to `inbox/`. The ownership transfer check includes a provider change plan, but MCP still cannot apply local ownership changes or external provider account changes.
 
 Archive ownership is separate from archive operation. A family, company, or other group can own an archive while named people operate it. For example, parents can operate a child-related archive under a family owner, and a later receipt-backed transfer can move ownership to the child.
 

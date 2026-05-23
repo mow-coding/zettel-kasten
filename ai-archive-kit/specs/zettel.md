@@ -4,7 +4,7 @@ A zettel is the canonical human-readable record unit.
 
 The file format is Markdown with YAML frontmatter.
 
-AI may draft zettels in `inbox/`, but canonical records in `zettels/` require explicit human promotion unless an archive changes that policy.
+AI may draft zettels in `inbox/`, but canonical records in `zettels/` require explicit human minting unless an archive changes that policy.
 
 See also:
 
@@ -156,9 +156,22 @@ visibility:
   source_visibility: private
 ```
 
-## Promotion
+## Minting
 
-Promotion records how a draft became canonical.
+Minting records how a draft became canonical private archive memory.
+
+```yaml
+mint:
+  stage: minted
+  minted_at: 2026-05-23T12:30:00+09:00
+  reviewed_by: person:example
+  authority_mode: basic
+  receipt_path: receipts/mint/zet_example.mint.json
+  draft_snapshot_path: receipts/mint/drafts/zet_example.draft.md
+  checklist_version: zettel-minting/v0.2
+```
+
+The older `promotion` metadata remains valid for v0.2 compatibility:
 
 ```yaml
 promotion:
@@ -168,13 +181,13 @@ promotion:
   checklist_version: zettel-promotion/v0.2
 ```
 
-AI may prepare a promotion candidate, but the user decides what becomes canonical durable memory.
+AI may prepare a minting candidate, but the user decides what becomes canonical durable memory in the default HITL flow.
 
-## Promotion Checklist
+## Minting Checklist
 
 A zettel may move from `inbox/` to `zettels/` only after explicit human approval.
 
-Before promotion, check:
+Before minting, check:
 
 ```text
 1. One clear purpose.

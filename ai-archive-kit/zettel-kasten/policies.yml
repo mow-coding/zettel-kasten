@@ -28,7 +28,7 @@ policies:
     applies_to:
       actions:
         - create_draft_zettel
-    condition: AI creates a zettel without explicit human promotion approval.
+    condition: AI creates a zettel without explicit human minting approval.
     enforcement: Write only to root_policy.ai_inbox.
     reason: Drafts are useful, but canonical memory should not be silently mutated.
 
@@ -37,6 +37,7 @@ policies:
     applies_to:
       actions:
         - promote_zettel
+        - mint_zettel
         - archive_init
     condition: A zettel is created or moved into canonical zettels/.
     enforcement: Require explicit human approval or an archive-level policy override.
@@ -49,9 +50,10 @@ policies:
         - Zettel
       actions:
         - create_draft_zettel
+        - mint_zettel
         - promote_zettel
     condition: Required zettel frontmatter fields are missing.
-    enforcement: Block promotion and warn on draft creation.
+    enforcement: Block minting/promotion and warn on draft creation.
     reason: AI retrieval and future tools need consistent metadata.
 
   - policy_id: drafts_may_be_incomplete
@@ -60,7 +62,7 @@ policies:
       actions:
         - create_draft_zettel
     condition: A draft has uncertainty, TODOs, multiple ideas, or unresolved questions.
-    enforcement: Allow in inbox, but mark promotion.ready_for_promotion as false until reviewed.
+    enforcement: Allow in inbox, but keep canonical minting blocked until reviewed.
     reason: Capture should be easy, but rough drafts should not become canonical by accident.
 
   - policy_id: promotion_checklist_required
@@ -68,10 +70,11 @@ policies:
     applies_to:
       actions:
         - promote_zettel
+        - mint_zettel
         - archive_doctor
-    condition: A draft is promoted into zettels/ or archive doctor checks promotion readiness.
-    enforcement: Require the zettel promotion checklist in zettel-kasten/zettel-rules.yml.
-    reason: Promotion is the boundary between temporary AI draft and durable memory.
+    condition: A draft is minted or legacy-promoted into zettels/ or archive doctor checks readiness.
+    enforcement: Require the zettel minting checklist in zettel-kasten/zettel-rules.yml, with legacy promotion checklist compatibility.
+    reason: Minting is the boundary between temporary AI draft and durable memory.
 
   - policy_id: canonical_zettel_must_be_self_contained
     decision: deny

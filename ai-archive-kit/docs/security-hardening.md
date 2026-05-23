@@ -120,7 +120,7 @@ search
 create inbox drafts
 plan onboarding
 plan real pilot preflight
-preview promotion/share/ownership transfer
+preview minting/share/ownership transfer
 ```
 
 MCP must not:
@@ -128,7 +128,7 @@ MCP must not:
 ```text
 apply real pilot setup
 apply onboarding
-promote canonical memory
+mint canonical memory
 apply ownership transfer
 mutate external provider accounts
 store provider secrets

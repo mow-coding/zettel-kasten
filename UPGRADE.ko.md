@@ -28,13 +28,33 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.8` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.8.md` |
+| `v0.2.9` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.9.md` |
+| `v0.2.8` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.8.md` |
 | `v0.2.7` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.7.md` |
 | `v0.2.6` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.6.md` |
 | `v0.2.5` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.5.md` |
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.8`에서 `v0.2.9`로
+
+호환 가능한 용어 안정화 패치입니다.
+
+변경 사항:
+
+- 새 archive는 `human_minting`을 기본값으로 사용합니다.
+- 기존 `human_promotion` archive도 계속 유효합니다.
+- zettel rules에서 `minting_rules`를 사용할 수 있습니다.
+- `promotion_rules`는 v0.2 legacy fallback으로 유지됩니다.
+- 사용자-facing 문서는 minting 언어를 우선 사용합니다.
+
+실제 private archive migration은 필요 없습니다.
+
+```bash
+git fetch --tags
+git checkout v0.2.9
+```
 
 ## `v0.2.7`에서 `v0.2.8`로
 

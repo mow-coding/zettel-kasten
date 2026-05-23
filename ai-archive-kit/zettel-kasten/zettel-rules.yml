@@ -94,7 +94,7 @@ draft_rules:
     - private_source_leakage
     - fake_source_certainty
 
-promotion_rules:
+minting_rules: &v029_minting_rules
   default_target_status: canonical
   default_target_path: zettels/
   requires_human_approval: true
@@ -103,6 +103,11 @@ promotion_rules:
   update_fields:
     - status
     - updated_at
+    - mint.stage
+    - mint.reviewed_by
+    - mint.minted_at
+    - mint.receipt_path
+    - mint.draft_snapshot_path
     - promotion.stage
     - promotion.reviewed_by
     - promotion.reviewed_at
@@ -137,6 +142,10 @@ promotion_rules:
     - id: sensitive_content_reviewed
       question: Has sensitive content been reviewed?
       required: true
+
+promotion_rules:
+  <<: *v029_minting_rules
+  legacy_compatibility: true
 
 split_rules:
   idea_note_rule: one idea per permanent_note unless a clear reason is recorded.
@@ -185,11 +194,10 @@ revision_rules:
     - edit_would_hide_mistake_or_decision_reversal
 
 ai_behavior:
-  - Write drafts first unless the user explicitly asks for canonical promotion.
-  - Treat promotion as a human decision.
+  - Write drafts first unless the user explicitly asks for canonical minting.
+  - Treat minting as a human decision, with promotion kept only as a legacy compatibility layer.
   - Preserve user intent, doubts, and corrections.
   - Suggest splitting drafts with multiple purposes.
   - Prefer typed edges over vague links.
   - Preserve private sources when deriving shareable zettels.
   - Record substantial project work in meeting minutes and decision logs.
-

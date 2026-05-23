@@ -13,7 +13,7 @@ It is intentionally small:
 
 ```text
 doctor
-  Inspect an archive for missing files, invalid YAML/frontmatter, schema problems, manifest problems, unsafe zettel references, and promotion-rule warnings.
+  Inspect an archive for missing files, invalid YAML/frontmatter, schema problems, manifest problems, unsafe zettel references, and minting-rule warnings.
 
 init
   Initialize a personal, company, or family archive from a safe template.
@@ -362,7 +362,7 @@ The generated archive keeps these defaults:
 
 ```text
 AI writes to inbox only.
-Canonical zettels require human promotion.
+Canonical zettels require human minting.
 Original files are referenced by sha256 object_id.
 Provider URLs are forbidden inside zettels.
 Secrets are ignored by .gitignore.

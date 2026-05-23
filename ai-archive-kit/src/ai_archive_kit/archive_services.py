@@ -414,7 +414,7 @@ def promote_zettel_dry_run(
     frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
     frontmatter = json_safe(frontmatter)
     rules = load_zettel_rules(root)
-    promotion_rules = rules.get("promotion_rules") if isinstance(rules.get("promotion_rules"), dict) else {}
+    minting_rules = lifecycle_minting_rules(rules)
     paths = rules.get("paths") if isinstance(rules.get("paths"), dict) else {}
     note_kinds = note_kind_rules(rules)
     allowed_link_types = load_allowed_link_types(root)
@@ -423,10 +423,10 @@ def promote_zettel_dry_run(
     warnings: list[str] = []
     target_folder = normalize_rule_folder(
         root,
-        promotion_rules.get("default_target_path") if isinstance(promotion_rules, dict) else None,
+        minting_rules.get("default_target_path"),
         "zettels/",
         blockers,
-        "Promotion target",
+        "Minting target",
     )
     receipt_folder = normalize_rule_folder(
         root,
@@ -484,13 +484,13 @@ def promote_zettel_dry_run(
     if proposed_file.exists():
         blockers.append(f"Proposed canonical path already exists: {proposed_path}.")
 
-    checklist = build_promotion_checklist(frontmatter, body, promotion_rules, allowed_link_types)
-    requires_checklist = bool(promotion_rules.get("requires_checklist", True)) if isinstance(promotion_rules, dict) else True
+    checklist = build_minting_checklist(frontmatter, body, minting_rules, allowed_link_types)
+    requires_checklist = bool(minting_rules.get("requires_checklist", True))
     if requires_checklist:
         for item in checklist:
             if item["required"] and item["status"] != "passed":
                 blockers.append(
-                    f"Required promotion checklist item is not passed: {item['id']} ({item['status']})."
+                    f"Required minting checklist item is not passed: {item['id']} ({item['status']})."
                 )
 
     near_duplicates = find_promotion_duplicates(root, path, frontmatter, body, proposed_path)
@@ -516,9 +516,7 @@ def promote_zettel_dry_run(
         near_duplicates=near_duplicates,
         blockers=blockers,
         warnings=warnings,
-        requires_human_approval=bool(promotion_rules.get("requires_human_approval", True))
-        if isinstance(promotion_rules, dict)
-        else True,
+        requires_human_approval=bool(minting_rules.get("requires_human_approval", True)),
     )
     return {
         "ok": not blockers,
@@ -917,6 +915,16 @@ def note_kind_rules(rules: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def lifecycle_minting_rules(rules: dict[str, Any]) -> dict[str, Any]:
+    minting_rules = rules.get("minting_rules")
+    if isinstance(minting_rules, dict):
+        return minting_rules
+    promotion_rules = rules.get("promotion_rules")
+    if isinstance(promotion_rules, dict):
+        return promotion_rules
+    return {}
+
+
 def normalize_rule_folder(
     archive_root: Path,
     raw_path: Any,
@@ -974,6 +982,75 @@ def build_promotion_checklist(
             }
         )
     return results
+
+
+def build_minting_checklist(
+    frontmatter: dict[str, Any],
+    body: str,
+    minting_rules: dict[str, Any],
+    allowed_link_types: set[str],
+) -> list[dict[str, Any]]:
+    return build_lifecycle_checklist(frontmatter, body, minting_rules, allowed_link_types)
+
+
+def build_lifecycle_checklist(
+    frontmatter: dict[str, Any],
+    body: str,
+    rules: dict[str, Any],
+    allowed_link_types: set[str],
+) -> list[dict[str, Any]]:
+    raw_items = rules.get("checklist") if isinstance(rules, dict) else []
+    if not isinstance(raw_items, list):
+        return []
+
+    mint = frontmatter.get("mint") if isinstance(frontmatter.get("mint"), dict) else {}
+    promotion = frontmatter.get("promotion") if isinstance(frontmatter.get("promotion"), dict) else {}
+    results: list[dict[str, Any]] = []
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict) or not isinstance(raw_item.get("id"), str):
+            continue
+        item_id = raw_item["id"]
+        required = bool(raw_item.get("required", False))
+        explicit = lifecycle_checklist_decision(mint, item_id)
+        source_label = "mint_frontmatter"
+        if explicit is None:
+            explicit = promotion_checklist_decision(promotion, item_id)
+            source_label = "legacy_promotion_frontmatter"
+        if explicit is True:
+            status = "passed"
+            message = "Marked as passed in frontmatter."
+            source = source_label
+        elif explicit is False:
+            status = "blocked"
+            message = "Marked as not passed in frontmatter."
+            source = source_label
+        else:
+            status, message = infer_promotion_checklist_item(item_id, frontmatter, body, allowed_link_types)
+            source = "machine"
+        results.append(
+            {
+                "id": item_id,
+                "question": raw_item.get("question"),
+                "required": required,
+                "status": status,
+                "source": source,
+                "message": message,
+            }
+        )
+    return results
+
+
+def lifecycle_checklist_decision(lifecycle: dict[str, Any], item_id: str) -> bool | None:
+    checklist = lifecycle.get("checklist")
+    if isinstance(checklist, dict):
+        return interpret_promotion_checklist_value(checklist.get(item_id))
+    if isinstance(checklist, list):
+        for entry in checklist:
+            if isinstance(entry, dict) and entry.get("id") == item_id:
+                if "passed" in entry:
+                    return interpret_promotion_checklist_value(entry.get("passed"))
+                return interpret_promotion_checklist_value(entry.get("status"))
+    return None
 
 
 def promotion_checklist_decision(promotion: dict[str, Any], item_id: str) -> bool | None:

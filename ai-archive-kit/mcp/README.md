@@ -74,7 +74,7 @@ read_zettel
   Read one zettel by id or path.
 
 create_draft_zettel
-  Create an AI draft in inbox/. This does not promote the zettel.
+  Create an AI draft in inbox/. This does not mint the zettel.
 
 list_views
   List saved views from views/*.yml.
@@ -116,7 +116,7 @@ source_mount_plan
   Show host-native and Docker read-only mount guidance. This never changes files.
 
 promotion_check
-  Dry-run check whether an inbox draft can be promoted. Returns checklist status, duplicate hints, and receipt preview. This never writes canonical memory.
+  Legacy dry-run check whether an inbox draft can be promoted. Returns checklist status, duplicate hints, and receipt preview. This never writes canonical memory.
 
 mint_zettel_check
   Dry-run check whether an inbox draft zet can be minted. Returns checklist status, duplicate hints, mint receipt preview, and draft snapshot path. This never writes canonical memory, receipts, or snapshots.
