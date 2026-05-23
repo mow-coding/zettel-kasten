@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Archive Kit anchor metadata",
+  "type": "object",
+  "required": [
+    "anchor_id",
+    "path",
+    "action",
+    "lifecycle_action",
+    "dry_run",
+    "archive_id",
+    "source_archive",
+    "attestation_receipt",
+    "anchored_zets",
+    "foreign_provenance_policy",
+    "local_meaning",
+    "status",
+    "blockers",
+    "warnings"
+  ],
+  "properties": {
+    "anchor_id": {"type": "string"},
+    "path": {"type": "string"},
+    "action": {"type": "string", "enum": ["anchor_zet"]},
+    "lifecycle_action": {"type": "string", "enum": ["anchor"]},
+    "dry_run": {"type": "boolean"},
+    "timestamp": {"type": "string"},
+    "archive_id": {"type": "string"},
+    "source_archive": {"type": "string"},
+    "attestation_receipt": {"type": "object"},
+    "anchored_zets": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "foreign_provenance_policy": {"type": "object"},
+    "local_meaning": {"type": "object"},
+    "status": {"type": "string"},
+    "blockers": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}

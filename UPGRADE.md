@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.9` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.9.md` |
+| `v0.2.10` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.10.md` |
+| `v0.2.9` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.9.md` |
 | `v0.2.8` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.8.md` |
 | `v0.2.7` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.7.md` |
 | `v0.2.6` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.6.md` |
@@ -36,6 +37,27 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.9` To `v0.2.10`
+
+This is a compatible dry-run lifecycle feature patch.
+
+What changed:
+
+- added `archive delegate-zet --dry-run`,
+- added `archive attest-zet --dry-run`,
+- added `archive anchor-zet --dry-run`,
+- added read-only MCP checks for delegate, attest, and anchor,
+- added schemas for delegate receipts, attestation receipts, and anchor metadata.
+
+No private archive migration is required.
+
+Real P2P, feed, transport, external sending, and foreign zet import remain unavailable.
+
+```bash
+git fetch --tags
+git checkout v0.2.10
+```
 
 ## From `v0.2.8` To `v0.2.9`
 

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Archive Kit delegate receipt",
+  "type": "object",
+  "required": [
+    "receipt_id",
+    "receipt_path",
+    "action",
+    "lifecycle_action",
+    "dry_run",
+    "source_archive",
+    "target_archive",
+    "scope_gate",
+    "trust_gate",
+    "ownership_gate",
+    "delegated_zets",
+    "blockers",
+    "warnings"
+  ],
+  "properties": {
+    "receipt_id": {"type": "string"},
+    "receipt_path": {"type": "string"},
+    "action": {"type": "string", "enum": ["delegate_zet"]},
+    "lifecycle_action": {"type": "string", "enum": ["delegate"]},
+    "dry_run": {"type": "boolean"},
+    "timestamp": {"type": "string"},
+    "source_archive": {"type": "string"},
+    "target_archive": {"type": "string"},
+    "view_id": {"type": "string"},
+    "scope_gate": {"type": "object"},
+    "trust_gate": {"type": "object"},
+    "ownership_gate": {"type": "object"},
+    "delegated_zets": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "compatibility": {"type": "object"},
+    "legacy_share_receipt_preview": {"type": "object"},
+    "blockers": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}

@@ -124,6 +124,15 @@ mint_zettel_check
 share_check
   Dry-run check whether a saved view can be shared with a trusted counterparty. Returns scope gate, trust gate, and receipt preview. This never writes or sends archive data.
 
+delegate_zet_check
+  Dry-run check whether zets from a saved view can be delegated. Returns delegate receipt preview, scope gate, trust gate, and hashes. This never writes or sends archive data.
+
+attest_zet_check
+  Dry-run check whether a delegated foreign zet receipt can be attested. Returns attestation receipt preview. This never writes receipts.
+
+anchor_zet_check
+  Dry-run check whether an attested foreign zet can be anchored into local meaning. Returns anchor metadata preview. This never writes metadata.
+
 ownership_transfer_check
   Dry-run check whether archive ownership can be transferred. Returns scope gate, trust gate, ownership gate, provider change plan, and schema-shaped receipt preview. This never changes owners or writes receipts.
 ```
@@ -146,6 +155,7 @@ ownership_transfer_check
 - `promotion_check` previews canonical and receipt paths but does not write either file.
 - `mint_zettel_check` previews canonical, mint receipt, and draft snapshot paths but does not write any of them.
 - `share_check` previews archive sharing but does not write receipts, create workpacks, merge, fork, or send data.
+- `delegate_zet_check`, `attest_zet_check`, and `anchor_zet_check` preview the future zet sharing lifecycle but do not write receipts, metadata, zettels, workpacks, or transport messages.
 - `ownership_transfer_check` previews ownership transfer and external provider changes, but does not write receipts or change `archive-identity.yml`.
 - Ownership transfer receipt examples can be validated by `archive_doctor` when they live under `receipts/lineage/*.ownership-transfer.json`.
 - Real pilot apply, restore drill apply, real onboarding apply, external import apply, source registration apply, source scan apply, minting/promotion into canonical `zettels/`, real archive sharing, real ownership transfer, and external provider account mutation are intentionally not exposed through MCP.

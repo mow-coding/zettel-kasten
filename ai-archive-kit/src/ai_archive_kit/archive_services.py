@@ -59,9 +59,13 @@ SOURCE_SCAN_RECEIPTS_DIR = "receipts/sources"
 RESTORE_DRILL_RECEIPTS_DIR = "receipts/recovery"
 MINT_RECEIPTS_DIR = "receipts/mint"
 MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
+DELEGATE_RECEIPTS_DIR = "receipts/delegate"
+ATTESTATION_RECEIPTS_DIR = "receipts/attest"
+ANCHOR_METADATA_DIR = "anchors"
 MINT_AUTHORITY_MODE = "basic"
 MINT_CHECKLIST_VERSION = "zet-mint/v0.2"
 SOURCE_SCAN_MODE = "metadata_only"
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SOURCE_ROOTS_LOCAL_PROFILE = "profiles/local/source-roots.local.yml"
 RESTORE_DRILL_EXCLUDED_PATHS = [
     ".git/",
@@ -2084,6 +2088,7 @@ def share_archive_scope_dry_run(
             "path": relative,
             "zettel_id": frontmatter.get("id"),
             "title": frontmatter.get("title"),
+            "sha256": sha256_path(path),
             "sensitive_categories": sensitive_categories,
         }
         if sensitive_categories and not allow_sensitive:
@@ -2151,6 +2156,265 @@ def share_archive_scope_dry_run(
         "would_change": [
             "create share workpack from selected view",
             f"write {proposed_receipt_path}",
+        ],
+    }
+
+
+def delegate_zets_dry_run(
+    archive_root: Path | str,
+    *,
+    view_id: str,
+    target_archive: str,
+    counterparty_id: str | None = None,
+    counterparty_fingerprint: str | None = None,
+    allow_sensitive: bool = False,
+) -> dict[str, Any]:
+    share_result = share_archive_scope_dry_run(
+        archive_root,
+        view_id=view_id,
+        target_archive=target_archive,
+        counterparty_id=counterparty_id,
+        counterparty_fingerprint=counterparty_fingerprint,
+        allow_sensitive=allow_sensitive,
+    )
+    source_archive = share_result["source_archive"]
+    proposed_receipt_path = (
+        f"{DELEGATE_RECEIPTS_DIR}/"
+        f"{safe_slug(source_archive)}__{safe_slug(target_archive)}__{safe_slug(view_id)}.delegate.json"
+    )
+    delegated_zets = [
+        {
+            "path": item.get("path"),
+            "zettel_id": item.get("zettel_id"),
+            "title": item.get("title"),
+            "sha256": item.get("sha256"),
+            "sensitive_categories": item.get("sensitive_categories", []),
+        }
+        for item in share_result["scope_gate"]["included"]
+    ]
+    scope_gate = dict(share_result["scope_gate"])
+    scope_gate["delegated_zets"] = delegated_zets
+    delegate_receipt = {
+        "receipt_id": f"receipt:delegate:{safe_slug(source_archive)}:{safe_slug(target_archive)}:{safe_slug(view_id)}",
+        "receipt_path": proposed_receipt_path,
+        "action": "delegate_zet",
+        "lifecycle_action": "delegate",
+        "dry_run": True,
+        "timestamp": "<execution-time>",
+        "source_archive": source_archive,
+        "target_archive": target_archive,
+        "view_id": view_id,
+        "scope_gate": scope_gate,
+        "trust_gate": share_result["trust_gate"],
+        "ownership_gate": share_result["ownership_gate"],
+        "delegated_zets": delegated_zets,
+        "compatibility": {
+            "protocol": "zet-sharing-dry-run/v0.2",
+            "schema": "delegate-receipt/v0.2",
+            "trust_profile": share_result["trust_gate"].get("status"),
+            "capability": "delegate",
+        },
+        "legacy_share_receipt_preview": share_result["receipt_preview"],
+        "blockers": share_result["blockers"],
+        "warnings": share_result["warnings"],
+    }
+    return {
+        "ok": share_result["ok"],
+        "dry_run": True,
+        "lifecycle_action": "delegate",
+        "source_archive": source_archive,
+        "target_archive": target_archive,
+        "view_id": view_id,
+        "blockers": share_result["blockers"],
+        "warnings": share_result["warnings"],
+        "scope_gate": scope_gate,
+        "trust_gate": share_result["trust_gate"],
+        "ownership_gate": share_result["ownership_gate"],
+        "delegated_zets": delegated_zets,
+        "proposed_delegate_receipt_path": proposed_receipt_path,
+        "delegate_receipt_preview": delegate_receipt,
+        "proposed_receipt_path": proposed_receipt_path,
+        "receipt_preview": delegate_receipt,
+        "would_change": [
+            "create delegate receipt for selected zets",
+            f"write {proposed_receipt_path}",
+        ],
+    }
+
+
+def attest_zets_dry_run(
+    archive_root: Path | str,
+    *,
+    delegate_receipt_path: str,
+    counterparty_id: str | None = None,
+    counterparty_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    receipt_path = resolve_receipt_input_path(root, delegate_receipt_path)
+    delegate_receipt = load_json_file(receipt_path)
+    schema_issues = validate_schema(delegate_receipt, "delegate-receipt.schema.json")
+    if schema_issues:
+        blockers.extend(f"Delegate receipt schema issue: {issue.message}" for issue in schema_issues)
+
+    source_archive = string_or_empty(delegate_receipt.get("source_archive"))
+    target_archive = string_or_empty(delegate_receipt.get("target_archive"))
+    if target_archive != archive_id:
+        blockers.append(f"Delegate receipt target_archive does not match this archive: {target_archive} != {archive_id}.")
+    trust_gate = validate_counterparty_trust(
+        root,
+        counterparty_id=counterparty_id or source_archive,
+        counterparty_fingerprint=counterparty_fingerprint,
+        blockers=blockers,
+    )
+    delegated_zets = normalized_delegated_zets(delegate_receipt.get("delegated_zets"), blockers)
+    delegate_receipt_sha = sha256_path(receipt_path)
+    delegate_receipt_id = string_or_empty(delegate_receipt.get("receipt_id")) or "unknown"
+    proposed_receipt_path = (
+        f"{ATTESTATION_RECEIPTS_DIR}/"
+        f"{safe_slug(archive_id)}__{safe_slug(source_archive)}__{safe_slug(delegate_receipt_id)}.attestation.json"
+    )
+    verification = {
+        "delegate_receipt_schema": "passed" if not schema_issues else "blocked",
+        "target_archive_match": target_archive == archive_id,
+        "delegated_zets_count": len(delegated_zets),
+        "hashes_valid": all(SHA256_RE.match(str(item.get("sha256") or "")) for item in delegated_zets),
+    }
+    attestation_receipt = {
+        "receipt_id": f"receipt:attestation:{safe_slug(archive_id)}:{safe_slug(source_archive)}:{safe_slug(delegate_receipt_id)}",
+        "receipt_path": proposed_receipt_path,
+        "action": "attest_zet",
+        "lifecycle_action": "attest",
+        "dry_run": True,
+        "timestamp": "<execution-time>",
+        "attesting_archive": archive_id,
+        "source_archive": source_archive,
+        "target_archive": target_archive,
+        "delegate_receipt": {
+            "receipt_id": delegate_receipt.get("receipt_id"),
+            "path": display_receipt_input_path(root, receipt_path),
+            "sha256": delegate_receipt_sha,
+            "action": delegate_receipt.get("action"),
+            "lifecycle_action": delegate_receipt.get("lifecycle_action"),
+        },
+        "delegated_zets": delegated_zets,
+        "trust_gate": trust_gate,
+        "verification": verification,
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "attest",
+        "archive_id": archive_id,
+        "source_archive": source_archive,
+        "target_archive": target_archive,
+        "blockers": blockers,
+        "warnings": warnings,
+        "trust_gate": trust_gate,
+        "verification": verification,
+        "delegated_zets": delegated_zets,
+        "proposed_attestation_receipt_path": proposed_receipt_path,
+        "attestation_receipt_preview": attestation_receipt,
+        "would_change": [
+            "record attestation receipt for delegated zets",
+            f"write {proposed_receipt_path}",
+        ],
+    }
+
+
+def anchor_zets_dry_run(
+    archive_root: Path | str,
+    *,
+    attestation_receipt_path: str,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    receipt_path = resolve_receipt_input_path(root, attestation_receipt_path)
+    attestation_receipt = load_json_file(receipt_path)
+    schema_issues = validate_schema(attestation_receipt, "attestation-receipt.schema.json")
+    if schema_issues:
+        blockers.extend(f"Attestation receipt schema issue: {issue.message}" for issue in schema_issues)
+
+    attesting_archive = string_or_empty(attestation_receipt.get("attesting_archive"))
+    target_archive = string_or_empty(attestation_receipt.get("target_archive"))
+    source_archive = string_or_empty(attestation_receipt.get("source_archive"))
+    if attesting_archive != archive_id:
+        blockers.append(f"Attestation receipt attesting_archive does not match this archive: {attesting_archive} != {archive_id}.")
+    if target_archive and target_archive != archive_id:
+        blockers.append(f"Attestation receipt target_archive does not match this archive: {target_archive} != {archive_id}.")
+
+    delegated_zets = normalized_delegated_zets(attestation_receipt.get("delegated_zets"), blockers)
+    attestation_sha = sha256_path(receipt_path)
+    attestation_receipt_id = string_or_empty(attestation_receipt.get("receipt_id")) or "unknown"
+    proposed_anchor_path = (
+        f"{ANCHOR_METADATA_DIR}/"
+        f"{safe_slug(archive_id)}__{safe_slug(source_archive)}__{safe_slug(attestation_receipt_id)}.anchor.json"
+    )
+    anchored_zets = [
+        {
+            "foreign_zettel_id": item.get("zettel_id"),
+            "foreign_path": item.get("path"),
+            "title": item.get("title"),
+            "sha256": item.get("sha256"),
+            "local_status": "foreign_attested",
+            "provenance": {
+                "source_archive": source_archive,
+                "attestation_receipt_id": attestation_receipt.get("receipt_id"),
+                "preserve_foreign_authorship": True,
+            },
+        }
+        for item in delegated_zets
+    ]
+    anchor_metadata = {
+        "anchor_id": f"anchor:{safe_slug(archive_id)}:{safe_slug(source_archive)}:{safe_slug(attestation_receipt_id)}",
+        "path": proposed_anchor_path,
+        "action": "anchor_zet",
+        "lifecycle_action": "anchor",
+        "dry_run": True,
+        "timestamp": "<execution-time>",
+        "archive_id": archive_id,
+        "source_archive": source_archive,
+        "attestation_receipt": {
+            "receipt_id": attestation_receipt.get("receipt_id"),
+            "path": display_receipt_input_path(root, receipt_path),
+            "sha256": attestation_sha,
+        },
+        "anchored_zets": anchored_zets,
+        "foreign_provenance_policy": {
+            "preserve_source_archive": True,
+            "preserve_foreign_zettel_ids": True,
+            "do_not_claim_authorship": True,
+            "requires_human_review_before_canonical_memory": True,
+        },
+        "local_meaning": {
+            "status": "preview",
+            "suggested_scope": "foreign_attested",
+            "requires_anchor_review": True,
+        },
+        "status": "preview",
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "anchor",
+        "archive_id": archive_id,
+        "source_archive": source_archive,
+        "blockers": blockers,
+        "warnings": warnings,
+        "anchored_zets": anchored_zets,
+        "proposed_anchor_metadata_path": proposed_anchor_path,
+        "anchor_metadata_preview": anchor_metadata,
+        "would_change": [
+            "record anchor metadata for attested foreign zets",
+            f"write {proposed_anchor_path}",
         ],
     }
 
@@ -4781,6 +5045,72 @@ def load_archive_identity(archive_root: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ArchiveServiceError("archive-identity.yml must be a YAML object.")
     return json_safe(data)
+
+
+def load_json_file(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ArchiveServiceError(f"JSON file is invalid: {path}") from exc
+    if not isinstance(data, dict):
+        raise ArchiveServiceError(f"JSON file must contain an object: {path}")
+    return json_safe(data)
+
+
+def resolve_receipt_input_path(archive_root: Path, raw_path: str) -> Path:
+    value = (raw_path or "").strip()
+    if not value:
+        raise ArchiveServiceError("Receipt path is required.")
+    candidate = Path(value).expanduser()
+    if candidate.is_absolute():
+        path = candidate.resolve()
+    else:
+        path = archive_internal_path(archive_root, value)
+    if not path.is_file():
+        raise ArchiveServiceError(f"Receipt file is missing: {value}")
+    return path
+
+
+def display_receipt_input_path(archive_root: Path, path: Path) -> str:
+    if is_path_within_root(path, archive_root):
+        return archive_relative_path(path, archive_root)
+    return str(path)
+
+
+def string_or_empty(value: Any) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def normalized_delegated_zets(raw_items: Any, blockers: list[str]) -> list[dict[str, Any]]:
+    if not isinstance(raw_items, list):
+        blockers.append("Delegated zets must be a list.")
+        return []
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_items):
+        if not isinstance(item, dict):
+            blockers.append(f"Delegated zets entry must be an object: index {index}.")
+            continue
+        path = item.get("path")
+        zettel_id = item.get("zettel_id")
+        sha256 = item.get("sha256")
+        if not isinstance(path, str) or not path:
+            blockers.append(f"Delegated zets entry missing path: index {index}.")
+        if not isinstance(zettel_id, str) or not zettel_id:
+            blockers.append(f"Delegated zets entry missing zettel_id: index {index}.")
+        if not isinstance(sha256, str) or not SHA256_RE.match(sha256):
+            blockers.append(f"Delegated zets entry has invalid sha256: index {index}.")
+        normalized.append(
+            {
+                "path": path,
+                "zettel_id": zettel_id,
+                "title": item.get("title"),
+                "sha256": sha256,
+                "sensitive_categories": item.get("sensitive_categories") if isinstance(item.get("sensitive_categories"), list) else [],
+            }
+        )
+    if not normalized:
+        blockers.append("Delegated zets list is empty.")
+    return normalized
 
 
 def validate_counterparty_trust(

@@ -128,6 +128,7 @@ These documents record public-safe work already performed.
 - [Versioning And Storage Work Log](../plans/work-log-2026-05-23-versioning-and-storage.md)
 - [Product Whitepaper Depth Correction Work Log](../plans/work-log-2026-05-23-product-whitepaper-depth.md)
 - [Zet Sharing Lifecycle Terminology Work Log](../plans/work-log-2026-05-23-zet-sharing-lifecycle-terminology.md)
+- [Zet Sharing Dry-Run Lifecycle Work Log](../plans/work-log-2026-05-23-zet-sharing-dry-run-lifecycle.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
 

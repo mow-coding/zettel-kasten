@@ -4,6 +4,24 @@ All notable public releases of `zettel-kasten` and `zet` should be documented he
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.10 - 2026-05-23
+
+Zet sharing dry-run lifecycle contract.
+
+Added:
+
+- `delegate-zet --dry-run` as the product-facing dry-run surface for scoped zet delegation,
+- `attest-zet --dry-run` for verifying a delegated foreign zet receipt without writing files,
+- `anchor-zet --dry-run` for previewing local meaning-network anchoring without writing files,
+- read-only MCP tools `delegate_zet_check`, `attest_zet_check`, and `anchor_zet_check`,
+- schemas for delegate receipts, attestation receipts, and anchor metadata.
+
+Compatibility:
+
+- existing `share --dry-run` and MCP `share_check` remain available,
+- no real P2P, SNS/feed, transport, external sending, or foreign zet import is implemented,
+- no private archive migration is required.
+
 ## v0.2.9 - 2026-05-23
 
 Terminology stabilization patch.

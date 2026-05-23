@@ -57,6 +57,15 @@ import --dry-run
 share --dry-run
   Preview a governed archive share from a saved view with scope and trust gates.
 
+delegate-zet --dry-run
+  Preview scoped zet delegation and return a delegate receipt preview without writing files.
+
+attest-zet --dry-run
+  Preview attestation of a delegated foreign zet receipt without writing files.
+
+anchor-zet --dry-run
+  Preview anchoring an attested foreign zet into local meaning without writing metadata.
+
 pilot-plan
   Plan a safe first real personal/team archive pilot without writing files.
 

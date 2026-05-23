@@ -19,6 +19,12 @@ Commands:
           Register a source without hand-editing source-bindings.yml.
   mint-zettel
           Mint an inbox draft zet into canonical private archive memory.
+  delegate-zet
+          Preview delegated zet access from a saved view.
+  attest-zet
+          Preview attestation of a delegated foreign zet receipt.
+  anchor-zet
+          Preview anchoring an attested foreign zet into local meaning.
   source-mounts
           Show host-native and Docker mount guidance for registered sources.
   recovery-plan
@@ -1610,6 +1616,114 @@ def command_share(args: argparse.Namespace) -> int:
     return 0 if result["ok"] else 1
 
 
+def command_delegate_zet(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("Only --dry-run zet delegation is implemented. Real sharing is intentionally unavailable.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.delegate_zets_dry_run(
+            Path(args.archive_root),
+            view_id=args.view,
+            target_archive=args.target_archive,
+            counterparty_id=args.counterparty_id,
+            counterparty_fingerprint=args.counterparty_fingerprint,
+            allow_sensitive=args.allow_sensitive,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result["ok"] else "blocked"
+        print(f"Zet delegate dry-run {state}.")
+        print(f"Source archive: {result['source_archive']}")
+        print(f"Target archive: {result['target_archive']}")
+        print(f"View: {result['view_id']}")
+        print(f"Delegated zets: {len(result['delegated_zets'])}")
+        print(f"Trust gate: {result['trust_gate']['status']}")
+        print(f"Proposed delegate receipt path: {result['proposed_delegate_receipt_path']}")
+        if result["blockers"]:
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result["warnings"]:
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result["ok"] else 1
+
+
+def command_attest_zet(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("Only --dry-run zet attestation is implemented. Real attestation writes are intentionally unavailable.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.attest_zets_dry_run(
+            Path(args.archive_root),
+            delegate_receipt_path=args.delegate_receipt,
+            counterparty_id=args.counterparty_id,
+            counterparty_fingerprint=args.counterparty_fingerprint,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result["ok"] else "blocked"
+        print(f"Zet attest dry-run {state}.")
+        print(f"Archive: {result['archive_id']}")
+        print(f"Source archive: {result['source_archive']}")
+        print(f"Delegated zets: {len(result['delegated_zets'])}")
+        print(f"Trust gate: {result['trust_gate']['status']}")
+        print(f"Proposed attestation receipt path: {result['proposed_attestation_receipt_path']}")
+        if result["blockers"]:
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result["warnings"]:
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result["ok"] else 1
+
+
+def command_anchor_zet(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("Only --dry-run zet anchoring is implemented. Real anchor writes are intentionally unavailable.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.anchor_zets_dry_run(
+            Path(args.archive_root),
+            attestation_receipt_path=args.attestation_receipt,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result["ok"] else "blocked"
+        print(f"Zet anchor dry-run {state}.")
+        print(f"Archive: {result['archive_id']}")
+        print(f"Source archive: {result['source_archive']}")
+        print(f"Anchored zets: {len(result['anchored_zets'])}")
+        print(f"Proposed anchor metadata path: {result['proposed_anchor_metadata_path']}")
+        if result["blockers"]:
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result["warnings"]:
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result["ok"] else 1
+
+
 def command_providers(args: argparse.Namespace) -> int:
     try:
         result = archive_services.provider_bindings_summary(Path(args.archive_root))
@@ -2724,6 +2838,33 @@ def build_parser() -> argparse.ArgumentParser:
     share.add_argument("--dry-run", action="store_true", help="Preview sharing without writing or sending files.")
     share.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     share.set_defaults(func=command_share)
+
+    delegate = subcommands.add_parser("delegate-zet", help="Dry-run delegated access to zets from a saved view.")
+    delegate.add_argument("archive_root", help="Source archive root.")
+    delegate.add_argument("--view", required=True, help="View id to delegate.")
+    delegate.add_argument("--target-archive", required=True, help="Target archive id.")
+    delegate.add_argument("--counterparty-id", help="Expected counterparty identity/archive/principal id.")
+    delegate.add_argument("--counterparty-fingerprint", help="Expected counterparty public key fingerprint.")
+    delegate.add_argument("--allow-sensitive", action="store_true", help="Allow sensitive categories in the delegation preview.")
+    delegate.add_argument("--dry-run", action="store_true", help="Preview delegation without writing or sending files.")
+    delegate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    delegate.set_defaults(func=command_delegate_zet)
+
+    attest = subcommands.add_parser("attest-zet", help="Dry-run attestation of a delegated foreign zet receipt.")
+    attest.add_argument("archive_root", help="Attesting archive root.")
+    attest.add_argument("--delegate-receipt", required=True, help="Archive-relative or absolute delegate receipt JSON path.")
+    attest.add_argument("--counterparty-id", help="Expected source archive/principal id. Defaults to receipt source_archive.")
+    attest.add_argument("--counterparty-fingerprint", help="Expected source public key fingerprint.")
+    attest.add_argument("--dry-run", action="store_true", help="Preview attestation without writing files.")
+    attest.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    attest.set_defaults(func=command_attest_zet)
+
+    anchor = subcommands.add_parser("anchor-zet", help="Dry-run anchoring of an attested foreign zet into local meaning.")
+    anchor.add_argument("archive_root", help="Anchoring archive root.")
+    anchor.add_argument("--attestation-receipt", required=True, help="Archive-relative or absolute attestation receipt JSON path.")
+    anchor.add_argument("--dry-run", action="store_true", help="Preview anchoring without writing files.")
+    anchor.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    anchor.set_defaults(func=command_anchor_zet)
 
     providers = subcommands.add_parser("providers", help="Inspect external provider bindings and manual change plans.")
     providers.add_argument("archive_root", help="Archive root to inspect.")

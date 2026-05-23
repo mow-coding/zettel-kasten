@@ -349,6 +349,48 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "delegate_zet_check",
+        "description": "Dry-run check whether zets from a saved view can be delegated. This never writes receipts or sends data.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "view": {"type": "string"},
+                "target_archive": {"type": "string"},
+                "counterparty_id": {"type": "string"},
+                "counterparty_fingerprint": {"type": "string"},
+                "allow_sensitive": {"type": "boolean", "default": False},
+            },
+            "required": ["archive_root", "view", "target_archive"],
+        },
+    },
+    {
+        "name": "attest_zet_check",
+        "description": "Dry-run check whether a delegated foreign zet receipt can be attested. This never writes receipts.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "delegate_receipt": {"type": "string"},
+                "counterparty_id": {"type": "string"},
+                "counterparty_fingerprint": {"type": "string"},
+            },
+            "required": ["archive_root", "delegate_receipt"],
+        },
+    },
+    {
+        "name": "anchor_zet_check",
+        "description": "Dry-run check whether an attested foreign zet can be anchored into local meaning. This never writes metadata.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "attestation_receipt": {"type": "string"},
+            },
+            "required": ["archive_root", "attestation_receipt"],
+        },
+    },
+    {
         "name": "ownership_transfer_check",
         "description": "Dry-run check whether archive ownership can be transferred. This never changes owners or writes receipts.",
         "inputSchema": {
@@ -506,6 +548,12 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_mint_zettel_check(arguments)
     if name == "share_check":
         return tool_share_check(arguments)
+    if name == "delegate_zet_check":
+        return tool_delegate_zet_check(arguments)
+    if name == "attest_zet_check":
+        return tool_attest_zet_check(arguments)
+    if name == "anchor_zet_check":
+        return tool_anchor_zet_check(arguments)
     if name == "ownership_transfer_check":
         return tool_ownership_transfer_check(arguments)
 
@@ -861,6 +909,54 @@ def tool_share_check(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"share_check: {state}.", result)
+
+
+def tool_delegate_zet_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    view_id = require_string_arg(arguments, "view")
+    target_archive = require_string_arg(arguments, "target_archive")
+    counterparty_id = optional_string_arg(arguments, "counterparty_id")
+    counterparty_fingerprint = optional_string_arg(arguments, "counterparty_fingerprint")
+    allow_sensitive = bool(arguments.get("allow_sensitive", False))
+    result = call_service(
+        archive_services.delegate_zets_dry_run,
+        archive_root,
+        view_id=view_id,
+        target_archive=target_archive,
+        counterparty_id=counterparty_id,
+        counterparty_fingerprint=counterparty_fingerprint,
+        allow_sensitive=allow_sensitive,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"delegate_zet_check: {state}.", result)
+
+
+def tool_attest_zet_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    delegate_receipt = require_string_arg(arguments, "delegate_receipt")
+    counterparty_id = optional_string_arg(arguments, "counterparty_id")
+    counterparty_fingerprint = optional_string_arg(arguments, "counterparty_fingerprint")
+    result = call_service(
+        archive_services.attest_zets_dry_run,
+        archive_root,
+        delegate_receipt_path=delegate_receipt,
+        counterparty_id=counterparty_id,
+        counterparty_fingerprint=counterparty_fingerprint,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"attest_zet_check: {state}.", result)
+
+
+def tool_anchor_zet_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    attestation_receipt = require_string_arg(arguments, "attestation_receipt")
+    result = call_service(
+        archive_services.anchor_zets_dry_run,
+        archive_root,
+        attestation_receipt_path=attestation_receipt,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"anchor_zet_check: {state}.", result)
 
 
 def tool_ownership_transfer_check(arguments: dict[str, Any]) -> dict[str, Any]:

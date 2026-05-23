@@ -169,6 +169,44 @@ class ArchiveCliTests(unittest.TestCase):
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
         return root
 
+    def copy_fake_archive_as_company_target(self, root: Path) -> Path:
+        archive_root = self.copy_fake_archive(root)
+        archive_path = archive_root / "archive.yml"
+        archive_data = archive_cli.load_yaml(archive_path.read_text(encoding="utf-8"))
+        archive_data["archive_id"] = "archive:company:fake-blue"
+        archive_data["name"] = "Fake Blue Target Archive"
+        archive_data["type"] = "company"
+        archive_path.write_text(archive_cli.dump_yaml(archive_data), encoding="utf-8")
+
+        identity_path = archive_root / "archive-identity.yml"
+        identity = archive_cli.load_yaml(identity_path.read_text(encoding="utf-8"))
+        identity["identity"]["archive_id"] = "archive:company:fake-blue"
+        identity["identity"]["identity_id"] = "identity:archive:company:fake-blue"
+        identity["identity"]["scope"] = "company"
+        identity["identity"]["principal_id"] = "company:fake-blue"
+        identity["identity"]["display_name"] = "Fake Blue Company"
+        identity["ownership"]["owner_id"] = "company:fake-blue"
+        identity["ownership"]["owner_kind"] = "company"
+        identity["ownership"]["owner_display_name"] = "Fake Blue Company"
+        identity["ownership"]["owner_archive_id"] = "archive:company:fake-blue"
+        identity["trusted_counterparties"].append(
+            {
+                "identity_id": "identity:archive:personal:fake-life",
+                "archive_id": "archive:personal:fake-life",
+                "principal_id": "person:fake-user",
+                "expected_fingerprint": "SHA256:fake-user-primary",
+                "trust_level": "out_of_band_verified",
+            }
+        )
+        identity_path.write_text(archive_cli.dump_yaml(identity), encoding="utf-8")
+        return archive_root
+
+    def write_json_receipt(self, archive_root: Path, relative_path: str, payload: dict) -> Path:
+        path = archive_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        return path
+
     def make_fake_lunch_draft_promotion_ready(self, archive_root: Path, title: str = "Promotion-ready lunch note") -> Path:
         path = archive_root / "inbox" / "zet_20260519_draft_ai_lunch_note.md"
         text = path.read_text(encoding="utf-8")
@@ -2136,6 +2174,310 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["scope_gate"]["included"], [])
             self.assertEqual(result["scope_gate"]["excluded"][0]["path"], "zettels/zet_20260521_fake_medical_note.md")
             self.assertIn("medical", result["scope_gate"]["excluded"][0]["sensitive_categories"])
+
+    def test_delegate_zet_dry_run_previews_receipt_with_hashes(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(
+            [
+                "delegate-zet",
+                str(archive_root),
+                "--view",
+                "view.fake.company.derived",
+                "--target-archive",
+                "archive:company:fake-blue",
+                "--counterparty-id",
+                "archive:company:fake-blue",
+                "--counterparty-fingerprint",
+                "SHA256:fake-company-blue",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["lifecycle_action"], "delegate")
+        self.assertTrue(result["proposed_delegate_receipt_path"].startswith("receipts/delegate/"))
+        self.assertEqual(result["delegate_receipt_preview"]["action"], "delegate_zet")
+        self.assertEqual(result["delegate_receipt_preview"]["lifecycle_action"], "delegate")
+        self.assertEqual(len(result["delegated_zets"]), 1)
+        self.assertEqual(len(result["delegated_zets"][0]["sha256"]), 64)
+        self.assertEqual(
+            archive_cli.validate_schema(result["delegate_receipt_preview"], "delegate-receipt.schema.json"),
+            [],
+        )
+        self.assertFalse((archive_root / result["proposed_delegate_receipt_path"]).exists())
+
+    def test_delegate_zet_sensitive_policy_matches_share_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            frontmatter = {
+                "id": "zet_20260521_fake_medical_note",
+                "title": "Fake medical note",
+                "created_at": "2026-05-21T00:00:00+09:00",
+                "updated_at": "2026-05-21T00:00:00+09:00",
+                "archive_id": "archive:personal:fake-life",
+                "status": "canonical",
+                "kind": "permanent_note",
+                "facets": {"domain": "medical", "record_type": "journal"},
+                "assets": [],
+                "edges": [],
+                "provenance": {
+                    "created_by": "test",
+                    "created_in": "archive:personal:fake-life",
+                    "source": "test",
+                    "derived_from": [],
+                },
+                "visibility": {"scope": "private", "allowed_archives": [], "source_visibility": "private"},
+                "promotion": {"stage": "promoted"},
+            }
+            (archive_root / "zettels" / "zet_20260521_fake_medical_note.md").write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\nSensitive fake medical note.\n",
+                encoding="utf-8",
+            )
+            (archive_root / "views" / "sensitive.yml").write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "id": "view.fake.sensitive.medical",
+                        "name": "Sensitive medical view",
+                        "for": "ai_context",
+                        "filters": {"facets.domain": "medical"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            blocked_code, blocked_output = self.run_cli(
+                [
+                    "delegate-zet",
+                    str(archive_root),
+                    "--view",
+                    "view.fake.sensitive.medical",
+                    "--target-archive",
+                    "archive:company:fake-blue",
+                    "--counterparty-id",
+                    "archive:company:fake-blue",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-company-blue",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(blocked_code, 1)
+            blocked = json.loads(blocked_output)
+            self.assertEqual(blocked["delegated_zets"], [])
+            self.assertEqual(blocked["scope_gate"]["excluded"][0]["path"], "zettels/zet_20260521_fake_medical_note.md")
+
+            allowed_code, allowed_output = self.run_cli(
+                [
+                    "delegate-zet",
+                    str(archive_root),
+                    "--view",
+                    "view.fake.sensitive.medical",
+                    "--target-archive",
+                    "archive:company:fake-blue",
+                    "--counterparty-id",
+                    "archive:company:fake-blue",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-company-blue",
+                    "--allow-sensitive",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(allowed_code, 0, allowed_output)
+            allowed = json.loads(allowed_output)
+            self.assertEqual(len(allowed["delegated_zets"]), 1)
+            self.assertTrue(any("Sensitive zettel allowed" in warning for warning in allowed["warnings"]))
+
+    def test_attest_and_anchor_zet_dry_run_preview_receipts_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source_root = self.copy_fake_archive(Path(tmp) / "source")
+            target_root = self.copy_fake_archive_as_company_target(Path(tmp) / "target")
+            delegate_code, delegate_output = self.run_cli(
+                [
+                    "delegate-zet",
+                    str(source_root),
+                    "--view",
+                    "view.fake.company.derived",
+                    "--target-archive",
+                    "archive:company:fake-blue",
+                    "--counterparty-id",
+                    "archive:company:fake-blue",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-company-blue",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(delegate_code, 0, delegate_output)
+            delegate_result = json.loads(delegate_output)
+            delegate_path = self.write_json_receipt(
+                target_root,
+                delegate_result["proposed_delegate_receipt_path"],
+                delegate_result["delegate_receipt_preview"],
+            )
+
+            attest_code, attest_output = self.run_cli(
+                [
+                    "attest-zet",
+                    str(target_root),
+                    "--delegate-receipt",
+                    archive_cli.archive_relative_path(delegate_path, target_root),
+                    "--counterparty-id",
+                    "archive:personal:fake-life",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-user-primary",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(attest_code, 0, attest_output)
+            attest_result = json.loads(attest_output)
+            self.assertEqual(attest_result["lifecycle_action"], "attest")
+            self.assertEqual(attest_result["trust_gate"]["status"], "verified")
+            self.assertEqual(len(attest_result["delegated_zets"]), 1)
+            self.assertEqual(
+                archive_cli.validate_schema(attest_result["attestation_receipt_preview"], "attestation-receipt.schema.json"),
+                [],
+            )
+            self.assertFalse((target_root / attest_result["proposed_attestation_receipt_path"]).exists())
+
+            attestation_path = self.write_json_receipt(
+                target_root,
+                attest_result["proposed_attestation_receipt_path"],
+                attest_result["attestation_receipt_preview"],
+            )
+            anchor_code, anchor_output = self.run_cli(
+                [
+                    "anchor-zet",
+                    str(target_root),
+                    "--attestation-receipt",
+                    archive_cli.archive_relative_path(attestation_path, target_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(anchor_code, 0, anchor_output)
+            anchor_result = json.loads(anchor_output)
+            self.assertEqual(anchor_result["lifecycle_action"], "anchor")
+            self.assertEqual(len(anchor_result["anchored_zets"]), 1)
+            self.assertEqual(anchor_result["anchor_metadata_preview"]["foreign_provenance_policy"]["do_not_claim_authorship"], True)
+            self.assertEqual(
+                archive_cli.validate_schema(anchor_result["anchor_metadata_preview"], "anchor-metadata.schema.json"),
+                [],
+            )
+            self.assertFalse((target_root / anchor_result["proposed_anchor_metadata_path"]).exists())
+
+    def test_attest_and_anchor_zet_dry_run_block_mismatches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source_root = self.copy_fake_archive(Path(tmp) / "source")
+            target_root = self.copy_fake_archive_as_company_target(Path(tmp) / "target")
+            delegate_code, delegate_output = self.run_cli(
+                [
+                    "delegate-zet",
+                    str(source_root),
+                    "--view",
+                    "view.fake.company.derived",
+                    "--target-archive",
+                    "archive:company:fake-blue",
+                    "--counterparty-id",
+                    "archive:company:fake-blue",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-company-blue",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(delegate_code, 0, delegate_output)
+            delegate_result = json.loads(delegate_output)
+            delegate_path = self.write_json_receipt(
+                target_root,
+                delegate_result["proposed_delegate_receipt_path"],
+                delegate_result["delegate_receipt_preview"],
+            )
+
+            bad_fingerprint_code, bad_fingerprint_output = self.run_cli(
+                [
+                    "attest-zet",
+                    str(target_root),
+                    "--delegate-receipt",
+                    archive_cli.archive_relative_path(delegate_path, target_root),
+                    "--counterparty-id",
+                    "archive:personal:fake-life",
+                    "--counterparty-fingerprint",
+                    "SHA256:attacker",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(bad_fingerprint_code, 1)
+            bad_fingerprint = json.loads(bad_fingerprint_output)
+            self.assertTrue(any("fingerprint does not match" in blocker for blocker in bad_fingerprint["blockers"]))
+
+            mismatch_code, mismatch_output = self.run_cli(
+                [
+                    "attest-zet",
+                    str(source_root),
+                    "--delegate-receipt",
+                    str(delegate_path),
+                    "--counterparty-id",
+                    "archive:personal:fake-life",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-user-primary",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(mismatch_code, 1)
+            mismatch = json.loads(mismatch_output)
+            self.assertTrue(any("target_archive does not match" in blocker for blocker in mismatch["blockers"]))
+
+            attest_code, attest_output = self.run_cli(
+                [
+                    "attest-zet",
+                    str(target_root),
+                    "--delegate-receipt",
+                    archive_cli.archive_relative_path(delegate_path, target_root),
+                    "--counterparty-id",
+                    "archive:personal:fake-life",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-user-primary",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(attest_code, 0, attest_output)
+            attest_result = json.loads(attest_output)
+            attestation_path = self.write_json_receipt(
+                target_root,
+                attest_result["proposed_attestation_receipt_path"],
+                attest_result["attestation_receipt_preview"],
+            )
+            anchor_mismatch_code, anchor_mismatch_output = self.run_cli(
+                [
+                    "anchor-zet",
+                    str(source_root),
+                    "--attestation-receipt",
+                    str(attestation_path),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(anchor_mismatch_code, 1)
+            anchor_mismatch = json.loads(anchor_mismatch_output)
+            self.assertTrue(any("attesting_archive does not match" in blocker for blocker in anchor_mismatch["blockers"]))
 
     def test_transfer_ownership_dry_run_previews_family_to_child_receipt_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

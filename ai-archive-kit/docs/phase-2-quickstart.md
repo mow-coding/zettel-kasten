@@ -24,6 +24,9 @@ archive search
 archive pack
 archive import --dry-run
 archive share --dry-run
+archive delegate-zet --dry-run
+archive attest-zet --dry-run
+archive anchor-zet --dry-run
 minimal stdio MCP server
 ```
 
@@ -212,6 +215,7 @@ The server speaks JSON-RPC over stdio. It is meant to be launched by an AI clien
 - `promote` remains available for legacy v0.2 compatibility.
 - `import --dry-run` writes nothing.
 - `share --dry-run` writes nothing and checks scope plus counterparty trust.
+- `delegate-zet`, `attest-zet`, and `anchor-zet` are dry-run only; they preview the future zet sharing lifecycle but do not write receipts, metadata, or transport messages.
 - Archive ownership and archive operation are separate; real ownership transfer is future work.
 - Original object files are referenced by `object_id`.
 - Provider URLs and local absolute paths should not live in zettels.

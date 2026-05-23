@@ -132,7 +132,13 @@ attestation receipt
 anchor metadata
 ```
 
-These are not implemented yet.
+As of `v0.2.10`, these exist as dry-run preview concepts:
+
+- `delegate-zet --dry-run` returns a delegate receipt preview.
+- `attest-zet --dry-run` returns an attestation receipt preview.
+- `anchor-zet --dry-run` returns anchor metadata preview.
+
+They are not real sharing, transport, import, or write paths yet.
 
 They should be designed later so that:
 
@@ -149,6 +155,7 @@ Current status:
 - `attest` is the preferred product word for verifying a foreign `zet`.
 - `delegate` is the preferred candidate for scoped sharing authority.
 - `anchor` is the preferred candidate for placing an attested foreign `zet` into local meaning.
+- `v0.2.10` exposes the first dry-run CLI/MCP checks for delegate, attest, and anchor.
 
 Short form:
 

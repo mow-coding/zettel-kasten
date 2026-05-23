@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.9` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.9.md` |
+| `v0.2.10` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.10.md` |
+| `v0.2.9` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.9.md` |
 | `v0.2.8` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.8.md` |
 | `v0.2.7` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.7.md` |
 | `v0.2.6` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.6.md` |
@@ -36,6 +37,27 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.9`에서 `v0.2.10`으로
+
+이 버전은 호환 가능한 dry-run lifecycle 기능 패치입니다.
+
+변경 사항:
+
+- `archive delegate-zet --dry-run` 추가,
+- `archive attest-zet --dry-run` 추가,
+- `archive anchor-zet --dry-run` 추가,
+- delegate, attest, anchor를 위한 read-only MCP check 추가,
+- delegate receipt, attestation receipt, anchor metadata schema 추가.
+
+private archive migration은 필요하지 않습니다.
+
+실제 P2P, feed, transport, 외부 전송, foreign zet import는 아직 구현하지 않습니다.
+
+```bash
+git fetch --tags
+git checkout v0.2.10
+```
 
 ## `v0.2.8`에서 `v0.2.9`로
 

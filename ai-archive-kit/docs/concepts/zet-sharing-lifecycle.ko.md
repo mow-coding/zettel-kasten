@@ -132,7 +132,13 @@ attestation receipt
 anchor metadata
 ```
 
-아직 구현된 것은 아닙니다.
+`v0.2.10` 기준으로 이것들은 dry-run preview 개념으로 존재합니다.
+
+- `delegate-zet --dry-run`은 delegate receipt preview를 반환합니다.
+- `attest-zet --dry-run`은 attestation receipt preview를 반환합니다.
+- `anchor-zet --dry-run`은 anchor metadata preview를 반환합니다.
+
+아직 실제 공유, transport, import, write path는 아닙니다.
 
 나중에 설계할 때는 다음을 만족해야 합니다.
 
@@ -149,6 +155,7 @@ anchor metadata
 - `attest`는 foreign `zet` 검증의 선호 제품 언어입니다.
 - `delegate`는 scoped sharing authority의 선호 후보입니다.
 - `anchor`는 attested foreign `zet`를 local meaning에 놓는 선호 후보입니다.
+- `v0.2.10`은 delegate, attest, anchor의 첫 dry-run CLI/MCP check를 제공합니다.
 
 짧게 쓰면:
 

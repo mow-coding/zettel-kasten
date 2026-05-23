@@ -65,6 +65,44 @@ class McpServerTests(unittest.TestCase):
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
         return root
 
+    def copy_fake_archive_as_company_target(self, root: Path) -> Path:
+        archive_root = self.copy_fake_archive(root)
+        archive_path = archive_root / "archive.yml"
+        archive_data = archive_cli.load_yaml(archive_path.read_text(encoding="utf-8"))
+        archive_data["archive_id"] = "archive:company:fake-blue"
+        archive_data["name"] = "Fake Blue Target Archive"
+        archive_data["type"] = "company"
+        archive_path.write_text(archive_cli.dump_yaml(archive_data), encoding="utf-8")
+
+        identity_path = archive_root / "archive-identity.yml"
+        identity = archive_cli.load_yaml(identity_path.read_text(encoding="utf-8"))
+        identity["identity"]["archive_id"] = "archive:company:fake-blue"
+        identity["identity"]["identity_id"] = "identity:archive:company:fake-blue"
+        identity["identity"]["scope"] = "company"
+        identity["identity"]["principal_id"] = "company:fake-blue"
+        identity["identity"]["display_name"] = "Fake Blue Company"
+        identity["ownership"]["owner_id"] = "company:fake-blue"
+        identity["ownership"]["owner_kind"] = "company"
+        identity["ownership"]["owner_display_name"] = "Fake Blue Company"
+        identity["ownership"]["owner_archive_id"] = "archive:company:fake-blue"
+        identity["trusted_counterparties"].append(
+            {
+                "identity_id": "identity:archive:personal:fake-life",
+                "archive_id": "archive:personal:fake-life",
+                "principal_id": "person:fake-user",
+                "expected_fingerprint": "SHA256:fake-user-primary",
+                "trust_level": "out_of_band_verified",
+            }
+        )
+        identity_path.write_text(archive_cli.dump_yaml(identity), encoding="utf-8")
+        return archive_root
+
+    def write_json_receipt(self, archive_root: Path, relative_path: str, payload: dict) -> Path:
+        path = archive_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        return path
+
     def init_transfer_ready_family_archive(self, root: Path) -> Path:
         result = subprocess.run(
             [
@@ -133,6 +171,9 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("promotion_check", tool_names)
             self.assertIn("mint_zettel_check", tool_names)
             self.assertIn("share_check", tool_names)
+            self.assertIn("delegate_zet_check", tool_names)
+            self.assertIn("attest_zet_check", tool_names)
+            self.assertIn("anchor_zet_check", tool_names)
             self.assertIn("archive_onboarding_plan", tool_names)
             self.assertIn("real_pilot_plan", tool_names)
             self.assertIn("archive_preflight_check", tool_names)
@@ -150,6 +191,9 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("archive_mint_zettel", tool_names)
             self.assertNotIn("mint_zettel_apply", tool_names)
             self.assertNotIn("share_archive_scope", tool_names)
+            self.assertNotIn("delegate_zet", tool_names)
+            self.assertNotIn("attest_zet", tool_names)
+            self.assertNotIn("anchor_zet", tool_names)
             self.assertNotIn("archive_onboard", tool_names)
             self.assertNotIn("archive_onboarding_apply", tool_names)
             self.assertNotIn("real_pilot_apply", tool_names)
@@ -816,6 +860,98 @@ class McpServerTests(unittest.TestCase):
             self.assertEqual(len(structured["scope_gate"]["included"]), 1)
             self.assertFalse(structured["ownership_gate"]["ownership_transfer"])
             self.assertFalse((archive_root / structured["proposed_receipt_path"]).exists())
+        finally:
+            self.stop_server(process)
+
+    def test_delegate_attest_anchor_checks_are_dry_run_only(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                source_root = self.copy_fake_archive(Path(tmp) / "source")
+                target_root = self.copy_fake_archive_as_company_target(Path(tmp) / "target")
+                delegate_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "delegate_zet_check",
+                            "arguments": {
+                                "archive_root": str(source_root),
+                                "view": "view.fake.company.derived",
+                                "target_archive": "archive:company:fake-blue",
+                                "counterparty_id": "archive:company:fake-blue",
+                                "counterparty_fingerprint": "SHA256:fake-company-blue",
+                            },
+                        },
+                    },
+                )
+                delegate_result = delegate_response["result"]
+                self.assertFalse(delegate_result["isError"])
+                delegated = delegate_result["structuredContent"]
+                self.assertTrue(delegated["ok"])
+                self.assertEqual(delegated["lifecycle_action"], "delegate")
+                self.assertEqual(len(delegated["delegated_zets"]), 1)
+                self.assertFalse((source_root / delegated["proposed_delegate_receipt_path"]).exists())
+
+                delegate_path = self.write_json_receipt(
+                    target_root,
+                    delegated["proposed_delegate_receipt_path"],
+                    delegated["delegate_receipt_preview"],
+                )
+                attest_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "attest_zet_check",
+                            "arguments": {
+                                "archive_root": str(target_root),
+                                "delegate_receipt": archive_cli.archive_relative_path(delegate_path, target_root),
+                                "counterparty_id": "archive:personal:fake-life",
+                                "counterparty_fingerprint": "SHA256:fake-user-primary",
+                            },
+                        },
+                    },
+                )
+                attest_result = attest_response["result"]
+                self.assertFalse(attest_result["isError"])
+                attested = attest_result["structuredContent"]
+                self.assertTrue(attested["ok"])
+                self.assertEqual(attested["lifecycle_action"], "attest")
+                self.assertEqual(attested["trust_gate"]["status"], "verified")
+                self.assertFalse((target_root / attested["proposed_attestation_receipt_path"]).exists())
+
+                attestation_path = self.write_json_receipt(
+                    target_root,
+                    attested["proposed_attestation_receipt_path"],
+                    attested["attestation_receipt_preview"],
+                )
+                anchor_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "anchor_zet_check",
+                            "arguments": {
+                                "archive_root": str(target_root),
+                                "attestation_receipt": archive_cli.archive_relative_path(attestation_path, target_root),
+                            },
+                        },
+                    },
+                )
+                anchor_result = anchor_response["result"]
+                self.assertFalse(anchor_result["isError"])
+                anchored = anchor_result["structuredContent"]
+                self.assertTrue(anchored["ok"])
+                self.assertEqual(anchored["lifecycle_action"], "anchor")
+                self.assertEqual(len(anchored["anchored_zets"]), 1)
+                self.assertFalse((target_root / anchored["proposed_anchor_metadata_path"]).exists())
         finally:
             self.stop_server(process)
 

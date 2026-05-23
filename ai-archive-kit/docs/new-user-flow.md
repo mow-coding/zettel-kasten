@@ -460,10 +460,13 @@ source_mount_plan
 promotion_check
 mint_zettel_check
 share_check
+delegate_zet_check
+attest_zet_check
+anchor_zet_check
 ownership_transfer_check
 ```
 
-MCP can create drafts, inspect archives, search, plan onboarding, preview external imports, list sources, preview source registration, preview source mount plans, preview source scans, preview minting, preview legacy promotion, preview archive sharing, and check ownership transfer. It cannot perform real onboarding apply, source registration apply, source scan apply, canonical minting, real share, merge, fork, or ownership transfer. Use the CLI for explicit human-approved steps.
+MCP can create drafts, inspect archives, search, plan onboarding, preview external imports, list sources, preview source registration, preview source mount plans, preview source scans, preview minting, preview legacy promotion, preview archive sharing, preview delegate/attest/anchor lifecycle checks, and check ownership transfer. It cannot perform real onboarding apply, source registration apply, source scan apply, canonical minting, real share, real delegate, real attest, real anchor, merge, fork, or ownership transfer. Use the CLI for explicit human-approved steps.
 
 ## Flow 8: Keep Secrets Out
 
