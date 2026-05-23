@@ -23,7 +23,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.14 pre-release
+v0.2.15 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -40,13 +40,14 @@ What exists today:
 - CLI-backed real delegate proof/receipt writes for scoped zet delegation,
 - dry-run `attest-zet` and `anchor-zet` lifecycle previews, including `claimable_once` delegate capability previews.
 - WOM Safe HTML Profile design notes for the long-term canonical/interchange/rendering target.
+- read-only `check-safe-html` validation for obvious unsafe patterns before future WOM Safe HTML Profile migration.
 
 What does not exist yet:
 
 - production-grade installation flow,
 - live provider integrations,
 - production `ZET` sharing service,
-- Markdown-to-WOM-Safe-HTML conversion or validation,
+- full Markdown-to-WOM-Safe-HTML conversion or finalized profile validation,
 - stable `v1.0.0` protocol guarantee.
 
 ## Core Model
@@ -175,6 +176,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.15
 v0.2.14
 v0.2.13
 v0.2.12

@@ -175,8 +175,9 @@ v0.2 구현은 Markdown compatibility를 유지합니다.
 v0.2.14
   WOM Safe HTML Profile 방향 문서화
 
-next compatible patch
-  profile validator 또는 Markdown-to-safe-HTML dry-run 추가
+v0.2.15
+  기존 v0.2 Markdown 호환 zet를 위한 read-only Safe HTML Profile
+  validator dry-run 추가
 
 later
   mint dry-run에서 canonical HTML preview 제공
@@ -186,3 +187,35 @@ future minor release
 ```
 
 이 문서로 인해 기존 private archive migration은 필요하지 않습니다.
+
+## v0.2.15 Validator Dry-Run
+
+`v0.2.15`는 위 rollout의 첫 구체 도구를 추가합니다. v0.2 Markdown 호환 zet가 미래의 WOM Safe HTML Profile 마이그레이션과 호환 가능한지 미리 검사하는 읽기 전용 CLI dry-run validator입니다.
+
+```bash
+python ai-archive-kit/cli/archive.py check-safe-html <archive-root> \
+  --path inbox/<draft-zet>.md \
+  --dry-run \
+  --format json
+```
+
+이 validator는:
+
+- draft zet 또는 canonical zet를 읽기만 합니다.
+- 파일을 쓰지 않습니다.
+- Markdown을 HTML로 변환하지 않습니다.
+- mint 결과를 바꾸지 않습니다.
+- 기존 zet를 마이그레이션하지 않습니다.
+
+반환되는 JSON에는 `ok`, `lifecycle_action: check_safe_html`, `source_path`, `detected_format: markdown_compatible`, `proposed_profile: wom-safe-html/v0.1-draft`, `blockers`, `warnings`, `html_profile_preview`, `text_extraction_preview`, `source_reference_preview` 필드가 포함됩니다.
+
+첫 validator의 차단 목록 (맥락과 무관하게 항상 차단):
+
+- `<script>` element,
+- `<iframe>` element,
+- `<object>` element,
+- `<embed>` element,
+- 링크 내 `javascript:` URL,
+- `onclick=`, `onload=` 등 `on*=` inline event handler attribute.
+
+이 목록은 최소 안전 기준선입니다. WOM Safe HTML Profile의 전체 element/attribute allowlist는 아직 확정되지 않았으며, 이번 validator는 명백히 unsafe한 패턴만 표시합니다. 이후 패치에서 명시적 allowlist, Markdown-to-Safe-HTML preview, 더 풍부한 warning이 추가될 수 있습니다.

@@ -4,6 +4,23 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.15 - 2026-05-23
+
+WOM Safe HTML Profile validator dry-run patch.
+
+Added:
+
+- `archive check-safe-html --path <zet> --dry-run` CLI command, a read-only validator that inspects a v0.2 Markdown-compatible zet and reports whether it is compatible with a future WOM Safe HTML Profile migration,
+- block detection for `<script>`, `<iframe>`, `<object>`, `<embed>`, `javascript:` URLs, and inline event handler attributes (for example `onclick=`),
+- structured JSON output with `ok`, `lifecycle_action: check_safe_html`, `source_path`, `detected_format: markdown_compatible`, `proposed_profile: wom-safe-html/v0.1-draft`, `blockers`, `warnings`, `html_profile_preview`, `text_extraction_preview`, and `source_reference_preview`.
+
+Compatibility:
+
+- existing Markdown-compatible zets remain valid in the v0.2 compatibility line,
+- the validator only reads; it never writes files, never converts Markdown to HTML, never changes mint output, and never migrates existing zets,
+- the WOM Safe HTML Profile element/attribute allowlist is still not finalized; the validator only flags obviously unsafe patterns at this stage,
+- no private archive migration is required.
+
 ## v0.2.14 - 2026-05-23
 
 WOM Safe HTML Profile documentation/spec baseline patch.

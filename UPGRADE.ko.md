@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.14` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.14.md` |
+| `v0.2.15` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.15.md` |
+| `v0.2.14` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.14.md` |
 | `v0.2.13` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.13.md` |
 | `v0.2.12` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.12.md` |
 | `v0.2.11` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.11.md` |
@@ -41,6 +42,25 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.14`에서 `v0.2.15`로
+
+WOM Safe HTML Profile dry-run validator 패치이며, 호환 가능한 변경입니다.
+
+변경 사항:
+
+- `archive check-safe-html --path <zet> --dry-run`이라는 읽기 전용 CLI 명령을 추가했습니다. v0.2 Markdown 호환 zet가 미래의 WOM Safe HTML Profile 마이그레이션과 호환 가능한지 미리 검사합니다.
+- validator는 `<script>`, `<iframe>`, `<object>`, `<embed>`, `javascript:` URL, 그리고 `onclick=` 같은 inline event handler attribute가 zet body 안에 있으면 차단합니다.
+- validator는 `ok`, `lifecycle_action: check_safe_html`, `source_path`, `detected_format: markdown_compatible`, `proposed_profile: wom-safe-html/v0.1-draft`, `blockers`, `warnings`, `html_profile_preview`, `text_extraction_preview`, `source_reference_preview` 필드를 포함한 구조화된 JSON을 반환합니다.
+
+실제 private archive migration은 필요 없습니다.
+
+이번 릴리스는 Markdown-to-HTML 변환기, profile allowlist, UI, live sharing, P2P transport, external provider sync를 구현하지 않습니다. 기존 Markdown 호환 zets는 그대로 유효합니다.
+
+```bash
+git fetch --tags
+git checkout v0.2.15
+```
 
 ## `v0.2.13`에서 `v0.2.14`로
 

@@ -2750,6 +2750,117 @@ def anchor_zets_dry_run(
     }
 
 
+SAFE_HTML_PROFILE_ID = "wom-safe-html/v0.1-draft"
+SAFE_HTML_BLOCKED_TAGS = ("script", "iframe", "object", "embed")
+SAFE_HTML_BLOCK_TAG_PATTERNS = {
+    name: re.compile(rf"<\s*{name}\b", re.IGNORECASE) for name in SAFE_HTML_BLOCKED_TAGS
+}
+SAFE_HTML_JS_URL_PATTERN = re.compile(r"\bjavascript\s*:", re.IGNORECASE)
+SAFE_HTML_INLINE_EVENT_PATTERN = re.compile(r"<\s*\w+[^>]*\son[a-z]+\s*=", re.IGNORECASE)
+
+
+def check_safe_html_dry_run(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    if not zettel_id and not relative_path:
+        raise ArchiveServiceError("Provide --zettel-id or --path.")
+
+    path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
+    source_path = archive_relative_path(path, root)
+    text = path.read_text(encoding="utf-8")
+    frontmatter, body = split_zettel_text(text)
+    frontmatter = json_safe(frontmatter) if isinstance(frontmatter, dict) else {}
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    detected_unsafe: list[str] = []
+
+    for tag, pattern in SAFE_HTML_BLOCK_TAG_PATTERNS.items():
+        if pattern.search(body):
+            detected_unsafe.append(tag)
+            blockers.append(
+                f"Unsafe raw HTML element <{tag}> detected in zet body. "
+                f"WOM Safe HTML Profile will not allow <{tag}> in canonical zets."
+            )
+    if SAFE_HTML_JS_URL_PATTERN.search(body):
+        detected_unsafe.append("javascript_url")
+        blockers.append(
+            "Unsafe javascript: URL detected in zet body. "
+            "WOM Safe HTML Profile will not allow the javascript: protocol in links."
+        )
+    if SAFE_HTML_INLINE_EVENT_PATTERN.search(body):
+        detected_unsafe.append("inline_event_handler")
+        blockers.append(
+            "Inline event handler attribute detected in zet body (for example onclick=). "
+            "WOM Safe HTML Profile will not allow inline event handlers."
+        )
+
+    if not body.strip():
+        warnings.append("zet body is empty; future Safe HTML migration still expects structured content.")
+
+    assets = frontmatter.get("assets") if isinstance(frontmatter.get("assets"), list) else []
+    edges = frontmatter.get("edges") if isinstance(frontmatter.get("edges"), list) else []
+    provenance = frontmatter.get("provenance") if isinstance(frontmatter.get("provenance"), dict) else {}
+    derived_from = provenance.get("derived_from") if isinstance(provenance.get("derived_from"), list) else []
+    object_id_references = [
+        item.get("object_id")
+        for item in assets
+        if isinstance(item, dict) and isinstance(item.get("object_id"), str)
+    ]
+
+    html_profile_preview = {
+        "profile_id": SAFE_HTML_PROFILE_ID,
+        "status": "draft",
+        "blocked_elements": list(SAFE_HTML_BLOCKED_TAGS),
+        "blocked_attribute_pattern": "on*",
+        "blocked_url_schemes": ["javascript:"],
+        "allowlist_status": (
+            "not yet defined; future WOM Safe HTML Profile will publish an explicit "
+            "element/attribute allowlist before any real migration."
+        ),
+        "detected_unsafe_categories": detected_unsafe,
+    }
+    text_extraction_preview = {
+        "method": "markdown_plain_text",
+        "char_count": len(body),
+        "line_count": body.count("\n") + 1 if body else 0,
+        "word_count": len(body.split()),
+        "has_yaml_frontmatter": bool(frontmatter),
+    }
+    source_reference_preview = {
+        "method": "frontmatter_envelope_v0_2",
+        "assets_count": len(assets),
+        "edges_count": len(edges),
+        "derived_from_count": len(derived_from),
+        "object_id_references": object_id_references,
+        "notes": (
+            "WOM Safe HTML Profile prefers object_id, content hash, or manifest ref over raw provider URLs "
+            "for canonical source identity."
+        ),
+    }
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "check_safe_html",
+        "archive_id": archive_id,
+        "source_path": source_path,
+        "detected_format": "markdown_compatible",
+        "proposed_profile": SAFE_HTML_PROFILE_ID,
+        "blockers": blockers,
+        "warnings": warnings,
+        "html_profile_preview": html_profile_preview,
+        "text_extraction_preview": text_extraction_preview,
+        "source_reference_preview": source_reference_preview,
+        "would_change": [],
+    }
+
+
 def onboarding_plan(
     target_root: Path | str,
     *,

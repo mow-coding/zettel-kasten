@@ -175,8 +175,9 @@ Recommended rollout:
 v0.2.14
   document WOM Safe HTML Profile direction
 
-next compatible patch
-  add profile validator or Markdown-to-safe-HTML dry-run
+v0.2.15
+  add read-only Safe HTML Profile validator dry-run for existing
+  v0.2 Markdown-compatible zets
 
 later
   preview canonical HTML during mint dry-run
@@ -186,3 +187,35 @@ future minor release
 ```
 
 No existing private archive migration is required by this document.
+
+## v0.2.15 Validator Dry-Run
+
+`v0.2.15` ships the first concrete tool for this rollout: a read-only CLI dry-run validator that previews whether a v0.2 Markdown-compatible zet is compatible with a future WOM Safe HTML Profile migration.
+
+```bash
+python ai-archive-kit/cli/archive.py check-safe-html <archive-root> \
+  --path inbox/<draft-zet>.md \
+  --dry-run \
+  --format json
+```
+
+The validator:
+
+- reads a draft or canonical zet,
+- never writes files,
+- never converts Markdown to HTML,
+- never changes mint output,
+- never migrates existing zets.
+
+It returns structured JSON with the fields `ok`, `lifecycle_action: check_safe_html`, `source_path`, `detected_format: markdown_compatible`, `proposed_profile: wom-safe-html/v0.1-draft`, `blockers`, `warnings`, `html_profile_preview`, `text_extraction_preview`, and `source_reference_preview`.
+
+Block list in this first validator (always blocked, regardless of context):
+
+- `<script>` elements,
+- `<iframe>` elements,
+- `<object>` elements,
+- `<embed>` elements,
+- `javascript:` URLs in links,
+- inline event handler attributes such as `onclick=`, `onload=`, and other `on*=` attributes.
+
+This list is the minimum safety floor. The full WOM Safe HTML Profile element/attribute allowlist is still not finalized; the validator only flags obviously unsafe patterns at this stage. A future patch may add an explicit allowlist, Markdown-to-Safe-HTML preview, and a richer set of warnings.

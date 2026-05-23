@@ -82,6 +82,9 @@ attest-zet --dry-run
 anchor-zet --dry-run
   Preview anchoring an attested foreign zet into local meaning without writing metadata.
 
+check-safe-html --path <zet> --dry-run
+  Read-only validator that previews whether a v0.2 Markdown-compatible zet is compatible with future WOM Safe HTML Profile migration. It blocks obvious unsafe raw HTML patterns and never writes files.
+
 pilot-plan
   Plan a safe first real personal/team archive pilot without writing files.
 

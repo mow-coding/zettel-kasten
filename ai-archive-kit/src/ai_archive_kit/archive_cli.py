@@ -26,6 +26,9 @@ Commands:
           Preview attestation of a delegated foreign zet receipt.
   anchor-zet
           Preview anchoring an attested foreign zet into local meaning.
+  check-safe-html
+          Dry-run check whether a Markdown-compatible zet is compatible with a
+          future WOM Safe HTML Profile migration. Read-only; never writes files.
   source-mounts
           Show host-native and Docker mount guidance for registered sources.
   recovery-plan
@@ -1812,6 +1815,43 @@ def command_anchor_zet(args: argparse.Namespace) -> int:
     return 0 if result["ok"] else 1
 
 
+def command_check_safe_html(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "check-safe-html is a read-only dry-run validator and requires --dry-run. "
+            "It never writes files.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = archive_services.check_safe_html_dry_run(
+            Path(args.archive_root),
+            relative_path=args.path,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result["ok"] else "blocked"
+        print(f"WOM Safe HTML check dry-run {state}.")
+        print(f"Archive: {result['archive_id']}")
+        print(f"Source path: {result['source_path']}")
+        print(f"Detected format: {result['detected_format']}")
+        print(f"Proposed profile: {result['proposed_profile']}")
+        if result["blockers"]:
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result["warnings"]:
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result["ok"] else 1
+
+
 def command_providers(args: argparse.Namespace) -> int:
     try:
         result = archive_services.provider_bindings_summary(Path(args.archive_root))
@@ -2974,6 +3014,29 @@ def build_parser() -> argparse.ArgumentParser:
     anchor.add_argument("--dry-run", action="store_true", help="Preview anchoring without writing files.")
     anchor.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     anchor.set_defaults(func=command_anchor_zet)
+
+    check_safe_html = subcommands.add_parser(
+        "check-safe-html",
+        help="Dry-run check whether a Markdown-compatible zet is compatible with a future WOM Safe HTML Profile migration.",
+    )
+    check_safe_html.add_argument("archive_root", help="Archive root containing the zet.")
+    check_safe_html.add_argument(
+        "--path",
+        required=True,
+        help="Archive-relative zet path inside inbox/ or zettels/.",
+    )
+    check_safe_html.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Preview Safe HTML compatibility without writing files.",
+    )
+    check_safe_html.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    check_safe_html.set_defaults(func=command_check_safe_html)
 
     providers = subcommands.add_parser("providers", help="Inspect external provider bindings and manual change plans.")
     providers.add_argument("archive_root", help="Archive root to inspect.")

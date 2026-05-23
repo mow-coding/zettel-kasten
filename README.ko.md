@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.2.14 pre-release
+v0.2.15 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -40,13 +40,14 @@ v0.2.14 pre-release
 - scoped zet delegation을 delegate proof/receipt로 실제 기록하는 CLI 구현.
 - `claimable_once` delegate capability preview를 포함한 dry-run `attest-zet`, `anchor-zet` lifecycle preview.
 - 장기 canonical/interchange/rendering target으로서의 WOM Safe HTML Profile 설계 문서.
+- 미래 WOM Safe HTML Profile migration 전에 명백히 unsafe한 패턴을 읽기 전용으로 검사하는 `check-safe-html` validator.
 
 아직 없는 것:
 
 - production-grade 설치 흐름,
 - 실제 provider 연동,
 - production `ZET` 공유 서비스,
-- Markdown에서 WOM Safe HTML로 변환하거나 검증하는 구현,
+- Markdown에서 WOM Safe HTML로 실제 변환하거나 finalized profile로 검증하는 구현,
 - 안정판 `v1.0.0` 프로토콜 보장.
 
 ## 핵심 모델
@@ -176,6 +177,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.15
 v0.2.14
 v0.2.13
 v0.2.12
