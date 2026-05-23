@@ -1,10 +1,21 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.16 planning and implementation baseline
+Status: v0.2.17 planning and implementation baseline
 
 ## Purpose
 
 WOM is AI-runtime first, but AI runtimes need a safe first step before they act.
+
+In v0.2.17, the first step is profile resolution when the user names a target archive/profile.
+
+The profile registry layer gives terminal-capable AI tools a read-only way to answer:
+
+```text
+Which WOM profile did the user ask for?
+Is the requested profile the current/default profile or another profile?
+Does the profile have an archive id, type, root, and token state?
+Is direct draft writing available, or should the AI suggest token registration or delegation?
+```
 
 The runtime context layer gives terminal-capable AI tools a read-only way to answer:
 
@@ -16,6 +27,24 @@ Where may drafts and zets live?
 What safe actions are available?
 Are there blockers before I continue?
 ```
+
+## Profile Registry Commands
+
+CLI:
+
+```bash
+archive profile-list --registry <path> --format json
+archive profile-resolve --registry <path> --target <query> --format json
+```
+
+MCP:
+
+```text
+wom_profile_list
+wom_profile_resolve
+```
+
+Profile resolution must happen before runtime context whenever the user names a target profile. This prevents the AI from assuming the current/default archive is correct.
 
 ## Runtime Context Command
 
@@ -42,12 +71,13 @@ MCP clients must not request `redact_local_paths: false` unless trusted local de
 An AI runtime should start with:
 
 ```text
-1. call runtime context
-2. check ok/blockers/warnings
-3. confirm expected archive id and type when known
-4. create drafts only in inbox
-5. run mint dry-run before asking for mint approval
-6. use CLI approval paths for real minting
+1. resolve requested WOM profile when the user names a target
+2. confirm or switch target archive context
+3. call runtime context with expected archive id and type
+4. check ok/blockers/warnings
+5. create drafts only in inbox after a future dry-run/write approval path exists
+6. run mint dry-run before asking for mint approval
+7. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -58,7 +88,8 @@ The `templates/ai-runtime/wom-archive/SKILL.md` file is a reusable prompt-side p
 
 The skill tells the AI to:
 
-- run runtime context first,
+- resolve the requested profile first when the user names a target archive/profile,
+- then run runtime context,
 - keep paths archive-relative,
 - avoid exposing local absolute paths,
 - use dry-run checks before approval requests,
@@ -69,8 +100,9 @@ The skill tells the AI to:
 
 The plugin layer should expose read and preview tools first.
 
-Allowed v0.2.16 direction:
+Allowed v0.2.17 direction:
 
+- profile list and profile resolve,
 - runtime context,
 - doctor,
 - list/read zets,
@@ -83,6 +115,7 @@ Allowed v0.2.16 direction:
 Not allowed in this layer yet:
 
 - real minting through MCP,
+- profile registration or token registration through MCP,
 - provider API sync,
 - source scan apply,
 - source registration apply,

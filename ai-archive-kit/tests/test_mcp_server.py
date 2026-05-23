@@ -105,6 +105,33 @@ class McpServerTests(unittest.TestCase):
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         return path
 
+    def write_profile_registry(self, path: Path, archive_root: str) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            archive_cli.dump_yaml(
+                {
+                    "version": "wom-profile-registry/v0.1",
+                    "default_profile": "profile:personal:me",
+                    "profiles": [
+                        {
+                            "profile_id": "profile:personal:me",
+                            "label": "Personal archive",
+                            "aliases": ["me", "personal"],
+                            "node_id": "person:me",
+                            "archive_id": "archive:personal:me",
+                            "archive_type": "personal",
+                            "archive_root": archive_root,
+                            "operator_id": "person:me",
+                            "authority_mode": "owner_operator",
+                            "token": {"state": "present", "token_ref": "local-keyring:wom/profile/example-personal"},
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
     def init_transfer_ready_family_archive(self, root: Path) -> Path:
         result = subprocess.run(
             [
@@ -167,6 +194,8 @@ class McpServerTests(unittest.TestCase):
             tools = self.send(process, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             tools_by_name = {tool["name"]: tool for tool in tools["result"]["tools"]}
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
+            self.assertIn("wom_profile_list", tool_names)
+            self.assertIn("wom_profile_resolve", tool_names)
             self.assertIn("archive_doctor", tool_names)
             self.assertIn("archive_runtime_context", tool_names)
             self.assertIn("create_draft_zettel", tool_names)
@@ -200,6 +229,10 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("mint_zettel", tool_names)
             self.assertNotIn("archive_mint_zettel", tool_names)
             self.assertNotIn("mint_zettel_apply", tool_names)
+            self.assertNotIn("wom_profile_register", tool_names)
+            self.assertNotIn("wom_profile_apply", tool_names)
+            self.assertNotIn("wom_profile_token_register", tool_names)
+            self.assertNotIn("profile_token_register", tool_names)
             self.assertNotIn("archive_runtime_context_apply", tool_names)
             self.assertNotIn("share_archive_scope", tool_names)
             self.assertNotIn("delegate_zet", tool_names)
@@ -248,6 +281,122 @@ class McpServerTests(unittest.TestCase):
             self.assertEqual(result["structuredContent"]["warnings"], 0)
         finally:
             self.stop_server(process)
+
+    def test_wom_profile_tools_respect_allowed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_registry = self.write_profile_registry(
+                allowed_root / "profiles.yml",
+                str((allowed_root / "archive").resolve()),
+            )
+            outside_registry = self.write_profile_registry(
+                outside_root / "profiles.yml",
+                str((outside_root / "archive").resolve()),
+            )
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                list_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "wom_profile_list",
+                            "arguments": {"registry": str(allowed_registry)},
+                        },
+                    },
+                )
+                self.assertFalse(list_response["result"]["isError"])
+                structured = list_response["result"]["structuredContent"]
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "profile_list")
+                self.assertEqual(structured["profiles"][0]["archive_root"], "<local-path-redacted>")
+                self.assertNotIn(str(allowed_root), json.dumps(structured))
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "wom_profile_resolve",
+                            "arguments": {"registry": str(outside_registry), "target": "personal"},
+                        },
+                    },
+                )
+                self.assertTrue(outside_response["result"]["isError"])
+                self.assertIn("outside allowed archive root", outside_response["result"]["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_wom_profile_resolve_ignores_local_path_disclosure_without_env_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = str((Path(tmp) / "archive").resolve())
+            registry = self.write_profile_registry(Path(tmp) / "profiles.yml", archive_root)
+            process = self.start_server()
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "wom_profile_resolve",
+                            "arguments": {
+                                "registry": str(registry),
+                                "target": "personal",
+                                "redact_local_paths": False,
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["redaction"]["local_paths_redacted"])
+                self.assertEqual(structured["target_archive_context_preview"]["archive_root"], "<local-path-redacted>")
+                self.assertNotIn(archive_root, json.dumps(structured))
+                self.assertTrue(
+                    any("AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1" in warning for warning in structured["warnings"])
+                )
+            finally:
+                self.stop_server(process)
+
+    def test_wom_profile_resolve_can_disclose_local_paths_with_env_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = str((Path(tmp) / "archive").resolve())
+            registry = self.write_profile_registry(Path(tmp) / "profiles.yml", archive_root)
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS": "1"})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "wom_profile_resolve",
+                            "arguments": {
+                                "registry": str(registry),
+                                "target": "personal",
+                                "redact_local_paths": False,
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertFalse(structured["redaction"]["local_paths_redacted"])
+                self.assertEqual(structured["target_archive_context_preview"]["archive_root"], archive_root)
+            finally:
+                self.stop_server(process)
 
     def test_archive_runtime_context_tool_respects_allowed_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

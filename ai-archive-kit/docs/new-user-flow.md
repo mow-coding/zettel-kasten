@@ -443,6 +443,8 @@ python -m ai_archive_kit.mcp_server
 Current MCP tools:
 
 ```text
+wom_profile_list
+wom_profile_resolve
 archive_doctor
 archive_runtime_context
 archive_init
@@ -467,9 +469,9 @@ anchor_zet_check
 ownership_transfer_check
 ```
 
-For AI clients, the first safe call should usually be `archive_runtime_context`. It confirms which archive is mounted, keeps paths archive-relative by default, and returns safe next actions before the AI creates a draft or asks for mint approval.
+For AI clients, the first safe call should be `wom_profile_resolve` when the user names a target profile or archive. After that, call `archive_runtime_context` with the resolved archive id and type. This prevents the AI from assuming the current/default archive is the target.
 
-MCP can create drafts, inspect archives, search, plan onboarding, preview external imports, list sources, preview source registration, preview source mount plans, preview source scans, preview minting, preview legacy promotion, preview archive sharing, preview delegate/attest/anchor lifecycle checks, check ownership transfer, and read runtime context. It cannot perform real onboarding apply, source registration apply, source scan apply, canonical minting, real share, real delegate, real attest, real anchor, merge, fork, ownership transfer, or runtime context apply. Use the CLI for explicit human-approved steps.
+MCP can create drafts, inspect archives, search, plan onboarding, preview external imports, list sources, preview source registration, preview source mount plans, preview source scans, preview minting, preview legacy promotion, preview archive sharing, preview delegate/attest/anchor lifecycle checks, check ownership transfer, read runtime context, and resolve profile registry entries. It cannot perform real onboarding apply, profile registration, token registration, source registration apply, source scan apply, canonical minting, real share, real delegate, real attest, real anchor, merge, fork, ownership transfer, or runtime context apply. Use the CLI for explicit human-approved steps.
 
 ## Flow 8: Keep Secrets Out
 

@@ -1,7 +1,7 @@
 # Public Documentation Map
 
 Status: public navigation baseline
-Date: 2026-05-23
+Date: 2026-05-24
 
 This repository intentionally separates four kinds of public project records:
 
@@ -107,6 +107,7 @@ Onboarding and setup plans:
 
 - [AI-Assisted Onboarding And Provider Setup](ai-assisted-onboarding-and-provider-setup.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
+- [WOM Profile Registry](wom-profile-registry.md)
 - [One-Command Setup](one-command-setup.md)
 - [New User Flow](new-user-flow.md)
 - [External Imports](external-imports.md)
@@ -139,6 +140,7 @@ These documents record public-safe work already performed.
 - [WOM Safe HTML Profile Work Log](../plans/work-log-2026-05-23-wom-safe-html-profile.md)
 - [WOM Safe HTML Validator Work Log](../plans/work-log-2026-05-23-safe-html-validator.md)
 - [WOM AI Runtime Context Work Log](../plans/work-log-2026-05-24-ai-runtime-context.md)
+- [WOM Profile Registry Work Log](../plans/work-log-2026-05-24-profile-registry.md)
 - [Delegate Capability Binding Work Log](../plans/work-log-2026-05-23-delegate-capability-binding.md)
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)

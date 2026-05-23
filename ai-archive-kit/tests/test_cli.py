@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import unicodedata
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
@@ -169,6 +170,48 @@ class ArchiveCliTests(unittest.TestCase):
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
         return root
 
+    def write_profile_registry(self, path: Path, profiles: list[dict], default_profile: str = "profile:personal:me") -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            archive_cli.dump_yaml(
+                {
+                    "version": "wom-profile-registry/v0.1",
+                    "default_profile": default_profile,
+                    "profiles": profiles,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def example_profiles(self, personal_root: str = "<local-private-path>/personal") -> list[dict]:
+        return [
+            {
+                "profile_id": "profile:personal:me",
+                "label": "Personal archive",
+                "aliases": ["me", "personal", "내 개인"],
+                "node_id": "person:me",
+                "archive_id": "archive:personal:me",
+                "archive_type": "personal",
+                "archive_root": personal_root,
+                "operator_id": "person:me",
+                "authority_mode": "owner_operator",
+                "token": {"state": "present", "token_ref": "local-keyring:wom/profile/example-personal"},
+            },
+            {
+                "profile_id": "profile:team:younghee-chulsoo",
+                "label": "영희 & 철수 팀",
+                "aliases": ["영희 철수 팀", "영희&철수", "우리 팀"],
+                "node_id": "team:younghee-chulsoo",
+                "archive_id": "archive:team:younghee-chulsoo",
+                "archive_type": "project",
+                "archive_root": "<local-private-path>/younghee-chulsoo-team",
+                "operator_id": "person:me",
+                "authority_mode": "draft_only",
+                "token": {"state": "missing"},
+            },
+        ]
+
     def snapshot_archive_files(self, archive_root: Path) -> dict[str, str]:
         snapshot: dict[str, str] = {}
         for path in sorted(item for item in archive_root.rglob("*") if item.is_file()):
@@ -236,6 +279,203 @@ class ArchiveCliTests(unittest.TestCase):
         code, output = self.run_cli(["doctor", str(archive_root), "--strict"])
         self.assertEqual(code, 0, output)
         self.assertIn("0 error(s), 0 warning(s)", output)
+
+    def test_profile_list_reads_example_registry_and_redacts_paths(self) -> None:
+        registry = KIT_ROOT / "templates" / "profiles" / "wom-profiles.example.yml"
+        code, output = self.run_cli(["profile-list", "--registry", str(registry), "--format", "json"])
+
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["lifecycle_action"], "profile_list")
+        self.assertEqual(result["registry_path"], "<local-path-redacted>")
+        self.assertEqual(result["default_profile"], "profile:personal:me")
+        self.assertEqual(len(result["profiles"]), 2)
+        self.assertEqual(result["profiles"][0]["archive_root"], "<local-path-redacted>")
+        self.assertEqual(result["profiles"][0]["token_state"], "present")
+        self.assertEqual(result["profiles"][1]["token_state"], "missing")
+        self.assertNotIn("token_ref", json.dumps(result))
+
+    def test_profile_resolve_exact_profile_id_match_succeeds(self) -> None:
+        registry = KIT_ROOT / "templates" / "profiles" / "wom-profiles.example.yml"
+        code, output = self.run_cli(
+            [
+                "profile-resolve",
+                "--registry",
+                str(registry),
+                "--target",
+                "profile:personal:me",
+                "--format",
+                "json",
+            ]
+        )
+
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["resolution_state"], "resolved")
+        self.assertEqual(result["selected_profile"]["profile_id"], "profile:personal:me")
+        self.assertTrue(result["direct_write_available"])
+        self.assertEqual(result["suggested_next_action"], "run_runtime_context")
+        self.assertEqual(result["runtime_context_args_preview"]["expected_archive_id"], "archive:personal:me")
+        self.assertEqual(result["runtime_context_args_preview"]["expected_type"], "personal")
+        self.assertEqual(result["runtime_context_args_preview"]["archive_root"], "<local-path-redacted>")
+
+    def test_profile_resolve_exact_label_and_alias_match_succeed(self) -> None:
+        registry = KIT_ROOT / "templates" / "profiles" / "wom-profiles.example.yml"
+        label_code, label_output = self.run_cli(
+            ["profile-resolve", "--registry", str(registry), "--target", "Personal archive", "--format", "json"]
+        )
+        alias_code, alias_output = self.run_cli(
+            ["profile-resolve", "--registry", str(registry), "--target", "PERSONAL", "--format", "json"]
+        )
+
+        self.assertEqual(label_code, 0, label_output)
+        self.assertEqual(alias_code, 0, alias_output)
+        self.assertEqual(json.loads(label_output)["matches"][0]["match_type"], "label")
+        self.assertEqual(json.loads(alias_output)["matches"][0]["match_type"], "alias")
+
+    def test_profile_resolve_normalizes_korean_label_and_alias_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            decomposed_alias = unicodedata.normalize("NFD", "영희&철수")
+            registry = self.write_profile_registry(
+                Path(tmp) / "profiles.yml",
+                [{**self.example_profiles()[1], "aliases": [decomposed_alias], "token": {"state": "present"}}],
+                default_profile="profile:team:younghee-chulsoo",
+            )
+
+            code, output = self.run_cli(
+                ["profile-resolve", "--registry", str(registry), "--target", "\u200b영희&철수", "--format", "json"]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["resolution_state"], "resolved")
+            self.assertEqual(result["selected_profile"]["profile_id"], "profile:team:younghee-chulsoo")
+
+    def test_profile_resolve_ambiguous_match_returns_ambiguous_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self.write_profile_registry(
+                Path(tmp) / "profiles.yml",
+                [
+                    {**self.example_profiles()[0], "aliases": ["shared"]},
+                    {**self.example_profiles()[1], "aliases": ["shared"], "token": {"state": "present"}},
+                ],
+            )
+
+            code, output = self.run_cli(["profile-resolve", "--registry", str(registry), "--target", "shared", "--format", "json"])
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["resolution_state"], "ambiguous")
+            self.assertEqual(result["suggested_next_action"], "ask_user_to_choose_profile")
+            self.assertEqual(len(result["matches"]), 2)
+
+    def test_profile_resolve_missing_target_suggests_delegate_or_registration(self) -> None:
+        registry = KIT_ROOT / "templates" / "profiles" / "wom-profiles.example.yml"
+        code, output = self.run_cli(
+            ["profile-resolve", "--registry", str(registry), "--target", "unknown target", "--format", "json"]
+        )
+
+        result = json.loads(output)
+        self.assertEqual(code, 1, output)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["resolution_state"], "not_found")
+        self.assertEqual(result["suggested_next_action"], "suggest_delegate_flow")
+        self.assertIn("register the profile", result["warnings"][0])
+        self.assertEqual(result["delegate_fallback_preview"]["reason"], "target_profile_not_found")
+
+    def test_profile_resolve_token_missing_disables_direct_write(self) -> None:
+        registry = KIT_ROOT / "templates" / "profiles" / "wom-profiles.example.yml"
+        code, output = self.run_cli(
+            ["profile-resolve", "--registry", str(registry), "--target", "영희&철수", "--format", "json"]
+        )
+
+        result = json.loads(output)
+        self.assertEqual(code, 0, output)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["resolution_state"], "token_missing")
+        self.assertFalse(result["direct_write_available"])
+        self.assertEqual(result["suggested_next_action"], "register_profile_token")
+        self.assertEqual(result["delegate_fallback_preview"]["reason"], "profile_token_missing")
+        self.assertEqual(result["target_archive_context_preview"]["archive_type"], "project")
+
+    def test_profile_list_no_redact_local_paths_exposes_paths_in_cli_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = str((Path(tmp) / "personal-archive").resolve())
+            registry = self.write_profile_registry(Path(tmp) / "profiles.yml", self.example_profiles(archive_root))
+
+            code, output = self.run_cli(
+                ["profile-list", "--registry", str(registry), "--no-redact-local-paths", "--format", "json"]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertFalse(result["redaction"]["local_paths_redacted"])
+            self.assertEqual(result["registry_path"], str(registry.resolve()))
+            self.assertEqual(result["profiles"][0]["archive_root"], archive_root)
+
+    def test_profile_registry_commands_write_no_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self.write_profile_registry(Path(tmp) / "profiles.yml", self.example_profiles())
+            before = {
+                path.relative_to(tmp).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(Path(tmp).rglob("*"))
+                if path.is_file()
+            }
+
+            list_code, list_output = self.run_cli(["profile-list", "--registry", str(registry), "--format", "json"])
+            resolve_code, resolve_output = self.run_cli(
+                ["profile-resolve", "--registry", str(registry), "--target", "personal", "--format", "json"]
+            )
+
+            after = {
+                path.relative_to(tmp).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(Path(tmp).rglob("*"))
+                if path.is_file()
+            }
+            self.assertEqual(list_code, 0, list_output)
+            self.assertEqual(resolve_code, 0, resolve_output)
+            self.assertEqual(after, before)
+
+    def test_profile_registry_version_mismatch_blocks_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self.write_profile_registry(Path(tmp) / "profiles.yml", self.example_profiles())
+            data = archive_cli.load_yaml(registry.read_text(encoding="utf-8"))
+            data["version"] = "wom-profile-registry/v9"
+            registry.write_text(archive_cli.dump_yaml(data), encoding="utf-8")
+
+            code, output = self.run_cli(["profile-list", "--registry", str(registry), "--format", "json"])
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("version must be wom-profile-registry/v0.1" in item for item in result["blockers"]))
+
+    def test_profile_registry_blocks_raw_token_values_and_duplicate_profile_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            raw_token_profile = {
+                **self.example_profiles()[0],
+                "token": {
+                    "state": "present",
+                    "token_ref": "local-keyring:wom/profile/example-personal",
+                    "value": "example-raw-token-value",
+                },
+            }
+            duplicate_profile = {**self.example_profiles()[1], "profile_id": "profile:personal:me"}
+            registry = self.write_profile_registry(Path(tmp) / "profiles.yml", [raw_token_profile, duplicate_profile])
+
+            code, output = self.run_cli(["profile-list", "--registry", str(registry), "--format", "json"])
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("raw secret-like" in item for item in result["blockers"]))
+            self.assertTrue(any("unsupported field" in item for item in result["blockers"]))
+            self.assertTrue(any("duplicate profile_id" in item for item in result["blockers"]))
+            self.assertNotIn("example-raw-token-value", output)
 
     def test_runtime_context_returns_deterministic_redacted_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3402,7 +3642,7 @@ class ArchiveCliTests(unittest.TestCase):
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             provider_path = archive_root / "provider-bindings.yml"
             data = archive_cli.load_yaml(provider_path.read_text(encoding="utf-8"))
-            data["bindings"][0]["auth"] = {"token": "ghp_fakeActualSecretValue1234567890"}
+            data["bindings"][0]["auth"] = {"token": "example-provider-token"}
             provider_path.write_text(archive_cli.dump_yaml(data), encoding="utf-8")
 
             code, output = self.run_cli(["doctor", str(archive_root)])
@@ -3463,7 +3703,7 @@ class ArchiveCliTests(unittest.TestCase):
             zettel_path.write_text(
                 "---\n"
                 + archive_cli.dump_yaml(frontmatter)
-                + "---\n\nThis draft mentions /home/example/private.txt.\n",
+                + "---\n\nThis draft mentions /tmp/example/private.txt.\n",
                 encoding="utf-8",
             )
 
@@ -3527,7 +3767,7 @@ class ArchiveCliTests(unittest.TestCase):
                         "name": "Local test profile",
                         "env": {
                             "required": ["ARCHIVE_ROOT"],
-                            "ARCHIVE_ROOT": "C:/Users/example/archive",
+                            "ARCHIVE_ROOT": "X:/example/archive",
                         },
                     }
                 ),

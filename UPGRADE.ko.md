@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.16` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.16.md` |
+| `v0.2.17` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.17.md` |
+| `v0.2.16` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.16.md` |
 | `v0.2.15` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.15.md` |
 | `v0.2.14` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.14.md` |
 | `v0.2.13` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.13.md` |
@@ -43,6 +44,27 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.16`에서 `v0.2.17`로
+
+이번 버전은 WOM Profile Registry dry-run을 추가하는 호환 가능한 패치입니다.
+
+바뀐 점:
+
+- `archive profile-list --registry <path> --format json` 명령이 추가되었습니다.
+- `archive profile-resolve --registry <path> --target <query> --format json` 명령이 추가되었습니다.
+- MCP에도 읽기 전용 `wom_profile_list`, `wom_profile_resolve` 도구가 추가되었습니다.
+- AI runtime이 runtime-context나 draft 작업 전에 요청된 profile을 먼저 확인할 수 있습니다.
+- 예시 registry는 `ai-archive-kit/templates/profiles/wom-profiles.example.yml`에 추가되었습니다.
+
+private archive migration은 필요 없습니다.
+
+이번 버전은 profile 등록, token 저장, create-draft dry-run, provider API sync, UI, MCP를 통한 real minting, MCP write/register/apply tool을 추가하지 않습니다.
+
+```bash
+git fetch --tags
+git checkout v0.2.17
+```
 
 ## `v0.2.15`에서 `v0.2.16`으로
 

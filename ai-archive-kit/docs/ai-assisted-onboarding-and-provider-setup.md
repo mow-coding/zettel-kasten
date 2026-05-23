@@ -94,7 +94,19 @@ Examples:
 
 The AI should be able to run setup commands, inspect logs, and guide the user.
 
-Before it drafts, runs mint dry-runs, or asks for mint approval inside an existing archive, the AI should confirm runtime context:
+If the user names a target profile or archive, the AI should resolve that profile before assuming the current/default archive:
+
+```text
+archive profile-resolve --registry <registry> --target <query> --format json
+```
+
+For MCP clients, the equivalent read-only tool is:
+
+```text
+wom_profile_resolve
+```
+
+Before it drafts, runs mint dry-runs, or asks for mint approval inside an existing archive, the AI should then confirm runtime context:
 
 ```text
 archive runtime-context <archive-root> --format json

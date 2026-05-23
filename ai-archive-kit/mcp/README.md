@@ -61,6 +61,12 @@ archive-mcp
 ## Tools
 
 ```text
+wom_profile_list
+  List WOM profile registry entries. This is read-only and redacts registry/archive local paths by default.
+
+wom_profile_resolve
+  Resolve a requested WOM profile by exact profile id, label, or alias before runtime-context or draft work. This never registers profiles or stores tokens.
+
 archive_doctor
   Inspect archive health and policy readiness.
 
@@ -143,6 +149,7 @@ ownership_transfer_check
 ## Safety Defaults
 
 - The server is local stdio only.
+- `wom_profile_list` and `wom_profile_resolve` are read-only. They never register profiles, store tokens, scan the disk, or write files. They redact local paths unless `AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1` is set on the MCP server and the caller explicitly disables redaction.
 - `create_draft_zettel` writes only to `inbox/`.
 - `archive_init` refuses non-empty target folders.
 - `archive_doctor` is read-only.
@@ -162,6 +169,6 @@ ownership_transfer_check
 - `delegate_zet_check`, `attest_zet_check`, and `anchor_zet_check` preview the future zet sharing lifecycle, including claimable-once capability binding previews, but do not write receipts, metadata, zettels, workpacks, claim registries, or transport messages.
 - `ownership_transfer_check` previews ownership transfer and external provider changes, but does not write receipts or change `archive-identity.yml`.
 - Ownership transfer receipt examples can be validated by `archive_doctor` when they live under `receipts/lineage/*.ownership-transfer.json`.
-- Real pilot apply, restore drill apply, real onboarding apply, external import apply, source registration apply, source scan apply, minting/promotion into canonical `zettels/`, real archive sharing, real ownership transfer, runtime context apply, and external provider account mutation are intentionally not exposed through MCP.
+- Real pilot apply, restore drill apply, real onboarding apply, profile registration, token registration, external import apply, source registration apply, source scan apply, minting/promotion into canonical `zettels/`, real archive sharing, real ownership transfer, runtime context apply, and external provider account mutation are intentionally not exposed through MCP.
 - In Docker Compose, MCP paths are allowlisted to `/archives` through `AI_ARCHIVE_MCP_ALLOWED_ROOTS=/archives`.
 - Tool result paths use archive-relative `/` paths so JSON-RPC output is stable across Windows, macOS, and Linux.

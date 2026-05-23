@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.16` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.16.md` |
+| `v0.2.17` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.17.md` |
+| `v0.2.16` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.16.md` |
 | `v0.2.15` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.15.md` |
 | `v0.2.14` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.14.md` |
 | `v0.2.13` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.13.md` |
@@ -43,6 +44,27 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.16` To `v0.2.17`
+
+This is a compatible WOM Profile Registry dry-run patch.
+
+What changed:
+
+- added `archive profile-list --registry <path> --format json`,
+- added `archive profile-resolve --registry <path> --target <query> --format json`,
+- added read-only MCP tools `wom_profile_list` and `wom_profile_resolve`,
+- added token-state aware profile resolution before runtime context and draft work,
+- added an example registry template at `ai-archive-kit/templates/profiles/wom-profiles.example.yml`.
+
+No private archive migration is required.
+
+This release does not add profile registration, token storage, create-draft dry-run, provider API sync, UI, real minting through MCP, or any MCP write/register/apply tool.
+
+```bash
+git fetch --tags
+git checkout v0.2.17
+```
 
 ## From `v0.2.15` To `v0.2.16`
 

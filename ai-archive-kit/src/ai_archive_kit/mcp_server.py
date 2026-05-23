@@ -32,6 +32,43 @@ JSONRPC_INTERNAL_ERROR = -32603
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
+        "name": "wom_profile_list",
+        "description": "List read-only WOM profile registry entries before resolving archive runtime context.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "registry": {"type": "string", "description": "Path to the WOM profile registry YAML file."},
+                "current_profile": {"type": "string"},
+                "strict": {"type": "boolean", "default": False},
+                "redact_local_paths": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Local paths remain redacted unless AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1 is set on the MCP server.",
+                },
+            },
+            "required": ["registry"],
+        },
+    },
+    {
+        "name": "wom_profile_resolve",
+        "description": "Resolve a requested WOM profile by profile id, label, or alias before runtime-context or draft work.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "registry": {"type": "string", "description": "Path to the WOM profile registry YAML file."},
+                "target": {"type": "string", "description": "Requested profile id, label, or alias."},
+                "current_profile": {"type": "string"},
+                "strict": {"type": "boolean", "default": False},
+                "redact_local_paths": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Local paths remain redacted unless AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1 is set on the MCP server.",
+                },
+            },
+            "required": ["registry", "target"],
+        },
+    },
+    {
         "name": "archive_doctor",
         "description": "Inspect a zettel-kasten archive for structural, metadata, object manifest, and zettel policy issues.",
         "inputSchema": {
@@ -527,6 +564,10 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(arguments, dict):
         raise InvalidParamsError("tools/call params.arguments must be an object.")
 
+    if name == "wom_profile_list":
+        return tool_wom_profile_list(arguments)
+    if name == "wom_profile_resolve":
+        return tool_wom_profile_resolve(arguments)
     if name == "archive_doctor":
         return tool_archive_doctor(arguments)
     if name == "archive_runtime_context":
@@ -603,12 +644,45 @@ def tool_archive_doctor(arguments: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def tool_wom_profile_list(arguments: dict[str, Any]) -> dict[str, Any]:
+    registry = require_path_arg(arguments, "registry")
+    requested_redaction = bool(arguments.get("redact_local_paths", True))
+    redact_local_paths = mcp_redact_local_paths(requested_redaction)
+    result = call_service(
+        archive_services.profile_list,
+        registry,
+        current_profile=optional_string_arg(arguments, "current_profile"),
+        strict=bool(arguments.get("strict", False)),
+        redact_local_paths=redact_local_paths,
+    )
+    add_mcp_redaction_warning(result, requested_redaction, redact_local_paths)
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"wom_profile_list: {state}.", result)
+
+
+def tool_wom_profile_resolve(arguments: dict[str, Any]) -> dict[str, Any]:
+    registry = require_path_arg(arguments, "registry")
+    target = require_string_arg(arguments, "target")
+    requested_redaction = bool(arguments.get("redact_local_paths", True))
+    redact_local_paths = mcp_redact_local_paths(requested_redaction)
+    result = call_service(
+        archive_services.profile_resolve,
+        registry,
+        target=target,
+        current_profile=optional_string_arg(arguments, "current_profile"),
+        strict=bool(arguments.get("strict", False)),
+        redact_local_paths=redact_local_paths,
+    )
+    add_mcp_redaction_warning(result, requested_redaction, redact_local_paths)
+    state = str(result.get("resolution_state") or ("passed" if result["ok"] else "blocked"))
+    return tool_success_result(f"wom_profile_resolve: {state}.", result)
+
+
 def tool_archive_runtime_context(arguments: dict[str, Any]) -> dict[str, Any]:
     archive_root = require_path_arg(arguments, "archive_root")
     strict = bool(arguments.get("strict", False))
     requested_redaction = bool(arguments.get("redact_local_paths", True))
-    local_paths_allowed = os.environ.get(MCP_ALLOW_LOCAL_PATHS_ENV) == "1"
-    redact_local_paths = requested_redaction or not local_paths_allowed
+    redact_local_paths = mcp_redact_local_paths(requested_redaction)
     diagnostics = [item.as_dict() for item in archive_cli.Doctor(archive_root).run()]
     result = call_service(
         archive_services.runtime_context,
@@ -619,11 +693,7 @@ def tool_archive_runtime_context(arguments: dict[str, Any]) -> dict[str, Any]:
         redact_local_paths=redact_local_paths,
         diagnostics=diagnostics,
     )
-    if not requested_redaction and not local_paths_allowed:
-        result["warnings"].append(
-            "MCP local path disclosure was requested but ignored because "
-            f"{MCP_ALLOW_LOCAL_PATHS_ENV}=1 is not set."
-        )
+    add_mcp_redaction_warning(result, requested_redaction, redact_local_paths)
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"archive_runtime_context: {state}.", result)
 
@@ -1068,6 +1138,23 @@ def tool_error_result(text: str) -> dict[str, Any]:
         "structuredContent": {"error": text},
         "isError": True,
     }
+
+
+def mcp_redact_local_paths(requested_redaction: bool) -> bool:
+    return requested_redaction or os.environ.get(MCP_ALLOW_LOCAL_PATHS_ENV) != "1"
+
+
+def add_mcp_redaction_warning(result: dict[str, Any], requested_redaction: bool, effective_redaction: bool) -> None:
+    if requested_redaction or not effective_redaction:
+        return
+    warnings = result.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+        result["warnings"] = warnings
+    warnings.append(
+        "MCP local path disclosure was requested but ignored because "
+        f"{MCP_ALLOW_LOCAL_PATHS_ENV}=1 is not set."
+    )
 
 
 def error_response(request_id: Any, code: int, message: str) -> dict[str, Any]:

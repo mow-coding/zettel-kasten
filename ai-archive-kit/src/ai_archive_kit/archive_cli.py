@@ -3,6 +3,10 @@
 
 Commands:
   doctor  Inspect an archive for structural and policy issues.
+  profile-list
+          List read-only WOM profile registry entries.
+  profile-resolve
+          Resolve a requested WOM profile before runtime-context.
   runtime-context
           Print read-only AI runtime context for a mounted archive.
   init    Create a new archive from a built-in template.
@@ -1259,6 +1263,39 @@ def command_validate(args: argparse.Namespace) -> int:
         print("Validation passed." if ok else "Validation failed.")
 
     return 0 if ok else 1
+
+
+def command_profile_list(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.profile_list(
+            Path(args.registry),
+            current_profile=args.current_profile,
+            strict=args.strict,
+            redact_local_paths=args.redact_local_paths,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_json(result)
+    return 0 if result["ok"] else 1
+
+
+def command_profile_resolve(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.profile_resolve(
+            Path(args.registry),
+            target=args.target,
+            current_profile=args.current_profile,
+            strict=args.strict,
+            redact_local_paths=args.redact_local_paths,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_json(result)
+    return 0 if result["ok"] else 1
 
 
 def command_runtime_context(args: argparse.Namespace) -> int:
@@ -2872,6 +2909,53 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--allow-warnings", action="store_true", help="Do not fail when only warnings are present.")
     validate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     validate.set_defaults(func=command_validate)
+
+    profile_list_parser = subcommands.add_parser(
+        "profile-list",
+        help="List read-only WOM profile registry entries.",
+    )
+    profile_list_parser.add_argument("--registry", required=True, help="Path to the local WOM profile registry YAML file.")
+    profile_list_parser.add_argument("--current-profile", help="Optional current profile id for caller context.")
+    profile_list_parser.add_argument("--strict", action="store_true", help="Treat registry warnings as blocking.")
+    profile_list_parser.add_argument(
+        "--redact-local-paths",
+        dest="redact_local_paths",
+        action="store_true",
+        default=True,
+        help="Redact registry and archive local paths. This is the default.",
+    )
+    profile_list_parser.add_argument(
+        "--no-redact-local-paths",
+        dest="redact_local_paths",
+        action="store_false",
+        help="Include local paths for trusted local debugging.",
+    )
+    profile_list_parser.add_argument("--format", choices=["json"], default="json", help="Output format.")
+    profile_list_parser.set_defaults(func=command_profile_list)
+
+    profile_resolve_parser = subcommands.add_parser(
+        "profile-resolve",
+        help="Resolve a requested WOM profile before runtime-context.",
+    )
+    profile_resolve_parser.add_argument("--registry", required=True, help="Path to the local WOM profile registry YAML file.")
+    profile_resolve_parser.add_argument("--target", required=True, help="Requested profile id, label, or alias.")
+    profile_resolve_parser.add_argument("--current-profile", help="Optional current profile id for caller context.")
+    profile_resolve_parser.add_argument("--strict", action="store_true", help="Treat registry warnings as blocking when safe.")
+    profile_resolve_parser.add_argument(
+        "--redact-local-paths",
+        dest="redact_local_paths",
+        action="store_true",
+        default=True,
+        help="Redact registry and archive local paths. This is the default.",
+    )
+    profile_resolve_parser.add_argument(
+        "--no-redact-local-paths",
+        dest="redact_local_paths",
+        action="store_false",
+        help="Include local paths for trusted local debugging.",
+    )
+    profile_resolve_parser.add_argument("--format", choices=["json"], default="json", help="Output format.")
+    profile_resolve_parser.set_defaults(func=command_profile_resolve)
 
     runtime_context = subcommands.add_parser(
         "runtime-context",

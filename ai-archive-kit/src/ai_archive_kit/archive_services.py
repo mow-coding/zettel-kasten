@@ -11,6 +11,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import unicodedata
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,28 @@ SENSITIVE_CATEGORY_ALIASES = {"diary": "journal", "therapy": "psychological", "m
 EXTERNAL_IMPORT_SOURCES = {"notion", "google_drive"}
 EXTERNAL_IMPORT_EXTENSIONS = {".md", ".markdown", ".txt"}
 SOURCE_TYPES = {"local_folder", "external_ssd", "notion_export", "google_drive_export", "object_manifest"}
+PROFILE_REGISTRY_VERSION = "wom-profile-registry/v0.1"
+PROFILE_REGISTRY_ARCHIVE_TYPES = {"personal", "company", "family", "project", "relationship", "child", "business_unit"}
+PROFILE_RESOLUTION_STATES = {"resolved", "ambiguous", "not_found", "token_missing"}
+PROFILE_NEXT_ACTIONS = {
+    "run_runtime_context",
+    "ask_user_to_choose_profile",
+    "register_profile_token",
+    "suggest_delegate_flow",
+}
+PROFILE_ALLOWED_TOKEN_KEYS = {"state", "token_ref"}
+PROFILE_RAW_TOKEN_KEYS = {
+    "access_token",
+    "api_key",
+    "client_secret",
+    "password",
+    "private_key",
+    "refresh_token",
+    "secret",
+    "token",
+    "value",
+}
+PROFILE_IGNORABLE_QUERY_CHARS = dict.fromkeys(map(ord, "\ufeff\u200b\u200c\u200d\u2060"), None)
 RUNTIME_CONTEXT_ARCHIVE_TYPES = {"personal", "company", "family", "project", "relationship", "child", "business_unit"}
 RUNTIME_CONTEXT_SAFE_ACTIONS = [
     "create draft in inbox",
@@ -4777,6 +4800,319 @@ def preflight_next_actions(blockers: list[str], warnings: list[str]) -> list[str
         "Run metadata-only scan-source --dry-run.",
         "Approve only after reviewing item_count, source root, and receipt preview.",
     ]
+
+
+def profile_list(
+    registry_path: Path | str,
+    *,
+    current_profile: str | None = None,
+    strict: bool = False,
+    redact_local_paths: bool = True,
+) -> dict[str, Any]:
+    registry_file, registry, blockers, warnings = load_profile_registry(registry_path)
+    profiles = profile_registry_entries(registry, blockers, warnings)
+    if strict and warnings:
+        blockers.extend(warnings)
+        warnings = []
+
+    return {
+        "ok": not blockers,
+        "lifecycle_action": "profile_list",
+        "registry_path": redacted_path_value(registry_file, redact_local_paths=redact_local_paths),
+        "default_profile": registry.get("default_profile"),
+        "current_profile": current_profile,
+        "profiles": [profile_public_summary(profile, redact_local_paths=redact_local_paths) for profile in profiles],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+        "redaction": {"local_paths_redacted": bool(redact_local_paths)},
+    }
+
+
+def profile_resolve(
+    registry_path: Path | str,
+    *,
+    target: str,
+    current_profile: str | None = None,
+    strict: bool = False,
+    redact_local_paths: bool = True,
+) -> dict[str, Any]:
+    registry_file, registry, blockers, warnings = load_profile_registry(registry_path)
+    profiles = profile_registry_entries(registry, blockers, warnings)
+    query = normalize_profile_lookup_text(target or "")
+    if not query:
+        blockers.append("target query is required.")
+
+    matches = resolve_profile_matches(profiles, query) if query else []
+    selected_profile = matches[0]["profile"] if len(matches) == 1 else None
+    resolution_state = profile_resolution_state(matches, selected_profile)
+    direct_write_available = False
+    suggested_next_action = "suggest_delegate_flow"
+    delegate_fallback_preview: dict[str, Any] | None = None
+    target_archive_context_preview = None
+    runtime_context_args_preview = None
+
+    if len(matches) > 1:
+        resolution_state = "ambiguous"
+        suggested_next_action = "ask_user_to_choose_profile"
+        warnings.append("Multiple profiles matched the target query; ask the user to choose one.")
+    elif not matches:
+        resolution_state = "not_found"
+        suggested_next_action = "suggest_delegate_flow"
+        warnings.append("No profile matched the target query; register the profile or use a delegate flow.")
+        delegate_fallback_preview = {
+            "available": True,
+            "reason": "target_profile_not_found",
+            "suggestion": "Ask the user to choose/register a profile, or prepare a delegate flow instead of direct archive writing.",
+        }
+    elif selected_profile is not None:
+        token_state = profile_token_state(selected_profile)
+        archive_root = profile_archive_root(selected_profile)
+        if token_state == "missing":
+            resolution_state = "token_missing"
+            suggested_next_action = "register_profile_token"
+            warnings.append("Matched profile has no usable token; direct write is not available.")
+            delegate_fallback_preview = {
+                "available": True,
+                "reason": "profile_token_missing",
+                "suggestion": "Register the profile token, or use a delegate flow if this AI should not write to the target archive.",
+            }
+        else:
+            resolution_state = "resolved"
+            suggested_next_action = "run_runtime_context"
+
+        if not archive_root:
+            direct_write_available = False
+            warnings.append("Matched profile is missing archive_root; direct write is not available.")
+        else:
+            direct_write_available = token_state != "missing"
+
+        target_archive_context_preview = profile_context_preview(selected_profile, redact_local_paths=redact_local_paths)
+        runtime_context_args_preview = {
+            "archive_root": redact_profile_archive_root(archive_root, redact_local_paths=redact_local_paths),
+            "expected_archive_id": selected_profile.get("archive_id"),
+            "expected_type": selected_profile.get("archive_type"),
+            "format": "json",
+        }
+
+    if strict and warnings and resolution_state not in {"token_missing", "not_found"}:
+        blockers.extend(warnings)
+        warnings = []
+
+    return {
+        "ok": not blockers and resolution_state not in {"ambiguous", "not_found"},
+        "lifecycle_action": "profile_resolve",
+        "target_query": query,
+        "current_profile": current_profile,
+        "default_profile": registry.get("default_profile"),
+        "matches": [profile_match_summary(match, redact_local_paths=redact_local_paths) for match in matches],
+        "selected_profile": profile_public_summary(selected_profile, redact_local_paths=redact_local_paths)
+        if selected_profile is not None and len(matches) == 1
+        else None,
+        "resolution_state": resolution_state,
+        "direct_write_available": direct_write_available,
+        "suggested_next_action": suggested_next_action,
+        "target_archive_context_preview": target_archive_context_preview,
+        "runtime_context_args_preview": runtime_context_args_preview,
+        "delegate_fallback_preview": delegate_fallback_preview,
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+        "redaction": {"local_paths_redacted": bool(redact_local_paths)},
+        "registry_path": redacted_path_value(registry_file, redact_local_paths=redact_local_paths),
+    }
+
+
+def load_profile_registry(registry_path: Path | str) -> tuple[Path, dict[str, Any], list[str], list[str]]:
+    registry_file = Path(registry_path).expanduser().resolve()
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not registry_file.is_file():
+        return registry_file, {}, ["Profile registry does not exist or is not a file."], warnings
+    try:
+        data = load_yaml(registry_file.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return registry_file, {}, [f"Profile registry could not be read as YAML: {exc}"], warnings
+    if not isinstance(data, dict):
+        return registry_file, {}, ["Profile registry must be a YAML object."], warnings
+    registry = json_safe(data)
+    if registry.get("version") != PROFILE_REGISTRY_VERSION:
+        blockers.append(f"Profile registry version must be {PROFILE_REGISTRY_VERSION}.")
+    if not isinstance(registry.get("profiles"), list):
+        blockers.append("Profile registry must contain a profiles list.")
+    return registry_file, registry, blockers, warnings
+
+
+def profile_registry_entries(registry: dict[str, Any], blockers: list[str], warnings: list[str]) -> list[dict[str, Any]]:
+    raw_profiles = registry.get("profiles") if isinstance(registry.get("profiles"), list) else []
+    profiles: list[dict[str, Any]] = []
+    seen_profile_ids: set[str] = set()
+    for index, item in enumerate(raw_profiles):
+        if not isinstance(item, dict):
+            warnings.append(f"Profile registry item {index} is not an object.")
+            continue
+        profile = json_safe(item)
+        profile_id = profile.get("profile_id")
+        if not isinstance(profile_id, str) or not profile_id.strip():
+            warnings.append(f"Profile registry item {index} is missing profile_id.")
+            continue
+        if profile_id in seen_profile_ids:
+            blockers.append(f"Profile registry contains duplicate profile_id: {profile_id}.")
+        seen_profile_ids.add(profile_id)
+        validate_profile_token_contract(profile, blockers)
+        if profile.get("archive_type") and profile.get("archive_type") not in PROFILE_REGISTRY_ARCHIVE_TYPES:
+            warnings.append(f"Profile {profile_id} has an unknown archive_type.")
+        profiles.append(profile)
+    return profiles
+
+
+def validate_profile_token_contract(profile: dict[str, Any], blockers: list[str]) -> None:
+    token = profile.get("token")
+    if token is None:
+        return
+    profile_id = str(profile.get("profile_id") or "<unknown-profile>")
+    if not isinstance(token, dict):
+        blockers.append(f"Profile {profile_id} token must be an object with state/token_ref metadata only.")
+        return
+    token_keys = {str(key) for key in token.keys()}
+    raw_keys = sorted(key for key in token_keys if key.casefold() in PROFILE_RAW_TOKEN_KEYS)
+    if raw_keys:
+        blockers.append(
+            f"Profile {profile_id} token contains raw secret-like field(s): {', '.join(raw_keys)}. "
+            "Use token_ref instead of storing token values."
+        )
+    unknown_keys = sorted(token_keys - PROFILE_ALLOWED_TOKEN_KEYS)
+    if unknown_keys:
+        blockers.append(
+            f"Profile {profile_id} token contains unsupported field(s): {', '.join(unknown_keys)}. "
+            "Only state and token_ref are allowed."
+        )
+
+
+def resolve_profile_matches(profiles: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    ranked_matches: list[dict[str, Any]] = []
+    for profile in profiles:
+        match = profile_match(profile, query)
+        if match is not None:
+            ranked_matches.append(match)
+    if not ranked_matches:
+        return []
+    best_rank = min(match["rank"] for match in ranked_matches)
+    return [match for match in ranked_matches if match["rank"] == best_rank]
+
+
+def profile_match(profile: dict[str, Any], query: str) -> dict[str, Any] | None:
+    checks = [
+        ("profile_id", profile.get("profile_id"), 0),
+        ("label", profile.get("label"), 1),
+    ]
+    aliases = profile.get("aliases") if isinstance(profile.get("aliases"), list) else []
+    for alias in aliases:
+        checks.append(("alias", alias, 2))
+    for field, value, rank in checks:
+        if isinstance(value, str) and exact_profile_query_match(value, query):
+            return {
+                "profile": profile,
+                "profile_id": profile.get("profile_id"),
+                "match_type": field,
+                "matched_value": value,
+                "strength": "strong",
+                "rank": rank,
+            }
+    return None
+
+
+def exact_profile_query_match(value: str, query: str) -> bool:
+    left = normalize_profile_lookup_text(value)
+    right = normalize_profile_lookup_text(query)
+    return left.casefold() == right.casefold()
+
+
+def normalize_profile_lookup_text(value: str) -> str:
+    return unicodedata.normalize("NFC", value).translate(PROFILE_IGNORABLE_QUERY_CHARS).strip()
+
+
+def profile_resolution_state(matches: list[dict[str, Any]], selected_profile: dict[str, Any] | None) -> str:
+    if len(matches) > 1:
+        return "ambiguous"
+    if not matches:
+        return "not_found"
+    if selected_profile is not None and profile_token_state(selected_profile) == "missing":
+        return "token_missing"
+    return "resolved"
+
+
+def profile_public_summary(profile: dict[str, Any] | None, *, redact_local_paths: bool) -> dict[str, Any] | None:
+    if profile is None:
+        return None
+    return {
+        "profile_id": profile.get("profile_id"),
+        "label": profile.get("label"),
+        "aliases": profile_aliases(profile),
+        "node_id": profile.get("node_id"),
+        "archive_id": profile.get("archive_id"),
+        "archive_type": profile.get("archive_type"),
+        "operator_id": profile.get("operator_id"),
+        "authority_mode": profile.get("authority_mode"),
+        "token_state": profile_token_state(profile),
+        "archive_root": redact_profile_archive_root(profile_archive_root(profile), redact_local_paths=redact_local_paths),
+    }
+
+
+def profile_match_summary(match: dict[str, Any], *, redact_local_paths: bool) -> dict[str, Any]:
+    profile = match["profile"]
+    return {
+        "profile_id": profile.get("profile_id"),
+        "label": profile.get("label"),
+        "match_type": match.get("match_type"),
+        "matched_value": match.get("matched_value"),
+        "strength": match.get("strength"),
+        "archive_id": profile.get("archive_id"),
+        "archive_type": profile.get("archive_type"),
+        "token_state": profile_token_state(profile),
+        "authority_mode": profile.get("authority_mode"),
+        "archive_root": redact_profile_archive_root(profile_archive_root(profile), redact_local_paths=redact_local_paths),
+    }
+
+
+def profile_context_preview(profile: dict[str, Any], *, redact_local_paths: bool) -> dict[str, Any]:
+    return {
+        "profile_id": profile.get("profile_id"),
+        "archive_id": profile.get("archive_id"),
+        "archive_type": profile.get("archive_type"),
+        "node_id": profile.get("node_id"),
+        "operator_id": profile.get("operator_id"),
+        "authority_mode": profile.get("authority_mode"),
+        "archive_root": redact_profile_archive_root(profile_archive_root(profile), redact_local_paths=redact_local_paths),
+    }
+
+
+def profile_aliases(profile: dict[str, Any]) -> list[str]:
+    aliases = profile.get("aliases") if isinstance(profile.get("aliases"), list) else []
+    return [alias for alias in aliases if isinstance(alias, str)]
+
+
+def profile_archive_root(profile: dict[str, Any]) -> str | None:
+    archive_root = profile.get("archive_root")
+    if isinstance(archive_root, str) and archive_root.strip():
+        return archive_root.strip()
+    return None
+
+
+def profile_token_state(profile: dict[str, Any]) -> str:
+    token = profile.get("token") if isinstance(profile.get("token"), dict) else {}
+    state = token.get("state")
+    if isinstance(state, str) and state.strip():
+        return state.strip()
+    return "missing"
+
+
+def redact_profile_archive_root(archive_root: str | None, *, redact_local_paths: bool) -> str | None:
+    if not archive_root:
+        return None
+    return "<local-path-redacted>" if redact_local_paths else archive_root
+
+
+def redacted_path_value(path: Path, *, redact_local_paths: bool) -> str:
+    return "<local-path-redacted>" if redact_local_paths else str(path)
 
 
 def runtime_context(

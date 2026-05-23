@@ -1,0 +1,34 @@
+version: wom-profile-registry/v0.1
+default_profile: profile:personal:me
+profiles:
+  - profile_id: profile:personal:me
+    label: Personal archive
+    aliases:
+      - me
+      - personal
+      - 내 개인
+    node_id: person:me
+    archive_id: archive:personal:me
+    archive_type: personal
+    # Replace placeholder local paths before using this registry privately.
+    archive_root: <local-private-path>/personal-archive
+    operator_id: person:me
+    authority_mode: owner_operator
+    token:
+      state: present
+      token_ref: local-keyring:wom/profile/example-personal
+
+  - profile_id: profile:team:younghee-chulsoo
+    label: 영희 & 철수 팀
+    aliases:
+      - 영희 철수 팀
+      - 영희&철수
+      - 우리 팀
+    node_id: team:younghee-chulsoo
+    archive_id: archive:team:younghee-chulsoo
+    archive_type: project
+    archive_root: <local-private-path>/younghee-chulsoo-team
+    operator_id: person:me
+    authority_mode: draft_only
+    token:
+      state: missing

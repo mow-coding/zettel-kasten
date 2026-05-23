@@ -4,6 +4,26 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.17 - 2026-05-24
+
+WOM Profile Registry dry-run patch.
+
+Added:
+
+- `archive profile-list --registry <path> --format json`, a read-only CLI command that lists local WOM profile registry entries with local paths redacted by default,
+- `archive profile-resolve --registry <path> --target <query> --format json`, a read-only CLI command that resolves a requested profile by exact profile id, label, or alias before runtime context or draft work,
+- read-only MCP tools `wom_profile_list` and `wom_profile_resolve`,
+- token-state aware resolution so a missing token can still resolve profile identity while disabling direct write availability,
+- delegate fallback previews when a target profile is missing or a matched profile has no usable token,
+- an example profile registry template with placeholder paths and fake `token_ref` values only,
+- Unicode-normalized matching and blockers for registry version drift, duplicate profile ids, and raw token-like fields.
+
+Compatibility:
+
+- no private archive migration is required,
+- no schema change is required,
+- profile registry commands never write files, never scan the whole disk, never store tokens, and do not add create-draft dry-run, provider API sync, UI, real minting through MCP, or any MCP write/register/apply tool.
+
 ## v0.2.16 - 2026-05-24
 
 WOM AI Runtime Context Layer patch.
