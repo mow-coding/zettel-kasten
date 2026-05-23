@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.11` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.11.md` |
+| `v0.2.12` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.12.md` |
+| `v0.2.11` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.11.md` |
 | `v0.2.10` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.10.md` |
 | `v0.2.9` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.9.md` |
 | `v0.2.8` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.8.md` |
@@ -38,6 +39,25 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.11` To `v0.2.12`
+
+This is a compatible real delegate receipt write patch.
+
+What changed:
+
+- added `archive delegate-zet --approve --reviewed-by <actor>`,
+- real delegate writes create `receipts/delegate/*.delegate.json`,
+- `archive doctor` validates applied delegate receipts,
+- real delegate capability receipts get a generated nonce,
+- claim/spent/revocation registries remain explicitly unimplemented.
+
+No private archive migration is required.
+
+```bash
+git fetch --tags
+git checkout v0.2.12
+```
 
 ## From `v0.2.10` To `v0.2.11`
 

@@ -2,7 +2,8 @@
 
 The checked schemas use standard JSON Schema 2020-12 keywords, but the runtime
 intentionally supports only the small subset needed for local archive health
-checks: type, required, properties, items, and enum.
+checks: type, required, properties, items, enum, const, allOf, and simple
+if/then conditionals.
 """
 
 from __future__ import annotations
@@ -37,6 +38,18 @@ def validate_schema(data: Any, schema_name: str) -> list[SchemaIssue]:
 def validate_value(data: Any, schema: dict[str, Any], data_path: str) -> list[SchemaIssue]:
     issues: list[SchemaIssue] = []
 
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list):
+        for child_schema in all_of:
+            if isinstance(child_schema, dict):
+                issues.extend(validate_value(data, child_schema, data_path))
+
+    if_schema = schema.get("if")
+    then_schema = schema.get("then")
+    if isinstance(if_schema, dict) and isinstance(then_schema, dict):
+        if not validate_value(data, if_schema, data_path):
+            issues.extend(validate_value(data, then_schema, data_path))
+
     expected_type = schema.get("type")
     if expected_type is not None and not matches_type(data, expected_type):
         issues.append(
@@ -54,6 +67,15 @@ def validate_value(data: Any, schema: dict[str, Any], data_path: str) -> list[Sc
             SchemaIssue(
                 "schema_enum",
                 f"{data_path} should be one of: {', '.join(map(str, enum_values))}.",
+                data_path,
+            )
+        )
+
+    if "const" in schema and data != schema.get("const"):
+        issues.append(
+            SchemaIssue(
+                "schema_const",
+                f"{data_path} should be {schema.get('const')!r}.",
                 data_path,
             )
         )

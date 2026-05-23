@@ -149,15 +149,16 @@ attestation receipt
 anchor metadata
 ```
 
-As of `v0.2.11`, these exist as dry-run preview concepts:
+As of `v0.2.12`, the lifecycle is still early, but delegation has one real local write path:
 
 - `delegate-zet --dry-run` returns a delegate receipt preview.
+- `delegate-zet --approve --reviewed-by <actor>` writes a local delegate receipt.
 - `attest-zet --dry-run` returns an attestation receipt preview.
 - `anchor-zet --dry-run` returns anchor metadata preview.
 
 `delegate-zet --target-policy claimable_once --dry-run` can preview a one-time claimable capability without naming the recipient archive yet. The later `attest-zet --dry-run` preview binds that capability to the attesting archive through `claim_binding`.
 
-They are not real sharing, transport, import, or write paths yet.
+Delegate receipt write is real local evidence, but it is not transport or import. Attestation and anchor are still preview-only.
 
 They should be designed later so that:
 
@@ -190,6 +191,7 @@ Current status:
 - `anchor` is the preferred candidate for placing an attested foreign `zet` into local meaning.
 - `v0.2.10` exposes the first dry-run CLI/MCP checks for delegate, attest, and anchor.
 - `v0.2.11` adds `counterparty_bound` and `claimable_once` delegate capability previews.
+- `v0.2.12` adds CLI-only real delegate receipt writes.
 
 Short form:
 

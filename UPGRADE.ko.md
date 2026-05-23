@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.11` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.11.md` |
+| `v0.2.12` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.12.md` |
+| `v0.2.11` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.11.md` |
 | `v0.2.10` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.10.md` |
 | `v0.2.9` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.9.md` |
 | `v0.2.8` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.8.md` |
@@ -38,6 +39,25 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.11`에서 `v0.2.12`로
+
+호환 가능한 real delegate receipt write 패치입니다.
+
+변경 사항:
+
+- `archive delegate-zet --approve --reviewed-by <actor>` 추가,
+- 실제 delegate 실행 시 `receipts/delegate/*.delegate.json` 생성,
+- `archive doctor`가 applied delegate receipt 검증,
+- real delegate capability receipt에 nonce 생성,
+- claim/spent/revocation registry는 아직 구현하지 않음을 명시.
+
+private archive migration은 필요하지 않습니다.
+
+```bash
+git fetch --tags
+git checkout v0.2.12
+```
 
 ## `v0.2.10`에서 `v0.2.11`로
 

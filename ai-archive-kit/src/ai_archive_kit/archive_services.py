@@ -8,6 +8,7 @@ import fnmatch
 import mimetypes
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 from datetime import date, datetime
@@ -2349,6 +2350,9 @@ def delegate_zets_dry_run(
         f"{DELEGATE_RECEIPTS_DIR}/"
         f"{safe_slug(source_archive)}__{target_slug}__{safe_slug(view_id)}.delegate.json"
     )
+    receipt_path = archive_internal_path(root, proposed_receipt_path)
+    if receipt_path.exists():
+        blockers.append(f"Proposed delegate receipt already exists: {proposed_receipt_path}.")
     delegated_zets = [
         {
             "path": item.get("path"),
@@ -2433,6 +2437,106 @@ def delegate_zets_dry_run(
             "create delegate receipt for selected zets",
             f"write {proposed_receipt_path}",
         ],
+    }
+
+
+def issued_delegation_capability(capability: dict[str, Any]) -> dict[str, Any]:
+    issued = json_safe(capability)
+    target_policy = issued.get("target_policy") or DELEGATE_TARGET_POLICY_COUNTERPARTY_BOUND
+    issued["nonce"] = f"nonce:{secrets.token_hex(16)}"
+    issued["issue_state"] = "issued"
+    issued["registry_state"] = {
+        "claim_registry": "not_implemented",
+        "spent_registry": "not_implemented",
+        "revocation_registry": "not_implemented",
+    }
+    if target_policy == DELEGATE_TARGET_POLICY_CLAIMABLE_ONCE:
+        issued["claim_state"] = "unclaimed_receipt_only"
+        issued["spent_state"] = "not_spent_receipt_only"
+    else:
+        issued["claim_state"] = "counterparty_bound"
+        issued["spent_state"] = "not_applicable"
+    return issued
+
+
+def delegate_zets(
+    archive_root: Path | str,
+    *,
+    view_id: str,
+    target_archive: str | None = None,
+    counterparty_id: str | None = None,
+    counterparty_fingerprint: str | None = None,
+    allow_sensitive: bool = False,
+    target_policy: str | None = None,
+    reviewed_by: str,
+) -> dict[str, Any]:
+    reviewer = reviewed_by.strip()
+    if not reviewer:
+        raise ArchiveServiceError("Real zet delegation requires --reviewed-by.")
+
+    root = require_existing_archive_root(archive_root)
+    dry_run = delegate_zets_dry_run(
+        root,
+        view_id=view_id,
+        target_archive=target_archive,
+        counterparty_id=counterparty_id,
+        counterparty_fingerprint=counterparty_fingerprint,
+        allow_sensitive=allow_sensitive,
+        target_policy=target_policy,
+    )
+    if dry_run["blockers"]:
+        raise ArchiveServiceError("Zet delegation blocked by dry-run: " + "; ".join(dry_run["blockers"]))
+
+    receipt_relative = dry_run["proposed_delegate_receipt_path"]
+    receipt_path = archive_internal_path(root, receipt_relative)
+    if receipt_path.exists():
+        raise ArchiveServiceError(f"Delegate receipt path already exists: {receipt_relative}.")
+
+    now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    receipt = json_safe(dry_run["delegate_receipt_preview"])
+    capability = issued_delegation_capability(dry_run["delegation_capability"])
+    receipt.update(
+        {
+            "dry_run": False,
+            "timestamp": now,
+            "reviewed_by": reviewer,
+            "reviewed_at": now,
+            "delegation_capability": capability,
+            "settlement_condition": capability.get("settlement_condition", {"mode": "none"}),
+            "result": {
+                "created_paths": [receipt_relative],
+                "status": "delegate_receipt_written",
+            },
+        }
+    )
+    if isinstance(receipt.get("compatibility"), dict):
+        receipt["compatibility"]["protocol"] = "zet-sharing/v0.2"
+
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    with receipt_path.open("x", encoding="utf-8") as handle:
+        handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "lifecycle_action": "delegate",
+        "source_archive": dry_run["source_archive"],
+        "target_archive": dry_run["target_archive"],
+        "target_policy": dry_run["target_policy"],
+        "view_id": dry_run["view_id"],
+        "receipt_path": receipt_relative,
+        "delegate_receipt_path": receipt_relative,
+        "reviewed_by": reviewer,
+        "blockers": [],
+        "warnings": dry_run["warnings"],
+        "scope_gate": dry_run["scope_gate"],
+        "trust_gate": dry_run["trust_gate"],
+        "ownership_gate": dry_run["ownership_gate"],
+        "created_paths": [receipt_relative],
+        "delegated_zets": dry_run["delegated_zets"],
+        "delegation_capability": capability,
+        "settlement_condition": capability.get("settlement_condition", {"mode": "none"}),
+        "receipt": json_safe(receipt),
     }
 
 

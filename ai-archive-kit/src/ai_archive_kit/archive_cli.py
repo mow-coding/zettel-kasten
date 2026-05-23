@@ -20,7 +20,7 @@ Commands:
   mint-zettel
           Mint an inbox draft zet into canonical private archive memory.
   delegate-zet
-          Preview delegated zet access from a saved view.
+          Preview or write delegated zet access from a saved view.
   attest-zet
           Preview attestation of a delegated foreign zet receipt.
   anchor-zet
@@ -243,6 +243,7 @@ class Doctor:
         self._check_recovery_receipts()
         self._check_lineage_receipts()
         self._check_mint_receipts()
+        self._check_delegate_receipts()
         self._check_zettel_kasten_layer()
         self._check_local_profile_and_secret_safety()
         return self.diagnostics
@@ -937,6 +938,65 @@ class Doctor:
             self.error("mint_receipt_sha_mismatch", f"Mint receipt {section}.sha256 does not match the referenced file.", path)
         return resolved
 
+    def _check_delegate_receipts(self) -> None:
+        root = self.archive_root / "receipts" / "delegate"
+        if not root.is_dir():
+            return
+        for path in sorted(root.glob("*.delegate.json")):
+            if not self._path_stays_inside_archive(path):
+                continue
+            data = self._load_json_file(path)
+            if not isinstance(data, dict):
+                continue
+            self._check_schema(data, "delegate-receipt.schema.json", path)
+            if data.get("action") != "delegate_zet":
+                self.error("delegate_receipt_action_invalid", "Delegate receipt action must be delegate_zet.", path)
+            if data.get("lifecycle_action") != "delegate":
+                self.error("delegate_receipt_lifecycle_invalid", "Delegate receipt lifecycle_action must be delegate.", path)
+            if data.get("dry_run") is False and not data.get("reviewed_by"):
+                self.error("delegate_receipt_reviewer_missing", "Applied delegate receipt must include reviewed_by.", path)
+            if data.get("receipt_path") != self._display_path(path):
+                self.error("delegate_receipt_path_mismatch", "Delegate receipt receipt_path must match its archive-relative path.", path)
+            for field in ["scope_gate", "trust_gate", "ownership_gate", "delegation_capability", "settlement_condition"]:
+                if not isinstance(data.get(field), dict):
+                    self.error("delegate_receipt_field_missing", f"Delegate receipt must contain object field: {field}.", path)
+            target_policy = data.get("target_policy")
+            capability = data.get("delegation_capability") if isinstance(data.get("delegation_capability"), dict) else {}
+            if target_policy not in archive_services.DELEGATE_TARGET_POLICIES:
+                self.error("delegate_receipt_target_policy_invalid", f"Invalid delegate target_policy: {target_policy}.", path)
+            if capability.get("target_policy") and capability.get("target_policy") != target_policy:
+                self.error("delegate_receipt_capability_policy_mismatch", "Delegate capability target_policy must match receipt target_policy.", path)
+            self._check_delegate_receipt_zets(data, path)
+
+    def _check_delegate_receipt_zets(self, data: dict[str, Any], path: Path) -> None:
+        delegated_zets = data.get("delegated_zets")
+        if not isinstance(delegated_zets, list):
+            self.error("delegate_receipt_zets_invalid", "Delegate receipt delegated_zets must be a list.", path)
+            return
+        local_source = bool(self.archive_config and data.get("source_archive") == self.archive_config.get("archive_id"))
+        for index, item in enumerate(delegated_zets):
+            if not isinstance(item, dict):
+                self.error("delegate_receipt_zets_invalid", f"Delegate receipt delegated_zets[{index}] must be an object.", path)
+                continue
+            expected_sha = item.get("sha256")
+            if not isinstance(expected_sha, str) or not SHA256_RE.match(expected_sha):
+                self.error("delegate_receipt_zettel_sha_invalid", f"Delegate receipt delegated_zets[{index}].sha256 must be a lowercase SHA-256 hex digest.", path)
+                continue
+            if not local_source:
+                continue
+            resolved = self._resolve_archive_file_ref(
+                item.get("path"),
+                path,
+                code_prefix="delegate_receipt_zettel",
+                label=f"Delegate receipt delegated_zets[{index}].path",
+                required=True,
+            )
+            if resolved is None:
+                continue
+            actual_sha = sha256_file(resolved)
+            if actual_sha != expected_sha:
+                self.error("delegate_receipt_zettel_sha_mismatch", f"Delegate receipt delegated_zets[{index}].sha256 does not match the referenced zettel.", path)
+
     def _resolve_archive_file_ref(
         self,
         value: Any,
@@ -1617,19 +1677,37 @@ def command_share(args: argparse.Namespace) -> int:
 
 
 def command_delegate_zet(args: argparse.Namespace) -> int:
-    if not args.dry_run:
-        print("Only --dry-run zet delegation is implemented. Real sharing is intentionally unavailable.", file=sys.stderr)
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("Zet delegation requires --dry-run or --approve. Use --dry-run to preview.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("Real zet delegation requires --reviewed-by.", file=sys.stderr)
         return 1
     try:
-        result = archive_services.delegate_zets_dry_run(
-            Path(args.archive_root),
-            view_id=args.view,
-            target_archive=args.target_archive,
-            counterparty_id=args.counterparty_id,
-            counterparty_fingerprint=args.counterparty_fingerprint,
-            allow_sensitive=args.allow_sensitive,
-            target_policy=args.target_policy,
-        )
+        if args.dry_run:
+            result = archive_services.delegate_zets_dry_run(
+                Path(args.archive_root),
+                view_id=args.view,
+                target_archive=args.target_archive,
+                counterparty_id=args.counterparty_id,
+                counterparty_fingerprint=args.counterparty_fingerprint,
+                allow_sensitive=args.allow_sensitive,
+                target_policy=args.target_policy,
+            )
+        else:
+            result = archive_services.delegate_zets(
+                Path(args.archive_root),
+                view_id=args.view,
+                target_archive=args.target_archive,
+                counterparty_id=args.counterparty_id,
+                counterparty_fingerprint=args.counterparty_fingerprint,
+                allow_sensitive=args.allow_sensitive,
+                target_policy=args.target_policy,
+                reviewed_by=args.reviewed_by,
+            )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -1637,15 +1715,22 @@ def command_delegate_zet(args: argparse.Namespace) -> int:
     if args.format == "json":
         print_json(result)
     else:
-        state = "passed" if result["ok"] else "blocked"
-        print(f"Zet delegate dry-run {state}.")
+        if result["dry_run"]:
+            state = "passed" if result["ok"] else "blocked"
+            print(f"Zet delegate dry-run {state}.")
+        else:
+            print("Zet delegate receipt written.")
         print(f"Source archive: {result['source_archive']}")
         print(f"Target policy: {result['target_policy']}")
         print(f"Target archive: {result['target_archive'] or '<deferred until attestation>'}")
         print(f"View: {result['view_id']}")
         print(f"Delegated zets: {len(result['delegated_zets'])}")
-        print(f"Trust gate: {result['trust_gate']['status']}")
-        print(f"Proposed delegate receipt path: {result['proposed_delegate_receipt_path']}")
+        if result["dry_run"]:
+            print(f"Trust gate: {result['trust_gate']['status']}")
+            print(f"Proposed delegate receipt path: {result['proposed_delegate_receipt_path']}")
+        else:
+            print(f"Delegate receipt path: {result['delegate_receipt_path']}")
+            print(f"Reviewed by: {result['reviewed_by']}")
         if result["blockers"]:
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -2496,6 +2581,7 @@ def create_recommended_dirs(target: Path) -> None:
         "db",
         "workbench",
         "receipts",
+        "receipts/delegate",
         "receipts/import",
         "receipts/lineage",
         "receipts/mint",
@@ -2841,7 +2927,7 @@ def build_parser() -> argparse.ArgumentParser:
     share.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     share.set_defaults(func=command_share)
 
-    delegate = subcommands.add_parser("delegate-zet", help="Dry-run delegated access to zets from a saved view.")
+    delegate = subcommands.add_parser("delegate-zet", help="Preview or write delegated access to zets from a saved view.")
     delegate.add_argument("archive_root", help="Source archive root.")
     delegate.add_argument("--view", required=True, help="View id to delegate.")
     delegate.add_argument("--target-archive", help="Target archive id. Required for counterparty_bound delegation.")
@@ -2853,8 +2939,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     delegate.add_argument("--counterparty-id", help="Expected counterparty identity/archive/principal id.")
     delegate.add_argument("--counterparty-fingerprint", help="Expected counterparty public key fingerprint.")
-    delegate.add_argument("--allow-sensitive", action="store_true", help="Allow sensitive categories in the delegation preview.")
+    delegate.add_argument("--allow-sensitive", action="store_true", help="Allow sensitive categories in the delegation gate.")
     delegate.add_argument("--dry-run", action="store_true", help="Preview delegation without writing or sending files.")
+    delegate.add_argument("--approve", action="store_true", help="Write a delegate receipt after dry-run gates pass.")
+    delegate.add_argument("--reviewed-by", help="Reviewer id required for real delegation, e.g. person:me.")
     delegate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     delegate.set_defaults(func=command_delegate_zet)
 

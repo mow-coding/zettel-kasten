@@ -60,6 +60,9 @@ share --dry-run
 delegate-zet --dry-run
   Preview scoped zet delegation and return a delegate capability receipt preview without writing files.
 
+delegate-zet --approve --reviewed-by
+  Write a local delegate receipt after the same dry-run gates pass.
+
 attest-zet --dry-run
   Preview attestation of a delegated foreign zet receipt without writing files.
 
@@ -312,6 +315,21 @@ python ai-archive-kit\cli\archive.py delegate-zet ai-archive-kit\examples\fake-l
 
 `claimable_once` does not write a claim registry yet. It only previews a delegate capability that can later be bound to the attesting archive.
 
+Write a real delegate receipt after review:
+
+```powershell
+python ai-archive-kit\cli\archive.py delegate-zet ai-archive-kit\examples\fake-life-archive `
+  --view view.fake.company.derived `
+  --target-policy counterparty_bound `
+  --target-archive archive:company:fake-blue `
+  --counterparty-id archive:company:fake-blue `
+  --counterparty-fingerprint SHA256:fake-company-blue `
+  --approve `
+  --reviewed-by person:me
+```
+
+Real delegate writes create `receipts/delegate/*.delegate.json` with `dry_run: false`. They do not send data, write attestations, write anchors, or create claim/spent registries.
+
 Preview ownership transfer without changing the archive:
 
 ```powershell
@@ -417,10 +435,11 @@ keyrings/*.local.yml
 
 `doctor` validates the main archive files against JSON Schema documents in `schemas/`.
 
-It also validates ownership-transfer receipt examples at:
+It also validates receipt files at:
 
 ```text
 receipts/lineage/*.ownership-transfer.json
+receipts/delegate/*.delegate.json
 ```
 
 Currently checked:
@@ -438,4 +457,4 @@ zettel-kasten/policies.yml
 zettel-kasten/zettel-rules.yml
 ```
 
-The runtime validator intentionally supports a small useful JSON Schema subset: `type`, `required`, `properties`, `items`, and `enum`.
+The runtime validator intentionally supports a small useful JSON Schema subset: `type`, `required`, `properties`, `items`, `enum`, `const`, `allOf`, and simple `if`/`then` conditionals.

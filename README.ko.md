@@ -13,7 +13,7 @@
 현재 공개 기준:
 
 ```text
-v0.2.11 pre-release
+v0.2.12 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -27,7 +27,8 @@ v0.2.11 pre-release
 - 버전별 release note,
 - 초기 Python CLI와 MCP 도구,
 - draft zet을 canonical zettel, mint receipt, draft snapshot으로 민팅하는 CLI 구현.
-- `claimable_once` delegate capability preview를 포함한 dry-run `delegate-zet`, `attest-zet`, `anchor-zet` lifecycle preview.
+- scoped zet delegation을 `receipts/delegate/*.delegate.json` receipt로 실제 기록하는 CLI 구현.
+- `claimable_once` delegate capability preview를 포함한 dry-run `attest-zet`, `anchor-zet` lifecycle preview.
 
 아직 없는 것:
 
@@ -158,6 +159,7 @@ OCR과 AI 전사는 유용하지만, 모델에 따라 달라질 수 있는 deriv
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.12
 v0.2.11
 v0.3.0
 v1.0.0

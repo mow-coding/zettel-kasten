@@ -163,6 +163,7 @@ class McpServerTests(unittest.TestCase):
             self.notify(process, {"jsonrpc": "2.0", "method": "notifications/initialized"})
 
             tools = self.send(process, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+            tools_by_name = {tool["name"]: tool for tool in tools["result"]["tools"]}
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
             self.assertIn("archive_doctor", tool_names)
             self.assertIn("create_draft_zettel", tool_names)
@@ -185,6 +186,12 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("source_registration_plan", tool_names)
             self.assertIn("source_mount_plan", tool_names)
             self.assertIn("ownership_transfer_check", tool_names)
+            share_required = tools_by_name["share_check"]["inputSchema"]["required"]
+            delegate_schema = tools_by_name["delegate_zet_check"]["inputSchema"]
+            self.assertIn("target_archive", share_required)
+            self.assertNotIn("target_policy", tools_by_name["share_check"]["inputSchema"]["properties"])
+            self.assertNotIn("target_archive", delegate_schema["required"])
+            self.assertIn("target_policy", delegate_schema["properties"])
             self.assertNotIn("promote_zettel", tool_names)
             self.assertNotIn("archive_promote", tool_names)
             self.assertNotIn("mint_zettel", tool_names)

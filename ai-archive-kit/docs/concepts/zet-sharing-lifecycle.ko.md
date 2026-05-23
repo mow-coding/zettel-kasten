@@ -149,15 +149,16 @@ attestation receipt
 anchor metadata
 ```
 
-`v0.2.11` 기준으로 이것들은 dry-run preview 개념으로 존재합니다.
+`v0.2.12` 기준으로 lifecycle은 아직 초기 단계이지만, delegate에는 하나의 실제 local write path가 생겼습니다.
 
 - `delegate-zet --dry-run`은 delegate receipt preview를 반환합니다.
+- `delegate-zet --approve --reviewed-by <actor>`는 local delegate receipt를 기록합니다.
 - `attest-zet --dry-run`은 attestation receipt preview를 반환합니다.
 - `anchor-zet --dry-run`은 anchor metadata preview를 반환합니다.
 
 `delegate-zet --target-policy claimable_once --dry-run`은 아직 recipient archive를 정하지 않은 1회용 claimable capability를 preview할 수 있습니다. 이후 `attest-zet --dry-run` preview가 `claim_binding`을 통해 그 capability를 attesting archive에 묶습니다.
 
-아직 실제 공유, transport, import, write path는 아닙니다.
+delegate receipt write는 실제 local evidence이지만 transport나 import는 아닙니다. attestation과 anchor는 아직 preview-only입니다.
 
 나중에 설계할 때는 다음을 만족해야 합니다.
 
@@ -190,6 +191,7 @@ core `zet` sharing model은 non-financial하고 protocol-neutral해야 합니다
 - `anchor`는 attested foreign `zet`를 local meaning에 놓는 선호 후보입니다.
 - `v0.2.10`은 delegate, attest, anchor의 첫 dry-run CLI/MCP check를 제공합니다.
 - `v0.2.11`은 `counterparty_bound`와 `claimable_once` delegate capability preview를 추가합니다.
+- `v0.2.12`는 CLI-only real delegate receipt write를 추가합니다.
 
 짧게 쓰면:
 

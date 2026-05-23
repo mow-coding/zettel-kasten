@@ -142,6 +142,9 @@ share --dry-run
 delegate-zet --dry-run
   Preview scoped zet delegation from a saved view and return a delegate capability receipt preview.
 
+delegate-zet --approve --reviewed-by
+  Write a local delegate receipt after the same dry-run gates pass.
+
 attest-zet --dry-run
   Preview attestation of a delegated foreign zet receipt without writing files.
 
@@ -268,6 +271,8 @@ Real minting reuses the dry-run checks as a gate. Blockers always stop the comma
 
 `archive share --dry-run` previews a GitHub-like archive share from a saved view. It shows which zettels are included or excluded, blocks sensitive categories by default, verifies the target counterparty fingerprint against `archive-identity.yml`, and writes nothing.
 
+`archive delegate-zet --dry-run` previews scoped zet delegation from a saved view. `archive delegate-zet --approve --reviewed-by <actor>` writes a `dry_run:false` delegate receipt under `receipts/delegate/` after the same gates pass. It does not send data, write attestations, write anchors, or create claim/spent registries.
+
 `archive onboard --dry-run` previews first setup for a new personal, family, or company archive. It shows the folder to create, selected provider profile, keyring guidance, and doctor plan. It writes nothing.
 
 `archive onboard --approve` creates the archive, writes or adjusts `provider-bindings.yml` from the selected provider profile, and runs strict doctor. This is the beginner-friendly setup path used by the Docker-first flow.
@@ -302,6 +307,7 @@ receipts/lineage/*.ownership-transfer.json
 receipts/import/*.external-import.json
 receipts/recovery/*.restore-drill.json
 receipts/mint/*.mint.json
+receipts/delegate/*.delegate.json
 zettel-kasten/*.yml
 ```
 
@@ -346,7 +352,7 @@ plans/phase-3-implementation-plan.md
 plans/phase-4-lineage-trust-plan.md
 ```
 
-Phase 2 is complete for the safe local toolkit subset. Phase 3 added real promotion. v0.2.8 added the product-facing `mint-zettel` lifecycle with canonical zettel, mint receipt, and draft snapshot outputs. v0.2.9 stabilizes minting terminology while preserving promotion compatibility. v0.2.10 adds dry-run `delegate-zet`, `attest-zet`, and `anchor-zet` lifecycle previews. v0.2.11 adds the delegate capability contract with `counterparty_bound` and `claimable_once` dry-run policies. Phase 4 adds the lineage/trust dry-run baseline and the first owner/operator identity model. Phase 7B adds CLI-only real ownership transfer plus provider change planning. Phase 8B adds one-command setup orchestration above the Docker-first runtime. Phase 8C hardens the local installer and container runtime. Phase 9 starts Notion and Google Drive export import. Real workpack import, real share/merge/fork, live external provider API sync, OS keyring integration, UI, and CI matrix remain future work.
+Phase 2 is complete for the safe local toolkit subset. Phase 3 added real promotion. v0.2.8 added the product-facing `mint-zettel` lifecycle with canonical zettel, mint receipt, and draft snapshot outputs. v0.2.9 stabilizes minting terminology while preserving promotion compatibility. v0.2.10 adds dry-run `delegate-zet`, `attest-zet`, and `anchor-zet` lifecycle previews. v0.2.11 adds the delegate capability contract with `counterparty_bound` and `claimable_once` dry-run policies. v0.2.12 adds CLI-only real delegate receipt writes. Phase 4 adds the lineage/trust dry-run baseline and the first owner/operator identity model. Phase 7B adds CLI-only real ownership transfer plus provider change planning. Phase 8B adds one-command setup orchestration above the Docker-first runtime. Phase 8C hardens the local installer and container runtime. Phase 9 starts Notion and Google Drive export import. Real workpack import, real share/merge/fork, live external provider API sync, OS keyring integration, UI, and CI matrix remain future work.
 
 ## Minimal MCP Server
 
@@ -389,7 +395,7 @@ anchor_zet_check
 ownership_transfer_check
 ```
 
-The MCP server is intentionally local and stdio-only. It exposes `mint_zettel_check`, legacy `promotion_check`, `share_check`, `delegate_zet_check`, `attest_zet_check`, `anchor_zet_check`, and `ownership_transfer_check` as dry-run only and does not expose real minting, legacy real promotion, real sharing, real claim registries, real attestation writes, real anchoring writes, real merge, real fork, or real ownership transfer; AI-created zettels go to `inbox/`. The ownership transfer check includes a provider change plan, but MCP still cannot apply local ownership changes or external provider account changes.
+The MCP server is intentionally local and stdio-only. It exposes `mint_zettel_check`, legacy `promotion_check`, `share_check`, `delegate_zet_check`, `attest_zet_check`, `anchor_zet_check`, and `ownership_transfer_check` as dry-run only and does not expose real minting, legacy real promotion, real delegate writes, real sharing, real claim registries, real attestation writes, real anchoring writes, real merge, real fork, or real ownership transfer; AI-created zettels go to `inbox/`. The ownership transfer check includes a provider change plan, but MCP still cannot apply local ownership changes or external provider account changes.
 
 Archive ownership is separate from archive operation. A family, company, or other group can own an archive while named people operate it. For example, parents can operate a child-related archive under a family owner, and a later receipt-backed transfer can move ownership to the child.
 

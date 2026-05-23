@@ -2232,6 +2232,136 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertTrue(any("target_archive is required" in blocker for blocker in result["blockers"]))
         self.assertFalse((archive_root / result["proposed_delegate_receipt_path"]).exists())
 
+    def test_delegate_zet_real_requires_approve_and_reviewed_by(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(
+            [
+                "delegate-zet",
+                str(archive_root),
+                "--view",
+                "view.fake.company.derived",
+                "--target-archive",
+                "archive:company:fake-blue",
+                "--counterparty-id",
+                "archive:company:fake-blue",
+                "--counterparty-fingerprint",
+                "SHA256:fake-company-blue",
+            ]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("--dry-run or --approve", output)
+
+        reviewed_code, reviewed_output = self.run_cli(
+            [
+                "delegate-zet",
+                str(archive_root),
+                "--view",
+                "view.fake.company.derived",
+                "--target-archive",
+                "archive:company:fake-blue",
+                "--counterparty-id",
+                "archive:company:fake-blue",
+                "--counterparty-fingerprint",
+                "SHA256:fake-company-blue",
+                "--approve",
+            ]
+        )
+        self.assertEqual(reviewed_code, 1)
+        self.assertIn("--reviewed-by", reviewed_output)
+
+    def test_delegate_zet_approve_writes_real_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            code, output = self.run_cli(
+                [
+                    "delegate-zet",
+                    str(archive_root),
+                    "--view",
+                    "view.fake.company.derived",
+                    "--target-archive",
+                    "archive:company:fake-blue",
+                    "--counterparty-id",
+                    "archive:company:fake-blue",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-company-blue",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:delegate-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["target_policy"], "counterparty_bound")
+            self.assertEqual(result["reviewed_by"], "person:delegate-reviewer")
+            receipt_path = archive_root / result["delegate_receipt_path"]
+            self.assertTrue(receipt_path.is_file())
+
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertFalse(receipt["dry_run"])
+            self.assertEqual(receipt["reviewed_by"], "person:delegate-reviewer")
+            self.assertEqual(receipt["result"]["created_paths"], [result["delegate_receipt_path"]])
+            self.assertEqual(receipt["delegation_capability"]["issue_state"], "issued")
+            self.assertNotEqual(receipt["delegation_capability"]["nonce"], "<generated-on-real-delegate>")
+            self.assertEqual(receipt["delegation_capability"]["registry_state"]["claim_registry"], "not_implemented")
+            self.assertEqual(archive_cli.validate_schema(receipt, "delegate-receipt.schema.json"), [])
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+            duplicate_code, duplicate_output = self.run_cli(
+                [
+                    "delegate-zet",
+                    str(archive_root),
+                    "--view",
+                    "view.fake.company.derived",
+                    "--target-archive",
+                    "archive:company:fake-blue",
+                    "--counterparty-id",
+                    "archive:company:fake-blue",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-company-blue",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:delegate-reviewer",
+                ]
+            )
+            self.assertEqual(duplicate_code, 1)
+            self.assertIn("Zet delegation blocked by dry-run", duplicate_output)
+
+    def test_delegate_zet_claimable_once_approve_writes_receipt_without_target_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            code, output = self.run_cli(
+                [
+                    "delegate-zet",
+                    str(archive_root),
+                    "--view",
+                    "view.fake.company.derived",
+                    "--target-policy",
+                    "claimable_once",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:delegate-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertFalse(result["dry_run"])
+            self.assertIsNone(result["target_archive"])
+            self.assertEqual(result["target_policy"], "claimable_once")
+            receipt = json.loads((archive_root / result["delegate_receipt_path"]).read_text(encoding="utf-8"))
+            self.assertIsNone(receipt["target_archive"])
+            self.assertEqual(receipt["delegation_capability"]["claim_state"], "unclaimed_receipt_only")
+            self.assertEqual(receipt["delegation_capability"]["spent_state"], "not_spent_receipt_only")
+            self.assertEqual(receipt["delegation_capability"]["registry_state"]["spent_registry"], "not_implemented")
+            self.assertEqual(archive_cli.validate_schema(receipt, "delegate-receipt.schema.json"), [])
+
     def test_delegate_zet_claimable_once_dry_run_defers_target_trust(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         code, output = self.run_cli(

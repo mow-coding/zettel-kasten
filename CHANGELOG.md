@@ -4,6 +4,24 @@ All notable public releases of `zettel-kasten` and `zet` should be documented he
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.12 - 2026-05-23
+
+Real delegate receipt write patch.
+
+Added:
+
+- `delegate-zet --approve --reviewed-by <actor>` for writing a schema-backed delegate receipt,
+- `receipts/delegate/*.delegate.json` doctor validation,
+- real delegate capability nonce issuance with receipt-local claim/spent state,
+- duplicate delegate receipt protection through dry-run blockers and exclusive file creation.
+
+Compatibility:
+
+- `delegate-zet --dry-run` remains the preview gate,
+- MCP delegate tooling remains read-only and dry-run only,
+- no real claim registry, spent registry, revocation registry, P2P transport, blockchain, or payment is implemented,
+- no private archive migration is required.
+
 ## v0.2.11 - 2026-05-23
 
 Delegate capability contract patch.

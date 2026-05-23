@@ -24,6 +24,8 @@
     "lifecycle_action": {"type": "string", "enum": ["delegate"]},
     "dry_run": {"type": "boolean"},
     "timestamp": {"type": "string"},
+    "reviewed_by": {"type": "string"},
+    "reviewed_at": {"type": "string"},
     "source_archive": {"type": "string"},
     "target_archive": {"type": ["string", "null"]},
     "target_policy": {"type": "string", "enum": ["counterparty_bound", "claimable_once"]},
@@ -39,6 +41,7 @@
     },
     "compatibility": {"type": "object"},
     "legacy_share_receipt_preview": {"type": "object"},
+    "result": {"type": "object"},
     "blockers": {
       "type": "array",
       "items": {"type": "string"}
@@ -47,5 +50,18 @@
       "type": "array",
       "items": {"type": "string"}
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "dry_run": {"const": false}
+        },
+        "required": ["dry_run"]
+      },
+      "then": {
+        "required": ["reviewed_by", "reviewed_at", "result"]
+      }
+    }
+  ]
 }
