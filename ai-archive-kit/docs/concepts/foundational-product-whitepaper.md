@@ -1,10 +1,14 @@
-# Foundational Product Whitepaper: Zettel-Kasten And Zet
+# Foundational Product Whitepaper: WOM, Zettel-Kasten, And Zet
 
 Status: public product planning baseline
 Date: 2026-05-23
 Version context: v0.2.7 planning document
 
-This document is the detailed public product philosophy for `zettel-kasten` and `zet`.
+This document is the detailed public product philosophy for WOM, `zettel-kasten`, and `zet`.
+
+`WOM` means `Widesider of Modernity`: the ambition to widen the horizon humans can perceive at the frontier of modernity.
+
+`zettel-kasten` is the historical root and archive method. `zet` is the active product primitive.
 
 It explains the product idea before implementation details: what the system is, why it exists, what it assumes about humans and AI, and how the same structure can support private archives, HITL workflows, AI-agent harnesses, messaging, social feeds, and collaboration.
 

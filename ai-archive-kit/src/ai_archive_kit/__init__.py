@@ -1,3 +1,3 @@
-"""AI Archive Kit package for zettel-kasten archives."""
+"""WOM Archive Kit package for local-first zet archives."""
 
-__version__ = "0.2.12"
+__version__ = "0.2.13"

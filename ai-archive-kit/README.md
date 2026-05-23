@@ -1,16 +1,21 @@
-# AI Archive Kit v0.2 Draft
+# WOM Archive Kit v0.2 Draft
 
-AI Archive Kit is a local-first, AI-readable archive protocol.
+WOM Archive Kit is the current implementation toolkit for WOM.
 
-It is not a website, SaaS app, dashboard, or visual note-taking product. The interface is an AI runtime such as Codex, Claude Code, or a future local agent. The durable unit of human-readable memory is the `zettel`.
+`WOM` stands for `Widesider of Modernity`: a local-first, AI-native, Web3-oriented archive and communication system.
+
+This folder is still named `ai-archive-kit` for v0.2 compatibility, but `AI Archive Kit` is now a transitional implementation/package name rather than the preferred product name.
+
+It is not a website, SaaS app, dashboard, or visual note-taking product. The interface is an AI runtime such as Codex, Claude Code, or a future local agent. The durable unit of human-readable memory is the `zet`.
 
 ## Core Idea
 
 ```text
 Human talks.
 AI drafts and organizes.
-Zettels persist.
+Zets persist.
 Original files stay addressable.
+Nodes can delegate, attest, and anchor.
 UI is optional.
 SaaS is replaceable.
 ```
@@ -19,7 +24,7 @@ The archive has four layers:
 
 1. Original data layer: raw files and external objects.
 2. Metadata/relation layer: SQLite and manifests.
-3. Zettelkasten layer: Markdown zettels with YAML frontmatter.
+3. Zet layer: Markdown zets with YAML frontmatter.
 4. View/perspective layer: AI-facing saved filters and context policies.
 
 ## Contents
@@ -32,6 +37,13 @@ schemas/      JSON Schema documents used by archive doctor.
 zettel-kasten/     v0.2 draft zettel-kasten layer: types, actions, and policies.
 templates/    Personal, company, and family archive templates.
 examples/     Fake sample archives with no private user data.
+```
+
+Canonical product terminology is documented in:
+
+```text
+docs/concepts/naming-and-terminology.md
+docs/concepts/naming-and-terminology.ko.md
 ```
 
 v0.1 established the file protocol: specs, templates, and fake examples.
@@ -106,11 +118,14 @@ read-zettel
 create-draft
   Create a draft zettel in inbox/.
 
-mint-zettel --dry-run
+mint-zet --dry-run
   Check whether a draft zet can be minted and preview canonical path, mint receipt, and draft snapshot without writing.
 
-mint-zettel --approve --reviewed-by
+mint-zet --approve --reviewed-by
   Mint an inbox draft zet into canonical private archive memory and write a receipt plus draft snapshot.
+
+mint-zettel
+  Transitional compatibility alias for mint-zet.
 
 promote --dry-run
   Legacy-compatible name for the older promotion readiness check.
@@ -124,11 +139,17 @@ index
 search
   Search zettels, object manifest entries, views, and source map entries through the generated index.
 
+parcel
+  Create a portable parcel from a saved view. The v0.2 compatibility path still writes under workpacks/.
+
 pack
-  Create a portable workpack from a saved view.
+  Transitional compatibility alias for parcel.
+
+admit --dry-run
+  Preview admitting a parcel/workpack without mutating the target archive.
 
 import --dry-run
-  Preview a workpack import without mutating the target archive.
+  Transitional compatibility alias for admit.
 
 import-external --dry-run
   Preview a Notion or Google Drive export import without mutating the target archive.
@@ -137,7 +158,7 @@ import-external --approve --reviewed-by
   Import Notion or Google Drive export items as inbox drafts and write an import receipt.
 
 share --dry-run
-  Preview a governed archive share from a saved view with scope and trust gates.
+  Legacy-compatible dry-run for the older share language. Product language should prefer delegate.
 
 delegate-zet --dry-run
   Preview scoped zet delegation from a saved view and return a delegate capability receipt preview.
@@ -250,12 +271,12 @@ db/archive-index.sqlite
 
 This file is a rebuildable map, not the archive itself. The durable archive still lives in Markdown zettels, YAML files, object manifests, and original files.
 
-`archive mint-zettel --dry-run` checks the minting gate using `minting_rules` in `zettel-kasten/zettel-rules.yml`, with legacy `promotion_rules` as a v0.2 fallback. It reports blockers, warnings, missing human-review items, near duplicates, the proposed canonical path, the proposed mint receipt path, and the proposed draft snapshot path. It writes nothing.
+`archive mint-zet --dry-run` checks the minting gate using `minting_rules` in `zettel-kasten/zettel-rules.yml`, with legacy `promotion_rules` as a v0.2 fallback. It reports blockers, warnings, missing human-review items, near duplicates, the proposed canonical path, the proposed mint receipt path, and the proposed draft snapshot path. It writes nothing. `archive mint-zettel` remains a v0.2 compatibility alias.
 
 Real minting is CLI-only and intentionally explicit:
 
 ```powershell
-python ai-archive-kit\cli\archive.py mint-zettel ai-archive-kit\examples\fake-life-archive `
+python ai-archive-kit\cli\archive.py mint-zet ai-archive-kit\examples\fake-life-archive `
   --path inbox\zet_20260519_draft_ai_lunch_note.md `
   --approve `
   --reviewed-by person:me
@@ -263,13 +284,13 @@ python ai-archive-kit\cli\archive.py mint-zettel ai-archive-kit\examples\fake-li
 
 Real minting reuses the dry-run checks as a gate. Blockers always stop the command. Warnings require `--allow-warnings`. The original inbox draft is preserved. The command writes the canonical zettel under `zettels/`, a mint receipt under `receipts/mint/`, and the exact mint-time draft snapshot under `receipts/mint/drafts/`. The older `archive promote` command remains available for compatibility.
 
-`archive pack` creates a portable slice under `workpacks/` using a saved view. The first implementation copies selected zettel files and writes object manifest metadata, but it does not copy original object files by default.
+`archive parcel` creates a portable slice under `workpacks/` using a saved view. The first implementation copies selected zettel files and writes object manifest metadata, but it does not copy original object files by default. `archive pack` remains a v0.2 compatibility alias.
 
-`archive import --dry-run` previews target inbox writes, object manifest merges, conflicts, and an import receipt. Real workpack import remains unavailable until the dry-run path is proven safer.
+`archive admit --dry-run` previews target inbox writes, object manifest merges, conflicts, and an admit/import receipt. Real parcel/workpack admit remains unavailable until the dry-run path is proven safer. `archive import --dry-run` remains a v0.2 compatibility alias.
 
 `archive import-external --source notion --export <folder> --dry-run` previews a Notion Markdown export import. `archive import-external --source google_drive --export <manifest.json> --dry-run` does the same for Google Drive exports. Approved imports write inbox drafts and `receipts/import/*.external-import.json`; they do not call Notion or Google Drive APIs or store OAuth secrets.
 
-`archive share --dry-run` previews a GitHub-like archive share from a saved view. It shows which zettels are included or excluded, blocks sensitive categories by default, verifies the target counterparty fingerprint against `archive-identity.yml`, and writes nothing.
+`archive share --dry-run` is the legacy dry-run for the older share language. It previews a GitHub-like archive share from a saved view, shows which zettels are included or excluded, blocks sensitive categories by default, verifies the target counterparty fingerprint against `archive-identity.yml`, and writes nothing. Product design should prefer `delegate-zet`.
 
 `archive delegate-zet --dry-run` previews scoped zet delegation from a saved view. `archive delegate-zet --approve --reviewed-by <actor>` writes a `dry_run:false` delegate receipt under `receipts/delegate/` after the same gates pass. It does not send data, write attestations, write anchors, or create claim/spent registries.
 
@@ -319,7 +340,7 @@ schemas/
 
 ## Platform Support
 
-AI Archive Kit is Docker-first hybrid. Non-programmer users can stay on Windows or macOS, while the default runtime runs inside a Linux container through Docker Compose. Host-native Python remains available for developers and backup paths.
+WOM Archive Kit is Docker-first hybrid. Non-programmer users can stay on Windows or macOS, while the default runtime runs inside a Linux container through Docker Compose. Host-native Python remains available for developers and backup paths.
 
 Archive-internal paths returned by CLI JSON and MCP tools use stable `/` relative paths such as:
 
@@ -352,7 +373,7 @@ plans/phase-3-implementation-plan.md
 plans/phase-4-lineage-trust-plan.md
 ```
 
-Phase 2 is complete for the safe local toolkit subset. Phase 3 added real promotion. v0.2.8 added the product-facing `mint-zettel` lifecycle with canonical zettel, mint receipt, and draft snapshot outputs. v0.2.9 stabilizes minting terminology while preserving promotion compatibility. v0.2.10 adds dry-run `delegate-zet`, `attest-zet`, and `anchor-zet` lifecycle previews. v0.2.11 adds the delegate capability contract with `counterparty_bound` and `claimable_once` dry-run policies. v0.2.12 adds CLI-only real delegate receipt writes. Phase 4 adds the lineage/trust dry-run baseline and the first owner/operator identity model. Phase 7B adds CLI-only real ownership transfer plus provider change planning. Phase 8B adds one-command setup orchestration above the Docker-first runtime. Phase 8C hardens the local installer and container runtime. Phase 9 starts Notion and Google Drive export import. Real workpack import, real share/merge/fork, live external provider API sync, OS keyring integration, UI, and CI matrix remain future work.
+Phase 2 is complete for the safe local toolkit subset. Phase 3 added real promotion. v0.2.8 added the product-facing minting lifecycle with canonical zettel, mint receipt, and draft snapshot outputs. v0.2.9 stabilizes minting terminology while preserving promotion compatibility. v0.2.10 adds dry-run `delegate-zet`, `attest-zet`, and `anchor-zet` lifecycle previews. v0.2.11 adds the delegate capability contract with `counterparty_bound` and `claimable_once` dry-run policies. v0.2.12 adds CLI-only real delegate receipt writes. v0.2.13 adds the WOM naming baseline and compatibility-safe aliases: `mint-zet`, `parcel`, and `admit`. Phase 4 adds the lineage/trust dry-run baseline and the first owner/operator identity model. Phase 7B adds CLI-only real ownership transfer plus provider change planning. Phase 8B adds one-command setup orchestration above the Docker-first runtime. Phase 8C hardens the local installer and container runtime. Phase 9 starts Notion and Google Drive export import. Real parcel/workpack import, real share/merge/fork, live external provider API sync, OS keyring integration, UI, and CI matrix remain future work.
 
 ## Minimal MCP Server
 

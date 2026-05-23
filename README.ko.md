@@ -1,19 +1,28 @@
-# Zettel-Kasten + Zet
+# WOM
 
-> 로컬 우선, AI-native 아카이브 프로토콜. 개인의 private memory를 오래 남고, 검증 가능하며, 필요한 경우에만 공유 가능한 텍스트로 바꿉니다.
+> Widesider of Modernity: 인간의 기억 지평을 넓히기 위한 local-first, AI-native, Web3 지향 archive/communication system.
 
 [English README](README.md) · [공개 문서 지도](ai-archive-kit/docs/public-documentation-map.ko.md) · [업그레이드 가이드](UPGRADE.ko.md) · [변경 기록](CHANGELOG.md) · [릴리스 노트](ai-archive-kit/docs/releases/) · [보안 정책](SECURITY.md)
 
-`zettel-kasten`은 중앙 SaaS 서버에 개인/조직의 기억을 통째로 맡기지 않고, 사용자가 자기 아카이브를 직접 소유하면서 AI와 함께 정리할 수 있도록 설계한 시스템입니다.
+`WOM`은 `Widesider of Modernity`의 약자입니다.
 
-`zet`는 이 아카이브 안에서 만들어지는 텍스트 중심 단위입니다. 나중에는 이 `zet`가 메시지, SNS 피드, 협업 워크스페이스의 기반이 될 수 있습니다.
+이 이름은 modernity의 최전선에서 인간이 인식할 수 있는 지평을 넓히겠다는 의도를 담습니다.
+
+WOM 안에서:
+
+- `zettel-kasten`은 역사적 뿌리이자 local archive method입니다.
+- `zet`는 active text primitive입니다.
+- `node`는 subject/archive participant입니다.
+- 선호 lifecycle은 `mint -> delegate -> attest -> anchor`입니다.
+
+`zettel-kasten`은 repository와 archive system의 뿌리로 남지만, 제품 언어는 `WOM`, `zet`, `node`를 중심으로 정리합니다.
 
 ## 현재 상태
 
 현재 공개 기준:
 
 ```text
-v0.2.12 pre-release
+v0.2.13 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -26,8 +35,8 @@ v0.2.12 pre-release
 - 설치/보안 문서,
 - 버전별 release note,
 - 초기 Python CLI와 MCP 도구,
-- draft zet을 canonical zettel, mint receipt, draft snapshot으로 민팅하는 CLI 구현.
-- scoped zet delegation을 `receipts/delegate/*.delegate.json` receipt로 실제 기록하는 CLI 구현.
+- draft zet을 canonical archive memory로 민팅하고 mint receipt/draft snapshot을 남기는 CLI 구현.
+- scoped zet delegation을 delegate proof/receipt로 실제 기록하는 CLI 구현.
 - `claimable_once` delegate capability preview를 포함한 dry-run `attest-zet`, `anchor-zet` lifecycle preview.
 
 아직 없는 것:
@@ -39,7 +48,7 @@ v0.2.12 pre-release
 
 ## 핵심 모델
 
-기본 archive 모델은 다음과 같습니다.
+기본 WOM archive 모델은 다음과 같습니다.
 
 ```text
 원본/source 데이터 + 메타데이터 + 민팅된 zets
@@ -51,7 +60,9 @@ v0.2.12 pre-release
 - metadata는 원본을 찾고 검증할 수 있게 해줍니다.
 - minted zet는 사람이 승인한 archive memory입니다.
 
-이 시스템은 SNS 앱에서 출발하지 않습니다. 먼저 private archive에서 출발합니다.
+이 시스템은 social app이 아니라 archive node에서 출발합니다.
+
+현재 명칭 기준은 [Naming And Terminology](ai-archive-kit/docs/concepts/naming-and-terminology.ko.md)를 보세요.
 
 인간 데이터 원형, AX 흐름에서의 의미, Web3-like `zet` 공유 모델까지 포함한 전체 설계 철학은 다음 문서를 보세요.
 
@@ -87,7 +98,7 @@ draft zet -> human review -> canonical private archive record
 
 대부분의 도구는 사용자를 앱의 구조에 맞추게 합니다.
 
-`zettel-kasten`은 반대로 접근합니다.
+WOM은 반대로 접근합니다.
 
 ```text
 사용자의 archive가 중심이고,
@@ -137,7 +148,7 @@ search text      -> SQLite/search index
 
 모든 텍스트가 같은 권위를 갖지는 않습니다.
 
-`zettel-kasten`은 텍스트를 다음처럼 구분합니다.
+WOM은 텍스트를 다음처럼 구분합니다.
 
 ```text
 L0 원본 source object
@@ -154,11 +165,12 @@ OCR과 AI 전사는 유용하지만, 모델에 따라 달라질 수 있는 deriv
 
 ## 버전 관리
 
-`zettel-kasten`과 `zet`는 버전이 있는 protocol family로 관리합니다.
+WOM, `zettel-kasten`, `zet`는 버전이 있는 protocol family로 관리합니다.
 
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.13
 v0.2.12
 v0.2.11
 v0.3.0

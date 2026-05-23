@@ -7,6 +7,8 @@ This document records the product-language direction for the future `zet` sharin
 
 It does not implement sharing, P2P transport, social feeds, or collaboration yet. It defines the philosophical verbs that future specs, schemas, receipts, and UI should align with.
 
+For the broader WOM naming baseline, including `zet`, `node`, `parcel`, `admit`, `proof`, and `credential`, see [Naming And Terminology](naming-and-terminology.md).
+
 ## 1. Why New Verbs Matter
 
 The project should not inherit ordinary SaaS verbs as its primary worldview.
@@ -38,7 +40,7 @@ This is a terminology candidate, not a finished protocol. It is intentionally cl
 In the current implementation:
 
 ```text
-draft zet -> mint-zettel -> canonical private zet -> mint receipt -> draft snapshot
+draft zet -> mint-zet -> canonical private zet -> mint proof/receipt -> draft snapshot
 ```
 
 Minting is not posting, sharing, broadcasting, or publishing.
@@ -59,7 +61,7 @@ It means the issuer gives another actor a scoped capability, such as:
 - the capability to receive a copy,
 - the capability to create an attestation.
 
-Future implementation may express this through a `delegate receipt`, capability token, share envelope, workpack, or another portable proof.
+Future implementation may express this through a delegation credential, capability token, parcel, or another portable proof. Current v0.2 implementation still uses `delegate receipt` in schema-backed compatibility paths.
 
 #### Delegate Is Not A Public Link
 
@@ -139,18 +141,22 @@ capability compatibility
 
 A client may be on a newer release and still understand an older sharing protocol. A recipient may refuse a technically readable `zet` if its trust profile or delegated capability is insufficient.
 
-## 4. Future Receipts
+## 4. Future Proofs And Compatibility Receipts
 
 The terminology points toward three future evidence objects:
 
 ```text
-delegate receipt
-attestation receipt
-anchor metadata
+delegation credential / delegation proof
+attestation
+anchor proof / anchor mark
 ```
 
-As of `v0.2.12`, the lifecycle is still early, but delegation has one real local write path:
+Current v0.2 implementation still uses `receipt` in file paths and schemas for compatibility.
 
+As of `v0.2.13`, the lifecycle is still early, but minting and delegation have real local write paths:
+
+- `mint-zet --dry-run` previews private archive minting. `mint-zettel` remains a compatibility alias.
+- `mint-zet --approve --reviewed-by <actor>` writes canonical private archive memory, a mint receipt, and a draft snapshot.
 - `delegate-zet --dry-run` returns a delegate receipt preview.
 - `delegate-zet --approve --reviewed-by <actor>` writes a local delegate receipt.
 - `attest-zet --dry-run` returns an attestation receipt preview.
@@ -192,6 +198,7 @@ Current status:
 - `v0.2.10` exposes the first dry-run CLI/MCP checks for delegate, attest, and anchor.
 - `v0.2.11` adds `counterparty_bound` and `claimable_once` delegate capability previews.
 - `v0.2.12` adds CLI-only real delegate receipt writes.
+- `v0.2.13` adds the WOM naming baseline and compatibility-safe CLI aliases: `mint-zet`, `parcel`, and `admit`.
 
 Short form:
 

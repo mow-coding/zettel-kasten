@@ -1,10 +1,14 @@
-# 기초 제품 백서: Zettel-Kasten And Zet
+# 기초 제품 백서: WOM, Zettel-Kasten, And Zet
 
 상태: 공개 제품 기획 기준선
 날짜: 2026-05-23
 버전 맥락: v0.2.7 planning document
 
-이 문서는 `zettel-kasten`과 `zet`의 상세한 공개 제품 철학 문서입니다.
+이 문서는 WOM, `zettel-kasten`, `zet`의 상세한 공개 제품 철학 문서입니다.
+
+`WOM`은 `Widesider of Modernity`의 약자입니다. modernity의 최전선에서 인간이 인식할 수 있는 지평을 넓히겠다는 의도를 담습니다.
+
+`zettel-kasten`은 역사적 뿌리와 archive method입니다. `zet`는 active product primitive입니다.
 
 구현 세부사항보다 먼저, 이 시스템이 무엇인지, 왜 필요한지, 인간과 AI에 대해 어떤 전제를 갖는지, 그리고 같은 구조가 어떻게 private archive, HITL workflow, AI-agent harness, 메신저, SNS, 협업툴로 확장될 수 있는지를 설명합니다.
 

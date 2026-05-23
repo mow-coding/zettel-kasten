@@ -4,6 +4,24 @@ All notable public releases of `zettel-kasten` and `zet` should be documented he
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.13 - 2026-05-23
+
+WOM naming baseline and compatibility alias patch.
+
+Added:
+
+- public WOM naming documents in English and Korean,
+- `mint-zet` as the preferred CLI surface for minting a zet, with `mint-zettel` preserved as a compatibility alias,
+- `parcel` as the preferred CLI surface for creating a portable bounded unit, with `pack` preserved as a compatibility alias,
+- `admit --dry-run` as the preferred CLI surface for previewing parcel/workpack admission, with `import --dry-run` preserved as a compatibility alias,
+- documentation that places `WOM`, `zet`, `node`, and `mint -> delegate -> attest -> anchor` at the center of the product language.
+
+Compatibility:
+
+- `ai-archive-kit`, `zettels/`, `receipts/`, `workpacks/`, and existing schema names remain unchanged for v0.2 compatibility,
+- `promote`, `share`, `mint-zettel`, `pack`, and `import` remain available,
+- no private archive migration is required.
+
 ## v0.2.12 - 2026-05-23
 
 Real delegate receipt write patch.

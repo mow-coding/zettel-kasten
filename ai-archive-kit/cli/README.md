@@ -1,6 +1,10 @@
-# AI Archive Kit CLI
+# WOM Archive Kit CLI
 
-This is the first minimal CLI for zettel-kasten archives.
+This is the current minimal CLI for WOM archive nodes.
+
+The folder/package still uses `ai-archive-kit` during v0.2 compatibility, but the preferred product language is WOM, `zet`, `node`, and `mint -> delegate -> attest -> anchor`.
+
+See `ai-archive-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
 For a beginner-friendly full walkthrough, see:
 
@@ -30,11 +34,14 @@ read-zettel
 create-draft
   Create a draft zettel in inbox/.
 
-mint-zettel --dry-run
+mint-zet --dry-run
   Check minting readiness and preview canonical path, mint receipt, and draft snapshot without writing.
 
-mint-zettel --approve --reviewed-by
+mint-zet --approve --reviewed-by
   Mint an inbox draft zet into canonical private archive memory and write receipt/snapshot evidence.
+
+mint-zettel
+  Transitional compatibility alias for mint-zet.
 
 promote --dry-run
   Legacy-compatible promotion readiness check.
@@ -48,14 +55,20 @@ index
 search
   Search zettels, object manifest entries, views, and source map entries through the generated index.
 
+parcel
+  Create a portable parcel from a saved view. The v0.2 compatibility path still writes under workpacks/.
+
 pack
-  Create a portable workpack from a saved view.
+  Transitional compatibility alias for parcel.
+
+admit --dry-run
+  Preview admitting a parcel/workpack without mutating the target archive.
 
 import --dry-run
-  Preview a workpack import without mutating the target archive.
+  Transitional compatibility alias for admit.
 
 share --dry-run
-  Preview a governed archive share from a saved view with scope and trust gates.
+  Legacy-compatible dry-run for the older share language. Product language should prefer delegate.
 
 delegate-zet --dry-run
   Preview scoped zet delegation and return a delegate capability receipt preview without writing files.
@@ -174,7 +187,7 @@ python ai-archive-kit\cli\archive.py create-draft .\tmp-my-archive `
 Preview minting without writing canonical memory:
 
 ```powershell
-python ai-archive-kit\cli\archive.py mint-zettel ai-archive-kit\examples\fake-life-archive `
+python ai-archive-kit\cli\archive.py mint-zet ai-archive-kit\examples\fake-life-archive `
   --path inbox\zet_20260519_draft_ai_lunch_note.md `
   --dry-run
 ```
@@ -208,7 +221,7 @@ warnings
 Dry-run writes nothing. Real minting is available only through the CLI and requires both an approval flag and a reviewer id:
 
 ```powershell
-python ai-archive-kit\cli\archive.py mint-zettel .\tmp-my-archive `
+python ai-archive-kit\cli\archive.py mint-zet .\tmp-my-archive `
   --path inbox\PUT-THE-DRAFT-FILENAME-HERE.md `
   --approve `
   --reviewed-by person:me
@@ -244,16 +257,16 @@ db/archive-index.sqlite
 
 It is a rebuildable search map. It is not the source of truth for archive memory.
 
-Create a workpack from a saved view:
+Create a parcel from a saved view:
 
 ```powershell
-python ai-archive-kit\cli\archive.py pack ai-archive-kit\examples\fake-life-archive `
+python ai-archive-kit\cli\archive.py parcel ai-archive-kit\examples\fake-life-archive `
   --view view.fake.education.gilwon `
   --purpose "Portable education context." `
   --mode reference
 ```
 
-`pack` writes a new folder under:
+`parcel` writes a new folder under the v0.2 compatibility path:
 
 ```text
 workpacks/
@@ -261,17 +274,17 @@ workpacks/
 
 The first implementation includes selected zettel files, a view snapshot, and object manifest metadata. Original object files are not copied by default.
 
-Preview importing a workpack:
+Preview admitting a parcel/workpack:
 
 ```powershell
-python ai-archive-kit\cli\archive.py import .\tmp-my-archive `
+python ai-archive-kit\cli\archive.py admit .\tmp-my-archive `
   .\some-workpack `
   --dry-run
 ```
 
-Import dry-run reports proposed inbox writes, object manifest merges, duplicate zettel IDs, warnings, blockers, and a receipt preview. Real import is intentionally unavailable.
+Admit/import dry-run reports proposed inbox writes, object manifest merges, duplicate zettel IDs, warnings, blockers, and a receipt preview. Real admit/import is intentionally unavailable.
 
-Preview sharing a saved view with another archive:
+Preview legacy sharing of a saved view with another archive:
 
 ```powershell
 python ai-archive-kit\cli\archive.py share ai-archive-kit\examples\fake-life-archive `

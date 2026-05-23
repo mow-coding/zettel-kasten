@@ -839,6 +839,27 @@ class ArchiveCliTests(unittest.TestCase):
             id_result = json.loads(id_output)
             self.assertEqual(id_result["draft_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
 
+    def test_mint_zet_alias_matches_legacy_mint_zettel(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            code, output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["zettel_id"], "zet_20260519_draft_ai_lunch_note")
+            self.assertEqual(result["proposed_canonical_path"], "zettels/zet_20260519_draft_ai_lunch_note.md")
+
     def test_mint_zettel_dry_run_prefers_minting_rules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -1742,6 +1763,29 @@ class ArchiveCliTests(unittest.TestCase):
             doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
             self.assertEqual(doctor_code, 0, doctor_output)
 
+    def test_parcel_alias_creates_workpack_compat_package(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            code, output = self.run_cli(
+                [
+                    "parcel",
+                    str(archive_root),
+                    "--view",
+                    "view.fake.education.gilwon",
+                    "--purpose",
+                    "Portable education context through the parcel alias.",
+                    "--mode",
+                    "reference",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["package_path"].startswith("workpacks/"))
+            self.assertTrue((archive_root / result["package_path"] / "package.yml").is_file())
+
     def test_pack_unknown_view_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -1796,6 +1840,38 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["proposed_receipt_path"].startswith("receipts/import/"))
             self.assertFalse((target_root / "inbox" / "zet_20110228_fake_school_record.md").exists())
             self.assertFalse((target_root / result["proposed_receipt_path"]).exists())
+
+    def test_admit_alias_previews_workpack_import_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source_root = self.copy_fake_archive(Path(tmp) / "source")
+            pack_code, pack_output = self.run_cli(
+                [
+                    "parcel",
+                    str(source_root),
+                    "--view",
+                    "view.fake.education.gilwon",
+                    "--purpose",
+                    "Portable education context for admit dry-run.",
+                    "--mode",
+                    "reference",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(pack_code, 0, pack_output)
+            package_root = source_root / json.loads(pack_output)["package_path"]
+
+            target_root = Path(tmp) / "target"
+            init_code, init_output = self.init_personal_archive(target_root, "archive:personal:admit-target")
+            self.assertEqual(init_code, 0, init_output)
+
+            code, output = self.run_cli(["admit", str(target_root), str(package_root), "--dry-run", "--format", "json"])
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["zettels"][0]["target_path"], "inbox/zet_20110228_fake_school_record.md")
+            self.assertFalse((target_root / "inbox" / "zet_20110228_fake_school_record.md").exists())
 
     def test_import_workpack_dry_run_requires_trust_when_package_requires_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

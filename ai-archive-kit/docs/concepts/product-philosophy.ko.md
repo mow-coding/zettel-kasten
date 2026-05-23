@@ -1,9 +1,13 @@
-# 제품 철학: Zettel-Kasten And Zet
+# 제품 철학: WOM, Zettel-Kasten, And Zet
 
 상태: 공개 철학 baseline
 날짜: 2026-05-23
 
-이 문서는 `zettel-kasten`과 `zet`의 설계 철학을 설명합니다.
+이 문서는 WOM, `zettel-kasten`, `zet`의 설계 철학을 설명합니다.
+
+`WOM`은 `Widesider of Modernity`의 약자입니다.
+
+`zettel-kasten`은 역사적 뿌리와 local archive method입니다. `zet`는 active product primitive입니다.
 
 단순한 기술 명세가 아니라, 왜 이 시스템이 필요한지 설명하는 문서입니다.
 
@@ -11,6 +15,7 @@
 
 - [Foundational Product Whitepaper](foundational-product-whitepaper.md)
 - [한국어 Foundational Product Whitepaper](foundational-product-whitepaper.ko.md)
+- [WOM 명칭과 용어 기준](naming-and-terminology.ko.md)
 - [Zet 공유 Lifecycle 용어](zet-sharing-lifecycle.ko.md)
 
 ## 1. 핵심 주장
@@ -19,7 +24,7 @@ AI에게 필요한 것은 prompt만이 아닙니다.
 
 AI에게는 오래 남고, 검증 가능하며, 사용자가 소유하는 memory가 필요합니다.
 
-`zettel-kasten`은 그 memory를 위한 local-first archive system입니다.
+WOM은 그 memory를 위한 local-first archive node에서 출발합니다.
 
 `zet`는 원본 자료, AI와의 대화, 사람의 판단을 durable archive memory로 바꾸는 텍스트 단위입니다.
 

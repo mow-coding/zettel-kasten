@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Minimal AI Archive Kit CLI.
+"""Minimal WOM Archive Kit CLI.
 
 Commands:
   doctor  Inspect an archive for structural and policy issues.
   init    Create a new archive from a built-in template.
   index   Build a generated local SQLite search index.
-  pack    Create a portable workpack from a view.
-  import  Preview a workpack import without mutating the target archive.
+  parcel Create a portable parcel from a view. Alias: pack.
+  admit  Preview admitting a parcel/workpack without mutating the target archive. Alias: import.
   import-external
           Import Notion or Google Drive exports as governed inbox drafts.
   providers
@@ -17,8 +17,9 @@ Commands:
           Metadata-only scan of a registered source into source-maps/.
   add-source
           Register a source without hand-editing source-bindings.yml.
-  mint-zettel
+  mint-zet
           Mint an inbox draft zet into canonical private archive memory.
+          Alias: mint-zettel.
   delegate-zet
           Preview or write delegated zet access from a saved view.
   attest-zet
@@ -1534,17 +1535,17 @@ def command_pack(args: argparse.Namespace) -> int:
     if args.format == "json":
         print_json(result)
     else:
-        print(f"Created workpack {result['package_id']} at {result['package_path']}")
+        print(f"Created parcel {result['package_id']} at {result['package_path']}")
         print(f"View: {result['view_id']}")
         print(f"Mode: {result['mode']}")
-        print(f"Zettels: {result['zettels']}")
+        print(f"Zets: {result['zettels']}")
         print(f"Objects: {result['objects']} metadata record(s)")
     return 0
 
 
 def command_import_workpack(args: argparse.Namespace) -> int:
     if not args.dry_run:
-        print("Only --dry-run workpack import is implemented. Real import is intentionally unavailable.", file=sys.stderr)
+        print("Only --dry-run parcel admit/import is implemented. Real admit/import is intentionally unavailable.", file=sys.stderr)
         return 1
     try:
         result = archive_services.import_workpack_dry_run_with_trust(
@@ -1561,10 +1562,10 @@ def command_import_workpack(args: argparse.Namespace) -> int:
         print_json(result)
     else:
         state = "passed" if result["ok"] else "blocked"
-        print(f"Workpack import dry-run {state}: {result['package_id']}")
+        print(f"Parcel admit dry-run {state}: {result['package_id']}")
         print(f"Target archive: {result['target_archive']}")
         print(f"Proposed receipt path: {result['proposed_receipt_path']}")
-        print(f"Zettels: {len(result['zettels'])}")
+        print(f"Zets: {len(result['zettels'])}")
         print(f"Objects: {len(result['objects'])}")
         print(f"Scope gate included zettels: {len(result['scope_gate']['included_zettels'])}")
         print(f"Trust gate: {result['trust_gate']['status']}")
@@ -2794,7 +2795,7 @@ def read_body_arg(args: argparse.Namespace) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="archive",
-        description="Minimal CLI for AI Archive Kit / zettel-kasten archives.",
+        description="Minimal CLI for WOM archive nodes.",
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
 
@@ -2838,7 +2839,7 @@ def build_parser() -> argparse.ArgumentParser:
     create_draft.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     create_draft.set_defaults(func=command_create_draft)
 
-    promote = subcommands.add_parser("promote", help="Check whether a draft zettel can be promoted.")
+    promote = subcommands.add_parser("promote", help="Legacy: check whether a draft zettel can be promoted.")
     promote.add_argument("archive_root", help="Archive root to inspect.")
     promote_target = promote.add_mutually_exclusive_group(required=True)
     promote_target.add_argument("--zettel-id", help="Draft zettel id to check.")
@@ -2854,7 +2855,11 @@ def build_parser() -> argparse.ArgumentParser:
     promote.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     promote.set_defaults(func=command_promote)
 
-    mint = subcommands.add_parser("mint-zettel", help="Mint an inbox draft zet into canonical private archive memory.")
+    mint = subcommands.add_parser(
+        "mint-zet",
+        aliases=["mint-zettel"],
+        help="Mint an inbox draft zet into canonical private archive memory. Alias: mint-zettel.",
+    )
     mint.add_argument("archive_root", help="Archive root to inspect.")
     mint_target = mint.add_mutually_exclusive_group(required=True)
     mint_target.add_argument("--zettel-id", help="Draft zettel id to mint.")
@@ -2882,7 +2887,11 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     search.set_defaults(func=command_search)
 
-    pack = subcommands.add_parser("pack", help="Create a portable workpack from a saved view.")
+    pack = subcommands.add_parser(
+        "parcel",
+        aliases=["pack"],
+        help="Create a portable parcel from a saved view. Alias: pack.",
+    )
     pack.add_argument("archive_root", help="Source archive root.")
     pack.add_argument("--view", required=True, help="View id to pack.")
     pack.add_argument("--purpose", required=True, help="Reason this workpack exists.")
@@ -2890,16 +2899,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         choices=["reference", "copy", "mount", "derive", "handover", "return"],
         default="reference",
-        help="Workpack mode.",
+        help="Parcel/workpack mode.",
     )
     pack.add_argument("--target-archive", help="Optional target archive id.")
     pack.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     pack.set_defaults(func=command_pack)
 
-    import_workpack = subcommands.add_parser("import", help="Preview a workpack import without mutating the target archive.")
+    import_workpack = subcommands.add_parser(
+        "admit",
+        aliases=["import"],
+        help="Preview admitting a parcel/workpack without mutating the target archive. Alias: import.",
+    )
     import_workpack.add_argument("archive_root", help="Target archive root.")
-    import_workpack.add_argument("workpack", help="Workpack directory or package.yml file.")
-    import_workpack.add_argument("--dry-run", action="store_true", help="Preview import without writing target archive files.")
+    import_workpack.add_argument("workpack", help="Parcel/workpack directory or package.yml file.")
+    import_workpack.add_argument("--dry-run", action="store_true", help="Preview admit/import without writing target archive files.")
     import_workpack.add_argument("--counterparty-id", help="Expected sender identity/archive/principal id for trust-gated workpacks.")
     import_workpack.add_argument("--counterparty-fingerprint", help="Expected sender public key fingerprint for trust-gated workpacks.")
     import_workpack.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
@@ -2916,7 +2929,7 @@ def build_parser() -> argparse.ArgumentParser:
     import_external.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     import_external.set_defaults(func=command_import_external)
 
-    share = subcommands.add_parser("share", help="Dry-run a governed archive share from a saved view.")
+    share = subcommands.add_parser("share", help="Legacy: dry-run a governed archive share from a saved view.")
     share.add_argument("archive_root", help="Source archive root.")
     share.add_argument("--view", required=True, help="View id to share.")
     share.add_argument("--target-archive", required=True, help="Target archive id.")

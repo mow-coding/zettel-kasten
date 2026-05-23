@@ -20,6 +20,8 @@ These documents explain the concept, product philosophy, archive model, and `zet
 
 Start here:
 
+- [WOM Naming And Terminology](concepts/naming-and-terminology.md)
+- [Korean WOM Naming And Terminology](concepts/naming-and-terminology.ko.md)
 - [Foundational Product Whitepaper](concepts/foundational-product-whitepaper.md)
 - [Korean Foundational Product Whitepaper](concepts/foundational-product-whitepaper.ko.md)
 - [Product Philosophy](concepts/product-philosophy.md)
@@ -42,6 +44,7 @@ These documents cover:
 - why `zet` is always text,
 - why source/original data remains separate from minted zets,
 - why private archive memory comes before social sharing,
+- why `WOM`, `zet`, and `node` are the preferred product-language anchors,
 - why future sharing verbs are framed as `mint -> delegate -> attest -> anchor`,
 - how `zet` sharing can later become messenger, SNS/feed, or collaboration workspace,
 - why this model is relevant to AI Transformation (AX).

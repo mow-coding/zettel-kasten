@@ -1,9 +1,13 @@
-# Product Philosophy: Zettel-Kasten And Zet
+# Product Philosophy: WOM, Zettel-Kasten, And Zet
 
 Status: public philosophy baseline
 Date: 2026-05-23
 
-This document explains the design philosophy behind `zettel-kasten` and `zet`.
+This document explains the design philosophy behind WOM, `zettel-kasten`, and `zet`.
+
+`WOM` is the umbrella name: `Widesider of Modernity`.
+
+`zettel-kasten` is the historical root and local archive method. `zet` is the active product primitive.
 
 It is intentionally not only a technical spec. It explains why the system exists.
 
@@ -11,6 +15,7 @@ For the longer public product planning document, read:
 
 - [Foundational Product Whitepaper](foundational-product-whitepaper.md)
 - [Korean Foundational Product Whitepaper](foundational-product-whitepaper.ko.md)
+- [Naming And Terminology](naming-and-terminology.md)
 - [Zet Sharing Lifecycle Terminology](zet-sharing-lifecycle.md)
 
 ## 1. Thesis
@@ -19,7 +24,7 @@ AI does not only need prompts.
 
 AI needs durable, inspectable, user-owned memory.
 
-`zettel-kasten` is a local-first archive system for that memory.
+WOM uses a local-first archive node for that memory.
 
 `zet` is the text unit that lets a person or organization turn source material, AI conversations, and human judgment into durable archive memory.
 

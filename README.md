@@ -1,19 +1,28 @@
-# Zettel-Kasten + Zet
+# WOM
 
-> A local-first, AI-native archive protocol where private memory becomes durable, inspectable, and deliberately shareable text.
+> Widesider of Modernity: a local-first, AI-native, Web3-oriented archive and communication system for widening the horizon of human memory.
 
 [한국어 README](README.ko.md) · [Documentation Map](ai-archive-kit/docs/public-documentation-map.md) · [Upgrade Guide](UPGRADE.md) · [Changelog](CHANGELOG.md) · [Release Notes](ai-archive-kit/docs/releases/) · [Security](SECURITY.md)
 
-`zettel-kasten` is a personal and organizational archive system designed for AI-assisted work without surrendering the archive to a central SaaS server.
+`WOM` stands for `Widesider of Modernity`.
 
-`zet` is the text-centered unit that can later power private messaging, social feeds, and collaborative workspaces.
+The name expresses the ambition to stand near the frontier of modernity and widen the horizon that humans can perceive.
+
+Inside WOM:
+
+- `zettel-kasten` is the historical root and local archive method,
+- `zet` is the active text primitive,
+- `node` is the subject/archive participant,
+- the preferred lifecycle is `mint -> delegate -> attest -> anchor`.
+
+`zettel-kasten` remains the repository and archive-system root, but the product language should center `WOM`, `zet`, and `node`.
 
 ## Status
 
 Current public baseline:
 
 ```text
-v0.2.12 pre-release
+v0.2.13 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -26,8 +35,8 @@ What exists today:
 - setup and security documentation,
 - versioned release notes,
 - early Python CLI and MCP tooling,
-- CLI-backed private minting from draft zet to canonical zettel, mint receipt, and draft snapshot,
-- CLI-backed real delegate receipt writes for scoped zet delegation,
+- CLI-backed private minting from draft zet to canonical archive memory, currently recorded with mint receipts and draft snapshots,
+- CLI-backed real delegate proof/receipt writes for scoped zet delegation,
 - dry-run `attest-zet` and `anchor-zet` lifecycle previews, including `claimable_once` delegate capability previews.
 
 What does not exist yet:
@@ -39,7 +48,7 @@ What does not exist yet:
 
 ## Core Model
 
-The base archive model is:
+The base WOM archive model is:
 
 ```text
 source/original data + metadata + minted zets
@@ -51,7 +60,9 @@ In other words:
 - metadata makes sources addressable and auditable,
 - minted zets are human-approved archive memory.
 
-The system starts from the archive, not from a social app.
+The system starts from the archive node, not from a social app.
+
+See [Naming And Terminology](ai-archive-kit/docs/concepts/naming-and-terminology.md) for the current naming freeze.
 
 For the full design philosophy, including the human data primitive model, AX rationale, and Web3-like `zet` sharing model, see:
 
@@ -86,7 +97,7 @@ Minting does not mean public posting. External sharing is a separate action.
 
 Most tools make users adapt to an application.
 
-`zettel-kasten` takes the opposite direction:
+WOM takes the opposite direction:
 
 ```text
 the user's archive stays primary,
@@ -136,7 +147,7 @@ See [Source Object Storage Policy](ai-archive-kit/docs/source-object-storage-pol
 
 Not every text artifact has the same authority.
 
-`zettel-kasten` distinguishes:
+WOM distinguishes:
 
 ```text
 L0 original source object
@@ -153,11 +164,12 @@ See [Text Provenance Hierarchy](ai-archive-kit/docs/text-provenance-hierarchy.md
 
 ## Versioning
 
-`zettel-kasten` and `zet` are managed as a versioned protocol family.
+WOM, `zettel-kasten`, and `zet` are managed as a versioned protocol family.
 
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.13
 v0.2.12
 v0.2.11
 v0.2.9

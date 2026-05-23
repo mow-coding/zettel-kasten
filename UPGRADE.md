@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.12` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.12.md` |
+| `v0.2.13` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.13.md` |
+| `v0.2.12` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.12.md` |
 | `v0.2.11` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.11.md` |
 | `v0.2.10` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.10.md` |
 | `v0.2.9` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.9.md` |
@@ -39,6 +40,29 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.12` To `v0.2.13`
+
+This is a compatible WOM naming baseline and CLI alias patch.
+
+What changed:
+
+- documented `WOM` as the umbrella name and `Widesider of Modernity` as its expansion,
+- added `archive mint-zet` as the preferred command name for minting a zet,
+- kept `archive mint-zettel` as a compatibility alias,
+- added `archive parcel` as the preferred command name for creating a bounded portable unit,
+- kept `archive pack` as a compatibility alias,
+- added `archive admit --dry-run` as the preferred command name for previewing parcel/workpack admission,
+- kept `archive import --dry-run` as a compatibility alias.
+
+No private archive migration is required.
+
+Existing scripts can keep using the old names, but new user-facing docs should prefer `mint-zet`, `parcel`, and `admit`.
+
+```bash
+git fetch --tags
+git checkout v0.2.13
+```
 
 ## From `v0.2.11` To `v0.2.12`
 

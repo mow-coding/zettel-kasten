@@ -20,6 +20,8 @@
 
 먼저 볼 문서:
 
+- [WOM 명칭과 용어 기준](concepts/naming-and-terminology.ko.md)
+- [WOM Naming And Terminology](concepts/naming-and-terminology.md)
 - [기초 제품 백서](concepts/foundational-product-whitepaper.ko.md)
 - [Foundational Product Whitepaper](concepts/foundational-product-whitepaper.md)
 - [Product Philosophy](concepts/product-philosophy.md)
@@ -42,6 +44,7 @@
 - 왜 `zet`는 항상 텍스트인지,
 - 왜 source/original data와 minted zet를 분리해야 하는지,
 - 왜 social sharing보다 private archive memory가 먼저인지,
+- 왜 `WOM`, `zet`, `node`를 제품 언어의 중심축으로 삼는지,
 - 왜 미래 공유 동사를 `mint -> delegate -> attest -> anchor`로 잡는지,
 - `zet` 공유가 어떻게 messenger, SNS/feed, collaboration workspace로 확장되는지,
 - 이 모델이 AX, 즉 AI Transformation 흐름에서 왜 중요한지.

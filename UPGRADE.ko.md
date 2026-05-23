@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.12` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.12.md` |
+| `v0.2.13` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.13.md` |
+| `v0.2.12` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.12.md` |
 | `v0.2.11` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.11.md` |
 | `v0.2.10` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.10.md` |
 | `v0.2.9` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.9.md` |
@@ -39,6 +40,29 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.12`에서 `v0.2.13`으로
+
+호환 가능한 WOM 명칭 기준선과 CLI alias 패치입니다.
+
+변경 사항:
+
+- `WOM`을 전체 umbrella name으로, `Widesider of Modernity`를 그 확장명으로 기록했습니다.
+- zet를 민팅하는 선호 명령으로 `archive mint-zet`을 추가했습니다.
+- 기존 `archive mint-zettel`은 compatibility alias로 유지했습니다.
+- 범위가 정해진 portable unit을 만드는 선호 명령으로 `archive parcel`을 추가했습니다.
+- 기존 `archive pack`은 compatibility alias로 유지했습니다.
+- parcel/workpack을 들여오는 과정을 미리 검토하는 선호 명령으로 `archive admit --dry-run`을 추가했습니다.
+- 기존 `archive import --dry-run`은 compatibility alias로 유지했습니다.
+
+실제 private archive migration은 필요 없습니다.
+
+기존 스크립트는 옛 이름을 계속 써도 됩니다. 다만 새 사용자-facing 문서는 `mint-zet`, `parcel`, `admit`을 우선 사용해야 합니다.
+
+```bash
+git fetch --tags
+git checkout v0.2.13
+```
 
 ## `v0.2.11`에서 `v0.2.12`로
 
