@@ -58,7 +58,7 @@ share --dry-run
   Preview a governed archive share from a saved view with scope and trust gates.
 
 delegate-zet --dry-run
-  Preview scoped zet delegation and return a delegate receipt preview without writing files.
+  Preview scoped zet delegation and return a delegate capability receipt preview without writing files.
 
 attest-zet --dry-run
   Preview attestation of a delegated foreign zet receipt without writing files.
@@ -288,6 +288,29 @@ whether sensitive categories are blocked
 whether the counterparty fingerprint matches archive-identity.yml
 where the future share receipt would live
 ```
+
+Preview counterparty-bound zet delegation:
+
+```powershell
+python ai-archive-kit\cli\archive.py delegate-zet ai-archive-kit\examples\fake-life-archive `
+  --view view.fake.company.derived `
+  --target-policy counterparty_bound `
+  --target-archive archive:company:fake-blue `
+  --counterparty-id archive:company:fake-blue `
+  --counterparty-fingerprint SHA256:fake-company-blue `
+  --dry-run
+```
+
+Preview one-time claimable delegation without choosing the recipient yet:
+
+```powershell
+python ai-archive-kit\cli\archive.py delegate-zet ai-archive-kit\examples\fake-life-archive `
+  --view view.fake.company.derived `
+  --target-policy claimable_once `
+  --dry-run
+```
+
+`claimable_once` does not write a claim registry yet. It only previews a delegate capability that can later be bound to the attesting archive.
 
 Preview ownership transfer without changing the archive:
 

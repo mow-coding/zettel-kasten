@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.10` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.10.md` |
+| `v0.2.11` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.11.md` |
+| `v0.2.10` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.10.md` |
 | `v0.2.9` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.9.md` |
 | `v0.2.8` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.8.md` |
 | `v0.2.7` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.7.md` |
@@ -37,6 +38,25 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.10`에서 `v0.2.11`로
+
+호환 가능한 delegate capability 계약 패치입니다.
+
+변경 사항:
+
+- `archive delegate-zet --dry-run`에 `--target-policy counterparty_bound|claimable_once` 추가,
+- `claimable_once` delegate preview에서는 `--target-archive` 없이도 실행 가능,
+- `delegation_capability`, `claim_binding`, `settlement_condition` preview field 추가,
+- settlement는 아직 비금융 상태이며 `mode: "none"`으로만 기록,
+- 실제 P2P, claim registry, spent registry, revocation, blockchain, payment는 아직 구현하지 않음.
+
+private archive migration은 필요하지 않습니다.
+
+```bash
+git fetch --tags
+git checkout v0.2.11
+```
 
 ## `v0.2.9`에서 `v0.2.10`으로
 

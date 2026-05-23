@@ -341,11 +341,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "archive_root": {"type": "string"},
                 "view": {"type": "string"},
                 "target_archive": {"type": "string"},
+                "target_policy": {"type": "string", "enum": sorted(archive_services.DELEGATE_TARGET_POLICIES)},
                 "counterparty_id": {"type": "string"},
                 "counterparty_fingerprint": {"type": "string"},
                 "allow_sensitive": {"type": "boolean", "default": False},
             },
-            "required": ["archive_root", "view", "target_archive"],
+            "required": ["archive_root", "view"],
         },
     },
     {
@@ -914,7 +915,8 @@ def tool_share_check(arguments: dict[str, Any]) -> dict[str, Any]:
 def tool_delegate_zet_check(arguments: dict[str, Any]) -> dict[str, Any]:
     archive_root = require_path_arg(arguments, "archive_root")
     view_id = require_string_arg(arguments, "view")
-    target_archive = require_string_arg(arguments, "target_archive")
+    target_archive = optional_string_arg(arguments, "target_archive")
+    target_policy = optional_string_arg(arguments, "target_policy")
     counterparty_id = optional_string_arg(arguments, "counterparty_id")
     counterparty_fingerprint = optional_string_arg(arguments, "counterparty_fingerprint")
     allow_sensitive = bool(arguments.get("allow_sensitive", False))
@@ -926,6 +928,7 @@ def tool_delegate_zet_check(arguments: dict[str, Any]) -> dict[str, Any]:
         counterparty_id=counterparty_id,
         counterparty_fingerprint=counterparty_fingerprint,
         allow_sensitive=allow_sensitive,
+        target_policy=target_policy,
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"delegate_zet_check: {state}.", result)

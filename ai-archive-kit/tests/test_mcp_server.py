@@ -952,6 +952,88 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(anchored["lifecycle_action"], "anchor")
                 self.assertEqual(len(anchored["anchored_zets"]), 1)
                 self.assertFalse((target_root / anchored["proposed_anchor_metadata_path"]).exists())
+
+                claimable_delegate_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 4,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "delegate_zet_check",
+                            "arguments": {
+                                "archive_root": str(source_root),
+                                "view": "view.fake.company.derived",
+                                "target_policy": "claimable_once",
+                            },
+                        },
+                    },
+                )
+                claimable_delegate_result = claimable_delegate_response["result"]
+                self.assertFalse(claimable_delegate_result["isError"])
+                claimable_delegated = claimable_delegate_result["structuredContent"]
+                self.assertTrue(claimable_delegated["ok"])
+                self.assertIsNone(claimable_delegated["target_archive"])
+                self.assertEqual(claimable_delegated["delegation_capability"]["target_policy"], "claimable_once")
+                self.assertEqual(claimable_delegated["trust_gate"]["status"], "deferred_until_attestation")
+                self.assertFalse((source_root / claimable_delegated["proposed_delegate_receipt_path"]).exists())
+
+                claimable_delegate_path = self.write_json_receipt(
+                    target_root,
+                    claimable_delegated["proposed_delegate_receipt_path"],
+                    claimable_delegated["delegate_receipt_preview"],
+                )
+                claimable_attest_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 5,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "attest_zet_check",
+                            "arguments": {
+                                "archive_root": str(target_root),
+                                "delegate_receipt": archive_cli.archive_relative_path(claimable_delegate_path, target_root),
+                                "counterparty_id": "archive:personal:fake-life",
+                                "counterparty_fingerprint": "SHA256:fake-user-primary",
+                            },
+                        },
+                    },
+                )
+                claimable_attest_result = claimable_attest_response["result"]
+                self.assertFalse(claimable_attest_result["isError"])
+                claimable_attested = claimable_attest_result["structuredContent"]
+                self.assertTrue(claimable_attested["ok"])
+                self.assertEqual(claimable_attested["claim_binding"]["claimed_by_archive"], "archive:company:fake-blue")
+                self.assertEqual(claimable_attested["claim_binding"]["spent_state_after_attestation"], "spent_preview")
+                self.assertFalse((target_root / claimable_attested["proposed_attestation_receipt_path"]).exists())
+
+                claimable_attestation_path = self.write_json_receipt(
+                    target_root,
+                    claimable_attested["proposed_attestation_receipt_path"],
+                    claimable_attested["attestation_receipt_preview"],
+                )
+                claimable_anchor_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 6,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "anchor_zet_check",
+                            "arguments": {
+                                "archive_root": str(target_root),
+                                "attestation_receipt": archive_cli.archive_relative_path(claimable_attestation_path, target_root),
+                            },
+                        },
+                    },
+                )
+                claimable_anchor_result = claimable_anchor_response["result"]
+                self.assertFalse(claimable_anchor_result["isError"])
+                claimable_anchored = claimable_anchor_result["structuredContent"]
+                self.assertTrue(claimable_anchored["ok"])
+                self.assertEqual(claimable_anchored["claim_binding"]["target_policy"], "claimable_once")
+                self.assertFalse((target_root / claimable_anchored["proposed_anchor_metadata_path"]).exists())
         finally:
             self.stop_server(process)
 

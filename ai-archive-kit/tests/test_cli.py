@@ -2198,11 +2198,67 @@ class ArchiveCliTests(unittest.TestCase):
         result = json.loads(output)
         self.assertTrue(result["ok"])
         self.assertEqual(result["lifecycle_action"], "delegate")
+        self.assertEqual(result["target_policy"], "counterparty_bound")
         self.assertTrue(result["proposed_delegate_receipt_path"].startswith("receipts/delegate/"))
         self.assertEqual(result["delegate_receipt_preview"]["action"], "delegate_zet")
         self.assertEqual(result["delegate_receipt_preview"]["lifecycle_action"], "delegate")
+        self.assertEqual(result["delegation_capability"]["target_policy"], "counterparty_bound")
+        self.assertEqual(result["delegation_capability"]["settlement_condition"]["mode"], "none")
         self.assertEqual(len(result["delegated_zets"]), 1)
         self.assertEqual(len(result["delegated_zets"][0]["sha256"]), 64)
+        self.assertEqual(
+            archive_cli.validate_schema(result["delegate_receipt_preview"], "delegate-receipt.schema.json"),
+            [],
+        )
+        self.assertFalse((archive_root / result["proposed_delegate_receipt_path"]).exists())
+
+    def test_delegate_zet_counterparty_bound_requires_target_archive(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(
+            [
+                "delegate-zet",
+                str(archive_root),
+                "--view",
+                "view.fake.company.derived",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 1)
+        result = json.loads(output)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["target_policy"], "counterparty_bound")
+        self.assertTrue(any("target_archive is required" in blocker for blocker in result["blockers"]))
+        self.assertFalse((archive_root / result["proposed_delegate_receipt_path"]).exists())
+
+    def test_delegate_zet_claimable_once_dry_run_defers_target_trust(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(
+            [
+                "delegate-zet",
+                str(archive_root),
+                "--view",
+                "view.fake.company.derived",
+                "--target-policy",
+                "claimable_once",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertTrue(result["ok"])
+        self.assertIsNone(result["target_archive"])
+        self.assertEqual(result["target_policy"], "claimable_once")
+        self.assertEqual(result["trust_gate"]["status"], "deferred_until_attestation")
+        capability = result["delegation_capability"]
+        self.assertEqual(capability["target_policy"], "claimable_once")
+        self.assertEqual(capability["claim_limit"], 1)
+        self.assertEqual(capability["claim_state"], "unclaimed_preview")
+        self.assertEqual(capability["spent_state"], "not_spent_preview")
+        self.assertEqual(capability["settlement_condition"]["mode"], "none")
         self.assertEqual(
             archive_cli.validate_schema(result["delegate_receipt_preview"], "delegate-receipt.schema.json"),
             [],
@@ -2293,6 +2349,24 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(len(allowed["delegated_zets"]), 1)
             self.assertTrue(any("Sensitive zettel allowed" in warning for warning in allowed["warnings"]))
 
+            claimable_blocked_code, claimable_blocked_output = self.run_cli(
+                [
+                    "delegate-zet",
+                    str(archive_root),
+                    "--view",
+                    "view.fake.sensitive.medical",
+                    "--target-policy",
+                    "claimable_once",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(claimable_blocked_code, 1)
+            claimable_blocked = json.loads(claimable_blocked_output)
+            self.assertEqual(claimable_blocked["delegated_zets"], [])
+            self.assertEqual(claimable_blocked["trust_gate"]["status"], "deferred_until_attestation")
+
     def test_attest_and_anchor_zet_dry_run_preview_receipts_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source_root = self.copy_fake_archive(Path(tmp) / "source")
@@ -2369,6 +2443,85 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(anchor_result["lifecycle_action"], "anchor")
             self.assertEqual(len(anchor_result["anchored_zets"]), 1)
             self.assertEqual(anchor_result["anchor_metadata_preview"]["foreign_provenance_policy"]["do_not_claim_authorship"], True)
+            self.assertEqual(
+                archive_cli.validate_schema(anchor_result["anchor_metadata_preview"], "anchor-metadata.schema.json"),
+                [],
+            )
+            self.assertFalse((target_root / anchor_result["proposed_anchor_metadata_path"]).exists())
+
+    def test_claimable_once_attest_binds_claimant_and_anchor_preserves_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source_root = self.copy_fake_archive(Path(tmp) / "source")
+            target_root = self.copy_fake_archive_as_company_target(Path(tmp) / "target")
+            delegate_code, delegate_output = self.run_cli(
+                [
+                    "delegate-zet",
+                    str(source_root),
+                    "--view",
+                    "view.fake.company.derived",
+                    "--target-policy",
+                    "claimable_once",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(delegate_code, 0, delegate_output)
+            delegate_result = json.loads(delegate_output)
+            delegate_path = self.write_json_receipt(
+                target_root,
+                delegate_result["proposed_delegate_receipt_path"],
+                delegate_result["delegate_receipt_preview"],
+            )
+
+            attest_code, attest_output = self.run_cli(
+                [
+                    "attest-zet",
+                    str(target_root),
+                    "--delegate-receipt",
+                    archive_cli.archive_relative_path(delegate_path, target_root),
+                    "--counterparty-id",
+                    "archive:personal:fake-life",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-user-primary",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(attest_code, 0, attest_output)
+            attest_result = json.loads(attest_output)
+            self.assertEqual(attest_result["verification"]["target_policy"], "claimable_once")
+            self.assertTrue(attest_result["verification"]["target_archive_match"])
+            self.assertEqual(attest_result["claim_binding"]["claimed_by_archive"], "archive:company:fake-blue")
+            self.assertEqual(attest_result["claim_binding"]["spent_state_after_attestation"], "spent_preview")
+            self.assertEqual(attest_result["settlement_condition"]["mode"], "none")
+            self.assertEqual(
+                archive_cli.validate_schema(attest_result["attestation_receipt_preview"], "attestation-receipt.schema.json"),
+                [],
+            )
+
+            attestation_path = self.write_json_receipt(
+                target_root,
+                attest_result["proposed_attestation_receipt_path"],
+                attest_result["attestation_receipt_preview"],
+            )
+            anchor_code, anchor_output = self.run_cli(
+                [
+                    "anchor-zet",
+                    str(target_root),
+                    "--attestation-receipt",
+                    archive_cli.archive_relative_path(attestation_path, target_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(anchor_code, 0, anchor_output)
+            anchor_result = json.loads(anchor_output)
+            self.assertEqual(anchor_result["claim_binding"]["claimed_by_archive"], "archive:company:fake-blue")
+            self.assertEqual(anchor_result["claim_binding"]["spent_state_after_attestation"], "spent_preview")
+            self.assertEqual(anchor_result["anchored_zets"][0]["provenance"]["claim_binding"]["target_policy"], "claimable_once")
             self.assertEqual(
                 archive_cli.validate_schema(anchor_result["anchor_metadata_preview"], "anchor-metadata.schema.json"),
                 [],

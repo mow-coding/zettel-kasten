@@ -27,8 +27,11 @@
     "timestamp": {"type": "string"},
     "attesting_archive": {"type": "string"},
     "source_archive": {"type": "string"},
-    "target_archive": {"type": "string"},
+    "target_archive": {"type": ["string", "null"]},
     "delegate_receipt": {"type": "object"},
+    "delegation_capability": {"type": "object"},
+    "claim_binding": {"type": "object"},
+    "settlement_condition": {"type": "object"},
     "delegated_zets": {
       "type": "array",
       "items": {"type": "object"}

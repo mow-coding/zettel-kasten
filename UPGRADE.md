@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.10` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.10.md` |
+| `v0.2.11` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.11.md` |
+| `v0.2.10` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.10.md` |
 | `v0.2.9` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.9.md` |
 | `v0.2.8` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.8.md` |
 | `v0.2.7` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.7.md` |
@@ -37,6 +38,25 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.10` To `v0.2.11`
+
+This is a compatible delegate capability contract patch.
+
+What changed:
+
+- added `--target-policy counterparty_bound|claimable_once` to `archive delegate-zet --dry-run`,
+- made `--target-archive` optional for `claimable_once` delegate previews,
+- added `delegation_capability`, `claim_binding`, and `settlement_condition` preview fields,
+- kept settlement non-financial with `mode: "none"`,
+- kept real P2P, claim registry, spent registry, revocation, blockchain, and payment unavailable.
+
+No private archive migration is required.
+
+```bash
+git fetch --tags
+git checkout v0.2.11
+```
 
 ## From `v0.2.9` To `v0.2.10`
 

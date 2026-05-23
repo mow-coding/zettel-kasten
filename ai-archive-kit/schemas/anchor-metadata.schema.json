@@ -28,6 +28,8 @@
     "archive_id": {"type": "string"},
     "source_archive": {"type": "string"},
     "attestation_receipt": {"type": "object"},
+    "claim_binding": {"type": "object"},
+    "settlement_condition": {"type": "object"},
     "anchored_zets": {
       "type": "array",
       "items": {"type": "object"}

@@ -62,6 +62,13 @@ MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
 DELEGATE_RECEIPTS_DIR = "receipts/delegate"
 ATTESTATION_RECEIPTS_DIR = "receipts/attest"
 ANCHOR_METADATA_DIR = "anchors"
+DELEGATE_TARGET_POLICY_COUNTERPARTY_BOUND = "counterparty_bound"
+DELEGATE_TARGET_POLICY_CLAIMABLE_ONCE = "claimable_once"
+DELEGATE_TARGET_POLICIES = {
+    DELEGATE_TARGET_POLICY_COUNTERPARTY_BOUND,
+    DELEGATE_TARGET_POLICY_CLAIMABLE_ONCE,
+}
+DELEGATE_DEFAULT_TARGET_POLICY = DELEGATE_TARGET_POLICY_COUNTERPARTY_BOUND
 MINT_AUTHORITY_MODE = "basic"
 MINT_CHECKLIST_VERSION = "zet-mint/v0.2"
 SOURCE_SCAN_MODE = "metadata_only"
@@ -2048,35 +2055,20 @@ def build_external_import_zettel_text(
     return "---\n" + dump_yaml(frontmatter) + "---\n\n" + item["body"].rstrip() + "\n"
 
 
-def share_archive_scope_dry_run(
-    archive_root: Path | str,
+def build_zettel_scope_preview(
+    root: Path,
     *,
     view_id: str,
-    target_archive: str,
-    counterparty_id: str | None = None,
-    counterparty_fingerprint: str | None = None,
-    allow_sensitive: bool = False,
-) -> dict[str, Any]:
-    root = require_existing_archive_root(archive_root)
-    if not view_id:
-        raise ArchiveServiceError("view_id is required.")
-    if not target_archive.strip():
-        raise ArchiveServiceError("target_archive is required.")
-
-    blockers: list[str] = []
-    warnings: list[str] = []
+    target_archive: str | None,
+    allow_sensitive: bool,
+    blockers: list[str],
+    warnings: list[str],
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
     source_archive = read_archive_id(root)
     identity_doc = load_archive_identity(root)
     ownership = identity_doc.get("ownership") if isinstance(identity_doc.get("ownership"), dict) else {}
     view = resolve_view(root, view_id)
     selected = select_zettels_for_view(root, view)
-    trust_gate = validate_counterparty_trust(
-        root,
-        counterparty_id=counterparty_id or target_archive,
-        counterparty_fingerprint=counterparty_fingerprint,
-        blockers=blockers,
-    )
-
     included: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
     for zettel in selected:
@@ -2105,9 +2097,6 @@ def share_archive_scope_dry_run(
     if not selected:
         warnings.append(f"View selected no canonical zettels: {view_id}.")
 
-    proposed_receipt_path = (
-        f"receipts/share/{safe_slug(source_archive)}__{safe_slug(target_archive)}__{safe_slug(view_id)}.share.json"
-    )
     scope_gate = {
         "unit": "view",
         "view_id": view_id,
@@ -2125,6 +2114,158 @@ def share_archive_scope_dry_run(
         "operators": ownership.get("operators") if isinstance(ownership.get("operators"), list) else [],
         "receipt_required_for_transfer": True,
     }
+    return source_archive, scope_gate, ownership_gate
+
+
+def deferred_claimable_once_trust_gate(
+    *,
+    counterparty_id: str | None,
+    counterparty_fingerprint: str | None,
+) -> dict[str, Any]:
+    return {
+        "required": False,
+        "ok": True,
+        "status": "deferred_until_attestation",
+        "counterparty_id": counterparty_id or None,
+        "provided_fingerprint": counterparty_fingerprint or None,
+        "matched": None,
+        "verification_method": "archive_identity_fingerprint_at_attestation",
+    }
+
+
+def blocked_counterparty_bound_trust_gate() -> dict[str, Any]:
+    return {
+        "required": True,
+        "ok": False,
+        "status": "blocked",
+        "counterparty_id": None,
+        "provided_fingerprint": None,
+        "matched": None,
+        "verification_method": "archive_identity_fingerprint",
+    }
+
+
+def normalize_delegate_target_policy(target_policy: str | None) -> str:
+    policy = (target_policy or DELEGATE_DEFAULT_TARGET_POLICY).strip() or DELEGATE_DEFAULT_TARGET_POLICY
+    if policy not in DELEGATE_TARGET_POLICIES:
+        raise ArchiveServiceError("target_policy must be one of: " + ", ".join(sorted(DELEGATE_TARGET_POLICIES)))
+    return policy
+
+
+def build_delegation_capability(
+    *,
+    source_archive: str,
+    target_archive: str | None,
+    view_id: str,
+    target_policy: str,
+) -> dict[str, Any]:
+    target_slug = safe_slug(target_archive) if target_archive else "claimable-once"
+    capability = {
+        "capability_id": f"capability:delegate:{safe_slug(source_archive)}:{target_slug}:{safe_slug(view_id)}",
+        "target_policy": target_policy,
+        "claim_state": "unclaimed_preview",
+        "spent_state": "not_spent_preview",
+        "nonce": "<generated-on-real-delegate>",
+        "binding_method": "attestation_claim_binding",
+        "settlement_condition": {"mode": "none"},
+    }
+    if target_archive:
+        capability["target_archive"] = target_archive
+    if target_policy == DELEGATE_TARGET_POLICY_CLAIMABLE_ONCE:
+        capability["claim_limit"] = 1
+        capability["claimant"] = "attesting_archive_at_claim_time"
+    return capability
+
+
+def normalized_delegate_capability(
+    delegate_receipt: dict[str, Any],
+    *,
+    source_archive: str,
+    target_archive: str | None,
+    blockers: list[str],
+) -> dict[str, Any]:
+    raw_capability = delegate_receipt.get("delegation_capability")
+    capability = dict(raw_capability) if isinstance(raw_capability, dict) else {}
+    target_policy = string_or_empty(capability.get("target_policy")) or DELEGATE_TARGET_POLICY_COUNTERPARTY_BOUND
+    if target_policy not in DELEGATE_TARGET_POLICIES:
+        blockers.append(f"Delegate receipt target_policy is unsupported: {target_policy}.")
+        target_policy = DELEGATE_TARGET_POLICY_COUNTERPARTY_BOUND
+    capability.setdefault(
+        "capability_id",
+        f"capability:delegate:{safe_slug(source_archive)}:{safe_slug(target_archive) if target_archive else 'legacy'}",
+    )
+    capability["target_policy"] = target_policy
+    capability.setdefault("claim_state", "legacy_untracked")
+    capability.setdefault("spent_state", "legacy_untracked")
+    capability.setdefault("binding_method", "attestation_claim_binding")
+    capability.setdefault("settlement_condition", {"mode": "none"})
+    return capability
+
+
+def build_claim_binding(
+    *,
+    archive_id: str,
+    source_archive: str,
+    target_archive: str | None,
+    delegation_capability: dict[str, Any],
+    target_archive_match: bool,
+) -> dict[str, Any]:
+    target_policy = delegation_capability.get("target_policy") or DELEGATE_TARGET_POLICY_COUNTERPARTY_BOUND
+    binding = {
+        "binding_method": "attestation_claim_binding",
+        "capability_id": delegation_capability.get("capability_id"),
+        "target_policy": target_policy,
+        "claimed_by_archive": archive_id,
+        "source_archive": source_archive,
+        "target_archive": target_archive,
+        "target_archive_match": target_archive_match,
+        "settlement_condition": delegation_capability.get("settlement_condition", {"mode": "none"}),
+    }
+    if target_policy == DELEGATE_TARGET_POLICY_CLAIMABLE_ONCE:
+        binding["claim_state_after_attestation"] = "claimed_preview"
+        binding["spent_state_after_attestation"] = "spent_preview"
+        binding["claim_limit"] = delegation_capability.get("claim_limit", 1)
+    else:
+        binding["claim_state_after_attestation"] = "bound_preview"
+        binding["spent_state_after_attestation"] = "not_applicable"
+    return binding
+
+
+def share_archive_scope_dry_run(
+    archive_root: Path | str,
+    *,
+    view_id: str,
+    target_archive: str,
+    counterparty_id: str | None = None,
+    counterparty_fingerprint: str | None = None,
+    allow_sensitive: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    if not view_id:
+        raise ArchiveServiceError("view_id is required.")
+    if not target_archive.strip():
+        raise ArchiveServiceError("target_archive is required.")
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    source_archive, scope_gate, ownership_gate = build_zettel_scope_preview(
+        root,
+        view_id=view_id,
+        target_archive=target_archive,
+        allow_sensitive=allow_sensitive,
+        blockers=blockers,
+        warnings=warnings,
+    )
+    trust_gate = validate_counterparty_trust(
+        root,
+        counterparty_id=counterparty_id or target_archive,
+        counterparty_fingerprint=counterparty_fingerprint,
+        blockers=blockers,
+    )
+
+    proposed_receipt_path = (
+        f"receipts/share/{safe_slug(source_archive)}__{safe_slug(target_archive)}__{safe_slug(view_id)}.share.json"
+    )
     receipt_preview = {
         "receipt_id": f"receipt:share:{safe_slug(source_archive)}:{safe_slug(target_archive)}:{safe_slug(view_id)}",
         "receipt_path": proposed_receipt_path,
@@ -2164,23 +2305,49 @@ def delegate_zets_dry_run(
     archive_root: Path | str,
     *,
     view_id: str,
-    target_archive: str,
+    target_archive: str | None = None,
     counterparty_id: str | None = None,
     counterparty_fingerprint: str | None = None,
     allow_sensitive: bool = False,
+    target_policy: str | None = None,
 ) -> dict[str, Any]:
-    share_result = share_archive_scope_dry_run(
-        archive_root,
+    root = require_existing_archive_root(archive_root)
+    if not view_id:
+        raise ArchiveServiceError("view_id is required.")
+    resolved_target_policy = normalize_delegate_target_policy(target_policy)
+    resolved_target_archive = (target_archive or "").strip() or None
+    blockers: list[str] = []
+    warnings: list[str] = []
+    source_archive, scope_gate, ownership_gate = build_zettel_scope_preview(
+        root,
         view_id=view_id,
-        target_archive=target_archive,
-        counterparty_id=counterparty_id,
-        counterparty_fingerprint=counterparty_fingerprint,
+        target_archive=resolved_target_archive,
         allow_sensitive=allow_sensitive,
+        blockers=blockers,
+        warnings=warnings,
     )
-    source_archive = share_result["source_archive"]
+
+    if resolved_target_policy == DELEGATE_TARGET_POLICY_COUNTERPARTY_BOUND:
+        if resolved_target_archive is None:
+            blockers.append("target_archive is required for counterparty_bound delegation.")
+            trust_gate = blocked_counterparty_bound_trust_gate()
+        else:
+            trust_gate = validate_counterparty_trust(
+                root,
+                counterparty_id=counterparty_id or resolved_target_archive,
+                counterparty_fingerprint=counterparty_fingerprint,
+                blockers=blockers,
+            )
+    else:
+        trust_gate = deferred_claimable_once_trust_gate(
+            counterparty_id=counterparty_id,
+            counterparty_fingerprint=counterparty_fingerprint,
+        )
+
+    target_slug = safe_slug(resolved_target_archive) if resolved_target_archive else "claimable-once"
     proposed_receipt_path = (
         f"{DELEGATE_RECEIPTS_DIR}/"
-        f"{safe_slug(source_archive)}__{safe_slug(target_archive)}__{safe_slug(view_id)}.delegate.json"
+        f"{safe_slug(source_archive)}__{target_slug}__{safe_slug(view_id)}.delegate.json"
     )
     delegated_zets = [
         {
@@ -2190,47 +2357,74 @@ def delegate_zets_dry_run(
             "sha256": item.get("sha256"),
             "sensitive_categories": item.get("sensitive_categories", []),
         }
-        for item in share_result["scope_gate"]["included"]
+        for item in scope_gate["included"]
     ]
-    scope_gate = dict(share_result["scope_gate"])
+    scope_gate = dict(scope_gate)
     scope_gate["delegated_zets"] = delegated_zets
+    scope_gate["target_policy"] = resolved_target_policy
+    delegation_capability = build_delegation_capability(
+        source_archive=source_archive,
+        target_archive=resolved_target_archive,
+        view_id=view_id,
+        target_policy=resolved_target_policy,
+    )
     delegate_receipt = {
-        "receipt_id": f"receipt:delegate:{safe_slug(source_archive)}:{safe_slug(target_archive)}:{safe_slug(view_id)}",
+        "receipt_id": f"receipt:delegate:{safe_slug(source_archive)}:{target_slug}:{safe_slug(view_id)}",
         "receipt_path": proposed_receipt_path,
         "action": "delegate_zet",
         "lifecycle_action": "delegate",
         "dry_run": True,
         "timestamp": "<execution-time>",
         "source_archive": source_archive,
-        "target_archive": target_archive,
+        "target_archive": resolved_target_archive,
+        "target_policy": resolved_target_policy,
         "view_id": view_id,
+        "delegation_capability": delegation_capability,
+        "settlement_condition": delegation_capability["settlement_condition"],
         "scope_gate": scope_gate,
-        "trust_gate": share_result["trust_gate"],
-        "ownership_gate": share_result["ownership_gate"],
+        "trust_gate": trust_gate,
+        "ownership_gate": ownership_gate,
         "delegated_zets": delegated_zets,
         "compatibility": {
             "protocol": "zet-sharing-dry-run/v0.2",
             "schema": "delegate-receipt/v0.2",
-            "trust_profile": share_result["trust_gate"].get("status"),
-            "capability": "delegate",
+            "trust_profile": trust_gate.get("status"),
+            "capability": f"delegate:{resolved_target_policy}",
         },
-        "legacy_share_receipt_preview": share_result["receipt_preview"],
-        "blockers": share_result["blockers"],
-        "warnings": share_result["warnings"],
+        "blockers": blockers,
+        "warnings": warnings,
     }
+    if resolved_target_policy == DELEGATE_TARGET_POLICY_COUNTERPARTY_BOUND and resolved_target_archive is not None:
+        delegate_receipt["legacy_share_receipt_preview"] = {
+            "receipt_id": f"receipt:share:{safe_slug(source_archive)}:{safe_slug(resolved_target_archive)}:{safe_slug(view_id)}",
+            "receipt_path": f"receipts/share/{safe_slug(source_archive)}__{safe_slug(resolved_target_archive)}__{safe_slug(view_id)}.share.json",
+            "action": "share_archive_scope",
+            "dry_run": True,
+            "timestamp": "<execution-time>",
+            "source_archive": source_archive,
+            "target_archive": resolved_target_archive,
+            "scope_gate": scope_gate,
+            "trust_gate": trust_gate,
+            "ownership_gate": ownership_gate,
+            "blockers": blockers,
+            "warnings": warnings,
+        }
     return {
-        "ok": share_result["ok"],
+        "ok": not blockers,
         "dry_run": True,
         "lifecycle_action": "delegate",
         "source_archive": source_archive,
-        "target_archive": target_archive,
+        "target_archive": resolved_target_archive,
+        "target_policy": resolved_target_policy,
         "view_id": view_id,
-        "blockers": share_result["blockers"],
-        "warnings": share_result["warnings"],
+        "blockers": blockers,
+        "warnings": warnings,
         "scope_gate": scope_gate,
-        "trust_gate": share_result["trust_gate"],
-        "ownership_gate": share_result["ownership_gate"],
+        "trust_gate": trust_gate,
+        "ownership_gate": ownership_gate,
         "delegated_zets": delegated_zets,
+        "delegation_capability": delegation_capability,
+        "settlement_condition": delegation_capability["settlement_condition"],
         "proposed_delegate_receipt_path": proposed_receipt_path,
         "delegate_receipt_preview": delegate_receipt,
         "proposed_receipt_path": proposed_receipt_path,
@@ -2260,8 +2454,16 @@ def attest_zets_dry_run(
         blockers.extend(f"Delegate receipt schema issue: {issue.message}" for issue in schema_issues)
 
     source_archive = string_or_empty(delegate_receipt.get("source_archive"))
-    target_archive = string_or_empty(delegate_receipt.get("target_archive"))
-    if target_archive != archive_id:
+    target_archive = string_or_empty(delegate_receipt.get("target_archive")) or None
+    delegation_capability = normalized_delegate_capability(
+        delegate_receipt,
+        source_archive=source_archive,
+        target_archive=target_archive,
+        blockers=blockers,
+    )
+    target_policy = delegation_capability.get("target_policy")
+    target_archive_match = target_policy == DELEGATE_TARGET_POLICY_CLAIMABLE_ONCE or target_archive == archive_id
+    if target_policy != DELEGATE_TARGET_POLICY_CLAIMABLE_ONCE and target_archive != archive_id:
         blockers.append(f"Delegate receipt target_archive does not match this archive: {target_archive} != {archive_id}.")
     trust_gate = validate_counterparty_trust(
         root,
@@ -2276,9 +2478,17 @@ def attest_zets_dry_run(
         f"{ATTESTATION_RECEIPTS_DIR}/"
         f"{safe_slug(archive_id)}__{safe_slug(source_archive)}__{safe_slug(delegate_receipt_id)}.attestation.json"
     )
+    claim_binding = build_claim_binding(
+        archive_id=archive_id,
+        source_archive=source_archive,
+        target_archive=target_archive,
+        delegation_capability=delegation_capability,
+        target_archive_match=target_archive_match,
+    )
     verification = {
         "delegate_receipt_schema": "passed" if not schema_issues else "blocked",
-        "target_archive_match": target_archive == archive_id,
+        "target_archive_match": target_archive_match,
+        "target_policy": target_policy,
         "delegated_zets_count": len(delegated_zets),
         "hashes_valid": all(SHA256_RE.match(str(item.get("sha256") or "")) for item in delegated_zets),
     }
@@ -2300,6 +2510,9 @@ def attest_zets_dry_run(
             "lifecycle_action": delegate_receipt.get("lifecycle_action"),
         },
         "delegated_zets": delegated_zets,
+        "delegation_capability": delegation_capability,
+        "claim_binding": claim_binding,
+        "settlement_condition": delegation_capability.get("settlement_condition", {"mode": "none"}),
         "trust_gate": trust_gate,
         "verification": verification,
         "blockers": blockers,
@@ -2317,6 +2530,9 @@ def attest_zets_dry_run(
         "trust_gate": trust_gate,
         "verification": verification,
         "delegated_zets": delegated_zets,
+        "delegation_capability": delegation_capability,
+        "claim_binding": claim_binding,
+        "settlement_condition": delegation_capability.get("settlement_condition", {"mode": "none"}),
         "proposed_attestation_receipt_path": proposed_receipt_path,
         "attestation_receipt_preview": attestation_receipt,
         "would_change": [
@@ -2344,6 +2560,12 @@ def anchor_zets_dry_run(
     attesting_archive = string_or_empty(attestation_receipt.get("attesting_archive"))
     target_archive = string_or_empty(attestation_receipt.get("target_archive"))
     source_archive = string_or_empty(attestation_receipt.get("source_archive"))
+    claim_binding = attestation_receipt.get("claim_binding") if isinstance(attestation_receipt.get("claim_binding"), dict) else {}
+    settlement_condition = (
+        attestation_receipt.get("settlement_condition")
+        if isinstance(attestation_receipt.get("settlement_condition"), dict)
+        else {"mode": "none"}
+    )
     if attesting_archive != archive_id:
         blockers.append(f"Attestation receipt attesting_archive does not match this archive: {attesting_archive} != {archive_id}.")
     if target_archive and target_archive != archive_id:
@@ -2366,6 +2588,7 @@ def anchor_zets_dry_run(
             "provenance": {
                 "source_archive": source_archive,
                 "attestation_receipt_id": attestation_receipt.get("receipt_id"),
+                "claim_binding": claim_binding,
                 "preserve_foreign_authorship": True,
             },
         }
@@ -2385,6 +2608,8 @@ def anchor_zets_dry_run(
             "path": display_receipt_input_path(root, receipt_path),
             "sha256": attestation_sha,
         },
+        "claim_binding": claim_binding,
+        "settlement_condition": settlement_condition,
         "anchored_zets": anchored_zets,
         "foreign_provenance_policy": {
             "preserve_source_archive": True,
@@ -2410,6 +2635,8 @@ def anchor_zets_dry_run(
         "blockers": blockers,
         "warnings": warnings,
         "anchored_zets": anchored_zets,
+        "claim_binding": claim_binding,
+        "settlement_condition": settlement_condition,
         "proposed_anchor_metadata_path": proposed_anchor_path,
         "anchor_metadata_preview": anchor_metadata,
         "would_change": [

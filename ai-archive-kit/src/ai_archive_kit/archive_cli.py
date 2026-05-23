@@ -1628,6 +1628,7 @@ def command_delegate_zet(args: argparse.Namespace) -> int:
             counterparty_id=args.counterparty_id,
             counterparty_fingerprint=args.counterparty_fingerprint,
             allow_sensitive=args.allow_sensitive,
+            target_policy=args.target_policy,
         )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
@@ -1639,7 +1640,8 @@ def command_delegate_zet(args: argparse.Namespace) -> int:
         state = "passed" if result["ok"] else "blocked"
         print(f"Zet delegate dry-run {state}.")
         print(f"Source archive: {result['source_archive']}")
-        print(f"Target archive: {result['target_archive']}")
+        print(f"Target policy: {result['target_policy']}")
+        print(f"Target archive: {result['target_archive'] or '<deferred until attestation>'}")
         print(f"View: {result['view_id']}")
         print(f"Delegated zets: {len(result['delegated_zets'])}")
         print(f"Trust gate: {result['trust_gate']['status']}")
@@ -2842,7 +2844,13 @@ def build_parser() -> argparse.ArgumentParser:
     delegate = subcommands.add_parser("delegate-zet", help="Dry-run delegated access to zets from a saved view.")
     delegate.add_argument("archive_root", help="Source archive root.")
     delegate.add_argument("--view", required=True, help="View id to delegate.")
-    delegate.add_argument("--target-archive", required=True, help="Target archive id.")
+    delegate.add_argument("--target-archive", help="Target archive id. Required for counterparty_bound delegation.")
+    delegate.add_argument(
+        "--target-policy",
+        choices=sorted(archive_services.DELEGATE_TARGET_POLICIES),
+        default=archive_services.DELEGATE_DEFAULT_TARGET_POLICY,
+        help="Delegation target policy. claimable_once can defer the recipient until attestation.",
+    )
     delegate.add_argument("--counterparty-id", help="Expected counterparty identity/archive/principal id.")
     delegate.add_argument("--counterparty-fingerprint", help="Expected counterparty public key fingerprint.")
     delegate.add_argument("--allow-sensitive", action="store_true", help="Allow sensitive categories in the delegation preview.")

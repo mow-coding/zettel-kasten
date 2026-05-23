@@ -13,7 +13,7 @@
 Current public baseline:
 
 ```text
-v0.2.10 pre-release
+v0.2.11 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -27,7 +27,7 @@ What exists today:
 - versioned release notes,
 - early Python CLI and MCP tooling,
 - CLI-backed private minting from draft zet to canonical zettel, mint receipt, and draft snapshot.
-- dry-run `delegate-zet`, `attest-zet`, and `anchor-zet` lifecycle previews for future zet sharing.
+- dry-run `delegate-zet`, `attest-zet`, and `anchor-zet` lifecycle previews, including `claimable_once` delegate capability previews.
 
 What does not exist yet:
 
@@ -157,7 +157,7 @@ See [Text Provenance Hierarchy](ai-archive-kit/docs/text-provenance-hierarchy.md
 Release tags are compatibility checkpoints:
 
 ```text
-v0.2.10
+v0.2.11
 v0.2.9
 v0.3.0
 v1.0.0

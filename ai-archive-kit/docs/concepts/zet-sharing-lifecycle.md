@@ -149,11 +149,13 @@ attestation receipt
 anchor metadata
 ```
 
-As of `v0.2.10`, these exist as dry-run preview concepts:
+As of `v0.2.11`, these exist as dry-run preview concepts:
 
 - `delegate-zet --dry-run` returns a delegate receipt preview.
 - `attest-zet --dry-run` returns an attestation receipt preview.
 - `anchor-zet --dry-run` returns anchor metadata preview.
+
+`delegate-zet --target-policy claimable_once --dry-run` can preview a one-time claimable capability without naming the recipient archive yet. The later `attest-zet --dry-run` preview binds that capability to the attesting archive through `claim_binding`.
 
 They are not real sharing, transport, import, or write paths yet.
 
@@ -187,6 +189,7 @@ Current status:
 - `delegate` is the preferred candidate for scoped sharing authority.
 - `anchor` is the preferred candidate for placing an attested foreign `zet` into local meaning.
 - `v0.2.10` exposes the first dry-run CLI/MCP checks for delegate, attest, and anchor.
+- `v0.2.11` adds `counterparty_bound` and `claimable_once` delegate capability previews.
 
 Short form:
 

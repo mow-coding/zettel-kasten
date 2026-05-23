@@ -4,6 +4,25 @@ All notable public releases of `zettel-kasten` and `zet` should be documented he
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.11 - 2026-05-23
+
+Delegate capability contract patch.
+
+Added:
+
+- `delegate-zet --target-policy counterparty_bound|claimable_once`,
+- `claimable_once` delegate previews that can defer the recipient archive until attestation,
+- `delegation_capability` preview fields for capability id, claim/spent preview state, nonce placeholder, binding method, and settlement condition,
+- `claim_binding` previews in attestation and anchor metadata,
+- MCP parity for `delegate_zet_check` with optional `target_archive`.
+
+Compatibility:
+
+- existing `delegate-zet` and `share --dry-run` flows remain compatible,
+- v0.2.10 delegate receipts without capability fields are treated as legacy `counterparty_bound`,
+- no real claim registry, spent registry, P2P transport, blockchain, or payment is implemented,
+- no private archive migration is required.
+
 ## v0.2.10 - 2026-05-23
 
 Zet sharing dry-run lifecycle contract.
