@@ -28,9 +28,36 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.4` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
+| `v0.2.8` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.8.md` |
+| `v0.2.7` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.7.md` |
+| `v0.2.6` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.6.md` |
+| `v0.2.5` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.5.md` |
+| `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.7` To `v0.2.8`
+
+This is a compatible minting lifecycle feature patch.
+
+What changed:
+
+- added `archive mint-zettel --dry-run`,
+- added `archive mint-zettel --approve --reviewed-by <id>`,
+- added mint receipts under `receipts/mint/`,
+- added draft snapshots under `receipts/mint/drafts/`,
+- added canonical zettel `mint` frontmatter,
+- added doctor validation for mint receipts and SHA-256 file links,
+- added read-only MCP `mint_zettel_check`.
+
+No private archive migration is required.
+
+If you mint new zettels, keep the generated canonical zettel, mint receipt, and draft snapshot together.
+
+```bash
+git fetch --tags
+git checkout v0.2.8
+```
 
 ## From `v0.2.3` To `v0.2.4`
 
@@ -102,4 +129,3 @@ Every future public release should include:
 - privacy scan status,
 - Git tag,
 - GitHub Release.
-

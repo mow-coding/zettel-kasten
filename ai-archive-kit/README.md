@@ -106,11 +106,17 @@ read-zettel
 create-draft
   Create a draft zettel in inbox/.
 
+mint-zettel --dry-run
+  Check whether a draft zet can be minted and preview canonical path, mint receipt, and draft snapshot without writing.
+
+mint-zettel --approve --reviewed-by
+  Mint an inbox draft zet into canonical private archive memory and write a receipt plus draft snapshot.
+
 promote --dry-run
-  Check zettel-rules promotion readiness and preview canonical path plus receipt without writing canonical memory.
+  Legacy-compatible name for the older promotion readiness check.
 
 promote --approve --reviewed-by
-  Promote an inbox draft to canonical zettel memory and write a promotion receipt after dry-run gates pass.
+  Legacy-compatible command that promotes an inbox draft and writes the older promotion receipt.
 
 index
   Build a generated local SQLite search index at db/archive-index.sqlite.
@@ -232,18 +238,18 @@ db/archive-index.sqlite
 
 This file is a rebuildable map, not the archive itself. The durable archive still lives in Markdown zettels, YAML files, object manifests, and original files.
 
-`archive promote --dry-run` checks the promotion checklist in `zettel-kasten/zettel-rules.yml`. It reports blockers, warnings, missing human-review items, near duplicates, the proposed canonical path, and the proposed receipt path. It writes nothing.
+`archive mint-zettel --dry-run` checks the minting gate by reusing the existing promotion checklist in `zettel-kasten/zettel-rules.yml`. It reports blockers, warnings, missing human-review items, near duplicates, the proposed canonical path, the proposed mint receipt path, and the proposed draft snapshot path. It writes nothing.
 
-Real promotion is CLI-only and intentionally explicit:
+Real minting is CLI-only and intentionally explicit:
 
 ```powershell
-python ai-archive-kit\cli\archive.py promote ai-archive-kit\examples\fake-life-archive `
+python ai-archive-kit\cli\archive.py mint-zettel ai-archive-kit\examples\fake-life-archive `
   --path inbox\zet_20260519_draft_ai_lunch_note.md `
   --approve `
   --reviewed-by person:me
 ```
 
-Real promotion reuses the dry-run checks as a gate. Blockers always stop the command. Warnings require `--allow-warnings`. The original inbox draft is preserved. The command writes the canonical zettel under `zettels/` and a receipt under `receipts/promotion/`.
+Real minting reuses the dry-run checks as a gate. Blockers always stop the command. Warnings require `--allow-warnings`. The original inbox draft is preserved. The command writes the canonical zettel under `zettels/`, a mint receipt under `receipts/mint/`, and the exact mint-time draft snapshot under `receipts/mint/drafts/`. The older `archive promote` command remains available for compatibility.
 
 `archive pack` creates a portable slice under `workpacks/` using a saved view. The first implementation copies selected zettel files and writes object manifest metadata, but it does not copy original object files by default.
 
@@ -286,6 +292,7 @@ workpacks/*/package.yml
 receipts/lineage/*.ownership-transfer.json
 receipts/import/*.external-import.json
 receipts/recovery/*.restore-drill.json
+receipts/mint/*.mint.json
 zettel-kasten/*.yml
 ```
 
@@ -323,14 +330,14 @@ docs/platform-support.md
 
 ## Next Implementation Plan
 
-Phase 3 real promotion is planned and tracked in:
+Earlier promotion work is tracked in:
 
 ```text
 plans/phase-3-implementation-plan.md
 plans/phase-4-lineage-trust-plan.md
 ```
 
-Phase 2 is complete for the safe local toolkit subset. Phase 3 added real promotion. Phase 4 adds the lineage/trust dry-run baseline and the first owner/operator identity model. Phase 7B adds CLI-only real ownership transfer plus provider change planning. Phase 8B adds one-command setup orchestration above the Docker-first runtime. Phase 8C hardens the local installer and container runtime. Phase 9 starts Notion and Google Drive export import. Real workpack import, real share/merge/fork, live external provider API sync, OS keyring integration, UI, and CI matrix remain future work.
+Phase 2 is complete for the safe local toolkit subset. Phase 3 added real promotion. v0.2.8 adds the product-facing `mint-zettel` lifecycle with canonical zettel, mint receipt, and draft snapshot outputs. Phase 4 adds the lineage/trust dry-run baseline and the first owner/operator identity model. Phase 7B adds CLI-only real ownership transfer plus provider change planning. Phase 8B adds one-command setup orchestration above the Docker-first runtime. Phase 8C hardens the local installer and container runtime. Phase 9 starts Notion and Google Drive export import. Real workpack import, real share/merge/fork, live external provider API sync, OS keyring integration, UI, and CI matrix remain future work.
 
 ## Minimal MCP Server
 
@@ -365,18 +372,19 @@ list_views
 archive_index
 archive_search
 promotion_check
+mint_zettel_check
 share_check
 ownership_transfer_check
 ```
 
-The MCP server is intentionally local and stdio-only. It exposes `promotion_check`, `share_check`, and `ownership_transfer_check` as dry-run only and does not expose real canonical promotion, real sharing, real merge, real fork, or real ownership transfer; AI-created zettels go to `inbox/`. The ownership transfer check includes a provider change plan, but MCP still cannot apply local ownership changes or external provider account changes.
+The MCP server is intentionally local and stdio-only. It exposes `promotion_check`, `mint_zettel_check`, `share_check`, and `ownership_transfer_check` as dry-run only and does not expose real canonical promotion, real minting, real sharing, real merge, real fork, or real ownership transfer; AI-created zettels go to `inbox/`. The ownership transfer check includes a provider change plan, but MCP still cannot apply local ownership changes or external provider account changes.
 
 Archive ownership is separate from archive operation. A family, company, or other group can own an archive while named people operate it. For example, parents can operate a child-related archive under a family owner, and a later receipt-backed transfer can move ownership to the child.
 
 ## Safety Defaults
 
 - AI writes drafts to `inbox/` by default.
-- Canonical zettels live in `zettels/` and require explicit human promotion.
+- Canonical zettels live in `zettels/` and require explicit human minting or legacy promotion.
 - Zettels reference original files by `object_id`, not provider URLs.
 - Object storage providers are replaceable through manifests.
 - External provider accounts are described in `provider-bindings.yml` with env/keyring references, not secrets.

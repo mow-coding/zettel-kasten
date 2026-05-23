@@ -1,6 +1,6 @@
 # Zettel Lifecycle Spec v0.2 Draft
 
-This spec defines how zettels are written, reviewed, promoted, revised, and retired in AI Archive Kit.
+This spec defines how zettels are written, reviewed, minted, revised, and retired in AI Archive Kit. Older v0.2 material may still say `promote`; `mint-zettel` is the preferred product-facing lifecycle word from v0.2.8 onward.
 
 For beginners: think of this as the rulebook for when an AI note is still a rough memo and when it becomes durable archive memory.
 
@@ -18,7 +18,7 @@ Project translation:
 ```text
 Capture freely.
 Draft safely.
-Promote deliberately.
+Mint deliberately.
 Preserve provenance.
 Link explicitly.
 Revise without erasing history.
@@ -31,13 +31,13 @@ inbox/
   Temporary captures and AI drafts.
 
 zettels/
-  Canonical zettels that passed promotion.
+  Canonical zettels that passed minting or legacy promotion.
 
 workbench/
   Optional working area for summaries, outlines, merge drafts, and temporary processing.
 
 receipts/
-  Optional audit records for promotion, import, transfer, redaction, and other significant actions.
+  Optional audit records for minting, promotion, import, transfer, redaction, and other significant actions.
 ```
 
 `workbench/` and `receipts/` are recommended but not required by v0.1 templates yet.
@@ -50,7 +50,7 @@ Recommended kinds:
 
 ```text
 fleeting_capture
-  A quick capture. Usually lives in inbox and may be deleted or promoted later.
+  A quick capture. Usually lives in inbox and may be deleted or minted later.
 
 source_note
   A note about a book, paper, video, web page, document, scan, or original object.
@@ -252,19 +252,27 @@ Related zettels and typed relationships.
 
 Do not force every zettel to use every heading. Use headings when they make the note easier to understand later.
 
-## Promotion Output
+## Minting Output
 
-When a draft is promoted:
+When a draft is minted:
 
 ```text
 status becomes canonical
+mint.stage becomes minted
+mint.reviewed_by is recorded
+mint.minted_at is recorded
+mint.authority_mode is recorded
 promotion.stage becomes promoted
 promotion.reviewed_by is recorded
 promotion.reviewed_at is recorded
 updated_at is updated
 the canonical file is written to zettels/
-the original draft is preserved, moved, or linked according to archive policy
+the original draft remains in inbox/
+the mint-time draft snapshot is written to receipts/mint/drafts/
+the mint receipt is written to receipts/mint/
 ```
+
+The `promotion` metadata remains for v0.2 compatibility. New code should prefer `mint` metadata and mint receipts when explaining the product lifecycle.
 
 Recommended canonical frontmatter:
 
@@ -294,6 +302,14 @@ visibility:
   scope: private
   allowed_archives: []
   source_visibility: private
+mint:
+  stage: minted
+  minted_at: 2026-05-19T12:30:00+09:00
+  reviewed_by: person:example
+  authority_mode: basic
+  receipt_path: receipts/mint/zet_20260519_example.mint.json
+  draft_snapshot_path: receipts/mint/drafts/zet_20260519_example.draft.md
+  checklist_version: zet-mint/v0.2
 promotion:
   stage: promoted
   reviewed_by: person:example
@@ -346,4 +362,3 @@ When helping the user write zettels, the AI should:
 ```text
 AI can help write memory, but the user decides what becomes durable memory.
 ```
-

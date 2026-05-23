@@ -4,6 +4,30 @@ All notable public releases of `zettel-kasten` and `zet` should be documented he
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.8 - 2026-05-23
+
+Minting lifecycle implementation.
+
+Added:
+
+- `mint-zettel` CLI command for `draft zet -> canonical private zet -> mint receipt -> draft snapshot`,
+- mint receipt schema at `schemas/mint-receipt.schema.json`,
+- canonical zettel `mint` frontmatter metadata with `authority_mode: basic`,
+- `receipts/mint/*.mint.json` and `receipts/mint/drafts/*.draft.md` validation in doctor,
+- read-only MCP `mint_zettel_check` dry-run tool.
+
+Changed:
+
+- real minting preserves the original `inbox/` draft,
+- real minting snapshots the exact draft text at mint time,
+- canonical zettels may now satisfy doctor lifecycle metadata with either new `mint` metadata or legacy `promotion` metadata,
+- `promote` remains available as a compatibility command.
+
+Migration:
+
+- no private archive migration required,
+- archives that use `mint-zettel` should keep the generated mint receipts and draft snapshots under `receipts/mint/`.
+
 ## v0.2.7 - 2026-05-23
 
 Foundational product whitepaper patch.

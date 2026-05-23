@@ -17,6 +17,8 @@ Commands:
           Metadata-only scan of a registered source into source-maps/.
   add-source
           Register a source without hand-editing source-bindings.yml.
+  mint-zettel
+          Mint an inbox draft zet into canonical private archive memory.
   source-mounts
           Show host-native and Docker mount guidance for registered sources.
   recovery-plan
@@ -233,6 +235,7 @@ class Doctor:
         self._check_source_scan_receipts()
         self._check_recovery_receipts()
         self._check_lineage_receipts()
+        self._check_mint_receipts()
         self._check_zettel_kasten_layer()
         self._check_local_profile_and_secret_safety()
         return self.diagnostics
@@ -639,13 +642,60 @@ class Doctor:
         elif status != expected_status:
             self.warn("zettel_status_path_mismatch", f"Zettel in {path.parent.name}/ has status {status}, expected {expected_status}.", path)
 
-        if expected_status == "canonical" and "promotion" not in data:
-            self.warn("promotion_metadata_missing", "Canonical zettel has no v0.2 promotion metadata.", path)
+        if expected_status == "canonical" and "mint" not in data and "promotion" not in data:
+            self.warn("canonical_lifecycle_metadata_missing", "Canonical zettel has no mint or v0.2 promotion metadata.", path)
+        if "mint" in data:
+            self._check_zettel_mint_metadata(data, path)
         if "kind" not in data:
             self.warn("zettel_kind_missing", "Zettel has no v0.2 kind field.", path)
 
         self._check_zettel_assets(data, path)
         self._check_zettel_edges(data, path)
+
+    def _check_zettel_mint_metadata(self, data: dict[str, Any], path: Path) -> None:
+        mint = data.get("mint")
+        if not isinstance(mint, dict):
+            self.error("mint_metadata_invalid", "Zettel mint metadata must be an object.", path)
+            return
+        if mint.get("stage") != "minted":
+            self.error("mint_stage_invalid", "Zettel mint.stage must be minted.", path)
+        if mint.get("authority_mode") != archive_services.MINT_AUTHORITY_MODE:
+            self.error("mint_authority_mode_invalid", "Zettel mint.authority_mode must be basic in v0.2.8.", path)
+        for field in ["minted_at", "reviewed_by", "receipt_path", "draft_snapshot_path", "checklist_version"]:
+            if not mint.get(field):
+                self.error("mint_metadata_field_missing", f"Zettel mint metadata missing field: {field}.", path)
+
+        receipt_path = self._resolve_archive_file_ref(
+            mint.get("receipt_path"),
+            path,
+            code_prefix="mint_receipt",
+            label="Zettel mint.receipt_path",
+            required=True,
+        )
+        if receipt_path and receipt_path.suffix != ".json":
+            self.error("mint_receipt_path_invalid", "Zettel mint.receipt_path must point to a JSON receipt.", path)
+        if receipt_path and receipt_path.is_file():
+            receipt = self._load_json_file(receipt_path)
+            if isinstance(receipt, dict):
+                expected_target = self._display_path(path)
+                actual_target = receipt.get("target", {}).get("path") if isinstance(receipt.get("target"), dict) else None
+                if actual_target != expected_target:
+                    self.error(
+                        "mint_receipt_target_mismatch",
+                        "Zettel mint receipt target.path does not point back to this zettel.",
+                        path,
+                    )
+                receipt_zettel = receipt.get("zettel") if isinstance(receipt.get("zettel"), dict) else {}
+                if receipt_zettel.get("id") != data.get("id"):
+                    self.error("mint_receipt_zettel_mismatch", "Zettel mint receipt zettel.id does not match this zettel id.", path)
+
+        self._resolve_archive_file_ref(
+            mint.get("draft_snapshot_path"),
+            path,
+            code_prefix="mint_snapshot",
+            label="Zettel mint.draft_snapshot_path",
+            required=True,
+        )
 
     def _check_zettel_assets(self, data: dict[str, Any], path: Path) -> None:
         assets = data.get("assets") or []
@@ -797,6 +847,107 @@ class Doctor:
                         f"Ownership transfer receipt must contain object field: {field}.",
                         path,
                     )
+
+    def _check_mint_receipts(self) -> None:
+        root = self.archive_root / "receipts" / "mint"
+        if not root.is_dir():
+            return
+        for path in sorted(root.glob("*.mint.json")):
+            if not self._path_stays_inside_archive(path):
+                continue
+            data = self._load_json_file(path)
+            if not isinstance(data, dict):
+                continue
+            self._check_schema(data, "mint-receipt.schema.json", path)
+            if data.get("action") != "mint_zettel":
+                self.error("mint_receipt_action_invalid", "Mint receipt action must be mint_zettel.", path)
+            if data.get("authority_mode") != archive_services.MINT_AUTHORITY_MODE:
+                self.error("mint_receipt_authority_mode_invalid", "Mint receipt authority_mode must be basic in v0.2.8.", path)
+            if data.get("dry_run") is False and not data.get("reviewed_by"):
+                self.error("mint_receipt_reviewer_missing", "Applied mint receipt must include reviewed_by.", path)
+            for field in ["source", "target", "snapshot", "zettel", "result"]:
+                if not isinstance(data.get(field), dict):
+                    self.error("mint_receipt_field_missing", f"Mint receipt must contain object field: {field}.", path)
+
+            self._check_mint_receipt_status(data, path, "source", "draft")
+            self._check_mint_receipt_status(data, path, "target", "canonical")
+            self._check_mint_receipt_file_ref(data, path, "source")
+            target_path = self._check_mint_receipt_file_ref(data, path, "target")
+            self._check_mint_receipt_file_ref(data, path, "snapshot")
+
+            if target_path is not None:
+                frontmatter = parse_frontmatter(target_path.read_text(encoding="utf-8"))
+                if frontmatter is None:
+                    self.error("mint_receipt_target_frontmatter_missing", "Mint receipt target has no zettel frontmatter.", path)
+                    continue
+                target_data = self._load_yaml_text(frontmatter, target_path)
+                if not isinstance(target_data, dict):
+                    continue
+                mint = target_data.get("mint") if isinstance(target_data.get("mint"), dict) else {}
+                receipt_relative = self._display_path(path)
+                if mint.get("receipt_path") != receipt_relative:
+                    self.error(
+                        "mint_receipt_canonical_link_missing",
+                        "Mint receipt target zettel does not link back through mint.receipt_path.",
+                        path,
+                    )
+
+    def _check_mint_receipt_status(self, data: dict[str, Any], path: Path, section: str, expected_status: str) -> None:
+        section_data = data.get(section)
+        if not isinstance(section_data, dict):
+            return
+        status = section_data.get("status")
+        if status != expected_status:
+            self.error(
+                "mint_receipt_status_invalid",
+                f"Mint receipt {section}.status must be {expected_status}.",
+                path,
+            )
+
+    def _check_mint_receipt_file_ref(self, data: dict[str, Any], path: Path, section: str) -> Path | None:
+        section_data = data.get(section)
+        if not isinstance(section_data, dict):
+            return None
+        resolved = self._resolve_archive_file_ref(
+            section_data.get("path"),
+            path,
+            code_prefix=f"mint_receipt_{section}",
+            label=f"Mint receipt {section}.path",
+            required=True,
+        )
+        if resolved is None:
+            return None
+        expected_sha = section_data.get("sha256")
+        if not isinstance(expected_sha, str) or not SHA256_RE.match(expected_sha):
+            self.error("mint_receipt_sha_invalid", f"Mint receipt {section}.sha256 must be a lowercase SHA-256 hex digest.", path)
+            return resolved
+        actual_sha = sha256_file(resolved)
+        if actual_sha != expected_sha:
+            self.error("mint_receipt_sha_mismatch", f"Mint receipt {section}.sha256 does not match the referenced file.", path)
+        return resolved
+
+    def _resolve_archive_file_ref(
+        self,
+        value: Any,
+        path: Path,
+        *,
+        code_prefix: str,
+        label: str,
+        required: bool,
+    ) -> Path | None:
+        if not isinstance(value, str) or not value.strip():
+            if required:
+                self.error(f"{code_prefix}_path_missing", f"{label} is missing.", path)
+            return None
+        try:
+            resolved = resolve_archive_relative_path(self.archive_root, value)
+        except ArchivePathError as exc:
+            self.error(f"{code_prefix}_path_unsafe", f"{label} is unsafe: {value} ({exc})", path)
+            return None
+        if not resolved.is_file():
+            self.error(f"{code_prefix}_path_missing", f"{label} points to a missing file: {value}", path)
+            return None
+        return resolved
 
     def _check_zettel_kasten_layer(self) -> None:
         root = self.archive_root / "zettel-kasten"
@@ -1170,6 +1321,78 @@ def command_promote(args: argparse.Namespace) -> int:
         print(f"Promoted {result['zettel_id']} to canonical memory.")
         print(f"Canonical path: {result['canonical_path']}")
         print(f"Receipt path: {result['receipt_path']}")
+        if result["warnings"]:
+            print("Warnings approved:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0
+
+
+def command_mint_zettel(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        try:
+            result = archive_services.mint_zettel_dry_run(
+                Path(args.archive_root),
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+            )
+        except archive_services.ArchiveServiceError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        if args.format == "json":
+            print_json(result)
+        else:
+            print(f"Dry-run mint for {result.get('zettel_id') or result['draft_path']}")
+            print(f"Draft path: {result['draft_path']}")
+            print(f"Proposed canonical path: {result['proposed_canonical_path']}")
+            print(f"Proposed mint receipt path: {result['proposed_mint_receipt_path']}")
+            print(f"Proposed draft snapshot path: {result['proposed_draft_snapshot_path']}")
+            if result.get("checklist"):
+                print("Checklist:")
+                for item in result["checklist"]:
+                    print(f"- {item['id']}: {item['status']} ({item['source']})")
+            if result.get("near_duplicates"):
+                print("Near duplicates:")
+                for item in result["near_duplicates"]:
+                    print(f"- {item['path']}: {item['reason']}")
+            if result["blockers"]:
+                print("Blockers:")
+                for blocker in result["blockers"]:
+                    print(f"- {blocker}")
+            if result["warnings"]:
+                print("Warnings:")
+                for warning in result["warnings"]:
+                    print(f"- {warning}")
+            print("Mint dry-run passed." if result["ok"] else "Mint dry-run blocked.")
+        return 0 if result["ok"] else 1
+
+    if not args.approve:
+        print("Real minting requires --approve.", file=sys.stderr)
+        return 1
+    if not args.reviewed_by:
+        print("Real minting requires --reviewed-by.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.mint_zettel(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            relative_path=args.path,
+            reviewed_by=args.reviewed_by,
+            allow_warnings=args.allow_warnings,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Minted {result['zettel_id']} into canonical private archive memory.")
+        print(f"Canonical path: {result['canonical_path']}")
+        print(f"Mint receipt path: {result['mint_receipt_path']}")
+        print(f"Draft snapshot path: {result['draft_snapshot_path']}")
         if result["warnings"]:
             print("Warnings approved:")
             for warning in result["warnings"]:
@@ -2154,6 +2377,8 @@ def create_recommended_dirs(target: Path) -> None:
         "receipts",
         "receipts/import",
         "receipts/lineage",
+        "receipts/mint",
+        "receipts/mint/drafts",
         "receipts/recovery",
         "receipts/share",
         "receipts/sources",
@@ -2421,6 +2646,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     promote.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     promote.set_defaults(func=command_promote)
+
+    mint = subcommands.add_parser("mint-zettel", help="Mint an inbox draft zet into canonical private archive memory.")
+    mint.add_argument("archive_root", help="Archive root to inspect.")
+    mint_target = mint.add_mutually_exclusive_group(required=True)
+    mint_target.add_argument("--zettel-id", help="Draft zettel id to mint.")
+    mint_target.add_argument("--path", help="Archive-relative draft path to mint.")
+    mint.add_argument("--dry-run", action="store_true", help="Preview minting without writing canonical memory.")
+    mint.add_argument("--approve", action="store_true", help="Actually mint after dry-run gates pass.")
+    mint.add_argument("--reviewed-by", help="Reviewer id required for real minting, e.g. person:me.")
+    mint.add_argument(
+        "--allow-warnings",
+        action="store_true",
+        help="Allow real minting when dry-run warnings are present.",
+    )
+    mint.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    mint.set_defaults(func=command_mint_zettel)
 
     index = subcommands.add_parser("index", help="Build a generated local SQLite search index.")
     index.add_argument("archive_root", help="Archive root to index.")

@@ -13,7 +13,7 @@
 Current public baseline:
 
 ```text
-v0.2.7 pre-release
+v0.2.8 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -25,13 +25,13 @@ What exists today:
 - fake sample archives,
 - setup and security documentation,
 - versioned release notes,
-- early Python CLI and MCP tooling.
+- early Python CLI and MCP tooling,
+- CLI-backed private minting from draft zet to canonical zettel, mint receipt, and draft snapshot.
 
 What does not exist yet:
 
 - production-grade installation flow,
 - live provider integrations,
-- final minting implementation,
 - production `zet` sharing service,
 - stable `v1.0.0` protocol guarantee.
 
@@ -156,7 +156,7 @@ See [Text Provenance Hierarchy](ai-archive-kit/docs/text-provenance-hierarchy.md
 Release tags are compatibility checkpoints:
 
 ```text
-v0.2.7
+v0.2.8
 v0.3.0
 v1.0.0
 ```

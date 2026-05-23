@@ -30,11 +30,17 @@ read-zettel
 create-draft
   Create a draft zettel in inbox/.
 
+mint-zettel --dry-run
+  Check minting readiness and preview canonical path, mint receipt, and draft snapshot without writing.
+
+mint-zettel --approve --reviewed-by
+  Mint an inbox draft zet into canonical private archive memory and write receipt/snapshot evidence.
+
 promote --dry-run
-  Check promotion readiness and preview canonical path plus receipt without writing canonical memory.
+  Legacy-compatible promotion readiness check.
 
 promote --approve --reviewed-by
-  Promote an inbox draft to canonical memory and write a promotion receipt after all dry-run gates pass.
+  Legacy-compatible command that writes the older promotion receipt after all dry-run gates pass.
 
 index
   Build a generated local SQLite search index.
@@ -153,15 +159,15 @@ python ai-archive-kit\cli\archive.py create-draft .\tmp-my-archive `
   --body "Draft body"
 ```
 
-Preview promotion without writing canonical memory:
+Preview minting without writing canonical memory:
 
 ```powershell
-python ai-archive-kit\cli\archive.py promote ai-archive-kit\examples\fake-life-archive `
+python ai-archive-kit\cli\archive.py mint-zettel ai-archive-kit\examples\fake-life-archive `
   --path inbox\zet_20260519_draft_ai_lunch_note.md `
   --dry-run
 ```
 
-Promotion dry-run checks:
+Minting dry-run checks:
 
 ```text
 draft lives in inbox/
@@ -178,7 +184,8 @@ The JSON output includes:
 
 ```text
 proposed_canonical_path
-proposed_receipt_path
+proposed_mint_receipt_path
+proposed_draft_snapshot_path
 checklist
 near_duplicates
 receipt_preview
@@ -186,23 +193,24 @@ blockers
 warnings
 ```
 
-Dry-run writes nothing. Real promotion is available only through the CLI and requires both an approval flag and a reviewer id:
+Dry-run writes nothing. Real minting is available only through the CLI and requires both an approval flag and a reviewer id:
 
 ```powershell
-python ai-archive-kit\cli\archive.py promote .\tmp-my-archive `
+python ai-archive-kit\cli\archive.py mint-zettel .\tmp-my-archive `
   --path inbox\PUT-THE-DRAFT-FILENAME-HERE.md `
   --approve `
   --reviewed-by person:me
 ```
 
-Real promotion writes:
+Real minting writes:
 
 ```text
 zettels/<same filename>.md
-receipts/promotion/<zettel_id>.promotion.json
+receipts/mint/<zettel_id>.mint.json
+receipts/mint/drafts/<zettel_id>.draft.md
 ```
 
-It keeps the original inbox draft. Blockers always stop the command. If warnings are present, add `--allow-warnings` only after intentionally reviewing them.
+It keeps the original inbox draft. Blockers always stop the command. If warnings are present, add `--allow-warnings` only after intentionally reviewing them. `promote` remains available as a compatibility command for older examples and tests.
 
 Build the generated search index:
 

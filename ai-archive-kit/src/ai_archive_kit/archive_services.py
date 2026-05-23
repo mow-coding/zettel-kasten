@@ -57,6 +57,10 @@ SOURCE_TYPES = {"local_folder", "external_ssd", "notion_export", "google_drive_e
 SOURCE_MAPS_DIR = "source-maps"
 SOURCE_SCAN_RECEIPTS_DIR = "receipts/sources"
 RESTORE_DRILL_RECEIPTS_DIR = "receipts/recovery"
+MINT_RECEIPTS_DIR = "receipts/mint"
+MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
+MINT_AUTHORITY_MODE = "basic"
+MINT_CHECKLIST_VERSION = "zet-mint/v0.2"
 SOURCE_SCAN_MODE = "metadata_only"
 SOURCE_ROOTS_LOCAL_PROFILE = "profiles/local/source-roots.local.yml"
 RESTORE_DRILL_EXCLUDED_PATHS = [
@@ -654,6 +658,227 @@ def promote_zettel(
     }
 
 
+def mint_zettel_dry_run(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    promotion_dry_run = promote_zettel_dry_run(root, zettel_id=zettel_id, relative_path=relative_path)
+    source_path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
+    source_frontmatter, _body = split_zettel_text(source_path.read_text(encoding="utf-8"))
+    source_frontmatter = json_safe(source_frontmatter)
+
+    zettel_id_value = str(source_frontmatter.get("id") or source_path.stem)
+    receipt_relative = f"{MINT_RECEIPTS_DIR}/{zettel_id_value}.mint.json"
+    snapshot_relative = f"{MINT_DRAFT_SNAPSHOTS_DIR}/{zettel_id_value}.draft.md"
+    blockers = list(promotion_dry_run["blockers"])
+    warnings = list(promotion_dry_run["warnings"])
+
+    receipt_path = resolve_archive_relative_path(root, receipt_relative)
+    snapshot_path = resolve_archive_relative_path(root, snapshot_relative)
+    if receipt_path.exists():
+        blockers.append(f"Mint receipt path already exists: {receipt_relative}.")
+    if snapshot_path.exists():
+        blockers.append(f"Draft snapshot path already exists: {snapshot_relative}.")
+
+    receipt_preview = build_mint_receipt_preview(
+        archive_root=root,
+        source_path=source_path,
+        frontmatter=source_frontmatter,
+        zettel_id=zettel_id_value,
+        title=source_frontmatter.get("title"),
+        draft_path=promotion_dry_run["draft_path"],
+        proposed_canonical_path=promotion_dry_run["proposed_canonical_path"],
+        proposed_receipt_path=receipt_relative,
+        proposed_snapshot_path=snapshot_relative,
+        checklist=promotion_dry_run["checklist"],
+        near_duplicates=promotion_dry_run["near_duplicates"],
+        blockers=blockers,
+        warnings=warnings,
+    )
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "draft_path": promotion_dry_run["draft_path"],
+        "zettel_id": zettel_id_value,
+        "title": source_frontmatter.get("title"),
+        "authority_mode": MINT_AUTHORITY_MODE,
+        "proposed_canonical_path": promotion_dry_run["proposed_canonical_path"],
+        "proposed_mint_receipt_path": receipt_relative,
+        "proposed_draft_snapshot_path": snapshot_relative,
+        "blockers": blockers,
+        "warnings": warnings,
+        "checklist": promotion_dry_run["checklist"],
+        "near_duplicates": promotion_dry_run["near_duplicates"],
+        "receipt_preview": receipt_preview,
+        "would_change": [
+            "status -> canonical",
+            "mint.stage -> minted",
+            "mint.authority_mode -> basic",
+            "promotion.stage -> promoted",
+            "updated_at -> current time",
+            f"write {promotion_dry_run['proposed_canonical_path']}",
+            f"write {receipt_relative}",
+            f"write {snapshot_relative}",
+        ],
+    }
+
+
+def mint_zettel(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    reviewed_by: str,
+    allow_warnings: bool = False,
+) -> dict[str, Any]:
+    reviewer = reviewed_by.strip()
+    if not reviewer:
+        raise ArchiveServiceError("Real minting requires --reviewed-by.")
+
+    root = require_existing_archive_root(archive_root)
+    dry_run = mint_zettel_dry_run(root, zettel_id=zettel_id, relative_path=relative_path)
+    if dry_run["blockers"]:
+        raise ArchiveServiceError("Minting blocked by dry-run: " + "; ".join(dry_run["blockers"]))
+    if dry_run["warnings"] and not allow_warnings:
+        raise ArchiveServiceError(
+            "Minting has warnings; rerun with --allow-warnings to approve them: "
+            + "; ".join(dry_run["warnings"])
+        )
+
+    source_path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
+    source_text = source_path.read_text(encoding="utf-8")
+    source_frontmatter, body = split_zettel_text(source_text)
+    source_frontmatter = json_safe(source_frontmatter)
+
+    canonical_relative = dry_run["proposed_canonical_path"]
+    receipt_relative = dry_run["proposed_mint_receipt_path"]
+    snapshot_relative = dry_run["proposed_draft_snapshot_path"]
+    canonical_path = resolve_archive_relative_path(root, canonical_relative)
+    receipt_path = resolve_archive_relative_path(root, receipt_relative)
+    snapshot_path = resolve_archive_relative_path(root, snapshot_relative)
+    if canonical_path.exists():
+        raise ArchiveServiceError(f"Target canonical path already exists: {canonical_relative}.")
+    if receipt_path.exists():
+        raise ArchiveServiceError(f"Mint receipt path already exists: {receipt_relative}.")
+    if snapshot_path.exists():
+        raise ArchiveServiceError(f"Draft snapshot path already exists: {snapshot_relative}.")
+
+    now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    promotion = source_frontmatter.get("promotion")
+    if not isinstance(promotion, dict):
+        promotion = {}
+    promotion.update(
+        {
+            "stage": "promoted",
+            "reviewed_by": reviewer,
+            "reviewed_at": now,
+            "checklist_version": "zettel-promotion/v0.2",
+        }
+    )
+    mint = {
+        "stage": "minted",
+        "minted_at": now,
+        "reviewed_by": reviewer,
+        "authority_mode": MINT_AUTHORITY_MODE,
+        "receipt_path": receipt_relative,
+        "draft_snapshot_path": snapshot_relative,
+        "checklist_version": MINT_CHECKLIST_VERSION,
+    }
+    canonical_frontmatter = dict(source_frontmatter)
+    canonical_frontmatter["status"] = "canonical"
+    canonical_frontmatter["updated_at"] = now
+    canonical_frontmatter["mint"] = mint
+    canonical_frontmatter["promotion"] = promotion
+    canonical_text = "---\n" + dump_yaml(canonical_frontmatter) + "---\n\n" + body.rstrip() + "\n"
+
+    zettel_id_value = str(source_frontmatter.get("id") or source_path.stem)
+    title = source_frontmatter.get("title")
+    created_paths = [canonical_relative, receipt_relative, snapshot_relative]
+
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    created_files: list[Path] = []
+    try:
+        with canonical_path.open("x", encoding="utf-8") as handle:
+            created_files.append(canonical_path)
+            handle.write(canonical_text)
+        with snapshot_path.open("x", encoding="utf-8") as handle:
+            created_files.append(snapshot_path)
+            handle.write(source_text)
+
+        source_sha = sha256_path(source_path)
+        canonical_sha = sha256_path(canonical_path)
+        snapshot_sha = sha256_path(snapshot_path)
+        receipt = {
+            "receipt_id": f"receipt:mint:{zettel_id_value}",
+            "receipt_path": receipt_relative,
+            "action": "mint_zettel",
+            "dry_run": False,
+            "timestamp": now,
+            "archive_id": read_archive_id(root),
+            "authority_mode": MINT_AUTHORITY_MODE,
+            "reviewed_by": reviewer,
+            "reviewed_at": now,
+            "source": {
+                "path": dry_run["draft_path"],
+                "status": "draft",
+                "sha256": source_sha,
+            },
+            "target": {
+                "path": canonical_relative,
+                "status": "canonical",
+                "sha256": canonical_sha,
+            },
+            "snapshot": {
+                "path": snapshot_relative,
+                "sha256": snapshot_sha,
+            },
+            "zettel": {
+                "id": zettel_id_value,
+                "title": title,
+            },
+            "source_refs": extract_mint_source_refs(source_frontmatter),
+            "edges": source_frontmatter.get("edges") if isinstance(source_frontmatter.get("edges"), list) else [],
+            "local_ai_sessions": extract_mint_local_ai_sessions(source_frontmatter),
+            "checklist": dry_run["checklist"],
+            "near_duplicates": dry_run["near_duplicates"],
+            "warnings": dry_run["warnings"],
+            "result": {
+                "created_paths": created_paths,
+            },
+        }
+        with receipt_path.open("x", encoding="utf-8") as handle:
+            created_files.append(receipt_path)
+            handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+    except OSError:
+        for created_path in reversed(created_files):
+            if created_path.exists():
+                created_path.unlink()
+        raise
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "draft_path": dry_run["draft_path"],
+        "zettel_id": zettel_id_value,
+        "title": title,
+        "authority_mode": MINT_AUTHORITY_MODE,
+        "canonical_path": canonical_relative,
+        "mint_receipt_path": receipt_relative,
+        "draft_snapshot_path": snapshot_relative,
+        "reviewed_by": reviewer,
+        "warnings": dry_run["warnings"],
+        "near_duplicates": dry_run["near_duplicates"],
+        "checklist": dry_run["checklist"],
+        "created_paths": created_paths,
+        "receipt": json_safe(receipt),
+    }
+
+
 def load_zettel_rules(archive_root: Path) -> dict[str, Any]:
     for path in [
         archive_internal_path(archive_root, "zettel-kasten/zettel-rules.yml"),
@@ -941,6 +1166,95 @@ def build_promotion_receipt_preview(
         "blockers": blockers,
         "warnings": warnings,
     }
+
+
+def build_mint_receipt_preview(
+    *,
+    archive_root: Path,
+    source_path: Path,
+    frontmatter: dict[str, Any],
+    zettel_id: str,
+    title: Any,
+    draft_path: str,
+    proposed_canonical_path: str,
+    proposed_receipt_path: str,
+    proposed_snapshot_path: str,
+    checklist: list[dict[str, Any]],
+    near_duplicates: list[dict[str, Any]],
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    source_sha = sha256_path(source_path)
+    return {
+        "receipt_id": f"receipt:mint:{zettel_id}",
+        "receipt_path": proposed_receipt_path,
+        "action": "mint_zettel",
+        "dry_run": True,
+        "timestamp": "<execution-time>",
+        "archive_id": read_archive_id(archive_root),
+        "authority_mode": MINT_AUTHORITY_MODE,
+        "reviewed_by": "<required-on-approve>",
+        "source": {
+            "path": draft_path,
+            "status": "draft",
+            "sha256": source_sha,
+        },
+        "target": {
+            "path": proposed_canonical_path,
+            "status": "canonical",
+            "sha256": "<after-write>",
+        },
+        "snapshot": {
+            "path": proposed_snapshot_path,
+            "sha256": source_sha,
+        },
+        "zettel": {
+            "id": zettel_id,
+            "title": title,
+        },
+        "source_refs": extract_mint_source_refs(frontmatter),
+        "edges": frontmatter.get("edges") if isinstance(frontmatter.get("edges"), list) else [],
+        "local_ai_sessions": extract_mint_local_ai_sessions(frontmatter),
+        "checklist": checklist,
+        "near_duplicates": near_duplicates,
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+
+def extract_mint_source_refs(frontmatter: dict[str, Any]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    explicit_refs = frontmatter.get("source_refs")
+    if isinstance(explicit_refs, list):
+        for item in explicit_refs:
+            if isinstance(item, dict):
+                refs.append(json_safe(item))
+            elif item is not None:
+                refs.append({"type": "source_ref", "value": str(item)})
+
+    provenance = frontmatter.get("provenance")
+    if isinstance(provenance, dict):
+        source = provenance.get("source")
+        if source:
+            refs.append({"type": "provenance_source", "value": str(source)})
+        derived_from = provenance.get("derived_from")
+        if isinstance(derived_from, list):
+            for item in derived_from:
+                if isinstance(item, dict):
+                    refs.append(json_safe(item))
+                elif item is not None:
+                    refs.append({"type": "derived_from", "value": str(item)})
+    return refs
+
+
+def extract_mint_local_ai_sessions(frontmatter: dict[str, Any]) -> list[dict[str, Any]]:
+    sessions = frontmatter.get("local_ai_sessions")
+    if isinstance(sessions, list):
+        return [json_safe(item) if isinstance(item, dict) else {"value": str(item)} for item in sessions if item is not None]
+    session = frontmatter.get("local_ai_session")
+    if isinstance(session, dict):
+        return [json_safe(session)]
+    return []
 
 
 def list_views(archive_root: Path | str) -> dict[str, Any]:
@@ -4785,6 +5099,14 @@ def read_archive_id(archive_root: Path) -> str:
     if not isinstance(data, dict) or not isinstance(data.get("archive_id"), str):
         raise ArchiveServiceError("archive.yml does not contain archive_id and archive_id was not provided.")
     return data["archive_id"]
+
+
+def sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def default_private_visibility() -> dict[str, Any]:

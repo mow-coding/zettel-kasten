@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zettel-kasten-archive-kit"
-version = "0.2.7"
+version = "0.2.8"
 description = "Local-first, AI-readable archive protocol and CLI for zettel-kasten archives."
 readme = "README.md"
 requires-python = ">=3.10"

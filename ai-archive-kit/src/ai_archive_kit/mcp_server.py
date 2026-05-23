@@ -320,6 +320,19 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "mint_zettel_check",
+        "description": "Dry-run check whether an inbox draft zet can be minted. This never writes canonical memory, receipts, or snapshots.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "zettel_id": {"type": "string"},
+                "path": {"type": "string"},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "share_check",
         "description": "Dry-run check whether a saved view can be shared with a trusted counterparty. This never writes or sends data.",
         "inputSchema": {
@@ -489,6 +502,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_archive_search(arguments)
     if name == "promotion_check":
         return tool_promotion_check(arguments)
+    if name == "mint_zettel_check":
+        return tool_mint_zettel_check(arguments)
     if name == "share_check":
         return tool_share_check(arguments)
     if name == "ownership_transfer_check":
@@ -812,6 +827,20 @@ def tool_promotion_check(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"promotion_check: {state}.", result)
+
+
+def tool_mint_zettel_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    zettel_id = optional_string_arg(arguments, "zettel_id")
+    relative_path = optional_string_arg(arguments, "path")
+    result = call_service(
+        archive_services.mint_zettel_dry_run,
+        archive_root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"mint_zettel_check: {state}.", result)
 
 
 def tool_share_check(arguments: dict[str, Any]) -> dict[str, Any]:

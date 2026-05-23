@@ -33,6 +33,7 @@
         "source_visibility": {"type": "string"}
       }
     },
-    "promotion": {"type": "object"}
+    "promotion": {"type": "object"},
+    "mint": {"type": "object"}
   }
 }

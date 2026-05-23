@@ -28,9 +28,36 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.4` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
+| `v0.2.8` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.8.md` |
+| `v0.2.7` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.7.md` |
+| `v0.2.6` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.6.md` |
+| `v0.2.5` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.5.md` |
+| `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.7`에서 `v0.2.8`로
+
+호환 가능한 민팅 라이프사이클 기능 패치입니다.
+
+변경 사항:
+
+- `archive mint-zettel --dry-run`을 추가했습니다.
+- `archive mint-zettel --approve --reviewed-by <id>`를 추가했습니다.
+- `receipts/mint/` 아래 mint receipt를 추가했습니다.
+- `receipts/mint/drafts/` 아래 draft snapshot을 추가했습니다.
+- canonical zettel의 `mint` frontmatter를 추가했습니다.
+- doctor가 mint receipt와 SHA-256 파일 연결을 검증합니다.
+- read-only MCP `mint_zettel_check`를 추가했습니다.
+
+실제 private archive migration은 필요 없습니다.
+
+새 zettel을 민팅했다면 canonical zettel, mint receipt, draft snapshot을 함께 보관하세요.
+
+```bash
+git fetch --tags
+git checkout v0.2.8
+```
 
 ## `v0.2.3`에서 `v0.2.4`로
 
@@ -102,4 +129,3 @@ new version -> updated rule set
 - privacy scan status,
 - Git tag,
 - GitHub Release.
-

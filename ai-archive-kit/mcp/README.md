@@ -118,6 +118,9 @@ source_mount_plan
 promotion_check
   Dry-run check whether an inbox draft can be promoted. Returns checklist status, duplicate hints, and receipt preview. This never writes canonical memory.
 
+mint_zettel_check
+  Dry-run check whether an inbox draft zet can be minted. Returns checklist status, duplicate hints, mint receipt preview, and draft snapshot path. This never writes canonical memory, receipts, or snapshots.
+
 share_check
   Dry-run check whether a saved view can be shared with a trusted counterparty. Returns scope gate, trust gate, and receipt preview. This never writes or sends archive data.
 
@@ -141,9 +144,10 @@ ownership_transfer_check
 - `source_mount_plan` returns Docker/host guidance but does not edit Compose files.
 - `source_scan_plan` previews source map entries but does not write `source-maps/` or receipts.
 - `promotion_check` previews canonical and receipt paths but does not write either file.
+- `mint_zettel_check` previews canonical, mint receipt, and draft snapshot paths but does not write any of them.
 - `share_check` previews archive sharing but does not write receipts, create workpacks, merge, fork, or send data.
 - `ownership_transfer_check` previews ownership transfer and external provider changes, but does not write receipts or change `archive-identity.yml`.
 - Ownership transfer receipt examples can be validated by `archive_doctor` when they live under `receipts/lineage/*.ownership-transfer.json`.
-- Real pilot apply, restore drill apply, real onboarding apply, external import apply, source registration apply, source scan apply, promotion into canonical `zettels/`, real archive sharing, real ownership transfer, and external provider account mutation are intentionally not exposed through MCP.
+- Real pilot apply, restore drill apply, real onboarding apply, external import apply, source registration apply, source scan apply, minting/promotion into canonical `zettels/`, real archive sharing, real ownership transfer, and external provider account mutation are intentionally not exposed through MCP.
 - In Docker Compose, MCP paths are allowlisted to `/archives` through `AI_ARCHIVE_MCP_ALLOWED_ROOTS=/archives`.
 - Tool result paths use archive-relative `/` paths so JSON-RPC output is stable across Windows, macOS, and Linux.

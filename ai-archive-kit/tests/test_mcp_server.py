@@ -131,6 +131,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("archive_index", tool_names)
             self.assertIn("archive_search", tool_names)
             self.assertIn("promotion_check", tool_names)
+            self.assertIn("mint_zettel_check", tool_names)
             self.assertIn("share_check", tool_names)
             self.assertIn("archive_onboarding_plan", tool_names)
             self.assertIn("real_pilot_plan", tool_names)
@@ -145,6 +146,9 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("ownership_transfer_check", tool_names)
             self.assertNotIn("promote_zettel", tool_names)
             self.assertNotIn("archive_promote", tool_names)
+            self.assertNotIn("mint_zettel", tool_names)
+            self.assertNotIn("archive_mint_zettel", tool_names)
+            self.assertNotIn("mint_zettel_apply", tool_names)
             self.assertNotIn("share_archive_scope", tool_names)
             self.assertNotIn("archive_onboard", tool_names)
             self.assertNotIn("archive_onboarding_apply", tool_names)
@@ -736,6 +740,47 @@ class McpServerTests(unittest.TestCase):
             self.assertFalse((archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists())
             self.assertFalse(
                 (archive_root / "receipts" / "promotion" / "zet_20260519_draft_ai_lunch_note.promotion.json").exists()
+            )
+        finally:
+            self.stop_server(process)
+
+    def test_mint_zettel_check_dry_run_never_writes_files(self) -> None:
+        process = self.start_server()
+        try:
+            archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+            response = self.send(
+                process,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "mint_zettel_check",
+                        "arguments": {
+                            "archive_root": str(archive_root),
+                            "path": "inbox/zet_20260519_draft_ai_lunch_note.md",
+                        },
+                    },
+                },
+            )
+            result = response["result"]
+            self.assertFalse(result["isError"])
+            self.assertTrue(result["structuredContent"]["dry_run"])
+            self.assertFalse(result["structuredContent"]["ok"])
+            self.assertIn("receipt_preview", result["structuredContent"])
+            self.assertIn("checklist", result["structuredContent"])
+            self.assertEqual(
+                result["structuredContent"]["proposed_mint_receipt_path"],
+                "receipts/mint/zet_20260519_draft_ai_lunch_note.mint.json",
+            )
+            self.assertEqual(
+                result["structuredContent"]["proposed_draft_snapshot_path"],
+                "receipts/mint/drafts/zet_20260519_draft_ai_lunch_note.draft.md",
+            )
+            self.assertFalse((archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists())
+            self.assertFalse((archive_root / "receipts" / "mint" / "zet_20260519_draft_ai_lunch_note.mint.json").exists())
+            self.assertFalse(
+                (archive_root / "receipts" / "mint" / "drafts" / "zet_20260519_draft_ai_lunch_note.draft.md").exists()
             )
         finally:
             self.stop_server(process)

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Archive Kit mint receipt",
+  "type": "object",
+  "required": [
+    "receipt_id",
+    "receipt_path",
+    "action",
+    "dry_run",
+    "archive_id",
+    "authority_mode",
+    "source",
+    "target",
+    "snapshot",
+    "zettel",
+    "checklist",
+    "near_duplicates",
+    "warnings"
+  ],
+  "properties": {
+    "receipt_id": {"type": "string"},
+    "receipt_path": {"type": "string"},
+    "action": {"type": "string", "enum": ["mint_zettel"]},
+    "dry_run": {"type": "boolean"},
+    "timestamp": {"type": "string"},
+    "archive_id": {"type": "string"},
+    "authority_mode": {"type": "string", "enum": ["basic"]},
+    "reviewed_by": {"type": "string"},
+    "reviewed_at": {"type": "string"},
+    "source": {"type": "object"},
+    "target": {"type": "object"},
+    "snapshot": {"type": "object"},
+    "zettel": {"type": "object"},
+    "source_refs": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "edges": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "local_ai_sessions": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "checklist": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "near_duplicates": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "blockers": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "result": {"type": "object"}
+  }
+}

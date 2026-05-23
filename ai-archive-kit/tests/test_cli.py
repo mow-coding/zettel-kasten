@@ -749,6 +749,282 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("Only drafts inside inbox/ can be promoted.", result["blockers"])
 
+    def test_mint_zettel_dry_run_checks_inbox_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            code, output = self.run_cli(
+                [
+                    "mint-zettel",
+                    str(archive_root),
+                    "--path",
+                    "inbox\\zet_20260519_draft_ai_lunch_note.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["draft_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+            self.assertEqual(result["authority_mode"], "basic")
+            self.assertEqual(result["proposed_canonical_path"], "zettels/zet_20260519_draft_ai_lunch_note.md")
+            self.assertEqual(result["proposed_mint_receipt_path"], "receipts/mint/zet_20260519_draft_ai_lunch_note.mint.json")
+            self.assertEqual(result["proposed_draft_snapshot_path"], "receipts/mint/drafts/zet_20260519_draft_ai_lunch_note.draft.md")
+            self.assertEqual(len(result["checklist"]), len(PROMOTION_CHECKLIST_IDS))
+            self.assertTrue(all(item["status"] == "passed" for item in result["checklist"]))
+            self.assertEqual(result["receipt_preview"]["action"], "mint_zettel")
+            self.assertTrue(result["receipt_preview"]["dry_run"])
+            self.assertEqual(result["receipt_preview"]["authority_mode"], "basic")
+            self.assertIn("source_refs", result["receipt_preview"])
+            self.assertFalse((archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists())
+            self.assertFalse((archive_root / "receipts" / "mint" / "zet_20260519_draft_ai_lunch_note.mint.json").exists())
+            self.assertFalse((archive_root / "receipts" / "mint" / "drafts" / "zet_20260519_draft_ai_lunch_note.draft.md").exists())
+
+            id_code, id_output = self.run_cli(
+                [
+                    "mint-zettel",
+                    str(archive_root),
+                    "--zettel-id",
+                    "zet_20260519_draft_ai_lunch_note",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(id_code, 0, id_output)
+            id_result = json.loads(id_output)
+            self.assertEqual(id_result["draft_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+
+    def test_mint_zettel_real_requires_approval_and_reviewer(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(
+            [
+                "mint-zettel",
+                str(archive_root),
+                "--path",
+                "inbox/zet_20260519_draft_ai_lunch_note.md",
+            ]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("--approve", output)
+
+        reviewed_code, reviewed_output = self.run_cli(
+            [
+                "mint-zettel",
+                str(archive_root),
+                "--path",
+                "inbox/zet_20260519_draft_ai_lunch_note.md",
+                "--approve",
+            ]
+        )
+        self.assertEqual(reviewed_code, 1)
+        self.assertIn("--reviewed-by", reviewed_output)
+
+    def test_mint_zettel_real_writes_canonical_receipt_snapshot_and_keeps_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path = self.make_fake_lunch_draft_promotion_ready(archive_root)
+            draft_text_before = draft_path.read_text(encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "mint-zettel",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["draft_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+            self.assertEqual(result["canonical_path"], "zettels/zet_20260519_draft_ai_lunch_note.md")
+            self.assertEqual(result["mint_receipt_path"], "receipts/mint/zet_20260519_draft_ai_lunch_note.mint.json")
+            self.assertEqual(result["draft_snapshot_path"], "receipts/mint/drafts/zet_20260519_draft_ai_lunch_note.draft.md")
+
+            canonical_path = archive_root / result["canonical_path"]
+            receipt_path = archive_root / result["mint_receipt_path"]
+            snapshot_path = archive_root / result["draft_snapshot_path"]
+            self.assertTrue(canonical_path.is_file())
+            self.assertTrue(receipt_path.is_file())
+            self.assertTrue(snapshot_path.is_file())
+            self.assertTrue(draft_path.is_file())
+            self.assertEqual(draft_path.read_text(encoding="utf-8"), draft_text_before)
+            self.assertEqual(snapshot_path.read_text(encoding="utf-8"), draft_text_before)
+
+            canonical_text = canonical_path.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(canonical_text)
+            self.assertIsNotNone(match)
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            self.assertEqual(frontmatter["status"], "canonical")
+            self.assertEqual(frontmatter["mint"]["stage"], "minted")
+            self.assertEqual(frontmatter["mint"]["authority_mode"], "basic")
+            self.assertEqual(frontmatter["mint"]["reviewed_by"], "person:test")
+            self.assertEqual(frontmatter["mint"]["receipt_path"], result["mint_receipt_path"])
+            self.assertEqual(frontmatter["mint"]["draft_snapshot_path"], result["draft_snapshot_path"])
+            self.assertEqual(frontmatter["mint"]["checklist_version"], "zet-mint/v0.2")
+            self.assertIn("minted_at", frontmatter["mint"])
+            self.assertEqual(frontmatter["promotion"]["stage"], "promoted")
+            self.assertEqual(frontmatter["promotion"]["reviewed_by"], "person:test")
+            self.assertEqual(frontmatter["promotion"]["checklist_version"], "zettel-promotion/v0.2")
+
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(archive_cli.validate_schema(receipt, "mint-receipt.schema.json"), [])
+            self.assertEqual(receipt["receipt_id"], "receipt:mint:zet_20260519_draft_ai_lunch_note")
+            self.assertEqual(receipt["action"], "mint_zettel")
+            self.assertFalse(receipt["dry_run"])
+            self.assertEqual(receipt["authority_mode"], "basic")
+            self.assertEqual(receipt["reviewed_by"], "person:test")
+            self.assertEqual(receipt["source"]["path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+            self.assertEqual(receipt["target"]["path"], result["canonical_path"])
+            self.assertEqual(receipt["snapshot"]["path"], result["draft_snapshot_path"])
+            self.assertRegex(receipt["source"]["sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(receipt["target"]["sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(receipt["snapshot"]["sha256"], r"^[0-9a-f]{64}$")
+            self.assertEqual(receipt["result"]["created_paths"], result["created_paths"])
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_mint_zettel_real_blocks_dry_run_blockers_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            code, output = self.run_cli(
+                [
+                    "mint-zettel",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("Minting blocked by dry-run", output)
+            self.assertFalse((archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists())
+            self.assertFalse((archive_root / "receipts" / "mint" / "zet_20260519_draft_ai_lunch_note.mint.json").exists())
+            self.assertFalse((archive_root / "receipts" / "mint" / "drafts" / "zet_20260519_draft_ai_lunch_note.draft.md").exists())
+
+    def test_mint_zettel_real_requires_allow_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root, title="Fake thought while eating alone")
+
+            code, output = self.run_cli(
+                [
+                    "mint-zettel",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("--allow-warnings", output)
+            self.assertFalse((archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists())
+            self.assertFalse((archive_root / "receipts" / "mint" / "zet_20260519_draft_ai_lunch_note.mint.json").exists())
+
+            allowed_code, allowed_output = self.run_cli(
+                [
+                    "mint-zettel",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--allow-warnings",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(allowed_code, 0, allowed_output)
+            result = json.loads(allowed_output)
+            self.assertTrue(any("same_title" in warning for warning in result["warnings"]))
+
+    def test_mint_zettel_real_fails_when_target_receipt_or_snapshot_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            canonical_path = archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md"
+            canonical_path.write_text("existing canonical", encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "mint-zettel",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("Proposed canonical path already exists", output)
+            self.assertEqual(canonical_path.read_text(encoding="utf-8"), "existing canonical")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            receipt_path = archive_root / "receipts" / "mint" / "zet_20260519_draft_ai_lunch_note.mint.json"
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_text("{}\n", encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "mint-zettel",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("Mint receipt path already exists", output)
+            self.assertFalse((archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists())
+            self.assertEqual(receipt_path.read_text(encoding="utf-8"), "{}\n")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            snapshot_path = archive_root / "receipts" / "mint" / "drafts" / "zet_20260519_draft_ai_lunch_note.draft.md"
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot_path.write_text("existing snapshot", encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "mint-zettel",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("Draft snapshot path already exists", output)
+            self.assertFalse((archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists())
+            self.assertFalse((archive_root / "receipts" / "mint" / "zet_20260519_draft_ai_lunch_note.mint.json").exists())
+            self.assertEqual(snapshot_path.read_text(encoding="utf-8"), "existing snapshot")
+
     def test_promote_dry_run_reports_same_title_duplicate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

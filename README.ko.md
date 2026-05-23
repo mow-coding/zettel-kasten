@@ -13,7 +13,7 @@
 현재 공개 기준:
 
 ```text
-v0.2.7 pre-release
+v0.2.8 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -25,13 +25,13 @@ v0.2.7 pre-release
 - fake sample archive,
 - 설치/보안 문서,
 - 버전별 release note,
-- 초기 Python CLI와 MCP 도구.
+- 초기 Python CLI와 MCP 도구,
+- draft zet을 canonical zettel, mint receipt, draft snapshot으로 민팅하는 CLI 구현.
 
 아직 없는 것:
 
 - production-grade 설치 흐름,
 - 실제 provider 연동,
-- 최종 minting 구현,
 - production `zet` 공유 서비스,
 - 안정판 `v1.0.0` 프로토콜 보장.
 
@@ -157,7 +157,7 @@ OCR과 AI 전사는 유용하지만, 모델에 따라 달라질 수 있는 deriv
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.2.7
+v0.2.8
 v0.3.0
 v1.0.0
 ```
