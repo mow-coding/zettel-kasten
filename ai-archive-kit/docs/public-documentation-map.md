@@ -24,6 +24,8 @@ Start here:
 - [Korean Foundational Product Whitepaper](concepts/foundational-product-whitepaper.ko.md)
 - [Product Philosophy](concepts/product-philosophy.md)
 - [Korean Product Philosophy](concepts/product-philosophy.ko.md)
+- [Zet Sharing Lifecycle Terminology](concepts/zet-sharing-lifecycle.md)
+- [Korean Zet Sharing Lifecycle Terminology](concepts/zet-sharing-lifecycle.ko.md)
 - [Zettel-Kasten And Zet Product Blueprint](../specs/zettelkasten-zet-product-blueprint.md)
 
 Supporting philosophy and model docs:
@@ -40,6 +42,7 @@ These documents cover:
 - why `zet` is always text,
 - why source/original data remains separate from minted zets,
 - why private archive memory comes before social sharing,
+- why future sharing verbs are framed as `mint -> delegate -> attest -> anchor`,
 - how `zet` sharing can later become messenger, SNS/feed, or collaboration workspace,
 - why this model is relevant to AI Transformation (AX).
 - how the same authority model supports HITL workflows and scoped AI-agent harnesses.
@@ -124,6 +127,7 @@ These documents record public-safe work already performed.
 - [GitHub Publication Work Log](../plans/work-log-2026-05-23-github-publication.md)
 - [Versioning And Storage Work Log](../plans/work-log-2026-05-23-versioning-and-storage.md)
 - [Product Whitepaper Depth Correction Work Log](../plans/work-log-2026-05-23-product-whitepaper-depth.md)
+- [Zet Sharing Lifecycle Terminology Work Log](../plans/work-log-2026-05-23-zet-sharing-lifecycle-terminology.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
 

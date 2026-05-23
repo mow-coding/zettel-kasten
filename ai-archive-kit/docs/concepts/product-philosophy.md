@@ -11,6 +11,7 @@ For the longer public product planning document, read:
 
 - [Foundational Product Whitepaper](foundational-product-whitepaper.md)
 - [Korean Foundational Product Whitepaper](foundational-product-whitepaper.ko.md)
+- [Zet Sharing Lifecycle Terminology](zet-sharing-lifecycle.md)
 
 ## 1. Thesis
 
@@ -200,6 +201,14 @@ private minted zet
 -> scoped capability or copy/access policy
 -> recipient archive or client
 ```
+
+The preferred lifecycle language for future sharing is:
+
+```text
+mint -> delegate -> attest -> anchor
+```
+
+In this vocabulary, `attest` is not liking or agreeing. It is the recipient archive's distributed witness that a foreign `zet` existed with a given issuer, hash, protocol profile, and delegated condition.
 
 The server, if one exists, should help transport, discovery, relay, or sync.
 

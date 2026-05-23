@@ -11,6 +11,7 @@
 
 - [Foundational Product Whitepaper](foundational-product-whitepaper.md)
 - [한국어 Foundational Product Whitepaper](foundational-product-whitepaper.ko.md)
+- [Zet 공유 Lifecycle 용어](zet-sharing-lifecycle.ko.md)
 
 ## 1. 핵심 주장
 
@@ -198,6 +199,14 @@ private minted zet
 -> scoped capability or copy/access policy
 -> recipient archive or client
 ```
+
+미래 공유의 선호 lifecycle 언어는 다음입니다.
+
+```text
+mint -> delegate -> attest -> anchor
+```
+
+이 언어에서 `attest`는 좋아요나 동의가 아닙니다. 어떤 foreign `zet`가 특정 issuer, hash, protocol profile, delegated condition으로 존재했다는 것을 recipient archive가 분산 증인으로 기록하는 행위입니다.
 
 서버가 존재한다면 transport, discovery, relay, sync를 도울 수 있습니다.
 

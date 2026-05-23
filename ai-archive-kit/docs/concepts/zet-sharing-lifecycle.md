@@ -1,0 +1,157 @@
+# Zet Sharing Lifecycle Terminology
+
+Status: public terminology candidate
+Date: 2026-05-23
+
+This document records the product-language direction for the future `zet` sharing layer.
+
+It does not implement sharing, P2P transport, social feeds, or collaboration yet. It defines the philosophical verbs that future specs, schemas, receipts, and UI should align with.
+
+## 1. Why New Verbs Matter
+
+The project should not inherit ordinary SaaS verbs as its primary worldview.
+
+The ordinary SaaS flow is:
+
+```text
+create -> share -> download -> save
+```
+
+That language treats data as files moving through a platform.
+
+The `zet` model treats each subject as an archive-bearing actor that can issue, delegate, verify, and place records within its own memory boundary.
+
+The preferred `zet` flow is:
+
+```text
+mint -> delegate -> attest -> anchor
+```
+
+This is a terminology candidate, not a finished protocol. It is intentionally closer to blockchain, distributed trust, and urban-sociological thinking than to ordinary app vocabulary.
+
+## 2. Lifecycle Verbs
+
+### Mint
+
+`mint` is the act of issuing a `zet` into a subject's own private archive as canonical memory.
+
+In the current implementation:
+
+```text
+draft zet -> mint-zettel -> canonical private zet -> mint receipt -> draft snapshot
+```
+
+Minting is not posting, sharing, broadcasting, or publishing.
+
+It is private archive issuance.
+
+### Delegate
+
+`delegate` is the candidate verb for making a minted `zet` available to a specific subject, group, archive, agent, or workspace.
+
+Delegation is not ownership transfer.
+
+It means the issuer gives another actor a scoped capability, such as:
+
+- the capability to inspect the `zet`,
+- the capability to verify its receipt and hash,
+- the capability to access referenced source material,
+- the capability to receive a copy,
+- the capability to create an attestation.
+
+Future implementation may express this through a `delegate receipt`, capability token, share envelope, workpack, or another portable proof.
+
+### Attest
+
+`attest` is the act of verifying a delegated foreign `zet` and recording evidence that it existed in a specific state.
+
+Attestation is not:
+
+- liking,
+- agreeing,
+- endorsing,
+- reposting,
+- adopting the idea as one's own.
+
+An attesting archive says, in effect:
+
+```text
+I verified that this foreign zet existed,
+was minted by this identity or archive,
+matched this schema/protocol profile,
+had this content hash,
+and entered my archive boundary under these delegated conditions.
+```
+
+This is why `attest` is central to the future Web3-like model.
+
+If many independent subjects attest the same minted `zet`, the original issuer can still create a new revision, but cannot easily pretend the older state never existed. The recorded hashes, receipts, and attestations become distributed witnesses.
+
+Attestation should eventually produce an `attestation receipt` or equivalent log entry.
+
+### Anchor
+
+`anchor` is the candidate verb for placing an attested foreign `zet` inside the recipient's own zettel-kasten meaning network.
+
+Anchoring is not merely storing a file.
+
+Anchoring gives the foreign `zet`:
+
+- local context,
+- local relationships,
+- local retrieval paths,
+- local interpretive position,
+- and a place in the recipient archive's knowledge map.
+
+The foreign `zet` remains foreign in provenance. Anchoring does not erase authorship, issuer identity, delegated scope, or attestation evidence.
+
+The urban-sociological intuition is that a record becomes meaningful when it gains location, relation, and situated context inside a living map.
+
+## 3. Compatibility Language
+
+The future sharing layer should avoid saying that two users simply need the same app version.
+
+The better compatibility model is:
+
+```text
+protocol compatibility
+schema compatibility
+trust profile compatibility
+capability compatibility
+```
+
+A client may be on a newer release and still understand an older sharing protocol. A recipient may refuse a technically readable `zet` if its trust profile or delegated capability is insufficient.
+
+## 4. Future Receipts
+
+The terminology points toward three future evidence objects:
+
+```text
+delegate receipt
+attestation receipt
+anchor metadata
+```
+
+These are not implemented yet.
+
+They should be designed later so that:
+
+- delegation is auditable,
+- attestation is independently verifiable,
+- anchoring preserves foreign provenance,
+- and private archive minting remains distinct from social sharing.
+
+## 5. Current Status
+
+Current status:
+
+- `mint` is already the preferred product word for private archive issuance.
+- `attest` is the preferred product word for verifying a foreign `zet`.
+- `delegate` is the preferred candidate for scoped sharing authority.
+- `anchor` is the preferred candidate for placing an attested foreign `zet` into local meaning.
+
+Short form:
+
+```text
+mint -> delegate -> attest -> anchor
+```

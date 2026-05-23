@@ -515,6 +515,23 @@ The same underlying object should not be casually leaked from the private archiv
 
 Sharing should usually create a share package or share envelope that is distinct from the private minted zet.
 
+### 14.1 Sharing Lifecycle Terminology
+
+The preferred terminology candidate for future `zet` sharing is:
+
+```text
+mint -> delegate -> attest -> anchor
+```
+
+Meaning:
+
+- `mint`: issue a `zet` as canonical private archive memory.
+- `delegate`: give a scoped capability to a specific subject, group, archive, agent, or workspace.
+- `attest`: verify a foreign `zet` and record evidence of its issuer, hash, protocol profile, and delegated condition.
+- `anchor`: place an attested foreign `zet` into the recipient archive's meaning network without erasing its foreign provenance.
+
+This vocabulary intentionally avoids ordinary SaaS verbs such as `download`, `share`, and `save` as the core philosophy. Future implementation may still use plain helper words in UI copy where clarity requires it, but the protocol-level concept model should align with minting, delegation, attestation, and anchoring.
+
 ## 15. Sharing Payload Policies
 
 Because a `zet` body is always text, sharing a zet may carry different source access policies:
