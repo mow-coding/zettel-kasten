@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import io
+import hashlib
 import json
 import shutil
 import sys
@@ -900,11 +901,352 @@ class ArchiveCliTests(unittest.TestCase):
                     "--title",
                     "Unsafe draft",
                     "--body",
-                    "This mentions C:\\Users\\example\\secret.txt.",
+                    "This mentions X:\\example\\secret.txt.",
                 ]
             )
             self.assertEqual(code, 1)
             self.assertIn("absolute path", output)
+
+    def test_create_draft_dry_run_returns_preview_and_writes_no_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:draft-dry-run")
+            self.assertEqual(init_code, 0, init_output)
+
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "AI assisted draft",
+                    "--body",
+                    "A safe draft body.",
+                    "--dry-run",
+                    "--expected-archive-id",
+                    "archive:personal:draft-dry-run",
+                    "--expected-type",
+                    "personal",
+                    "--profile-id",
+                    "profile:personal:test",
+                    "--profile-operator-id",
+                    "person:test",
+                    "--profile-authority-mode",
+                    "draft_only",
+                    "--creation-mode",
+                    "ai_assisted",
+                    "--created-by",
+                    "ai_runtime:codex",
+                    "--source",
+                    "user_conversation",
+                    "--assisted-by",
+                    "ai_runtime:codex",
+                    "--supervised-by",
+                    "person:test",
+                    "--derived-from",
+                    "object:example-script",
+                    "--source-ref",
+                    "local_ai_session:session:abc123",
+                    "--local-ai-session",
+                    "session:abc123",
+                    "--draft-id",
+                    "zet_20260524_010203_ai_assisted_draft",
+                    "--created-at",
+                    "2026-05-24T01:02:03+09:00",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "create_draft")
+            self.assertEqual(result["proposed_path"], "inbox/zet_20260524_010203_ai_assisted_draft.md")
+            self.assertRegex(result["body_sha256"], r"^[0-9a-f]{64}$")
+            self.assertFalse((archive_root / result["proposed_path"]).exists())
+            self.assertEqual(result["approval_replay"]["draft_id"], "zet_20260524_010203_ai_assisted_draft")
+            self.assertEqual(result["approval_replay"]["expected_archive_id"], "archive:personal:draft-dry-run")
+            self.assertEqual(result["approval_replay"]["profile_id"], "profile:personal:test")
+            frontmatter = result["frontmatter_preview"]
+            self.assertEqual(frontmatter["provenance"]["creation_mode"], "ai_assisted")
+            self.assertEqual(frontmatter["provenance"]["derived_from"], ["object:example-script"])
+            self.assertEqual(frontmatter["source_refs"][0]["type"], "local_ai_session")
+            self.assertEqual(frontmatter["local_ai_sessions"][0]["session_ref"], "session:abc123")
+
+    def test_create_draft_replay_writes_approved_inbox_draft_with_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:draft-replay")
+            self.assertEqual(init_code, 0, init_output)
+            body = "Approved safe draft body."
+            expected_hash = hashlib.sha256((body.rstrip() + "\n").encode("utf-8")).hexdigest()
+
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Approved AI draft",
+                    "--body",
+                    body,
+                    "--expected-archive-id",
+                    "archive:personal:draft-replay",
+                    "--expected-type",
+                    "personal",
+                    "--profile-id",
+                    "profile:personal:test",
+                    "--profile-operator-id",
+                    "person:test",
+                    "--profile-authority-mode",
+                    "draft_only",
+                    "--creation-mode",
+                    "ai_assisted",
+                    "--created-by",
+                    "ai_runtime:codex",
+                    "--source",
+                    "user_conversation",
+                    "--assisted-by",
+                    "ai_runtime:codex",
+                    "--supervised-by",
+                    "person:test",
+                    "--derived-from",
+                    "object:example-script",
+                    "--source-ref",
+                    "local_ai_session:session:approved",
+                    "--local-ai-session",
+                    "session:approved",
+                    "--draft-id",
+                    "zet_20260524_020304_approved_ai_draft",
+                    "--created-at",
+                    "2026-05-24T02:03:04+09:00",
+                    "--expected-body-sha256",
+                    expected_hash,
+                    "--draft-approved-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["path"], "inbox/zet_20260524_020304_approved_ai_draft.md")
+            draft_path = archive_root / result["path"]
+            self.assertTrue(draft_path.is_file())
+            match = archive_cli.FRONTMATTER_RE.match(draft_path.read_text(encoding="utf-8"))
+            self.assertIsNotNone(match)
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            self.assertEqual(frontmatter["provenance"]["created_by"], "ai_runtime:codex")
+            self.assertEqual(frontmatter["provenance"]["creation_mode"], "ai_assisted")
+            self.assertEqual(frontmatter["provenance"]["assisted_by"], ["ai_runtime:codex"])
+            self.assertEqual(frontmatter["provenance"]["supervised_by"], ["person:test"])
+            self.assertEqual(frontmatter["provenance"]["derived_from"], ["object:example-script"])
+            self.assertEqual(frontmatter["source_refs"][0]["value"], "session:approved")
+            self.assertEqual(frontmatter["local_ai_sessions"][0]["profile_id"], "profile:personal:test")
+            self.assertEqual(frontmatter["draft_creation"]["approved_by"], "person:test")
+            self.assertEqual(frontmatter["draft_creation"]["approval_scope"], "inbox_draft_only")
+            self.assertEqual(frontmatter["draft_creation"]["approved_body_sha256"], expected_hash)
+
+    def test_create_draft_body_hash_normalizes_line_endings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:draft-crlf")
+            self.assertEqual(init_code, 0, init_output)
+
+            base_args = [
+                "create-draft",
+                str(archive_root),
+                "--title",
+                "Line ending draft",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+            lf_code, lf_output = self.run_cli(base_args + ["--body", "Line one\nLine two"])
+            crlf_code, crlf_output = self.run_cli(base_args + ["--body", "Line one\r\nLine two"])
+            self.assertEqual(lf_code, 0, lf_output)
+            self.assertEqual(crlf_code, 0, crlf_output)
+            self.assertEqual(json.loads(lf_output)["body_sha256"], json.loads(crlf_output)["body_sha256"])
+
+    def test_create_draft_blocks_ai_creation_without_assisted_by(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:draft-ai-identity")
+            self.assertEqual(init_code, 0, init_output)
+
+            for created_by in ["person:test", "cli:archive", "mcp:zettel-kasten-archive-mcp"]:
+                code, output = self.run_cli(
+                    [
+                        "create-draft",
+                        str(archive_root),
+                        "--title",
+                        "AI identity draft",
+                        "--body",
+                        "Safe body.",
+                        "--dry-run",
+                        "--creation-mode",
+                        "ai_assisted",
+                        "--created-by",
+                        created_by,
+                        "--format",
+                        "json",
+                    ]
+                )
+                self.assertEqual(code, 1, output)
+                self.assertIn("assisting AI runtime", "; ".join(json.loads(output)["blockers"]))
+
+            pass_code, pass_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "AI identity pass",
+                    "--body",
+                    "Safe body.",
+                    "--dry-run",
+                    "--creation-mode",
+                    "ai_assisted",
+                    "--created-by",
+                    "person:test",
+                    "--assisted-by",
+                    "ai_runtime:codex",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(pass_code, 0, pass_output)
+            self.assertTrue(json.loads(pass_output)["ok"])
+
+    def test_create_draft_blocks_empty_body_and_bad_created_at(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:draft-sanity")
+            self.assertEqual(init_code, 0, init_output)
+
+            empty_code, empty_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Empty draft",
+                    "--body",
+                    "   ",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(empty_code, 1, empty_output)
+            self.assertIn("non-whitespace", "; ".join(json.loads(empty_output)["blockers"]))
+
+            date_code, date_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Bad date draft",
+                    "--body",
+                    "Safe body.",
+                    "--dry-run",
+                    "--created-at",
+                    "not-an-iso-date",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(date_code, 1, date_output)
+            self.assertIn("ISO 8601", "; ".join(json.loads(date_output)["blockers"]))
+
+    def test_create_draft_blocks_archive_id_type_and_body_hash_mismatches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:draft-mismatch")
+            self.assertEqual(init_code, 0, init_output)
+
+            id_code, id_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Mismatch",
+                    "--body",
+                    "Safe body.",
+                    "--dry-run",
+                    "--expected-archive-id",
+                    "archive:personal:other",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(id_code, 1)
+            self.assertIn("Expected archive id mismatch", json.loads(id_output)["blockers"][0])
+
+            type_code, type_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Type mismatch",
+                    "--body",
+                    "Safe body.",
+                    "--dry-run",
+                    "--expected-type",
+                    "company",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(type_code, 1)
+            self.assertIn("Expected archive type mismatch", json.loads(type_output)["blockers"][0])
+
+            hash_code, hash_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Hash mismatch",
+                    "--body",
+                    "Safe body.",
+                    "--dry-run",
+                    "--expected-body-sha256",
+                    "0" * 64,
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(hash_code, 1)
+            self.assertIn("SHA-256", "; ".join(json.loads(hash_output)["blockers"]))
+
+    def test_create_draft_rejects_unsafe_provenance_and_source_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:unsafe-provenance")
+            self.assertEqual(init_code, 0, init_output)
+
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Unsafe refs",
+                    "--body",
+                    "Safe body.",
+                    "--dry-run",
+                    "--derived-from",
+                    "X:\\example\\private.txt",
+                    "--source-ref",
+                    "object:s3://example-bucket/private.txt",
+                    "--local-ai-session",
+                    "gs://example-bucket/session",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertIn("Unsafe local path or provider locator", "; ".join(result["blockers"]))
 
     def test_promote_dry_run_checks_inbox_draft(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1228,6 +1570,67 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertEqual(result["zettel_id"], "zet_20260519_draft_ai_lunch_note")
             self.assertEqual(result["proposed_canonical_path"], "zettels/zet_20260519_draft_ai_lunch_note.md")
+
+    def test_mint_receipts_include_draft_provenance_refs_and_ai_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path = self.make_fake_lunch_draft_promotion_ready(archive_root)
+            text = draft_path.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            self.assertIsNotNone(match)
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            body = text[match.end() :].lstrip()
+            frontmatter["source_refs"] = [
+                {"type": "local_ai_session", "value": "session:mint-preview", "role": "prompt_context"}
+            ]
+            frontmatter["provenance"]["derived_from"] = ["object:source-script"]
+            frontmatter["local_ai_sessions"] = [
+                {
+                    "runtime": "codex",
+                    "session_ref": "session:mint-preview",
+                    "profile_id": "profile:personal:test",
+                    "archive_id": "archive:personal:fake-life",
+                    "authority_mode": "draft_only",
+                }
+            ]
+            draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(dry_code, 0, dry_output)
+            dry_result = json.loads(dry_output)
+            preview = dry_result["receipt_preview"]
+            self.assertIn({"type": "derived_from", "value": "object:source-script"}, preview["source_refs"])
+            self.assertEqual(preview["local_ai_sessions"][0]["session_ref"], "session:mint-preview")
+
+            real_code, real_output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(real_code, 0, real_output)
+            real_result = json.loads(real_output)
+            receipt = json.loads((archive_root / real_result["mint_receipt_path"]).read_text(encoding="utf-8"))
+            self.assertIn({"type": "derived_from", "value": "object:source-script"}, receipt["source_refs"])
+            self.assertEqual(receipt["local_ai_sessions"][0]["profile_id"], "profile:personal:test")
 
     def test_mint_zettel_dry_run_prefers_minting_rules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

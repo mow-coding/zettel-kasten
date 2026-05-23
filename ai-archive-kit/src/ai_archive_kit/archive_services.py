@@ -105,6 +105,13 @@ MINT_AUTHORITY_MODE = "basic"
 MINT_CHECKLIST_VERSION = "zet-mint/v0.2"
 SOURCE_SCAN_MODE = "metadata_only"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+DRAFT_CREATION_MODES = {"human_written", "ai_assisted", "ai_generated", "imported", "derived"}
+DRAFT_SECRET_VALUE_RE = re.compile(
+    r"(?i)(?:api[_-]?key|secret|token|password|credential|aws_secret_access_key)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{12,}"
+    r"|-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----"
+    r"|\bAKIA[0-9A-Z]{16}\b"
+    r"|\bghp_[A-Za-z0-9_]{20,}\b"
+)
 SOURCE_ROOTS_LOCAL_PROFILE = "profiles/local/source-roots.local.yml"
 RESTORE_DRILL_EXCLUDED_PATHS = [
     ".git/",
@@ -380,6 +387,96 @@ def resolve_zettel_path(archive_root: Path, zettel_id: str | None, relative_path
     raise ArchiveServiceError(f"Zettel id not found: {zettel_id}")
 
 
+def valid_draft_zettel_id(value: str) -> bool:
+    return bool(value and re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", value))
+
+
+def normalize_draft_body(body: str) -> str:
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized.rstrip() + "\n"
+
+
+def valid_iso_timestamp(value: str) -> bool:
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
+def sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def clean_optional_string_list(values: list[str] | None) -> list[str]:
+    result: list[str] = []
+    for value in values or []:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            result.append(text)
+    return result
+
+
+def normalize_source_refs(items: list[dict[str, Any]], blockers: list[str]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            blockers.append(f"source_refs[{index}] must be an object.")
+            continue
+        ref_type = str(item.get("type") or "").strip()
+        value = str(item.get("value") or "").strip()
+        if not ref_type or not value:
+            blockers.append(f"source_refs[{index}] requires type and value.")
+            continue
+        ref = {"type": ref_type, "value": value}
+        role = str(item.get("role") or "").strip()
+        if role:
+            ref["role"] = role
+        refs.append(ref)
+    return refs
+
+
+def normalize_local_ai_sessions(items: list[dict[str, Any]], blockers: list[str]) -> list[dict[str, Any]]:
+    sessions: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        if isinstance(item, str):
+            item = {"session_ref": item}
+        if not isinstance(item, dict):
+            blockers.append(f"local_ai_sessions[{index}] must be an object or safe string ref.")
+            continue
+        session_ref = str(item.get("session_ref") or item.get("value") or "").strip()
+        if not session_ref:
+            blockers.append(f"local_ai_sessions[{index}] requires session_ref.")
+            continue
+        session: dict[str, Any] = {"session_ref": session_ref}
+        for key in ["runtime", "profile_id", "archive_id", "authority_mode"]:
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                session[key] = value.strip()
+        sessions.append(session)
+    return sessions
+
+
+def validate_safe_draft_values(value: Any, blockers: list[str], field_path: str = "$") -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            validate_safe_draft_values(child, blockers, f"{field_path}.{key}")
+        return
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            validate_safe_draft_values(child, blockers, f"{field_path}[{index}]")
+        return
+    if value is None:
+        return
+    text = str(value)
+    if contains_forbidden_location_reference(text):
+        blockers.append(f"Unsafe local path or provider locator in {field_path}.")
+    if DRAFT_SECRET_VALUE_RE.search(text):
+        blockers.append(f"Secret-like value in {field_path}.")
+
+
 def create_draft_zettel(
     archive_root: Path | str,
     *,
@@ -391,27 +488,121 @@ def create_draft_zettel(
     visibility: dict[str, Any] | None = None,
     created_by: str = "cli:archive",
     source: str = "cli_command",
+    dry_run: bool = False,
+    expected_archive_id: str | None = None,
+    expected_type: str | None = None,
+    profile_id: str | None = None,
+    profile_operator_id: str | None = None,
+    profile_authority_mode: str | None = None,
+    creation_mode: str | None = None,
+    assisted_by: list[str] | None = None,
+    supervised_by: list[str] | None = None,
+    derived_from: list[str] | None = None,
+    source_refs: list[dict[str, Any]] | None = None,
+    local_ai_sessions: list[dict[str, Any]] | None = None,
+    draft_id: str | None = None,
+    created_at: str | None = None,
+    expected_body_sha256: str | None = None,
+    draft_approved_by: str | None = None,
 ) -> dict[str, Any]:
     require_yaml()
     root = require_existing_archive_root(archive_root)
+    archive_config = read_archive_config(root)
     if not title:
         raise ArchiveServiceError("title is required.")
-    if not body:
-        raise ArchiveServiceError("body is required.")
-    if contains_forbidden_location_reference(body):
-        raise ArchiveServiceError("Draft body appears to contain a provider URL or local absolute path.")
+    if body is None:
+        body = ""
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not body.strip():
+        blockers.append("body is required and must contain non-whitespace text.")
 
-    resolved_archive_id = archive_id or read_archive_id(root)
-    now = datetime.now().astimezone().replace(microsecond=0).isoformat()
-    zettel_id = make_zettel_id(title, now)
-    inbox = archive_internal_path(root, "inbox")
-    inbox.mkdir(parents=True, exist_ok=True)
-    path = inbox / f"{zettel_id}.md"
-    suffix = 2
-    while path.exists():
-        zettel_id = f"{make_zettel_id(title, now)}_{suffix}"
-        path = inbox / f"{zettel_id}.md"
-        suffix += 1
+    resolved_archive_id = archive_id or str(archive_config.get("archive_id") or "")
+    archive_type = archive_config.get("type") if isinstance(archive_config.get("type"), str) else None
+    if not resolved_archive_id:
+        blockers.append("archive.yml does not contain archive_id and archive_id was not provided.")
+    if expected_archive_id and expected_archive_id != resolved_archive_id:
+        blockers.append(f"Expected archive id mismatch: expected {expected_archive_id}, found {resolved_archive_id}.")
+    if expected_type and expected_type != archive_type:
+        blockers.append(f"Expected archive type mismatch: expected {expected_type}, found {archive_type or 'unknown'}.")
+
+    now = (created_at or datetime.now().astimezone().replace(microsecond=0).isoformat()).strip()
+    if not now:
+        blockers.append("created_at must not be empty.")
+        now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    elif created_at and not valid_iso_timestamp(now):
+        blockers.append("created_at must be an ISO 8601 timestamp.")
+
+    if draft_id is not None:
+        zettel_id = draft_id.strip()
+        if not valid_draft_zettel_id(zettel_id):
+            blockers.append("draft_id must be a safe zet id without path separators.")
+    else:
+        zettel_id = make_zettel_id(title, now)
+
+    normalized_body = normalize_draft_body(body)
+    body_sha256 = sha256_text(normalized_body)
+    if expected_body_sha256:
+        expected_hash = expected_body_sha256.strip().lower()
+        if not SHA256_RE.match(expected_hash):
+            blockers.append("expected_body_sha256 must be a 64-character lowercase hex SHA-256 value.")
+        elif expected_hash != body_sha256:
+            blockers.append("Expected body SHA-256 does not match the draft body.")
+
+    if contains_forbidden_location_reference(body):
+        blockers.append("Draft body appears to contain a provider URL or local absolute path.")
+    if DRAFT_SECRET_VALUE_RE.search(body):
+        blockers.append("Draft body appears to contain a secret-like value.")
+
+    if creation_mode:
+        if creation_mode not in DRAFT_CREATION_MODES:
+            blockers.append("creation_mode must be one of: " + ", ".join(sorted(DRAFT_CREATION_MODES)) + ".")
+
+    assisted = clean_optional_string_list(assisted_by)
+    supervised = clean_optional_string_list(supervised_by)
+    derived = clean_optional_string_list(derived_from)
+    refs = normalize_source_refs(source_refs or [], blockers)
+    sessions = normalize_local_ai_sessions(local_ai_sessions or [], blockers)
+    validate_safe_draft_values(
+        {
+            "created_by": created_by,
+            "source": source,
+            "profile_id": profile_id,
+            "profile_operator_id": profile_operator_id,
+            "profile_authority_mode": profile_authority_mode,
+            "assisted_by": assisted,
+            "supervised_by": supervised,
+            "derived_from": derived,
+            "source_refs": refs,
+            "local_ai_sessions": sessions,
+            "draft_approved_by": draft_approved_by,
+        },
+        blockers,
+    )
+
+    profile_bound = any(
+        value
+        for value in [
+            profile_id,
+            profile_operator_id,
+            profile_authority_mode,
+            sessions,
+        ]
+    )
+    if profile_bound and not dry_run:
+        if not draft_approved_by:
+            blockers.append("Profile-bound draft creation requires draft_approved_by.")
+        if not expected_body_sha256:
+            blockers.append("Profile-bound draft creation requires expected_body_sha256.")
+    elif profile_bound and dry_run:
+        if not draft_approved_by:
+            warnings.append("Profile-bound write replay will require draft_approved_by.")
+        if not expected_body_sha256:
+            warnings.append("Profile-bound write replay will require expected_body_sha256.")
+
+    if creation_mode in {"ai_assisted", "ai_generated"}:
+        if not assisted:
+            blockers.append("AI-assisted or AI-generated drafts must identify the assisting AI runtime.")
 
     frontmatter = {
         "id": zettel_id,
@@ -428,7 +619,7 @@ def create_draft_zettel(
             "created_by": created_by,
             "created_in": resolved_archive_id,
             "source": source,
-            "derived_from": [],
+            "derived_from": derived,
         },
         "visibility": visibility or default_private_visibility(),
         "promotion": {
@@ -436,12 +627,85 @@ def create_draft_zettel(
             "ready_for_promotion": False,
         },
     }
-    path.write_text("---\n" + dump_yaml(frontmatter) + "---\n\n" + body.rstrip() + "\n", encoding="utf-8")
+    if creation_mode:
+        frontmatter["provenance"]["creation_mode"] = creation_mode
+    if assisted:
+        frontmatter["provenance"]["assisted_by"] = assisted
+    if supervised:
+        frontmatter["provenance"]["supervised_by"] = supervised
+    if refs:
+        frontmatter["source_refs"] = refs
+    if sessions:
+        frontmatter["local_ai_sessions"] = sessions
+    if draft_approved_by or expected_body_sha256:
+        frontmatter["draft_creation"] = {
+            "approved_by": draft_approved_by,
+            "approval_scope": "inbox_draft_only",
+            "approved_body_sha256": expected_body_sha256.strip().lower() if expected_body_sha256 else None,
+        }
+
+    inbox = archive_internal_path(root, "inbox")
+    path = inbox / f"{zettel_id}.md"
+    if draft_id is None and not dry_run:
+        suffix = 2
+        base_zettel_id = zettel_id
+        while path.exists():
+            zettel_id = f"{base_zettel_id}_{suffix}"
+            frontmatter["id"] = zettel_id
+            path = inbox / f"{zettel_id}.md"
+            suffix += 1
+    elif path.exists():
+        blockers.append(f"Proposed draft path already exists: inbox/{zettel_id}.md.")
+
+    proposed_path = f"inbox/{zettel_id}.md"
+    approval_replay = {
+        "draft_id": zettel_id,
+        "created_at": now,
+        "expected_body_sha256": body_sha256,
+        "expected_archive_id": expected_archive_id or resolved_archive_id,
+        "expected_type": expected_type or archive_type,
+        "profile_id": profile_id,
+    }
+    target_archive = {
+        "archive_id": resolved_archive_id,
+        "archive_type": archive_type,
+        "profile_id": profile_id,
+        "profile_operator_id": profile_operator_id,
+        "profile_authority_mode": profile_authority_mode,
+    }
+    preview = {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "create_draft",
+        "target_archive": target_archive,
+        "proposed_path": proposed_path,
+        "frontmatter_preview": json_safe(frontmatter),
+        "body_sha256": body_sha256,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [f"write {proposed_path}"],
+        "approval_replay": approval_replay,
+    }
+    if dry_run:
+        return preview
+    if blockers:
+        raise ArchiveServiceError("Draft creation blocked: " + "; ".join(unique_preserve_order(blockers)))
+
+    inbox.mkdir(parents=True, exist_ok=True)
+    path.write_text("---\n" + dump_yaml(frontmatter) + "---\n\n" + normalized_body, encoding="utf-8")
     return {
+        "ok": True,
+        "dry_run": False,
+        "lifecycle_action": "create_draft",
         "zettel_id": zettel_id,
         "path": archive_relative_path(path, root),
         "status": "draft",
-        "frontmatter": frontmatter,
+        "target_archive": target_archive,
+        "frontmatter": json_safe(frontmatter),
+        "body_sha256": body_sha256,
+        "warnings": unique_preserve_order(warnings),
+        "created_paths": [archive_relative_path(path, root)],
+        "approval_replay": approval_replay,
     }
 
 
@@ -6496,10 +6760,17 @@ def make_snippet(text: str, query: str, size: int = 160) -> str:
 
 
 def read_archive_id(archive_root: Path) -> str:
-    data = load_yaml(read_archive_text(archive_root, "archive.yml"))
-    if not isinstance(data, dict) or not isinstance(data.get("archive_id"), str):
+    data = read_archive_config(archive_root)
+    if not isinstance(data.get("archive_id"), str):
         raise ArchiveServiceError("archive.yml does not contain archive_id and archive_id was not provided.")
     return data["archive_id"]
+
+
+def read_archive_config(archive_root: Path) -> dict[str, Any]:
+    data = load_yaml(read_archive_text(archive_root, "archive.yml"))
+    if not isinstance(data, dict):
+        raise ArchiveServiceError("archive.yml is not a readable object.")
+    return data
 
 
 def sha256_path(path: Path) -> str:

@@ -324,6 +324,22 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "kind": {"type": "string", "default": "fleeting_capture"},
                 "facets": {"type": "object"},
                 "visibility": {"type": "object"},
+                "dry_run": {"type": "boolean", "default": False},
+                "expected_archive_id": {"type": "string"},
+                "expected_type": {"type": "string", "enum": sorted(archive_services.RUNTIME_CONTEXT_ARCHIVE_TYPES)},
+                "profile_context": {"type": "object"},
+                "creation_mode": {"type": "string", "enum": sorted(archive_services.DRAFT_CREATION_MODES)},
+                "created_by": {"type": "string"},
+                "source": {"type": "string"},
+                "assisted_by": {"type": "array", "items": {"type": "string"}},
+                "supervised_by": {"type": "array", "items": {"type": "string"}},
+                "derived_from": {"type": "array", "items": {"type": "string"}},
+                "source_refs": {"type": "array", "items": {"type": "object"}},
+                "local_ai_sessions": {"type": "array", "items": {"type": "object"}},
+                "draft_id": {"type": "string"},
+                "created_at": {"type": "string"},
+                "expected_body_sha256": {"type": "string"},
+                "draft_approved_by": {"type": "string"},
             },
             "required": ["archive_root", "title", "body"],
         },
@@ -935,6 +951,11 @@ def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
     kind = optional_string_arg(arguments, "kind") or "fleeting_capture"
     facets = arguments.get("facets") if isinstance(arguments.get("facets"), dict) else {}
     visibility = arguments.get("visibility") if isinstance(arguments.get("visibility"), dict) else None
+    profile_context = arguments.get("profile_context") if isinstance(arguments.get("profile_context"), dict) else {}
+    source_refs = arguments.get("source_refs") if isinstance(arguments.get("source_refs"), list) else []
+    local_ai_sessions = arguments.get("local_ai_sessions") if isinstance(arguments.get("local_ai_sessions"), list) else []
+    created_by = optional_string_arg(arguments, "created_by") or "mcp:zettel-kasten-archive-mcp"
+    source = optional_string_arg(arguments, "source") or "mcp_tool_call"
     result = call_service(
         archive_services.create_draft_zettel,
         archive_root,
@@ -944,14 +965,42 @@ def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
         kind=kind,
         facets=facets,
         visibility=visibility,
-        created_by="mcp:zettel-kasten-archive-mcp",
-        source="mcp_tool_call",
+        created_by=created_by,
+        source=source,
+        dry_run=bool(arguments.get("dry_run", False)),
+        expected_archive_id=optional_string_arg(arguments, "expected_archive_id"),
+        expected_type=optional_string_arg(arguments, "expected_type"),
+        profile_id=profile_context.get("profile_id") if isinstance(profile_context.get("profile_id"), str) else None,
+        profile_operator_id=(
+            profile_context.get("operator_id")
+            if isinstance(profile_context.get("operator_id"), str)
+            else profile_context.get("profile_operator_id")
+            if isinstance(profile_context.get("profile_operator_id"), str)
+            else None
+        ),
+        profile_authority_mode=(
+            profile_context.get("authority_mode")
+            if isinstance(profile_context.get("authority_mode"), str)
+            else profile_context.get("profile_authority_mode")
+            if isinstance(profile_context.get("profile_authority_mode"), str)
+            else None
+        ),
+        creation_mode=optional_string_arg(arguments, "creation_mode"),
+        assisted_by=optional_string_list_arg(arguments, "assisted_by"),
+        supervised_by=optional_string_list_arg(arguments, "supervised_by"),
+        derived_from=optional_string_list_arg(arguments, "derived_from"),
+        source_refs=source_refs,
+        local_ai_sessions=local_ai_sessions,
+        draft_id=optional_string_arg(arguments, "draft_id"),
+        created_at=optional_string_arg(arguments, "created_at"),
+        expected_body_sha256=optional_string_arg(arguments, "expected_body_sha256"),
+        draft_approved_by=optional_string_arg(arguments, "draft_approved_by"),
     )
 
-    return tool_success_result(
-        f"Created draft zettel {result['zettel_id']}.",
-        result,
-    )
+    if result.get("dry_run"):
+        state = "passed" if result.get("ok") else "blocked"
+        return tool_success_result(f"create_draft_zettel dry-run: {state}.", result)
+    return tool_success_result(f"Created draft zettel {result['zettel_id']}.", result)
 
 
 def tool_list_views(arguments: dict[str, Any]) -> dict[str, Any]:

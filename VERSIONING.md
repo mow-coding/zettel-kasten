@@ -96,7 +96,7 @@ The archive should never silently rewrite a user's memory.
 Current public baseline:
 
 ```text
-v0.2.17 public showcase baseline
+v0.2.18 public showcase baseline
 ```
 
 This baseline is for early review and prototyping. It is not yet a stable `v1.0.0` protocol.
@@ -106,11 +106,11 @@ This baseline is for early review and prototyping. It is not yet a stable `v1.0.
 The current `ai-archive-kit` package metadata is:
 
 ```text
-0.2.17
+0.2.18
 ```
 
 Therefore the first public compatibility tag for this repository should be:
 
 ```text
-v0.2.17
+v0.2.18
 ```

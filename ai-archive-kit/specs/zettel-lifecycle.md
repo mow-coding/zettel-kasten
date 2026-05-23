@@ -142,10 +142,29 @@ facets: {}
 assets: []
 edges: []
 provenance:
-  created_by: ai_runtime
+  created_by: ai_runtime:codex
   created_in: archive:personal:example
   source: user_conversation
+  creation_mode: ai_assisted
+  assisted_by:
+    - ai_runtime:codex
+  supervised_by:
+    - person:example
   derived_from: []
+source_refs:
+  - type: local_ai_session
+    value: session:example
+    role: prompt_context
+local_ai_sessions:
+  - runtime: codex
+    session_ref: session:example
+    profile_id: profile:personal:example
+    archive_id: archive:personal:example
+    authority_mode: draft_only
+draft_creation:
+  approved_by: person:example
+  approval_scope: inbox_draft_only
+  approved_body_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 visibility:
   scope: private
   allowed_archives: []
@@ -168,8 +187,18 @@ Drafts must not contain:
 
 - provider URLs as canonical file references
 - secrets
+- raw local absolute paths
 - cross-archive private source leakage
 - fake certainty about sources
+
+Profile-bound AI draft creation has two approval moments:
+
+```text
+create-draft dry-run -> human draft approval -> inbox draft
+mint dry-run -> human mint approval -> canonical memory
+```
+
+Draft approval is scoped to `inbox_draft_only`. It must not be reused as mint approval.
 
 ## Promotion Rules
 

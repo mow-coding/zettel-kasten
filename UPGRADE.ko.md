@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.17` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.17.md` |
+| `v0.2.18` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.18.md` |
+| `v0.2.17` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.17.md` |
 | `v0.2.16` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.16.md` |
 | `v0.2.15` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.15.md` |
 | `v0.2.14` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.14.md` |
@@ -44,6 +45,28 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.17`에서 `v0.2.18`로
+
+이번 버전은 profile-aware draft zet creation dry-run을 추가하는 호환 가능한 패치입니다.
+
+바뀐 점:
+
+- `archive create-draft --dry-run --format json` 명령이 추가되었습니다.
+- draft id, created-at timestamp, expected body hash, draft approver를 replay 값으로 사용할 수 있습니다.
+- resolved profile id, operator id, authority mode, source refs, local AI sessions, assisted-by, supervised-by를 draft provenance에 남길 수 있습니다.
+- MCP `create_draft_zettel`도 같은 dry-run/profile-aware 입력을 받습니다.
+- 실제 draft write는 계속 `inbox/` 안으로만 제한됩니다.
+- minting은 여전히 `mint-zet --approve --reviewed-by`로 분리된 승인 단계입니다.
+
+private archive migration은 필요 없습니다. 기존 draft는 그대로 유효합니다.
+
+profile-bound AI write는 먼저 profile-resolve와 runtime-context를 확인하고, create-draft dry-run을 본 뒤, 사람이 draft를 승인했을 때 같은 draft id, created-at, expected archive id/type, profile id, expected body hash로 replay해야 합니다.
+
+```bash
+git fetch --tags
+git checkout v0.2.18
+```
 
 ## `v0.2.16`에서 `v0.2.17`로
 

@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.17` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.17.md` |
+| `v0.2.18` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.18.md` |
+| `v0.2.17` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.17.md` |
 | `v0.2.16` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.16.md` |
 | `v0.2.15` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.15.md` |
 | `v0.2.14` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.14.md` |
@@ -44,6 +45,28 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.17` To `v0.2.18`
+
+This is a compatible profile-aware draft zet creation dry-run patch.
+
+What changed:
+
+- added `archive create-draft --dry-run --format json`,
+- added replay-safe draft creation fields for draft id, created-at timestamp, expected body hash, and draft approver,
+- added profile-aware provenance fields for resolved profile id, operator id, authority mode, source refs, local AI sessions, assisting actors, and supervising actors,
+- extended MCP `create_draft_zettel` with the same dry-run and profile-aware inputs,
+- kept real draft writes constrained to `inbox/`,
+- kept minting separate through `mint-zet --approve --reviewed-by`.
+
+No private archive migration is required. Existing drafts remain valid.
+
+For profile-bound AI writes, first run profile resolution and runtime context, then dry-run draft creation. After human draft approval, replay the same draft id, created-at timestamp, expected archive id/type, profile id, and expected body hash.
+
+```bash
+git fetch --tags
+git checkout v0.2.18
+```
 
 ## From `v0.2.16` To `v0.2.17`
 

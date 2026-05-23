@@ -32,6 +32,14 @@ If the expected archive is known, include:
 
 Use `--strict` when the AI must stop on archive type mismatch or doctor warnings.
 
+Before writing an AI-assisted inbox draft, preview it:
+
+```bash
+archive create-draft <archive-root> --dry-run --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --format json
+```
+
+After human draft approval, replay the same `draft_id`, `created_at`, `expected_body_sha256`, expected archive id/type, and profile id. Draft approval is only for `inbox/`; minting still needs a separate `mint-zet --approve --reviewed-by` step.
+
 ## Read The Result
 
 Continue only when:
@@ -47,7 +55,8 @@ Continue only when:
 
 Prefer these actions:
 
-- create draft in inbox,
+- run create-draft dry-run,
+- create approved draft in inbox,
 - run mint dry-run,
 - run check-safe-html dry-run,
 - run doctor,
@@ -62,6 +71,9 @@ Do not:
 - assume the current/default profile is the target when the user names another profile,
 - register profiles or tokens through MCP,
 - scan the whole disk,
+- treat "upload" or "post" language as mint approval,
+- create a profile-bound AI draft without `draft_approved_by` and `expected_body_sha256`,
+- create an AI-assisted or AI-generated draft without `assisted_by`,
 - write canonical zets without explicit CLI approval,
 - assume MCP has a real mint/apply tool,
 - call provider APIs unless a future explicit integration and approval path exists,

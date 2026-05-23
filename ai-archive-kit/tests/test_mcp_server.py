@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import subprocess
@@ -902,6 +903,220 @@ class McpServerTests(unittest.TestCase):
                 )
                 self.assertFalse(read_response["result"]["isError"])
                 self.assertEqual(read_response["result"]["structuredContent"]["path"], relative_path)
+        finally:
+            self.stop_server(process)
+
+    def test_create_draft_zettel_dry_run_writes_no_file(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = Path(tmp) / "archive"
+                init_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_init",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "archive_type": "personal",
+                                "archive_id": "archive:personal:mcp-dry-run",
+                                "principal_id": "person:mcp-dry-run",
+                                "principal_name": "MCP Dry Run",
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(init_response["result"]["isError"])
+
+                draft_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "create_draft_zettel",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "title": "MCP dry-run draft",
+                                "body": "Safe MCP draft body.",
+                                "dry_run": True,
+                                "expected_archive_id": "archive:personal:mcp-dry-run",
+                                "expected_type": "personal",
+                                "profile_context": {
+                                    "profile_id": "profile:personal:mcp",
+                                    "operator_id": "person:mcp-dry-run",
+                                    "authority_mode": "draft_only",
+                                },
+                                "creation_mode": "ai_assisted",
+                                "created_by": "ai_runtime:codex",
+                                "source": "user_conversation",
+                                "assisted_by": ["ai_runtime:codex"],
+                                "supervised_by": ["person:mcp-dry-run"],
+                                "derived_from": ["object:mcp-source"],
+                                "source_refs": [
+                                    {"type": "local_ai_session", "value": "session:mcp-dry-run", "role": "prompt_context"}
+                                ],
+                                "local_ai_sessions": [
+                                    {
+                                        "runtime": "codex",
+                                        "session_ref": "session:mcp-dry-run",
+                                        "profile_id": "profile:personal:mcp",
+                                        "archive_id": "archive:personal:mcp-dry-run",
+                                        "authority_mode": "draft_only",
+                                    }
+                                ],
+                                "draft_id": "zet_20260524_mcp_dry_run",
+                                "created_at": "2026-05-24T03:04:05+09:00",
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(draft_response["result"]["isError"])
+                result = draft_response["result"]["structuredContent"]
+                self.assertTrue(result["dry_run"])
+                self.assertEqual(result["proposed_path"], "inbox/zet_20260524_mcp_dry_run.md")
+                self.assertFalse((archive_root / result["proposed_path"]).exists())
+        finally:
+            self.stop_server(process)
+
+    def test_create_draft_zettel_dry_run_blocks_ai_mode_without_assisted_by(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = Path(tmp) / "archive"
+                init_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_init",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "archive_type": "personal",
+                                "archive_id": "archive:personal:mcp-ai-identity",
+                                "principal_id": "person:mcp-ai-identity",
+                                "principal_name": "MCP AI Identity",
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(init_response["result"]["isError"])
+
+                draft_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "create_draft_zettel",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "title": "MCP AI identity draft",
+                                "body": "Safe MCP draft body.",
+                                "dry_run": True,
+                                "creation_mode": "ai_assisted",
+                                "created_by": "mcp:zettel-kasten-archive-mcp",
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(draft_response["result"]["isError"])
+                result = draft_response["result"]["structuredContent"]
+                self.assertFalse(result["ok"])
+                self.assertIn("assisting AI runtime", "; ".join(result["blockers"]))
+                self.assertEqual(list((archive_root / "inbox").glob("*.md")), [])
+        finally:
+            self.stop_server(process)
+
+    def test_create_draft_zettel_normal_mode_writes_profile_provenance_after_approval(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = Path(tmp) / "archive"
+                init_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_init",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "archive_type": "personal",
+                                "archive_id": "archive:personal:mcp-approved",
+                                "principal_id": "person:mcp-approved",
+                                "principal_name": "MCP Approved",
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(init_response["result"]["isError"])
+                body = "Approved MCP draft body."
+                expected_hash = hashlib.sha256((body.rstrip() + "\n").encode("utf-8")).hexdigest()
+
+                draft_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "create_draft_zettel",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "title": "MCP approved draft",
+                                "body": body,
+                                "expected_archive_id": "archive:personal:mcp-approved",
+                                "expected_type": "personal",
+                                "profile_context": {
+                                    "profile_id": "profile:personal:mcp",
+                                    "operator_id": "person:mcp-approved",
+                                    "authority_mode": "draft_only",
+                                },
+                                "creation_mode": "ai_assisted",
+                                "created_by": "ai_runtime:codex",
+                                "source": "user_conversation",
+                                "assisted_by": ["ai_runtime:codex"],
+                                "supervised_by": ["person:mcp-approved"],
+                                "source_refs": [
+                                    {"type": "local_ai_session", "value": "session:mcp-approved", "role": "prompt_context"}
+                                ],
+                                "local_ai_sessions": [
+                                    {
+                                        "runtime": "codex",
+                                        "session_ref": "session:mcp-approved",
+                                        "profile_id": "profile:personal:mcp",
+                                        "archive_id": "archive:personal:mcp-approved",
+                                        "authority_mode": "draft_only",
+                                    }
+                                ],
+                                "draft_id": "zet_20260524_mcp_approved",
+                                "created_at": "2026-05-24T04:05:06+09:00",
+                                "expected_body_sha256": expected_hash,
+                                "draft_approved_by": "person:mcp-approved",
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(draft_response["result"]["isError"])
+                relative_path = draft_response["result"]["structuredContent"]["path"]
+                draft_path = archive_root / relative_path
+                self.assertTrue(draft_path.is_file())
+                match = archive_cli.FRONTMATTER_RE.match(draft_path.read_text(encoding="utf-8"))
+                self.assertIsNotNone(match)
+                assert match is not None
+                frontmatter = archive_cli.load_yaml(match.group(1))
+                self.assertEqual(frontmatter["provenance"]["created_by"], "ai_runtime:codex")
+                self.assertEqual(frontmatter["local_ai_sessions"][0]["profile_id"], "profile:personal:mcp")
+                self.assertEqual(frontmatter["draft_creation"]["approved_body_sha256"], expected_hash)
         finally:
             self.stop_server(process)
 

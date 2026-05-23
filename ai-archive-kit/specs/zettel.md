@@ -142,8 +142,34 @@ provenance:
   created_by: person:example
   created_in: archive:personal:example
   source: user_conversation
+  creation_mode: ai_assisted
+  assisted_by:
+    - ai_runtime:codex
+  supervised_by:
+    - person:example
   derived_from: []
 ```
+
+Optional source refs and local AI session refs may be used for profile-aware draft creation:
+
+```yaml
+source_refs:
+  - type: local_ai_session
+    value: session:example
+    role: prompt_context
+local_ai_sessions:
+  - runtime: codex
+    session_ref: session:example
+    profile_id: profile:personal:example
+    archive_id: archive:personal:example
+    authority_mode: draft_only
+draft_creation:
+  approved_by: person:example
+  approval_scope: inbox_draft_only
+  approved_body_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+```
+
+`draft_creation` approval only authorizes writing an inbox draft. It does not authorize minting canonical memory.
 
 ## Visibility
 

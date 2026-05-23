@@ -21,6 +21,12 @@
         "created_by": {"type": "string"},
         "created_in": {"type": "string"},
         "source": {"type": "string"},
+        "creation_mode": {
+          "type": "string",
+          "enum": ["human_written", "ai_assisted", "ai_generated", "imported", "derived"]
+        },
+        "assisted_by": {"type": "array", "items": {"type": "string"}},
+        "supervised_by": {"type": "array", "items": {"type": "string"}},
         "derived_from": {"type": "array"}
       }
     },
@@ -31,6 +37,40 @@
         "scope": {"type": "string"},
         "allowed_archives": {"type": "array"},
         "source_visibility": {"type": "string"}
+      }
+    },
+    "source_refs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {"type": "string"},
+          "value": {"type": "string"},
+          "role": {"type": "string"}
+        },
+        "required": ["type", "value"]
+      }
+    },
+    "local_ai_sessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "runtime": {"type": "string"},
+          "session_ref": {"type": "string"},
+          "profile_id": {"type": "string"},
+          "archive_id": {"type": "string"},
+          "authority_mode": {"type": "string"}
+        },
+        "required": ["session_ref"]
+      }
+    },
+    "draft_creation": {
+      "type": "object",
+      "properties": {
+        "approved_by": {"type": ["string", "null"]},
+        "approval_scope": {"type": "string", "enum": ["inbox_draft_only"]},
+        "approved_body_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
       }
     },
     "promotion": {"type": "object"},

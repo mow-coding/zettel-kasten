@@ -1370,6 +1370,8 @@ def command_read_zettel(args: argparse.Namespace) -> int:
 def command_create_draft(args: argparse.Namespace) -> int:
     try:
         body = read_body_arg(args)
+        created_by = args.created_by or "cli:archive"
+        source = args.source or "cli_command"
         result = archive_services.create_draft_zettel(
             Path(args.archive_root),
             title=args.title,
@@ -1377,8 +1379,24 @@ def command_create_draft(args: argparse.Namespace) -> int:
             archive_id=args.archive_id,
             kind=args.kind,
             facets=parse_key_value_pairs(args.facet or []),
-            created_by="cli:archive",
-            source="cli_command",
+            created_by=created_by,
+            source=source,
+            dry_run=args.dry_run,
+            expected_archive_id=args.expected_archive_id,
+            expected_type=args.expected_type,
+            profile_id=args.profile_id,
+            profile_operator_id=args.profile_operator_id,
+            profile_authority_mode=args.profile_authority_mode,
+            creation_mode=args.creation_mode,
+            assisted_by=args.assisted_by,
+            supervised_by=args.supervised_by,
+            derived_from=args.derived_from,
+            source_refs=parse_source_ref_pairs(args.source_ref or []),
+            local_ai_sessions=build_local_ai_session_refs(args),
+            draft_id=args.draft_id,
+            created_at=args.created_at,
+            expected_body_sha256=args.expected_body_sha256,
+            draft_approved_by=args.draft_approved_by,
         )
     except (archive_services.ArchiveServiceError, ValueError, OSError) as exc:
         print(str(exc), file=sys.stderr)
@@ -1387,8 +1405,21 @@ def command_create_draft(args: argparse.Namespace) -> int:
     if args.format == "json":
         print_json(result)
     else:
-        print(f"Created draft zettel {result['zettel_id']} at {result['path']}")
-    return 0
+        if result.get("dry_run"):
+            print(f"Draft dry-run for {result['frontmatter_preview']['id']}")
+            print(f"Proposed path: {result['proposed_path']}")
+            if result["blockers"]:
+                print("Blockers:")
+                for blocker in result["blockers"]:
+                    print(f"- {blocker}")
+            if result["warnings"]:
+                print("Warnings:")
+                for warning in result["warnings"]:
+                    print(f"- {warning}")
+            print("Draft dry-run passed." if result["ok"] else "Draft dry-run blocked.")
+        else:
+            print(f"Created draft zettel {result['zettel_id']} at {result['path']}")
+    return 0 if result.get("ok", True) else 1
 
 
 def command_promote(args: argparse.Namespace) -> int:
@@ -2884,6 +2915,56 @@ def parse_key_value_pairs(items: list[str]) -> dict[str, str]:
     return result
 
 
+def parse_source_ref_pairs(items: list[str]) -> list[dict[str, str]]:
+    refs: list[dict[str, str]] = []
+    for item in items:
+        if ":" not in item:
+            raise ValueError(f"Source ref must be TYPE:VALUE: {item}")
+        ref_type, value = item.split(":", 1)
+        ref_type = ref_type.strip()
+        value = value.strip()
+        if not ref_type or not value:
+            raise ValueError(f"Source ref must be TYPE:VALUE: {item}")
+        ref = {"type": ref_type, "value": value}
+        if ref_type == "local_ai_session":
+            ref["role"] = "prompt_context"
+        refs.append(ref)
+    return refs
+
+
+def infer_runtime_name(actor: str | None) -> str | None:
+    if not actor:
+        return None
+    if actor.startswith("ai_runtime:"):
+        return actor.split(":", 1)[1] or None
+    if actor.startswith("mcp:"):
+        return "mcp"
+    if actor.startswith("cli:"):
+        return "cli"
+    return None
+
+
+def build_local_ai_session_refs(args: argparse.Namespace) -> list[dict[str, str]]:
+    sessions: list[dict[str, str]] = []
+    runtime = infer_runtime_name(args.created_by)
+    archive_id = args.expected_archive_id or args.archive_id
+    for item in args.local_ai_session or []:
+        session_ref = item.strip()
+        if not session_ref:
+            continue
+        session = {"session_ref": session_ref}
+        if runtime:
+            session["runtime"] = runtime
+        if args.profile_id:
+            session["profile_id"] = args.profile_id
+        if archive_id:
+            session["archive_id"] = archive_id
+        if args.profile_authority_mode:
+            session["authority_mode"] = args.profile_authority_mode
+        sessions.append(session)
+    return sessions
+
+
 def read_body_arg(args: argparse.Namespace) -> str:
     if args.body_file:
         return Path(args.body_file).read_text(encoding="utf-8")
@@ -3009,6 +3090,32 @@ def build_parser() -> argparse.ArgumentParser:
     create_draft.add_argument("--archive-id", help="Archive id. Defaults to archive.yml archive_id.")
     create_draft.add_argument("--kind", default="fleeting_capture", help="Zettel kind.")
     create_draft.add_argument("--facet", action="append", help="Facet in KEY=VALUE form. May be repeated.")
+    create_draft.add_argument("--dry-run", action="store_true", help="Preview draft creation without writing files.")
+    create_draft.add_argument("--expected-archive-id", help="Expected archive id; mismatch blocks.")
+    create_draft.add_argument(
+        "--expected-type",
+        choices=sorted(archive_services.RUNTIME_CONTEXT_ARCHIVE_TYPES),
+        help="Expected archive type; mismatch blocks.",
+    )
+    create_draft.add_argument("--profile-id", help="Resolved WOM profile id for profile-bound draft replay.")
+    create_draft.add_argument("--profile-operator-id", help="Actor operating under the resolved profile.")
+    create_draft.add_argument("--profile-authority-mode", help="Authority mode from the resolved profile.")
+    create_draft.add_argument(
+        "--creation-mode",
+        choices=sorted(archive_services.DRAFT_CREATION_MODES),
+        help="How the draft body was created.",
+    )
+    create_draft.add_argument("--created-by", help="Actor that created the draft frontmatter.")
+    create_draft.add_argument("--source", help="Non-secret source label for provenance.")
+    create_draft.add_argument("--assisted-by", action="append", help="Assisting actor id. May be repeated.")
+    create_draft.add_argument("--supervised-by", action="append", help="Supervising actor id. May be repeated.")
+    create_draft.add_argument("--derived-from", action="append", help="Safe source ref the draft derives from. May be repeated.")
+    create_draft.add_argument("--source-ref", action="append", help="Safe source ref in TYPE:VALUE form. May be repeated.")
+    create_draft.add_argument("--local-ai-session", action="append", help="Safe local AI session ref. May be repeated.")
+    create_draft.add_argument("--draft-id", help="Deterministic draft zet id for dry-run replay.")
+    create_draft.add_argument("--created-at", help="Deterministic ISO timestamp for dry-run replay.")
+    create_draft.add_argument("--expected-body-sha256", help="Expected SHA-256 of the normalized draft body.")
+    create_draft.add_argument("--draft-approved-by", help="Human actor approving inbox draft creation.")
     create_draft.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     create_draft.set_defaults(func=command_create_draft)
 

@@ -141,6 +141,7 @@ These documents record public-safe work already performed.
 - [WOM Safe HTML Validator Work Log](../plans/work-log-2026-05-23-safe-html-validator.md)
 - [WOM AI Runtime Context Work Log](../plans/work-log-2026-05-24-ai-runtime-context.md)
 - [WOM Profile Registry Work Log](../plans/work-log-2026-05-24-profile-registry.md)
+- [Draft Provenance Work Log](../plans/work-log-2026-05-24-draft-provenance.md)
 - [Delegate Capability Binding Work Log](../plans/work-log-2026-05-23-delegate-capability-binding.md)
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)

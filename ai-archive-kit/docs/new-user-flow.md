@@ -263,6 +263,25 @@ The scan writes `source-maps/*.jsonl` and `receipts/sources/*.source-scan.json`.
 
 AI should create draft zettels in `inbox/`.
 
+For AI-assisted profile-bound work, preview first:
+
+```powershell
+python ai-archive-kit\cli\archive.py create-draft .\tmp-my-archive `
+  --title "Draft from conversation" `
+  --body "# Draft from conversation`n`nThis is a rough note. It is not canonical memory yet." `
+  --dry-run `
+  --expected-archive-id archive:personal:me `
+  --expected-type personal `
+  --profile-id profile:personal:me `
+  --creation-mode ai_assisted `
+  --created-by ai_runtime:codex `
+  --format json
+```
+
+The dry-run writes nothing. It returns the proposed `inbox/` path, frontmatter preview, body hash, blockers, warnings, and approval replay values. After human draft approval, replay with the same `draft_id`, `created_at`, expected archive id/type, profile id, and `expected_body_sha256`, plus `draft-approved-by`.
+
+The older direct command remains compatible for simple local use:
+
 ```powershell
 python ai-archive-kit\cli\archive.py create-draft .\tmp-my-archive `
   --title "Draft from conversation" `
@@ -280,6 +299,8 @@ long-lived secrets
 private source leakage
 fake certainty about sources
 ```
+
+Natural-language requests such as "올려줘" should mean "preview or create an inbox draft zet." They do not mean mint canonical memory.
 
 ## Flow 4: Human Reviews Minting
 
@@ -469,9 +490,9 @@ anchor_zet_check
 ownership_transfer_check
 ```
 
-For AI clients, the first safe call should be `wom_profile_resolve` when the user names a target profile or archive. After that, call `archive_runtime_context` with the resolved archive id and type. This prevents the AI from assuming the current/default archive is the target.
+For AI clients, the first safe call should be `wom_profile_resolve` when the user names a target profile or archive. After that, call `archive_runtime_context` with the resolved archive id and type, then use `create_draft_zettel` with `dry_run: true` before any profile-bound draft write. This prevents the AI from assuming the current/default archive is the target.
 
-MCP can create drafts, inspect archives, search, plan onboarding, preview external imports, list sources, preview source registration, preview source mount plans, preview source scans, preview minting, preview legacy promotion, preview archive sharing, preview delegate/attest/anchor lifecycle checks, check ownership transfer, read runtime context, and resolve profile registry entries. It cannot perform real onboarding apply, profile registration, token registration, source registration apply, source scan apply, canonical minting, real share, real delegate, real attest, real anchor, merge, fork, ownership transfer, or runtime context apply. Use the CLI for explicit human-approved steps.
+MCP can dry-run draft creation, create approved inbox drafts, inspect archives, search, plan onboarding, preview external imports, list sources, preview source registration, preview source mount plans, preview source scans, preview minting, preview legacy promotion, preview archive sharing, preview delegate/attest/anchor lifecycle checks, check ownership transfer, read runtime context, and resolve profile registry entries. It cannot perform real onboarding apply, profile registration, token registration, source registration apply, source scan apply, canonical minting, real share, real delegate, real attest, real anchor, merge, fork, ownership transfer, or runtime context apply. Use the CLI for explicit human-approved minting steps.
 
 ## Flow 8: Keep Secrets Out
 

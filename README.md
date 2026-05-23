@@ -23,7 +23,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.17 pre-release
+v0.2.18 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -43,6 +43,7 @@ What exists today:
 - read-only `check-safe-html` validation for obvious unsafe patterns before future WOM Safe HTML Profile migration.
 - read-only `runtime-context` output so terminal-capable AI runtimes can confirm the active archive before drafting, dry-runs, or mint approval requests.
 - read-only profile registry resolution so AI runtimes resolve the requested target profile before assuming the default archive.
+- profile-aware `create-draft --dry-run` so AI runtimes preview inbox drafts and replay approved draft writes without minting.
 
 What does not exist yet:
 
@@ -178,6 +179,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.18
 v0.2.17
 v0.2.16
 v0.2.15

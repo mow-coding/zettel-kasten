@@ -83,7 +83,7 @@ read_zettel
   Read one zettel by id or path.
 
 create_draft_zettel
-  Create an AI draft in inbox/. This does not mint the zettel.
+  Create an AI draft in inbox/. `dry_run: true` previews the draft path, frontmatter, body hash, blockers, warnings, and approval replay values without writing. Normal profile-bound AI writes require draft approval plus expected body hash replay values. This does not mint the zettel.
 
 list_views
   List saved views from views/*.yml.
@@ -150,7 +150,8 @@ ownership_transfer_check
 
 - The server is local stdio only.
 - `wom_profile_list` and `wom_profile_resolve` are read-only. They never register profiles, store tokens, scan the disk, or write files. They redact local paths unless `AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1` is set on the MCP server and the caller explicitly disables redaction.
-- `create_draft_zettel` writes only to `inbox/`.
+- `create_draft_zettel` dry-run writes nothing. Normal mode writes only to `inbox/`.
+- Profile-bound AI draft writes require `draft_approved_by` and `expected_body_sha256`. That approval scope is `inbox_draft_only`; minting remains a separate CLI approval step.
 - `archive_init` refuses non-empty target folders.
 - `archive_doctor` is read-only.
 - `archive_runtime_context` is read-only, uses archive-relative paths by default, and redacts local absolute paths unless `AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1` is set on the MCP server and the caller explicitly disables redaction.

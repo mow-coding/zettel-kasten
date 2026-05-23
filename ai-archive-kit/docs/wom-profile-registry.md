@@ -100,6 +100,14 @@ When `profile-resolve` returns `resolution_state: resolved`, the AI should run:
 archive runtime-context <archive-root> --expected-archive-id <id> --expected-type <type> --format json
 ```
 
+If runtime context passes and the user asked to put new material into that archive, the AI should then run create-draft dry-run before writing:
+
+```text
+archive create-draft <archive-root> --dry-run --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --format json
+```
+
+Draft approval creates only an `inbox/` draft. Minting remains a separate approval step.
+
 When it returns `token_missing`, the AI should ask the user whether to register the profile token or use a delegate flow.
 
 When it returns `ambiguous`, the AI should ask the user to choose a profile.

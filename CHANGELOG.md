@@ -4,6 +4,30 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.18 - 2026-05-24
+
+Profile-aware draft zet creation dry-run patch.
+
+Added:
+
+- `archive create-draft --dry-run`, a no-write preview for inbox draft zet creation,
+- replay-safe draft fields: `--draft-id`, `--created-at`, `--expected-body-sha256`, and `--draft-approved-by`,
+- profile-aware draft context flags for resolved profile id, operator id, authority mode, expected archive id, and expected archive type,
+- optional draft provenance fields for creation mode, assisting actors, supervising actors, derived refs, source refs, local AI sessions, and inbox-draft-only approval metadata,
+- MCP `create_draft_zettel` dry-run support with the same profile-aware provenance inputs,
+- safety gates that block archive id/type mismatch, body hash mismatch, empty body content, malformed deterministic timestamps, unsafe local paths, provider storage locators, and secret-like values,
+- line-ending-normalized body hashes so LF/CRLF differences do not break approved draft replay,
+- AI-assisted and AI-generated draft gates that require the assisting AI runtime to be identified,
+- mint receipt propagation for draft `source_refs`, `provenance.derived_from`, and `local_ai_sessions`.
+
+Compatibility:
+
+- existing `create-draft` usage remains compatible when the new flags are omitted,
+- dry-run writes nothing,
+- real draft creation still writes only to `inbox/`,
+- profile-bound AI draft writes require draft approval and expected body hash replay values,
+- minting remains a separate CLI approval step and MCP still exposes no real mint tool.
+
 ## v0.2.17 - 2026-05-24
 
 WOM Profile Registry dry-run patch.

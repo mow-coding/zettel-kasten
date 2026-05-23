@@ -1,12 +1,12 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.17 planning and implementation baseline
+Status: v0.2.18 planning and implementation baseline
 
 ## Purpose
 
 WOM is AI-runtime first, but AI runtimes need a safe first step before they act.
 
-In v0.2.17, the first step is profile resolution when the user names a target archive/profile.
+In v0.2.18, the first step is still profile resolution when the user names a target archive/profile. The next safe write step is a dry-run inbox draft preview, not minting.
 
 The profile registry layer gives terminal-capable AI tools a read-only way to answer:
 
@@ -66,6 +66,35 @@ Local absolute paths are redacted by default.
 
 MCP clients must not request `redact_local_paths: false` unless trusted local debugging has been explicitly authorized. The stdio MCP server keeps local paths redacted unless `AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1` is set in the MCP server environment.
 
+## Draft Creation Dry-Run
+
+CLI:
+
+```bash
+archive create-draft <archive-root> --dry-run --format json
+```
+
+MCP:
+
+```text
+create_draft_zettel with dry_run: true
+```
+
+The dry-run returns the proposed `inbox/` path, frontmatter preview, body hash, blockers, warnings, and approval replay values. It writes nothing.
+
+Draft body hashes normalize line endings before replay. This lets an approved multi-line draft keep the same body hash across common LF and CRLF environments.
+
+When `creation_mode` is `ai_assisted` or `ai_generated`, provenance must identify the assisting AI runtime through `assisted_by`. Generic `cli:` or `mcp:` provenance is not enough for an AI-created draft.
+
+For profile-bound AI draft writes, normal mode requires:
+
+```text
+draft_approved_by
+expected_body_sha256
+```
+
+This approval only creates an inbox draft. Minting remains a separate `mint-zet --approve --reviewed-by` step.
+
 ## Expected AI Runtime Flow
 
 An AI runtime should start with:
@@ -75,9 +104,10 @@ An AI runtime should start with:
 2. confirm or switch target archive context
 3. call runtime context with expected archive id and type
 4. check ok/blockers/warnings
-5. create drafts only in inbox after a future dry-run/write approval path exists
-6. run mint dry-run before asking for mint approval
-7. use CLI approval paths for real minting
+5. run create-draft dry-run and show the proposed inbox draft
+6. replay the draft only after human draft approval
+7. run mint dry-run before asking for mint approval
+8. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -90,6 +120,7 @@ The skill tells the AI to:
 
 - resolve the requested profile first when the user names a target archive/profile,
 - then run runtime context,
+- use create-draft dry-run before any profile-bound draft write,
 - keep paths archive-relative,
 - avoid exposing local absolute paths,
 - use dry-run checks before approval requests,
@@ -100,13 +131,13 @@ The skill tells the AI to:
 
 The plugin layer should expose read and preview tools first.
 
-Allowed v0.2.17 direction:
+Allowed v0.2.18 direction:
 
 - profile list and profile resolve,
 - runtime context,
 - doctor,
 - list/read zets,
-- create drafts in inbox,
+- create-draft dry-run and approved inbox draft writes,
 - dry-run mint checks,
 - safe HTML dry-run through CLI,
 - onboarding and source planning,
@@ -138,6 +169,6 @@ That means:
 
 ## Compatibility
 
-This layer does not change archive schemas, zettel frontmatter, product philosophy, or naming rules.
+This layer adds optional frontmatter fields for draft provenance and replay-safe draft creation. It does not change product philosophy or naming rules.
 
 It is a safe confirmation layer above the existing CLI/MCP runtime.

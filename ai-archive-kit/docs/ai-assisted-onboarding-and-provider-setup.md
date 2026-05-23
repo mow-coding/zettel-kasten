@@ -120,6 +120,14 @@ archive_runtime_context
 
 This context check should show the archive id, archive type/scope, owner/principal summary, AI write policy, archive-relative paths, safe next actions, doctor summary, blockers, warnings, and whether local paths are redacted. It should not write files.
 
+Before a profile-bound AI draft write, the AI should run a draft creation dry-run:
+
+```text
+archive create-draft <archive-root> --dry-run --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --format json
+```
+
+The dry-run shows the proposed `inbox/` path, frontmatter preview, body hash, and replay values. It writes nothing. A later approved draft write must replay the expected body hash and include `draft-approved-by`; that approval is only for inbox draft creation, not minting.
+
 But the AI should not silently:
 
 - create provider accounts,
@@ -275,11 +283,12 @@ After sources are registered, the user can say:
 The AI should:
 
 1. inspect allowed source references,
-2. create draft in `inbox/`,
-3. show the draft,
-4. ask whether to mint,
-5. run mint checklist,
-6. mint only after approval.
+2. run create-draft dry-run,
+3. show the proposed inbox draft,
+4. create the draft only after human draft approval,
+5. ask whether to mint,
+6. run mint checklist,
+7. mint only after separate approval.
 
 ## 5. Natural Language To Action Mapping
 
@@ -296,9 +305,21 @@ Examples:
 ```text
 "이 파일 바탕으로 zet 만들어줘"
 -> inspect source ref
--> create draft
+-> create-draft dry-run
+-> human draft approval
+-> create inbox draft
 -> link source_refs
 -> ask for mint
+```
+
+```text
+"방금 만든 발표대본을 우리 회사 zettel-kasten에 올려줘"
+-> profile-resolve
+-> runtime-context
+-> create-draft dry-run
+-> human draft approval
+-> create inbox draft
+-> mint only if separately approved
 ```
 
 ```text
