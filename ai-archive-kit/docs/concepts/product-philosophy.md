@@ -210,6 +210,8 @@ mint -> delegate -> attest -> anchor
 
 In this vocabulary, `attest` is not liking or agreeing. It is the recipient archive's distributed witness that a foreign `zet` existed with a given issuer, hash, protocol profile, and delegated condition.
 
+`delegate` should not mean a reusable public link. The preferred model is an attestation-bound capability: it is either issued to a known counterparty, or it can be claimed once and then becomes bound to the claiming identity. This preserves the decentralized contact ledger: the issuer knows whom it delegated to, and the recipient can prove whom it received from.
+
 The server, if one exists, should help transport, discovery, relay, or sync.
 
 It should not become the canonical owner of the user's archive.

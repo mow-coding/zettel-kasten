@@ -514,6 +514,10 @@ private archive의 original이 가볍게 새어나가서는 안 됩니다.
 - optional relays,
 - 중앙 플랫폼을 유일한 source of truth로 만들지 않기.
 
+relationship-scoped sharing은 `delegate`가 기본적으로 public link가 아니라는 뜻이기도 합니다. 미래의 delegate capability는 counterparty-bound 또는 one-time claimable이어야 하고, attestation을 통해 recipient에게 귀속되어야 합니다. issuer는 자신이 누구와 접촉했는지 기억하기 위해 중앙 서버에 의존하지 않아야 하고, recipient는 foreign `zet`의 출처를 증명하기 위해 중앙 서버에 의존하지 않아야 합니다.
+
+이 모델은 나중에 optional settlement, licensing, token-gated access, smart contract와 연결될 수 있습니다. 다만 그런 layer는 선택 사항이어야 합니다. payment는 access 또는 license right를 부여할 수 있지만, authorship, provenance, archive ownership을 조용히 바꾸어서는 안 됩니다.
+
 공개 repository는 protocol/reference chain입니다.
 
 ```text

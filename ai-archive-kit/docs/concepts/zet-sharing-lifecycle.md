@@ -61,6 +61,23 @@ It means the issuer gives another actor a scoped capability, such as:
 
 Future implementation may express this through a `delegate receipt`, capability token, share envelope, workpack, or another portable proof.
 
+#### Delegate Is Not A Public Link
+
+The default delegation model should not be a reusable public link or one shared key that anyone can use.
+
+Delegation should be expressed as an attestation-bound capability:
+
+- `counterparty_bound`: issued for a known archive, subject, agent, group member, or workspace identity.
+- `claimable_once`: issued as a one-time capability for an initially unknown recipient; once claimed, it becomes bound to the claiming identity.
+- `spent`: after a one-time capability is claimed and attested, it should no longer be reusable by another actor.
+- `public_link`: possible only as an explicit, non-default future mode for intentionally public material.
+
+This matters because a decentralized system does not outsource the contact ledger to a central platform. The issuer should be able to know which counterparty received or claimed access, and the recipient should be able to prove which issuer delegated it.
+
+In practice, a future real delegation should carry a nonce, scope, target policy, expiry or revocation rule, issuer identity, and content/receipt hashes. The later attestation should bind that delegation to the recipient archive identity or public key fingerprint.
+
+If transport is purely peer-to-peer, the issuer can know that a capability was used only when the recipient returns an attestation or acknowledgement receipt. A shared ledger or public blockchain could later make that observation more globally visible, but it is not required for the core protocol.
+
 ### Attest
 
 `attest` is the act of verifying a delegated foreign `zet` and recording evidence that it existed in a specific state.
@@ -143,11 +160,25 @@ They are not real sharing, transport, import, or write paths yet.
 They should be designed later so that:
 
 - delegation is auditable,
+- delegation capabilities can be counterparty-bound or one-time claimable,
 - attestation is independently verifiable,
 - anchoring preserves foreign provenance,
 - and private archive minting remains distinct from social sharing.
 
-## 5. Current Status
+## 5. Optional Settlement Layer
+
+The core `zet` sharing model should remain non-financial and protocol-neutral.
+
+However, the capability model leaves room for future optional settlement:
+
+- a delegate capability may require no payment,
+- a delegate capability may later reference a payment receipt, license term, token-gated condition, or smart-contract settlement,
+- payment should grant access, capability, or license under explicit terms,
+- payment should not silently transfer authorship, provenance, or ownership of the original `zet`.
+
+This keeps `zet` useful as free personal communication while leaving a clean path for later blockchain, licensing, patronage, paid knowledge exchange, or institutional access models.
+
+## 6. Current Status
 
 Current status:
 

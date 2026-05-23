@@ -532,6 +532,88 @@ Meaning:
 
 This vocabulary intentionally avoids ordinary SaaS verbs such as `download`, `share`, and `save` as the core philosophy. Future implementation may still use plain helper words in UI copy where clarity requires it, but the protocol-level concept model should align with minting, delegation, attestation, and anchoring.
 
+### 14.2 Delegation Capability Model
+
+`delegate` must not default to one public key or public link that any actor can reuse.
+
+The preferred model is an attestation-bound delegation capability:
+
+```text
+issuer mints zet
+-> issuer creates delegate capability
+-> recipient claims or receives the capability
+-> recipient attests the delegated zet
+-> capability becomes bound to that recipient identity
+-> optional later anchor places the foreign zet in local meaning
+```
+
+Delegation should support at least these future target policies:
+
+```text
+counterparty_bound
+  The capability is issued to a known subject/archive/key/fingerprint.
+
+claimable_once
+  The capability can be claimed once by an initially unknown recipient.
+  After claim and attestation, it becomes bound and spent.
+
+group_bound
+  A group/workspace capability may exist, but should still be decomposable
+  into member-level or role-level proofs where sensitive access is involved.
+
+public_link
+  Explicit opt-in only. This must not be the default sharing model.
+```
+
+The reason is philosophical as much as technical:
+
+```text
+No central server should be the only party that knows who met whom.
+The issuer should keep evidence of whom it delegated to.
+The recipient should keep evidence of whom it received from.
+```
+
+For real implementation, delegate receipts should eventually include:
+
+- delegate id,
+- nonce or one-time claim id,
+- issuer archive/subject identity,
+- target policy,
+- target archive/subject/key when known,
+- counterparty fingerprint when known,
+- scope,
+- expiry/revocation policy,
+- delegated zet ids and hashes,
+- source access or copy policy,
+- required attestation policy,
+- optional settlement condition.
+
+If the recipient never returns an attestation or acknowledgement, the issuer may only know that a capability was issued, not that it was used. A future relay, shared ledger, or public blockchain can make usage observation stronger, but the core local-first protocol should not require one.
+
+### 14.3 Optional Settlement And Blockchain Extension
+
+The core system should remain usable without coins, tokens, payment, or public blockchain infrastructure.
+
+However, the delegation capability model should leave room for optional financial or contractual layers:
+
+```text
+free delegation
+paid delegation
+token-gated delegation
+licensed delegation
+institutional delegation
+smart-contract-settled delegation
+```
+
+The settlement layer must be explicit and separate from authorship/provenance:
+
+```text
+payment may grant access/capability/license;
+payment does not silently rewrite who minted the zet.
+```
+
+This keeps `zet` usable as private communication, messenger, SNS, and collaboration infrastructure while leaving a clean bridge toward future blockchain, licensing, or knowledge-market experiments.
+
 ## 15. Sharing Payload Policies
 
 Because a `zet` body is always text, sharing a zet may carry different source access policies:

@@ -514,6 +514,10 @@ The important principles are:
 - optional relays,
 - no central platform as the only source of truth.
 
+Relationship-scoped sharing also means that `delegate` is not a public-link default. A future delegate capability should be counterparty-bound or one-time claimable, then bound to the recipient through attestation. The issuer should not need a central server to remember whom it contacted, and the recipient should not need a central server to prove where the foreign `zet` came from.
+
+This model can later bridge to optional settlement, licensing, token-gated access, or smart contracts. Those layers should remain optional: payment may grant access or license rights, but it should not silently rewrite authorship, provenance, or archive ownership.
+
 The public repository is the protocol/reference chain:
 
 ```text

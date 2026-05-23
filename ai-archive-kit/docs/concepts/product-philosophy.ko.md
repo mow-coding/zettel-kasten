@@ -208,6 +208,8 @@ mint -> delegate -> attest -> anchor
 
 이 언어에서 `attest`는 좋아요나 동의가 아닙니다. 어떤 foreign `zet`가 특정 issuer, hash, protocol profile, delegated condition으로 존재했다는 것을 recipient archive가 분산 증인으로 기록하는 행위입니다.
 
+`delegate`는 재사용 가능한 public link를 뜻해서는 안 됩니다. 선호 모델은 attestation-bound capability입니다. 이미 알고 있는 counterparty에게 발급하거나, 1회 claim된 뒤 claim한 identity에 귀속되는 방식이어야 합니다. 그래야 탈중앙화된 contact ledger가 보존됩니다. issuer는 자신이 누구에게 delegation했는지 알고, recipient는 누구에게서 받았는지 증명할 수 있습니다.
+
 서버가 존재한다면 transport, discovery, relay, sync를 도울 수 있습니다.
 
 하지만 서버가 사용자의 archive를 canonical하게 소유해서는 안 됩니다.
