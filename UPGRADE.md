@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.15` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.15.md` |
+| `v0.2.16` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.16.md` |
+| `v0.2.15` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.15.md` |
 | `v0.2.14` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.14.md` |
 | `v0.2.13` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.13.md` |
 | `v0.2.12` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.12.md` |
@@ -42,6 +43,26 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.15` To `v0.2.16`
+
+This is a compatible WOM AI Runtime Context Layer patch.
+
+What changed:
+
+- added `archive runtime-context <archive-root> --format json`,
+- added `--expected-archive-id`, `--expected-type`, and `--strict` checks so terminal-capable AI runtimes can confirm they are operating on the intended archive before creating drafts, running dry-runs, or asking for mint approval,
+- added default local path redaction; JSON paths are archive-relative unless `--no-redact-local-paths` is explicitly used for trusted local debugging,
+- added read-only MCP tool `archive_runtime_context` with existing MCP allowed-root enforcement.
+
+No private archive migration is required.
+
+This release does not add create-draft dry-run, provider API sync, UI, real minting through MCP, or any MCP apply tool.
+
+```bash
+git fetch --tags
+git checkout v0.2.16
+```
 
 ## From `v0.2.14` To `v0.2.15`
 

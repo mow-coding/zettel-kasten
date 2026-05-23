@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.15` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.15.md` |
+| `v0.2.16` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.16.md` |
+| `v0.2.15` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.15.md` |
 | `v0.2.14` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.14.md` |
 | `v0.2.13` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.13.md` |
 | `v0.2.12` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.12.md` |
@@ -42,6 +43,26 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.15`에서 `v0.2.16`으로
+
+이번 버전은 WOM AI Runtime Context Layer를 추가하는 호환 가능한 패치입니다.
+
+바뀐 점:
+
+- `archive runtime-context <archive-root> --format json` 명령이 추가되었습니다.
+- `--expected-archive-id`, `--expected-type`, `--strict` 옵션으로 AI runtime이 draft를 만들거나 dry-run을 실행하거나 mint 승인을 요청하기 전에 올바른 archive에 붙어 있는지 확인할 수 있습니다.
+- 기본 출력은 로컬 절대경로를 숨기고 archive-relative path만 보여줍니다. 신뢰할 수 있는 로컬 디버깅 때만 `--no-redact-local-paths`를 사용할 수 있습니다.
+- MCP에도 읽기 전용 `archive_runtime_context` 도구가 추가되었습니다. 기존 MCP allowed roots 규칙을 그대로 따릅니다.
+
+private archive migration은 필요 없습니다.
+
+이번 버전은 create-draft dry-run, provider API sync, UI, MCP를 통한 real minting, MCP apply tool을 추가하지 않습니다.
+
+```bash
+git fetch --tags
+git checkout v0.2.16
+```
 
 ## `v0.2.14`에서 `v0.2.15`로
 

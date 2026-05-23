@@ -21,6 +21,7 @@ from . import archive_services
 SERVER_NAME = "zettel-kasten-archive-mcp"
 SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
 MCP_ALLOWED_ROOTS_ENV = "AI_ARCHIVE_MCP_ALLOWED_ROOTS"
+MCP_ALLOW_LOCAL_PATHS_ENV = "AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS"
 
 JSONRPC_PARSE_ERROR = -32700
 JSONRPC_INVALID_REQUEST = -32600
@@ -38,6 +39,25 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "properties": {
                 "archive_root": {"type": "string", "description": "Path to the archive root."},
                 "strict": {"type": "boolean", "default": False},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
+        "name": "archive_runtime_context",
+        "description": "Return read-only AI runtime context for a mounted archive before draft, dry-run, or mint approval work.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "expected_archive_id": {"type": "string"},
+                "expected_type": {"type": "string", "enum": sorted(archive_services.RUNTIME_CONTEXT_ARCHIVE_TYPES)},
+                "strict": {"type": "boolean", "default": False},
+                "redact_local_paths": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Local paths remain redacted unless AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1 is set on the MCP server.",
+                },
             },
             "required": ["archive_root"],
         },
@@ -509,6 +529,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
 
     if name == "archive_doctor":
         return tool_archive_doctor(arguments)
+    if name == "archive_runtime_context":
+        return tool_archive_runtime_context(arguments)
     if name == "archive_init":
         return tool_archive_init(arguments)
     if name == "archive_onboarding_plan":
@@ -579,6 +601,31 @@ def tool_archive_doctor(arguments: dict[str, Any]) -> dict[str, Any]:
             "diagnostics": [item.as_dict() for item in diagnostics],
         },
     )
+
+
+def tool_archive_runtime_context(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    strict = bool(arguments.get("strict", False))
+    requested_redaction = bool(arguments.get("redact_local_paths", True))
+    local_paths_allowed = os.environ.get(MCP_ALLOW_LOCAL_PATHS_ENV) == "1"
+    redact_local_paths = requested_redaction or not local_paths_allowed
+    diagnostics = [item.as_dict() for item in archive_cli.Doctor(archive_root).run()]
+    result = call_service(
+        archive_services.runtime_context,
+        archive_root,
+        expected_archive_id=optional_string_arg(arguments, "expected_archive_id"),
+        expected_type=optional_string_arg(arguments, "expected_type"),
+        strict=strict,
+        redact_local_paths=redact_local_paths,
+        diagnostics=diagnostics,
+    )
+    if not requested_redaction and not local_paths_allowed:
+        result["warnings"].append(
+            "MCP local path disclosure was requested but ignored because "
+            f"{MCP_ALLOW_LOCAL_PATHS_ENV}=1 is not set."
+        )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"archive_runtime_context: {state}.", result)
 
 
 def tool_archive_init(arguments: dict[str, Any]) -> dict[str, Any]:

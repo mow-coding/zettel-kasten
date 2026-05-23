@@ -106,6 +106,7 @@
 온보딩/설치 계획:
 
 - [AI-Assisted Onboarding And Provider Setup](ai-assisted-onboarding-and-provider-setup.md)
+- [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
 - [One-Command Setup](one-command-setup.md)
 - [New User Flow](new-user-flow.md)
 - [External Imports](external-imports.md)
@@ -137,6 +138,7 @@ local archive
 - [ZET Sharing Dry-Run Lifecycle Work Log](../plans/work-log-2026-05-23-zet-sharing-dry-run-lifecycle.md)
 - [WOM Safe HTML Profile Work Log](../plans/work-log-2026-05-23-wom-safe-html-profile.md)
 - [WOM Safe HTML Validator Work Log](../plans/work-log-2026-05-23-safe-html-validator.md)
+- [WOM AI Runtime Context Work Log](../plans/work-log-2026-05-24-ai-runtime-context.md)
 - [Delegate Capability Binding Work Log](../plans/work-log-2026-05-23-delegate-capability-binding.md)
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)

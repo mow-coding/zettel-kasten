@@ -169,6 +169,12 @@ class ArchiveCliTests(unittest.TestCase):
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
         return root
 
+    def snapshot_archive_files(self, archive_root: Path) -> dict[str, str]:
+        snapshot: dict[str, str] = {}
+        for path in sorted(item for item in archive_root.rglob("*") if item.is_file()):
+            snapshot[path.relative_to(archive_root).as_posix()] = path.read_text(encoding="utf-8")
+        return snapshot
+
     def copy_fake_archive_as_company_target(self, root: Path) -> Path:
         archive_root = self.copy_fake_archive(root)
         archive_path = archive_root / "archive.yml"
@@ -230,6 +236,129 @@ class ArchiveCliTests(unittest.TestCase):
         code, output = self.run_cli(["doctor", str(archive_root), "--strict"])
         self.assertEqual(code, 0, output)
         self.assertIn("0 error(s), 0 warning(s)", output)
+
+    def test_runtime_context_returns_deterministic_redacted_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            args = ["runtime-context", str(archive_root), "--format", "json"]
+            first_code, first_output = self.run_cli(args)
+            second_code, second_output = self.run_cli(args)
+
+            self.assertEqual(first_code, 0, first_output)
+            self.assertEqual(second_code, 0, second_output)
+            self.assertEqual(json.loads(first_output), json.loads(second_output))
+            self.assertNotIn(str(archive_root), first_output)
+
+            result = json.loads(first_output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "runtime_context")
+            self.assertEqual(result["archive_id"], "archive:personal:fake-life")
+            self.assertEqual(result["archive_type"], "personal")
+            self.assertEqual(result["scope"], "personal")
+            self.assertEqual(
+                result["paths"],
+                {
+                    "inbox": "inbox/",
+                    "zettels": "zettels/",
+                    "receipts": "receipts/",
+                    "object_manifest": "objects/manifests/files.jsonl",
+                },
+            )
+            self.assertTrue(result["redaction"]["local_paths_redacted"])
+            self.assertNotIn("local_archive_root", result)
+            self.assertNotIn("local_paths", result)
+            self.assertIn("create draft in inbox", result["available_safe_actions"])
+            self.assertIn("mint only through CLI approve path", result["available_safe_actions"])
+
+    def test_runtime_context_expected_archive_id_mismatch_blocks(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(
+            [
+                "runtime-context",
+                str(archive_root),
+                "--expected-archive-id",
+                "archive:personal:wrong",
+                "--format",
+                "json",
+            ]
+        )
+        result = json.loads(output)
+        self.assertEqual(code, 1, output)
+        self.assertFalse(result["ok"])
+        self.assertIn("Expected archive id archive:personal:wrong", result["blockers"][0])
+
+    def test_runtime_context_expected_type_mismatch_warns_by_default_and_blocks_in_strict(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+
+        default_code, default_output = self.run_cli(
+            ["runtime-context", str(archive_root), "--expected-type", "company", "--format", "json"]
+        )
+        default_result = json.loads(default_output)
+        self.assertEqual(default_code, 0, default_output)
+        self.assertTrue(default_result["ok"])
+        self.assertEqual(default_result["blockers"], [])
+        self.assertIn("Expected archive type company", default_result["warnings"][0])
+
+        strict_code, strict_output = self.run_cli(
+            ["runtime-context", str(archive_root), "--expected-type", "company", "--strict", "--format", "json"]
+        )
+        strict_result = json.loads(strict_output)
+        self.assertEqual(strict_code, 1, strict_output)
+        self.assertFalse(strict_result["ok"])
+        self.assertIn("Expected archive type company", strict_result["blockers"][0])
+
+    def test_runtime_context_writes_no_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(["runtime-context", str(archive_root), "--format", "json"])
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+    def test_runtime_context_no_redact_local_paths_includes_local_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            code, output = self.run_cli(
+                ["runtime-context", str(archive_root), "--no-redact-local-paths", "--format", "json"]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertFalse(result["redaction"]["local_paths_redacted"])
+            self.assertEqual(result["local_archive_root"], str(archive_root.resolve()))
+            self.assertEqual(result["local_paths"]["inbox"], str((archive_root / "inbox").resolve()))
+
+    def test_runtime_context_keeps_stable_summary_keys_when_optional_docs_are_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            (archive_root / "archive-identity.yml").unlink()
+            archive_yml = archive_cli.load_yaml((archive_root / "archive.yml").read_text(encoding="utf-8"))
+            archive_yml.pop("ai_write_policy")
+            (archive_root / "archive.yml").write_text(archive_cli.dump_yaml(archive_yml), encoding="utf-8")
+
+            code, output = self.run_cli(["runtime-context", str(archive_root), "--format", "json"])
+
+            result = json.loads(output)
+            self.assertIn(code, {0, 1}, output)
+            self.assertEqual(
+                set(result["principal"].keys()),
+                {"principal_id", "display_name", "kind", "identity_id"},
+            )
+            self.assertEqual(
+                set(result["owner"].keys()),
+                {"owner_id", "owner_kind", "owner_display_name", "owner_archive_id", "operator_count", "subject_count"},
+            )
+            self.assertEqual(
+                set(result["ai_write_policy"].keys()),
+                {"default", "canonical_requires", "summary"},
+            )
+            self.assertIsNone(result["principal"]["identity_id"])
+            self.assertIsNone(result["owner"]["owner_id"])
+            self.assertIsNone(result["ai_write_policy"]["default"])
+            self.assertEqual(result["ai_write_policy"]["summary"], "unavailable")
 
     def test_init_then_doctor_passes_strict(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

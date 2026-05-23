@@ -18,8 +18,7 @@ Kim Seong Kyun is the original creator of the `zettel-kasten` and `zet` concept,
 Please cite the project as:
 
 ```text
-Kim, Seong Kyun. Zettel-Kasten + Zet: A local-first AI-native archive and text-centered sharing protocol. 2026.
+Kim, Seong Kyun. zettel-kasten + zet: A local-first AI-native archive and text-centered sharing protocol. 2026.
 ```
 
 See `CITATION.cff` for machine-readable citation metadata.
-

@@ -55,6 +55,14 @@ SENSITIVE_CATEGORY_ALIASES = {"diary": "journal", "therapy": "psychological", "m
 EXTERNAL_IMPORT_SOURCES = {"notion", "google_drive"}
 EXTERNAL_IMPORT_EXTENSIONS = {".md", ".markdown", ".txt"}
 SOURCE_TYPES = {"local_folder", "external_ssd", "notion_export", "google_drive_export", "object_manifest"}
+RUNTIME_CONTEXT_ARCHIVE_TYPES = {"personal", "company", "family", "project", "relationship", "child", "business_unit"}
+RUNTIME_CONTEXT_SAFE_ACTIONS = [
+    "create draft in inbox",
+    "run mint dry-run",
+    "run check-safe-html dry-run",
+    "run doctor",
+    "mint only through CLI approve path",
+]
 SOURCE_MAPS_DIR = "source-maps"
 SOURCE_SCAN_RECEIPTS_DIR = "receipts/sources"
 RESTORE_DRILL_RECEIPTS_DIR = "receipts/recovery"
@@ -4769,6 +4777,214 @@ def preflight_next_actions(blockers: list[str], warnings: list[str]) -> list[str
         "Run metadata-only scan-source --dry-run.",
         "Approve only after reviewing item_count, source root, and receipt preview.",
     ]
+
+
+def runtime_context(
+    archive_root: Path | str,
+    *,
+    expected_archive_id: str | None = None,
+    expected_type: str | None = None,
+    strict: bool = False,
+    redact_local_paths: bool = True,
+    diagnostics: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if expected_type is not None and expected_type not in RUNTIME_CONTEXT_ARCHIVE_TYPES:
+        raise ArchiveServiceError("expected archive type must be one of: " + ", ".join(sorted(RUNTIME_CONTEXT_ARCHIVE_TYPES)))
+
+    archive_config = load_runtime_context_yaml(root, "archive.yml", blockers, required=True)
+    identity_doc = load_runtime_context_yaml(root, "archive-identity.yml", warnings, required=False)
+
+    archive_id = archive_config.get("archive_id") if isinstance(archive_config.get("archive_id"), str) else None
+    archive_type = archive_config.get("type") if isinstance(archive_config.get("type"), str) else None
+    identity = identity_doc.get("identity") if isinstance(identity_doc.get("identity"), dict) else {}
+    scope = identity.get("scope") if isinstance(identity.get("scope"), str) else None
+
+    if archive_id is None:
+        blockers.append("archive.yml does not contain a readable archive_id.")
+    elif expected_archive_id and archive_id != expected_archive_id:
+        blockers.append(f"Expected archive id {expected_archive_id}, found {archive_id}.")
+
+    if expected_type:
+        found_types = {item for item in [archive_type, scope] if item}
+        if expected_type not in found_types:
+            message = runtime_type_mismatch_message(expected_type, archive_type, scope)
+            if strict:
+                blockers.append(message)
+            else:
+                warnings.append(message)
+
+    doctor_summary = runtime_context_doctor_summary(diagnostics, strict=strict, blockers=blockers, warnings=warnings)
+    paths = runtime_context_paths(root, archive_config, warnings)
+    if strict and warnings:
+        blockers.extend(warnings)
+        warnings = []
+
+    result: dict[str, Any] = {
+        "ok": not blockers,
+        "lifecycle_action": "runtime_context",
+        "archive_id": archive_id,
+        "archive_type": archive_type,
+        "scope": scope,
+        "principal": runtime_context_principal_summary(archive_config, identity_doc),
+        "owner": runtime_context_owner_summary(identity_doc),
+        "ai_write_policy": runtime_context_ai_write_policy_summary(archive_config),
+        "paths": paths,
+        "available_safe_actions": list(RUNTIME_CONTEXT_SAFE_ACTIONS),
+        "doctor_summary": doctor_summary,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "redaction": {
+            "local_paths_redacted": bool(redact_local_paths),
+        },
+    }
+    if not redact_local_paths:
+        result["local_archive_root"] = str(root)
+        result["local_paths"] = runtime_context_local_paths(root, paths)
+    return result
+
+
+def load_runtime_context_yaml(root: Path, relative_path: str, messages: list[str], *, required: bool) -> dict[str, Any]:
+    try:
+        data = load_yaml(read_archive_text(root, relative_path))
+    except ArchiveServiceError as exc:
+        if required:
+            messages.append(f"{relative_path} could not be read: {exc}")
+        return {}
+    except Exception as exc:
+        if required:
+            messages.append(f"{relative_path} could not be parsed as YAML: {exc}")
+        else:
+            messages.append(f"{relative_path} could not be parsed as YAML.")
+        return {}
+    if not isinstance(data, dict):
+        messages.append(f"{relative_path} must be a YAML object.")
+        return {}
+    return json_safe(data)
+
+
+def runtime_type_mismatch_message(expected_type: str, archive_type: str | None, scope: str | None) -> str:
+    found_values = unique_preserve_order([item for item in [archive_type, scope] if item])
+    found = ", ".join(found_values) or "unknown"
+    return f"Expected archive type {expected_type}, found {found}."
+
+
+def runtime_context_doctor_summary(
+    diagnostics: list[dict[str, Any]] | None,
+    *,
+    strict: bool,
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    if diagnostics is None:
+        return {"checked": False, "errors": 0, "warnings": 0, "infos": 0}
+    errors = sum(1 for item in diagnostics if item.get("severity") == "ERROR")
+    warning_count = sum(1 for item in diagnostics if item.get("severity") == "WARN")
+    infos = sum(1 for item in diagnostics if item.get("severity") == "INFO")
+    if errors:
+        blockers.append(f"archive doctor reported {errors} error(s).")
+    if warning_count:
+        message = f"archive doctor reported {warning_count} warning(s)."
+        if strict:
+            blockers.append(message)
+        else:
+            warnings.append(message)
+    return {"checked": True, "errors": errors, "warnings": warning_count, "infos": infos}
+
+
+def runtime_context_paths(root: Path, archive_config: dict[str, Any], warnings: list[str]) -> dict[str, str | None]:
+    root_policy = archive_config.get("root_policy") if isinstance(archive_config.get("root_policy"), dict) else {}
+    return {
+        "inbox": runtime_context_relative_path(root, root_policy.get("ai_inbox"), "inbox/", warnings, "inbox", directory=True),
+        "zettels": runtime_context_relative_path(root, root_policy.get("canonical_zettels"), "zettels/", warnings, "zettels", directory=True),
+        "receipts": runtime_context_relative_path(root, None, "receipts/", warnings, "receipts", directory=True),
+        "object_manifest": runtime_context_relative_path(
+            root,
+            root_policy.get("object_manifest"),
+            "objects/manifests/files.jsonl",
+            warnings,
+            "object manifest",
+            directory=False,
+            only_if_exists=True,
+        ),
+    }
+
+
+def runtime_context_relative_path(
+    root: Path,
+    raw_path: Any,
+    fallback: str,
+    warnings: list[str],
+    label: str,
+    *,
+    directory: bool,
+    only_if_exists: bool = False,
+) -> str | None:
+    relative = str(raw_path or fallback)
+    try:
+        path = resolve_archive_relative_path(root, relative)
+    except ArchivePathError:
+        warnings.append(f"{label} path is unsafe in archive.yml; using {fallback}.")
+        path = resolve_archive_relative_path(root, fallback)
+    if only_if_exists and not path.exists():
+        return None
+    display = archive_relative_path(path, root)
+    if directory and not display.endswith("/"):
+        display += "/"
+    return display
+
+
+def runtime_context_local_paths(root: Path, paths: dict[str, str | None]) -> dict[str, str | None]:
+    local_paths: dict[str, str | None] = {}
+    for key, relative in paths.items():
+        if relative is None:
+            local_paths[key] = None
+            continue
+        normalized = relative.rstrip("/")
+        local_paths[key] = str(resolve_archive_relative_path(root, normalized))
+    return local_paths
+
+
+def runtime_context_principal_summary(archive_config: dict[str, Any], identity_doc: dict[str, Any]) -> dict[str, Any]:
+    principal = archive_config.get("principal") if isinstance(archive_config.get("principal"), dict) else {}
+    identity = identity_doc.get("identity") if isinstance(identity_doc.get("identity"), dict) else {}
+    return {
+        "principal_id": identity.get("principal_id") or principal.get("principal_id"),
+        "display_name": identity.get("display_name") or principal.get("display_name"),
+        "kind": principal.get("kind"),
+        "identity_id": identity.get("identity_id"),
+    }
+
+
+def runtime_context_owner_summary(identity_doc: dict[str, Any]) -> dict[str, Any]:
+    ownership = identity_doc.get("ownership") if isinstance(identity_doc.get("ownership"), dict) else {}
+    operators = ownership.get("operators") if isinstance(ownership.get("operators"), list) else []
+    subjects = ownership.get("subjects") if isinstance(ownership.get("subjects"), list) else []
+    return {
+        "owner_id": ownership.get("owner_id"),
+        "owner_kind": ownership.get("owner_kind"),
+        "owner_display_name": ownership.get("owner_display_name"),
+        "owner_archive_id": ownership.get("owner_archive_id"),
+        "operator_count": len(operators),
+        "subject_count": len(subjects),
+    }
+
+
+def runtime_context_ai_write_policy_summary(archive_config: dict[str, Any]) -> dict[str, Any]:
+    policy = archive_config.get("ai_write_policy") if isinstance(archive_config.get("ai_write_policy"), dict) else {}
+    default = policy.get("default")
+    canonical_requires = policy.get("canonical_requires")
+    summary = "unavailable"
+    if default or canonical_requires:
+        summary = f"default={default or 'unknown'}; canonical_requires={canonical_requires or 'unknown'}"
+    return {
+        "default": default,
+        "canonical_requires": canonical_requires,
+        "summary": summary,
+    }
 
 
 def source_mount_step(binding: dict[str, Any], *, local_profile_present: bool) -> dict[str, Any]:

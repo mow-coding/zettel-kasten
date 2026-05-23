@@ -3,6 +3,8 @@
 
 Commands:
   doctor  Inspect an archive for structural and policy issues.
+  runtime-context
+          Print read-only AI runtime context for a mounted archive.
   init    Create a new archive from a built-in template.
   index   Build a generated local SQLite search index.
   parcel Create a portable parcel from a view. Alias: pack.
@@ -1257,6 +1259,25 @@ def command_validate(args: argparse.Namespace) -> int:
         print("Validation passed." if ok else "Validation failed.")
 
     return 0 if ok else 1
+
+
+def command_runtime_context(args: argparse.Namespace) -> int:
+    try:
+        diagnostics = [item.as_dict() for item in Doctor(Path(args.archive_root)).run()]
+        result = archive_services.runtime_context(
+            Path(args.archive_root),
+            expected_archive_id=args.expected_archive_id,
+            expected_type=args.expected_type,
+            strict=args.strict,
+            redact_local_paths=args.redact_local_paths,
+            diagnostics=diagnostics,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_json(result)
+    return 0 if result["ok"] else 1
 
 
 def command_list_zettels(args: argparse.Namespace) -> int:
@@ -2851,6 +2872,34 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--allow-warnings", action="store_true", help="Do not fail when only warnings are present.")
     validate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     validate.set_defaults(func=command_validate)
+
+    runtime_context = subcommands.add_parser(
+        "runtime-context",
+        help="Print read-only AI runtime context for a mounted archive.",
+    )
+    runtime_context.add_argument("archive_root", help="Archive root to inspect.")
+    runtime_context.add_argument("--expected-archive-id", help="Expected archive id; mismatch blocks.")
+    runtime_context.add_argument(
+        "--expected-type",
+        choices=sorted(archive_services.RUNTIME_CONTEXT_ARCHIVE_TYPES),
+        help="Expected archive type. Mismatch warns by default and blocks with --strict.",
+    )
+    runtime_context.add_argument("--strict", action="store_true", help="Treat runtime context warnings as blocking.")
+    runtime_context.add_argument(
+        "--redact-local-paths",
+        dest="redact_local_paths",
+        action="store_true",
+        default=True,
+        help="Use archive-relative paths and suppress local absolute paths. This is the default.",
+    )
+    runtime_context.add_argument(
+        "--no-redact-local-paths",
+        dest="redact_local_paths",
+        action="store_false",
+        help="Include local absolute path context for trusted local debugging.",
+    )
+    runtime_context.add_argument("--format", choices=["json"], default="json", help="Output format.")
+    runtime_context.set_defaults(func=command_runtime_context)
 
     list_zettels = subcommands.add_parser("list-zettels", help="List draft and/or canonical zettels.")
     list_zettels.add_argument("archive_root", help="Archive root to inspect.")

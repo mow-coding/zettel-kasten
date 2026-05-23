@@ -105,6 +105,9 @@ onboard
 doctor
   Inspect an archive for missing files, invalid frontmatter, schema problems, manifest problems, unsafe zettel references, and minting-rule warnings.
 
+runtime-context
+  Print read-only JSON context for terminal-capable AI runtimes. It confirms archive id, archive type/scope, principal/owner summary, AI write policy, safe archive-relative paths, safe actions, and doctor summary. Local absolute paths are redacted by default.
+
 init
   Initialize a personal, company, or family archive from a safe template.
 
@@ -253,6 +256,14 @@ Host-native developer example:
 python ai-archive-kit\cli\archive.py doctor ai-archive-kit\examples\fake-life-archive
 ```
 
+Runtime context example:
+
+```powershell
+python ai-archive-kit\cli\archive.py runtime-context ai-archive-kit\examples\fake-life-archive --format json
+```
+
+Use `--expected-archive-id` and `--expected-type` when an AI runtime should confirm it is operating on a specific archive. Archive id mismatches block. Archive type mismatches warn by default and block with `--strict`. The command is read-only and writes no files.
+
 From inside `ai-archive-kit/`, the package can also be tested with:
 
 ```powershell
@@ -378,7 +389,7 @@ plans/phase-3-implementation-plan.md
 plans/phase-4-lineage-trust-plan.md
 ```
 
-Phase 2 is complete for the safe local toolkit subset. Phase 3 added real promotion. v0.2.8 added the product-facing minting lifecycle with canonical zettel, mint receipt, and draft snapshot outputs. v0.2.9 stabilizes minting terminology while preserving promotion compatibility. v0.2.10 adds dry-run `delegate-zet`, `attest-zet`, and `anchor-zet` lifecycle previews. v0.2.11 adds the delegate capability contract with `counterparty_bound` and `claimable_once` dry-run policies. v0.2.12 adds CLI-only real delegate receipt writes. v0.2.13 adds the WOM naming baseline and compatibility-safe aliases: `mint-zet`, `parcel`, and `admit`. v0.2.14 records the `WOM`/`zet`/`ZET` distinction and defines the WOM Safe HTML Profile as a compatibility-safe documentation baseline. v0.2.15 adds `archive check-safe-html --dry-run` as a read-only CLI validator that previews WOM Safe HTML Profile compatibility for v0.2 Markdown-compatible zets. Phase 4 adds the lineage/trust dry-run baseline and the first owner/operator identity model. Phase 7B adds CLI-only real ownership transfer plus provider change planning. Phase 8B adds one-command setup orchestration above the Docker-first runtime. Phase 8C hardens the local installer and container runtime. Phase 9 starts Notion and Google Drive export import. Real parcel/workpack import, real share/merge/fork, live external provider API sync, OS keyring integration, UI, Markdown-to-WOM-Safe-HTML conversion, and CI matrix remain future work.
+Phase 2 is complete for the safe local toolkit subset. Phase 3 added real promotion. v0.2.8 added the product-facing minting lifecycle with canonical zettel, mint receipt, and draft snapshot outputs. v0.2.9 stabilizes minting terminology while preserving promotion compatibility. v0.2.10 adds dry-run `delegate-zet`, `attest-zet`, and `anchor-zet` lifecycle previews. v0.2.11 adds the delegate capability contract with `counterparty_bound` and `claimable_once` dry-run policies. v0.2.12 adds CLI-only real delegate receipt writes. v0.2.13 adds the WOM naming baseline and compatibility-safe aliases: `mint-zet`, `parcel`, and `admit`. v0.2.14 records the `WOM`/`zet`/`ZET` distinction and defines the WOM Safe HTML Profile as a compatibility-safe documentation baseline. v0.2.15 adds `archive check-safe-html --dry-run` as a read-only CLI validator that previews WOM Safe HTML Profile compatibility for v0.2 Markdown-compatible zets. v0.2.16 adds the read-only WOM AI Runtime Context Layer so terminal-capable AI runtimes can confirm archive identity, type, paths, write policy, and safe actions before drafting or mint approval. Phase 4 adds the lineage/trust dry-run baseline and the first owner/operator identity model. Phase 7B adds CLI-only real ownership transfer plus provider change planning. Phase 8B adds one-command setup orchestration above the Docker-first runtime. Phase 8C hardens the local installer and container runtime. Phase 9 starts Notion and Google Drive export import. Real parcel/workpack import, real share/merge/fork, live external provider API sync, OS keyring integration, UI, Markdown-to-WOM-Safe-HTML conversion, and CI matrix remain future work.
 
 ## Minimal MCP Server
 
@@ -405,6 +416,7 @@ Initial tools:
 
 ```text
 archive_doctor
+archive_runtime_context
 archive_init
 list_zettels
 read_zettel
@@ -421,7 +433,7 @@ anchor_zet_check
 ownership_transfer_check
 ```
 
-The MCP server is intentionally local and stdio-only. It exposes `mint_zettel_check`, legacy `promotion_check`, `share_check`, `delegate_zet_check`, `attest_zet_check`, `anchor_zet_check`, and `ownership_transfer_check` as dry-run only and does not expose real minting, legacy real promotion, real delegate writes, real sharing, real claim registries, real attestation writes, real anchoring writes, real merge, real fork, or real ownership transfer; AI-created zettels go to `inbox/`. The ownership transfer check includes a provider change plan, but MCP still cannot apply local ownership changes or external provider account changes.
+The MCP server is intentionally local and stdio-only. It exposes `archive_runtime_context` as read-only, and exposes `mint_zettel_check`, legacy `promotion_check`, `share_check`, `delegate_zet_check`, `attest_zet_check`, `anchor_zet_check`, and `ownership_transfer_check` as dry-run only. It does not expose real minting, legacy real promotion, real delegate writes, real sharing, real claim registries, real attestation writes, real anchoring writes, real merge, real fork, or real ownership transfer; AI-created zettels go to `inbox/`. The ownership transfer check includes a provider change plan, but MCP still cannot apply local ownership changes or external provider account changes.
 
 Archive ownership is separate from archive operation. A family, company, or other group can own an archive while named people operate it. For example, parents can operate a child-related archive under a family owner, and a later receipt-backed transfer can move ownership to the child.
 

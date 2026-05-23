@@ -4,6 +4,25 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.16 - 2026-05-24
+
+WOM AI Runtime Context Layer patch.
+
+Added:
+
+- `archive runtime-context <archive-root> --format json`, a read-only CLI command for terminal-capable AI runtimes to confirm archive identity, type/scope, owner/principal summary, AI write policy, safe archive-relative paths, safe next actions, and doctor summary before drafting or asking for mint approval,
+- default local path redaction for runtime context JSON, with `--no-redact-local-paths` available only for trusted local debugging,
+- `--expected-archive-id`, `--expected-type`, and `--strict` gates so the runtime can block on archive id mismatches and treat archive type mismatches as warning-by-default or blocking in strict mode,
+- read-only MCP tool `archive_runtime_context` with the same core behavior and existing MCP allowed-root enforcement,
+- stable runtime context summary keys for AI parsing, with unavailable optional values represented as `null`,
+- MCP local path disclosure gating through `AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1`.
+
+Compatibility:
+
+- no private archive migration is required,
+- no schema change is required,
+- runtime context never writes files and does not implement create-draft dry-run, provider API sync, UI, real minting through MCP, or any new MCP apply tool.
+
 ## v0.2.15 - 2026-05-23
 
 WOM Safe HTML Profile validator dry-run patch.

@@ -94,6 +94,20 @@ Examples:
 
 The AI should be able to run setup commands, inspect logs, and guide the user.
 
+Before it drafts, runs mint dry-runs, or asks for mint approval inside an existing archive, the AI should confirm runtime context:
+
+```text
+archive runtime-context <archive-root> --format json
+```
+
+For MCP clients, the equivalent read-only tool is:
+
+```text
+archive_runtime_context
+```
+
+This context check should show the archive id, archive type/scope, owner/principal summary, AI write policy, archive-relative paths, safe next actions, doctor summary, blockers, warnings, and whether local paths are redacted. It should not write files.
+
 But the AI should not silently:
 
 - create provider accounts,

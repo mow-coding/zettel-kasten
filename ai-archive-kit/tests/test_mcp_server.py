@@ -20,9 +20,11 @@ from ai_archive_kit import archive_cli
 
 
 class McpServerTests(unittest.TestCase):
-    def start_server(self) -> subprocess.Popen[str]:
+    def start_server(self, extra_env: dict[str, str] | None = None) -> subprocess.Popen[str]:
         env = os.environ.copy()
         env["PYTHONPATH"] = "src"
+        if extra_env:
+            env.update(extra_env)
         return subprocess.Popen(
             [sys.executable, "-m", "ai_archive_kit.mcp_server"],
             cwd=KIT_ROOT,
@@ -166,6 +168,7 @@ class McpServerTests(unittest.TestCase):
             tools_by_name = {tool["name"]: tool for tool in tools["result"]["tools"]}
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
             self.assertIn("archive_doctor", tool_names)
+            self.assertIn("archive_runtime_context", tool_names)
             self.assertIn("create_draft_zettel", tool_names)
             self.assertIn("archive_index", tool_names)
             self.assertIn("archive_search", tool_names)
@@ -197,6 +200,7 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("mint_zettel", tool_names)
             self.assertNotIn("archive_mint_zettel", tool_names)
             self.assertNotIn("mint_zettel_apply", tool_names)
+            self.assertNotIn("archive_runtime_context_apply", tool_names)
             self.assertNotIn("share_archive_scope", tool_names)
             self.assertNotIn("delegate_zet", tool_names)
             self.assertNotIn("attest_zet", tool_names)
@@ -244,6 +248,84 @@ class McpServerTests(unittest.TestCase):
             self.assertEqual(result["structuredContent"]["warnings"], 0)
         finally:
             self.stop_server(process)
+
+    def test_archive_runtime_context_tool_respects_allowed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                allowed_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_runtime_context",
+                            "arguments": {"archive_root": str(allowed_archive)},
+                        },
+                    },
+                )
+                allowed_result = allowed_response["result"]
+                self.assertFalse(allowed_result["isError"])
+                structured = allowed_result["structuredContent"]
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "runtime_context")
+                self.assertTrue(structured["redaction"]["local_paths_redacted"])
+                self.assertNotIn(str(allowed_archive), json.dumps(structured))
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_runtime_context",
+                            "arguments": {"archive_root": str(outside_archive)},
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_archive_runtime_context_tool_ignores_local_path_disclosure_without_env_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            process = self.start_server()
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_runtime_context",
+                            "arguments": {"archive_root": str(archive_root), "redact_local_paths": False},
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["redaction"]["local_paths_redacted"])
+                self.assertNotIn("local_archive_root", structured)
+                self.assertNotIn("local_paths", structured)
+                self.assertTrue(
+                    any("AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1" in warning for warning in structured["warnings"])
+                )
+                self.assertNotIn(str(archive_root), json.dumps(structured))
+            finally:
+                self.stop_server(process)
 
     def test_archive_onboarding_plan_never_writes_files(self) -> None:
         process = self.start_server()

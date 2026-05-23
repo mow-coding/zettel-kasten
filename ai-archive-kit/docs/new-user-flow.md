@@ -211,7 +211,7 @@ Register another source without hand-editing YAML:
 python ai-archive-kit\cli\archive.py add-source .\tmp-my-archive `
   --source-id local:desktop `
   --type local_folder `
-  --local-root C:\Users\me\Desktop `
+  --local-root $env:ARCHIVE_SOURCE_DESKTOP_ROOT `
   --write-local-profile `
   --dry-run `
   --format json
@@ -223,7 +223,7 @@ When the plan looks right:
 python ai-archive-kit\cli\archive.py add-source .\tmp-my-archive `
   --source-id local:desktop `
   --type local_folder `
-  --local-root C:\Users\me\Desktop `
+  --local-root $env:ARCHIVE_SOURCE_DESKTOP_ROOT `
   --write-local-profile `
   --approve `
   --reviewed-by person:me
@@ -242,7 +242,7 @@ Preview a local folder scan:
 ```powershell
 python ai-archive-kit\cli\archive.py scan-source .\tmp-my-archive `
   --source local:personal-documents `
-  --source-root C:\Users\me\Documents `
+  --source-root $env:ARCHIVE_SOURCE_DOCUMENTS_ROOT `
   --dry-run `
   --format json
 ```
@@ -252,7 +252,7 @@ Apply only after review:
 ```powershell
 python ai-archive-kit\cli\archive.py scan-source .\tmp-my-archive `
   --source local:personal-documents `
-  --source-root C:\Users\me\Documents `
+  --source-root $env:ARCHIVE_SOURCE_DOCUMENTS_ROOT `
   --approve `
   --reviewed-by person:me
 ```
@@ -275,7 +275,7 @@ Drafts must still avoid:
 
 ```text
 provider URLs such as s3:// or b2://
-local absolute paths such as C:\Users\...
+local absolute paths such as `<local-absolute-path>`
 long-lived secrets
 private source leakage
 fake certainty about sources
@@ -444,6 +444,7 @@ Current MCP tools:
 
 ```text
 archive_doctor
+archive_runtime_context
 archive_init
 list_zettels
 read_zettel
@@ -466,7 +467,9 @@ anchor_zet_check
 ownership_transfer_check
 ```
 
-MCP can create drafts, inspect archives, search, plan onboarding, preview external imports, list sources, preview source registration, preview source mount plans, preview source scans, preview minting, preview legacy promotion, preview archive sharing, preview delegate/attest/anchor lifecycle checks, and check ownership transfer. It cannot perform real onboarding apply, source registration apply, source scan apply, canonical minting, real share, real delegate, real attest, real anchor, merge, fork, or ownership transfer. Use the CLI for explicit human-approved steps.
+For AI clients, the first safe call should usually be `archive_runtime_context`. It confirms which archive is mounted, keeps paths archive-relative by default, and returns safe next actions before the AI creates a draft or asks for mint approval.
+
+MCP can create drafts, inspect archives, search, plan onboarding, preview external imports, list sources, preview source registration, preview source mount plans, preview source scans, preview minting, preview legacy promotion, preview archive sharing, preview delegate/attest/anchor lifecycle checks, check ownership transfer, and read runtime context. It cannot perform real onboarding apply, source registration apply, source scan apply, canonical minting, real share, real delegate, real attest, real anchor, merge, fork, ownership transfer, or runtime context apply. Use the CLI for explicit human-approved steps.
 
 ## Flow 8: Keep Secrets Out
 
