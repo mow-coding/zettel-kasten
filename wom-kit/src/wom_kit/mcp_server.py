@@ -69,6 +69,28 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "wom_profile_wallet_check",
+        "description": "Preview wallet-ready WOM profile/node identity metadata. Read-only; never generates keys, signs, registers wallets, or calls blockchain/provider APIs.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root used for context."},
+                "profile": {"type": "string", "description": "Requested profile id, label, or alias."},
+                "registry": {
+                    "type": "string",
+                    "description": "Optional path to the WOM profile registry YAML file. If omitted, fixed archive-local registry paths are checked.",
+                },
+                "dry_run": {"type": "boolean", "default": True},
+                "redact_local_paths": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Local paths remain redacted unless AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1 is set on the MCP server.",
+                },
+            },
+            "required": ["archive_root", "profile"],
+        },
+    },
+    {
         "name": "archive_doctor",
         "description": "Inspect a zettel-kasten archive for structural, metadata, object manifest, and zettel policy issues.",
         "inputSchema": {
@@ -680,6 +702,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_wom_profile_list(arguments)
     if name == "wom_profile_resolve":
         return tool_wom_profile_resolve(arguments)
+    if name == "wom_profile_wallet_check":
+        return tool_wom_profile_wallet_check(arguments)
     if name == "archive_doctor":
         return tool_archive_doctor(arguments)
     if name == "archive_runtime_context":
@@ -796,6 +820,27 @@ def tool_wom_profile_resolve(arguments: dict[str, Any]) -> dict[str, Any]:
     add_mcp_redaction_warning(result, requested_redaction, redact_local_paths)
     state = str(result.get("resolution_state") or ("passed" if result["ok"] else "blocked"))
     return tool_success_result(f"wom_profile_resolve: {state}.", result)
+
+
+def tool_wom_profile_wallet_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    profile = require_string_arg(arguments, "profile")
+    registry = optional_path_arg(arguments, "registry")
+    if arguments.get("dry_run", True) is False:
+        raise ToolError("wom_profile_wallet_check is dry-run only.")
+    requested_redaction = bool(arguments.get("redact_local_paths", True))
+    redact_local_paths = mcp_redact_local_paths(requested_redaction)
+    result = call_service(
+        archive_services.profile_wallet_preview,
+        archive_root,
+        profile=profile,
+        registry_path=registry,
+        dry_run=bool(arguments.get("dry_run", True)),
+        redact_local_paths=redact_local_paths,
+    )
+    add_mcp_redaction_warning(result, requested_redaction, redact_local_paths)
+    state = str(result.get("resolution_state") or ("passed" if result["ok"] else "blocked"))
+    return tool_success_result(f"wom_profile_wallet_check: {state}.", result)
 
 
 def tool_archive_runtime_context(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1438,6 +1483,17 @@ def optional_string_list_arg(arguments: dict[str, Any], name: str) -> list[str] 
 
 def require_path_arg(arguments: dict[str, Any], name: str) -> Path:
     path = Path(require_string_arg(arguments, name)).resolve()
+    enforce_mcp_path_allowlist(path)
+    return path
+
+
+def optional_path_arg(arguments: dict[str, Any], name: str) -> Path | None:
+    value = arguments.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ToolError(f"Argument must be a non-empty string path: {name}")
+    path = Path(value).resolve()
     enforce_mcp_path_allowlist(path)
     return path
 

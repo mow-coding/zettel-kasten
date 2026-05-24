@@ -97,6 +97,8 @@ provider_api_called: false
 
 Source intake never checks credentials, creates buckets, uploads, syncs, copies, hashes, imports, or calls provider APIs.
 
+`archive profile-wallet --dry-run` does not read or write provider bindings. Profile wallet metadata may refer to a future signer with a safe `signer_ref`, but real key custody and signing are outside `provider-bindings.yml`. Do not put private keys, seed phrases, wallet secrets, payment credentials, or raw wallet provider URLs in provider bindings.
+
 ## Secret Boundary
 
 Provider bindings may store:

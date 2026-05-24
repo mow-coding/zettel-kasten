@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.24 planning and implementation baseline
+Status: v0.2.25 planning and implementation baseline
 
 ## Purpose
 
@@ -35,6 +35,7 @@ CLI:
 ```bash
 archive profile-list --registry <path> --format json
 archive profile-resolve --registry <path> --target <query> --format json
+archive profile-wallet <archive-root> --profile <profile-id-or-label> --dry-run --format json
 ```
 
 MCP:
@@ -42,9 +43,12 @@ MCP:
 ```text
 wom_profile_list
 wom_profile_resolve
+wom_profile_wallet_check
 ```
 
 Profile resolution must happen before runtime context whenever the user names a target profile. This prevents the AI from assuming the current/default archive is correct.
+
+`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.25 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
 
 ## Runtime Context Command
 
@@ -145,15 +149,16 @@ An AI runtime should start with:
 
 ```text
 1. resolve requested WOM profile when the user names a target
-2. confirm or switch target archive context
-3. call runtime context with expected archive id and type
-4. check ok/blockers/warnings
-5. run source-intake dry-run when a source/objet/provider/AI artifact is involved
-6. run create-draft dry-run with `--source-intake-plan` and show the proposed inbox draft
-7. replay the draft only after human draft approval
-8. optionally run block-header dry-run for the draft/header preview
-9. run mint dry-run before asking for mint approval
-10. use CLI approval paths for real minting
+2. optionally preview profile wallet readiness when identity/capability authority matters
+3. confirm or switch target archive context
+4. call runtime context with expected archive id and type
+5. check ok/blockers/warnings
+6. run source-intake dry-run when a source/objet/provider/AI artifact is involved
+7. run create-draft dry-run with `--source-intake-plan` and show the proposed inbox draft
+8. replay the draft only after human draft approval
+9. optionally run block-header dry-run for the draft/header preview
+10. run mint dry-run before asking for mint approval
+11. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -165,6 +170,7 @@ The `templates/ai-runtime/wom-archive/SKILL.md` file is a reusable prompt-side p
 The skill tells the AI to:
 
 - resolve the requested profile first when the user names a target archive/profile,
+- optionally run profile-wallet dry-run when the user asks about wallet-like identity or future signing authority,
 - then run runtime context,
 - run source-intake dry-run before drafting from source/objet material,
 - use create-draft dry-run before any profile-bound draft write,

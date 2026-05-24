@@ -66,6 +66,48 @@ PROFILE_NEXT_ACTIONS = {
     "register_profile_token",
     "suggest_delegate_flow",
 }
+PROFILE_WALLET_NODE_KINDS = {"person", "organization", "team", "family", "project", "agent"}
+PROFILE_WALLET_CUSTODY_MODES = {
+    "local_device",
+    "os_keychain_future",
+    "hardware_wallet_future",
+    "multisig_future",
+    "external_wallet_future",
+}
+PROFILE_WALLET_SIGNING_STATUSES = {"not_configured", "placeholder", "future"}
+PROFILE_WALLET_NODE_KEYS = {"node_id", "node_kind", "display_label"}
+PROFILE_WALLET_WALLET_KEYS = {"wallet_id", "fingerprint", "custody", "signing_status", "signer_ref"}
+PROFILE_WALLET_SECRET_KEYS = {
+    "access_token",
+    "api_key",
+    "client_secret",
+    "credential",
+    "credentials",
+    "mnemonic",
+    "passphrase",
+    "password",
+    "private_key",
+    "privatekey",
+    "recovery_phrase",
+    "refresh_token",
+    "secret",
+    "secret_key",
+    "seed",
+    "seed_phrase",
+    "token",
+    "wallet_secret",
+}
+PROFILE_WALLET_REGISTRY_CANDIDATES = [
+    "profiles/wom-profiles.yml",
+    "profiles/wom-profiles.yaml",
+    "profiles/profiles.yml",
+    "profiles/profiles.yaml",
+    "profiles/local/wom-profiles.local.yml",
+    "profiles/local/profiles.local.yml",
+]
+PROFILE_WALLET_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,199}$")
+PROFILE_WALLET_FINGERPRINT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._+-]{0,199}$")
+PROFILE_WALLET_ADDRESS_RE = re.compile(r"\b0x[a-fA-F0-9]{40}\b")
 PROFILE_ALLOWED_TOKEN_KEYS = {"state", "token_ref"}
 PROFILE_RAW_TOKEN_KEYS = {
     "access_token",
@@ -6858,6 +6900,314 @@ def profile_resolve(
         "redaction": {"local_paths_redacted": bool(redact_local_paths)},
         "registry_path": redacted_path_value(registry_file, redact_local_paths=redact_local_paths),
     }
+
+
+def profile_wallet_preview(
+    archive_root: Path | str,
+    *,
+    profile: str,
+    registry_path: Path | str | None = None,
+    dry_run: bool = True,
+    redact_local_paths: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("profile-wallet is a read-only dry-run preview; pass --dry-run.")
+
+    registry_file = resolve_profile_wallet_registry_path(root, registry_path, blockers, warnings)
+    registry: dict[str, Any] = {}
+    profiles: list[dict[str, Any]] = []
+    matches: list[dict[str, Any]] = []
+    selected_profile: dict[str, Any] | None = None
+    resolution_state = "not_found"
+
+    query = normalize_profile_lookup_text(profile or "")
+    if not query:
+        blockers.append("profile is required.")
+
+    if registry_file is not None:
+        _registry_file, registry, registry_blockers, registry_warnings = load_profile_registry(registry_file)
+        blockers.extend(registry_blockers)
+        warnings.extend(registry_warnings)
+        profiles = profile_registry_entries(registry, blockers, warnings)
+        matches = resolve_profile_matches(profiles, query) if query else []
+        selected_profile = matches[0]["profile"] if len(matches) == 1 else None
+        resolution_state = profile_wallet_resolution_state(matches, selected_profile)
+        if len(matches) > 1:
+            blockers.append("Multiple profiles matched the requested profile; ask the user to choose one.")
+        elif not matches and query:
+            blockers.append("Requested WOM profile was not found in the registry.")
+
+    if selected_profile is not None:
+        validate_profile_wallet_metadata(selected_profile, blockers, warnings)
+        selected_archive_id = selected_profile.get("archive_id")
+        if isinstance(selected_archive_id, str) and selected_archive_id and selected_archive_id != archive_id:
+            warnings.append(
+                "Selected profile archive_id differs from the supplied archive_root; confirm the target archive before writes."
+            )
+
+    warnings.append(
+        "WOM profile wallet metadata is wallet-ready identity context only; v0.2.25 does not generate keys or sign data."
+    )
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "profile_wallet_preview",
+        "archive_id": archive_id,
+        "registry_path": redacted_path_value(registry_file, redact_local_paths=redact_local_paths) if registry_file else None,
+        "target_query": query,
+        "resolution_state": resolution_state,
+        "profile": profile_public_summary(selected_profile, redact_local_paths=redact_local_paths)
+        if selected_profile is not None
+        else None,
+        "matches": [profile_match_summary(match, redact_local_paths=redact_local_paths) for match in matches],
+        "node_identity_preview": profile_node_identity_preview(selected_profile),
+        "wallet_identity_preview": profile_wallet_identity_preview(selected_profile),
+        "signing_readiness": profile_wallet_signing_readiness(selected_profile),
+        "capability_surface_preview": profile_wallet_capability_surface_preview(),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+        "redaction": {"local_paths_redacted": bool(redact_local_paths)},
+    }
+
+
+def resolve_profile_wallet_registry_path(
+    archive_root: Path,
+    registry_path: Path | str | None,
+    blockers: list[str],
+    warnings: list[str],
+) -> Path | None:
+    if registry_path is not None:
+        return Path(registry_path).expanduser().resolve()
+    for candidate in PROFILE_WALLET_REGISTRY_CANDIDATES:
+        path = archive_root / candidate
+        if path.is_file():
+            return path.resolve()
+    blockers.append(
+        "Profile registry was not found under the archive root. Pass --registry or create profiles/wom-profiles.yml."
+    )
+    warnings.append("Only fixed archive-local registry paths were checked; no whole-disk scan was performed.")
+    return None
+
+
+def profile_wallet_resolution_state(matches: list[dict[str, Any]], selected_profile: dict[str, Any] | None) -> str:
+    if len(matches) > 1:
+        return "ambiguous"
+    if selected_profile is None:
+        return "not_found"
+    return "resolved"
+
+
+def profile_node_identity_preview(profile: dict[str, Any] | None) -> dict[str, Any]:
+    if profile is None:
+        return {
+            "available": False,
+            "wallet_ready_identity_model": True,
+            "note": "No resolved profile is available for node identity preview.",
+        }
+    node = profile.get("node") if isinstance(profile.get("node"), dict) else {}
+    node_id = safe_profile_wallet_value(node.get("node_id")) or safe_profile_wallet_value(profile.get("node_id"))
+    node_kind = safe_profile_wallet_value(node.get("node_kind")) or infer_profile_node_kind(node_id, profile.get("archive_type"))
+    display_label = safe_profile_wallet_text(node.get("display_label")) or safe_profile_wallet_text(profile.get("label"))
+    return drop_none_values(
+        {
+            "available": True,
+            "node_id": node_id,
+            "node_kind": node_kind,
+            "display_label": display_label,
+            "profile_id": profile.get("profile_id"),
+            "archive_id": profile.get("archive_id"),
+            "wallet_ready_identity_model": True,
+            "model_note": "WOM profile selects the human-facing identity; WOM node is the subject/principal in the WOM network.",
+        }
+    )
+
+
+def profile_wallet_identity_preview(profile: dict[str, Any] | None) -> dict[str, Any]:
+    if profile is None:
+        return {
+            "available": False,
+            "real_wallet": False,
+            "real_signing_enabled": False,
+            "note": "No resolved profile is available for wallet identity preview.",
+        }
+    wallet = profile.get("wallet") if isinstance(profile.get("wallet"), dict) else {}
+    signing_status = safe_profile_wallet_value(wallet.get("signing_status")) or "not_configured"
+    return drop_none_values(
+        {
+            "available": bool(wallet),
+            "wallet_id": safe_profile_wallet_value(wallet.get("wallet_id")),
+            "fingerprint": safe_profile_wallet_value(wallet.get("fingerprint")),
+            "custody": safe_profile_wallet_value(wallet.get("custody")),
+            "signing_status": signing_status,
+            "signer_ref": safe_profile_wallet_value(wallet.get("signer_ref")),
+            "real_wallet": False,
+            "private_key_present": False,
+            "seed_phrase_present": False,
+            "real_signing_enabled": False,
+            "model_note": "This is public wallet-ready metadata, not key material or a blockchain wallet.",
+        }
+    )
+
+
+def profile_wallet_signing_readiness(profile: dict[str, Any] | None) -> dict[str, Any]:
+    wallet = profile.get("wallet") if isinstance(profile, dict) and isinstance(profile.get("wallet"), dict) else {}
+    status = safe_profile_wallet_value(wallet.get("signing_status")) or "not_configured"
+    return {
+        "status": status,
+        "wallet_metadata_present": bool(wallet),
+        "real_signing_available": False,
+        "key_generation_available": False,
+        "blockchain_api_called": False,
+        "provider_api_called": False,
+        "deferred_reason": "Private-key custody, signing UX, recovery, and threat modeling are future work.",
+    }
+
+
+def profile_wallet_capability_surface_preview() -> dict[str, Any]:
+    return {
+        "future_relevance": [
+            "mint",
+            "delegate",
+            "attest",
+            "anchor",
+            "receipts",
+            "block_headers",
+            "ZET_sharing",
+        ],
+        "v0_2_25_available": [],
+        "mutating_wallet_actions_available": False,
+        "real_signing_available": False,
+        "model_note": "A future WOM wallet layer can bind profile/node identity to capability proofs; v0.2.25 only previews readiness.",
+    }
+
+
+def validate_profile_wallet_metadata(profile: dict[str, Any], blockers: list[str], warnings: list[str]) -> None:
+    profile_id = str(profile.get("profile_id") or "<unknown-profile>")
+    node = profile.get("node")
+    wallet = profile.get("wallet")
+    if node is not None and not isinstance(node, dict):
+        blockers.append(f"Profile {profile_id} node must be an object when present.")
+        node = None
+    if wallet is not None and not isinstance(wallet, dict):
+        blockers.append(f"Profile {profile_id} wallet must be an object when present.")
+        wallet = None
+
+    if isinstance(node, dict):
+        unknown_node_keys = sorted(str(key) for key in node.keys() if str(key) not in PROFILE_WALLET_NODE_KEYS)
+        if unknown_node_keys:
+            warnings.append(
+                f"Profile {profile_id} node contains unsupported field(s) not shown in preview: "
+                + ", ".join(unknown_node_keys)
+                + "."
+            )
+        validate_profile_wallet_value_tree(node, blockers, f"profile {profile_id}.node")
+        node_kind = node.get("node_kind")
+        if isinstance(node_kind, str) and node_kind.strip() and node_kind.strip() not in PROFILE_WALLET_NODE_KINDS:
+            blockers.append(
+                f"Profile {profile_id} node.node_kind must be one of: "
+                + ", ".join(sorted(PROFILE_WALLET_NODE_KINDS))
+                + "."
+            )
+
+    if isinstance(wallet, dict):
+        unknown_wallet_keys = sorted(str(key) for key in wallet.keys() if str(key) not in PROFILE_WALLET_WALLET_KEYS)
+        if unknown_wallet_keys:
+            blockers.append(
+                f"Profile {profile_id} wallet contains unsupported field(s): "
+                + ", ".join(unknown_wallet_keys)
+                + ". Only public placeholder wallet metadata fields are allowed."
+            )
+        validate_profile_wallet_value_tree(wallet, blockers, f"profile {profile_id}.wallet")
+        custody = wallet.get("custody")
+        if isinstance(custody, str) and custody.strip() and custody.strip() not in PROFILE_WALLET_CUSTODY_MODES:
+            blockers.append(
+                f"Profile {profile_id} wallet.custody must be one of: "
+                + ", ".join(sorted(PROFILE_WALLET_CUSTODY_MODES))
+                + "."
+            )
+        signing_status = wallet.get("signing_status")
+        if (
+            isinstance(signing_status, str)
+            and signing_status.strip()
+            and signing_status.strip() not in PROFILE_WALLET_SIGNING_STATUSES
+        ):
+            blockers.append(
+                f"Profile {profile_id} wallet.signing_status must be one of: "
+                + ", ".join(sorted(PROFILE_WALLET_SIGNING_STATUSES))
+                + "."
+            )
+
+
+def validate_profile_wallet_value_tree(value: Any, blockers: list[str], field_path: str) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            normalized_key = key_text.casefold().replace("-", "_")
+            if normalized_key in PROFILE_WALLET_SECRET_KEYS:
+                blockers.append(f"{field_path}.{key_text} is a secret-like field; store no key, token, seed, or credential values.")
+            validate_profile_wallet_value_tree(child, blockers, f"{field_path}.{key_text}")
+        return
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            validate_profile_wallet_value_tree(child, blockers, f"{field_path}[{index}]")
+        return
+    if value is None:
+        return
+    text = str(value)
+    if profile_wallet_value_is_private_or_secret(text):
+        blockers.append(f"{field_path} contains private path, provider URL, wallet address, token-like, or secret-like data.")
+
+
+def profile_wallet_value_is_private_or_secret(value: str) -> bool:
+    text = value.strip()
+    return bool(
+        contains_forbidden_location_reference(text)
+        or "://" in text
+        or "@" in text
+        or DRAFT_SECRET_VALUE_RE.search(text)
+        or GITHUB_SECRET_LIKE_RE.search(text)
+        or PROFILE_WALLET_ADDRESS_RE.search(text)
+    )
+
+
+def safe_profile_wallet_value(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or profile_wallet_value_is_private_or_secret(text):
+        return None
+    return text
+
+
+def safe_profile_wallet_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = unicodedata.normalize("NFC", value).strip()
+    if not text or profile_wallet_value_is_private_or_secret(text):
+        return None
+    return text
+
+
+def infer_profile_node_kind(node_id: str | None, archive_type: Any) -> str | None:
+    if isinstance(node_id, str) and ":" in node_id:
+        candidate = node_id.split(":", 2)[1] if node_id.startswith("node:") and node_id.count(":") >= 2 else node_id.split(":", 1)[0]
+        if candidate in PROFILE_WALLET_NODE_KINDS:
+            return candidate
+    archive_type_text = archive_type if isinstance(archive_type, str) else None
+    if archive_type_text == "personal":
+        return "person"
+    if archive_type_text == "company":
+        return "organization"
+    if archive_type_text in {"family", "project"}:
+        return archive_type_text
+    return None
 
 
 def load_profile_registry(registry_path: Path | str) -> tuple[Path, dict[str, Any], list[str], list[str]]:

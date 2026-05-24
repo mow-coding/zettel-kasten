@@ -34,6 +34,9 @@ read-zettel
 create-draft
   Create a draft zettel in inbox/. It can consume a validated source-intake dry-run plan with --source-intake-plan.
 
+profile-wallet --dry-run
+  Preview wallet-ready WOM profile/node identity metadata. This never generates private keys, signs data, stores secrets, creates wallets, or calls blockchain/provider APIs.
+
 block-header --dry-run
   Preview the derived header for one draft or canonical zet. This returns `block = zet + header` metadata and hashes without writing, minting, reading objet bodies, or calling providers.
 

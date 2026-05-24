@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.24` | current public pre-release | `wom-kit/docs/releases/v0.2.24.md` |
+| `v0.2.25` | current public pre-release | `wom-kit/docs/releases/v0.2.25.md` |
+| `v0.2.24` | superseded public pre-release | `wom-kit/docs/releases/v0.2.24.md` |
 | `v0.2.23` | superseded public pre-release | `wom-kit/docs/releases/v0.2.23.md` |
 | `v0.2.22` | superseded public pre-release | `wom-kit/docs/releases/v0.2.22.md` |
 | `v0.2.21` | superseded public pre-release | `wom-kit/docs/releases/v0.2.21.md` |
@@ -51,6 +52,23 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.24`에서 `v0.2.25`로
+
+이번 버전은 WOM profile을 단순한 SaaS 계정 프로필이 아니라, 미래의 지갑형 신원 모델로 해석하기 위한 호환 패치입니다.
+
+바뀐 점:
+
+- `archive profile-wallet <archive-root> --profile <profile-id-or-label> --dry-run --format json`을 추가했습니다.
+- MCP에는 read-only `wom_profile_wallet_check`만 추가했습니다.
+- profile registry에 선택적인 공개 안전 메타데이터 `node`, `wallet` 필드를 문서화했습니다.
+- WOM profile은 사람이 고르는 프로필, WOM node는 네트워크 안의 주체, 미래 WOM wallet layer는 mint/delegate/attest/anchor/receipt proof를 위한 signing/capability layer라는 개념을 기록했습니다.
+
+private archive migration은 필요 없습니다.
+
+기존 profile registry 항목은 그대로 유효합니다. 새 `node`, `wallet` 필드는 공개해도 되는 placeholder metadata만 담아야 합니다.
+
+이번 버전은 private key 생성, seed phrase 저장, wallet secret 저장, 실제 signing, blockchain/provider API 호출, wallet 생성/등록, WOM coin, NFT-like access, payment, staking, consensus, ledger, P2P transport를 구현하지 않습니다.
 
 ## `v0.2.23`에서 `v0.2.24`로
 

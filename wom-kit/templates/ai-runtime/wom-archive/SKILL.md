@@ -12,6 +12,14 @@ archive profile-resolve --registry <registry> --target <query> --format json
 
 Continue only after the selected profile is clear. If `resolution_state` is `ambiguous`, ask the user to choose. If it is `not_found`, suggest registering the profile or using a delegate flow. If it is `token_missing`, do not claim direct write access.
 
+If the user asks about wallet-like identity, signing authority, capability authority, receipts, block headers, or future ZET interaction identity, run the read-only wallet readiness preview:
+
+```bash
+archive profile-wallet <archive-root> --profile <profile-id-or-label> --dry-run --format json
+```
+
+Treat the result as concept/readiness context only. v0.2.25 does not generate private keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
+
 Before creating drafts, running mint checks, or asking for mint approval, then run:
 
 ```bash
@@ -80,6 +88,7 @@ Continue only when:
 Prefer these actions:
 
 - run create-draft dry-run,
+- run profile-wallet dry-run when wallet-like identity or future signing authority is relevant,
 - run source-intake dry-run before drafting from source/objet material,
 - run block-header dry-run when the user asks about block/header structure,
 - create approved draft in inbox,
@@ -96,6 +105,7 @@ Do not:
 - set `redact_local_paths: false` or use `--no-redact-local-paths` unless the human explicitly asks for trusted local debugging,
 - assume the current/default profile is the target when the user names another profile,
 - register profiles or tokens through MCP,
+- generate keys, sign data, register wallets, store seed phrases, or store wallet secrets,
 - scan the whole disk,
 - read file bodies, hash files, copy, upload, import, OCR, transcribe, extract, or call provider APIs during source intake,
 - treat a source-intake plan as permission to capture/import/upload the source,

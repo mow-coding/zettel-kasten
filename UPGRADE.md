@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.24` | current public pre-release | `wom-kit/docs/releases/v0.2.24.md` |
+| `v0.2.25` | current public pre-release | `wom-kit/docs/releases/v0.2.25.md` |
+| `v0.2.24` | superseded public pre-release | `wom-kit/docs/releases/v0.2.24.md` |
 | `v0.2.23` | superseded public pre-release | `wom-kit/docs/releases/v0.2.23.md` |
 | `v0.2.22` | superseded public pre-release | `wom-kit/docs/releases/v0.2.22.md` |
 | `v0.2.21` | superseded public pre-release | `wom-kit/docs/releases/v0.2.21.md` |
@@ -51,6 +52,23 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.24` To `v0.2.25`
+
+This is a compatible profile wallet concept baseline.
+
+What changed:
+
+- added `archive profile-wallet <archive-root> --profile <profile-id-or-label> --dry-run --format json`,
+- added read-only MCP `wom_profile_wallet_check`,
+- documented optional public-safe profile registry fields under `node` and `wallet`,
+- documented the model: WOM profile is the selectable human-facing profile, WOM node is the subject/principal, and the future WOM wallet layer can support signing/capability proofs.
+
+No private archive migration is required.
+
+Existing profile registries remain valid. The optional `node` and `wallet` fields must contain public placeholder metadata only.
+
+This release does not generate private keys, store seed phrases, store wallet secrets, sign data, call blockchain/provider APIs, create wallets, register wallets, implement WOM coin, NFT-like access, payments, staking, consensus, ledger, or P2P transport.
 
 ## From `v0.2.23` To `v0.2.24`
 

@@ -67,6 +67,9 @@ wom_profile_list
 wom_profile_resolve
   Resolve a requested WOM profile by exact profile id, label, or alias before runtime-context or draft work. This never registers profiles or stores tokens.
 
+wom_profile_wallet_check
+  Preview wallet-ready WOM profile/node identity metadata. This is read-only and never generates keys, signs data, registers wallets, stores secrets, or calls blockchain/provider APIs.
+
 archive_doctor
   Inspect archive health and policy readiness.
 
@@ -161,7 +164,7 @@ ownership_transfer_check
 ## Safety Defaults
 
 - The server is local stdio only.
-- `wom_profile_list` and `wom_profile_resolve` are read-only. They never register profiles, store tokens, scan the disk, or write files. They redact local paths unless `AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1` is set on the MCP server and the caller explicitly disables redaction.
+- `wom_profile_list`, `wom_profile_resolve`, and `wom_profile_wallet_check` are read-only. They never register profiles, store tokens, generate keys, sign data, register wallets, scan the disk, or write files. They redact local paths unless `AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1` is set on the MCP server and the caller explicitly disables redaction.
 - `create_draft_zettel` dry-run writes nothing. Normal mode writes only to `inbox/`.
 - Profile-bound AI draft writes require `draft_approved_by` and `expected_body_sha256`. That approval scope is `inbox_draft_only`; minting remains a separate CLI approval step.
 - `archive_init` refuses non-empty target folders.

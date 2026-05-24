@@ -4,6 +4,24 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.25 - 2026-05-25
+
+Profile wallet concept baseline.
+
+Added:
+
+- `archive profile-wallet <archive-root> --profile <profile-id-or-label> --dry-run --format json`,
+- read-only MCP `wom_profile_wallet_check`,
+- optional public-safe `node` and `wallet` metadata fields for WOM profile registry entries,
+- documentation for the wallet-ready identity model: WOM profile selects the human-facing profile, WOM node is the subject/principal, and the future WOM wallet layer can sign capability/proof actions.
+
+Compatibility:
+
+- no private archive migration is required,
+- existing profile registry entries remain valid,
+- no private key generation, real cryptographic signing, blockchain API call, provider API call, wallet registration, token storage, seed phrase storage, payment layer, staking layer, consensus, ledger, or P2P transport is implemented,
+- WOM profile is not a crypto wallet in v0.2.25; it is a wallet-ready identity model.
+
 ## v0.2.24 - 2026-05-25
 
 Block header preview patch.

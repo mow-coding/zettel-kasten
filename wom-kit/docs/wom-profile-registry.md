@@ -1,6 +1,6 @@
 # WOM Profile Registry
 
-Status: v0.2.17 dry-run baseline
+Status: v0.2.25 wallet-ready identity baseline
 
 ## Purpose
 
@@ -21,6 +21,7 @@ CLI:
 ```bash
 archive profile-list --registry <path> --format json
 archive profile-resolve --registry <path> --target <query> --format json
+archive profile-wallet <archive-root> --profile <profile-id-or-label> --dry-run --format json
 ```
 
 MCP:
@@ -28,9 +29,12 @@ MCP:
 ```text
 wom_profile_list
 wom_profile_resolve
+wom_profile_wallet_check
 ```
 
-Both commands are read-only. They do not scan the whole disk, write files, register profiles, register tokens, or call provider APIs.
+The profile list and resolve commands are read-only. They do not scan the whole disk, write files, register profiles, register tokens, or call provider APIs.
+
+`profile-wallet` and `wom_profile_wallet_check` are also read-only. They preview wallet-ready identity metadata only; they do not generate private keys, sign data, register wallets, store seed phrases, store wallet secrets, call blockchain APIs, or call provider APIs.
 
 ## Registry Shape
 
@@ -49,6 +53,16 @@ profiles:
     archive_root: <local-private-path>/personal-archive
     operator_id: person:me
     authority_mode: owner_operator
+    node:
+      node_id: node:person:example
+      node_kind: person
+      display_label: Example Person
+    wallet:
+      wallet_id: wallet:local:example
+      fingerprint: wom-fp-example
+      custody: local_device
+      signing_status: placeholder
+      signer_ref: signer:local-placeholder
     token:
       state: present
       token_ref: local-keyring:wom/profile/example-personal
@@ -57,6 +71,39 @@ profiles:
 The registry may contain `token.state` and `token_ref`.
 
 It must not contain raw token values.
+
+The optional `node` and `wallet` sections are public-safe metadata only.
+
+Allowed `node.node_kind` values are:
+
+```text
+person
+organization
+team
+family
+project
+agent
+```
+
+Allowed `wallet.custody` values are:
+
+```text
+local_device
+os_keychain_future
+hardware_wallet_future
+multisig_future
+external_wallet_future
+```
+
+Allowed `wallet.signing_status` values are:
+
+```text
+not_configured
+placeholder
+future
+```
+
+These fields must not contain private keys, seed phrases, raw wallet addresses, payment credentials, raw provider URLs, local absolute paths, tokens, passwords, cookies, or OAuth refresh tokens.
 
 `v0.2.17` treats unsupported token fields, including names such as `value`, `token`, `secret`, `password`, `api_key`, `access_token`, `refresh_token`, and `private_key`, as blockers.
 
@@ -113,3 +160,5 @@ When it returns `token_missing`, the AI should ask the user whether to register 
 When it returns `ambiguous`, the AI should ask the user to choose a profile.
 
 When it returns `not_found`, the AI should suggest registering the profile or using a delegate flow.
+
+When `profile-wallet` returns `ok: true`, the AI may explain the profile's wallet readiness to the human operator, but it must not treat that preview as signing authority. Real key custody and signing are future work.

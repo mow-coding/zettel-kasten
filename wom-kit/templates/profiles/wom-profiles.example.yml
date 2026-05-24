@@ -32,3 +32,27 @@ profiles:
     authority_mode: draft_only
     token:
       state: missing
+
+  - profile_id: profile:person:wallet-ready-example
+    label: Wallet-ready example profile
+    aliases:
+      - wallet-ready-example
+      - wallet ready
+    node_id: node:person:example
+    archive_id: archive:personal:wallet-ready-example
+    archive_type: personal
+    archive_root: <local-private-path>/wallet-ready-example
+    operator_id: person:example
+    authority_mode: draft_only
+    node:
+      node_id: node:person:example
+      node_kind: person
+      display_label: Example Person
+    wallet:
+      wallet_id: wallet:local:example
+      fingerprint: wom-fp-example
+      custody: local_device
+      signing_status: placeholder
+      signer_ref: signer:local-placeholder
+    token:
+      state: missing

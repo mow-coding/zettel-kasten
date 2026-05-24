@@ -7,6 +7,8 @@ Commands:
           List read-only WOM profile registry entries.
   profile-resolve
           Resolve a requested WOM profile before runtime-context.
+  profile-wallet
+          Preview wallet-ready identity metadata for a resolved WOM profile.
   runtime-context
           Print read-only AI runtime context for a mounted archive.
   github-repo
@@ -1296,6 +1298,26 @@ def command_profile_resolve(args: argparse.Namespace) -> int:
             target=args.target,
             current_profile=args.current_profile,
             strict=args.strict,
+            redact_local_paths=args.redact_local_paths,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_json(result)
+    return 0 if result["ok"] else 1
+
+
+def command_profile_wallet(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("profile-wallet is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.profile_wallet_preview(
+            Path(args.archive_root),
+            profile=args.profile,
+            registry_path=Path(args.registry) if args.registry else None,
+            dry_run=args.dry_run,
             redact_local_paths=args.redact_local_paths,
         )
     except archive_services.ArchiveServiceError as exc:
@@ -3280,6 +3302,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     profile_resolve_parser.add_argument("--format", choices=["json"], default="json", help="Output format.")
     profile_resolve_parser.set_defaults(func=command_profile_resolve)
+
+    profile_wallet_parser = subcommands.add_parser(
+        "profile-wallet",
+        help="Preview wallet-ready identity metadata for a resolved WOM profile.",
+    )
+    profile_wallet_parser.add_argument("archive_root", help="Archive root used for context.")
+    profile_wallet_parser.add_argument("--profile", required=True, help="Requested profile id, label, or alias.")
+    profile_wallet_parser.add_argument("--registry", help="Optional path to the local WOM profile registry YAML file.")
+    profile_wallet_parser.add_argument("--dry-run", action="store_true", help="Preview only; never write files or generate keys.")
+    profile_wallet_parser.add_argument(
+        "--redact-local-paths",
+        dest="redact_local_paths",
+        action="store_true",
+        default=True,
+        help="Redact registry and archive local paths. This is the default.",
+    )
+    profile_wallet_parser.add_argument(
+        "--no-redact-local-paths",
+        dest="redact_local_paths",
+        action="store_false",
+        help="Include local paths for trusted local debugging.",
+    )
+    profile_wallet_parser.add_argument("--format", choices=["json"], default="json", help="Output format.")
+    profile_wallet_parser.set_defaults(func=command_profile_wallet)
 
     runtime_context = subcommands.add_parser(
         "runtime-context",

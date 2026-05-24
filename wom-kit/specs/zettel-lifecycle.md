@@ -236,6 +236,18 @@ Safe order:
 zet -> header -> block -> receipt -> attestations -> anchors -> possible token layer later
 ```
 
+## Profile Wallet Readiness
+
+v0.2.25 records the profile wallet concept without adding real wallet security primitives.
+
+```text
+WOM profile -> human-facing selectable profile
+WOM node    -> subject/principal in the WOM network
+WOM wallet layer -> future signing/capability layer
+```
+
+The future wallet layer may become relevant to mint, delegate, attest, anchor, receipts, block headers, and ZET sharing. In v0.2.25, `archive profile-wallet --dry-run` is read-only. It writes nothing, generates no private keys, performs no signing, stores no seed phrases or wallet secrets, calls no blockchain/provider APIs, and grants no mint authority.
+
 ## Promotion Rules
 
 A zettel may be promoted from `inbox/` to `zettels/` only when the user explicitly approves.

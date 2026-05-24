@@ -213,6 +213,32 @@ class ArchiveCliTests(unittest.TestCase):
             },
         ]
 
+    def wallet_ready_profile(self, archive_root: str = "<local-private-path>/wallet-ready") -> dict:
+        return {
+            "profile_id": "profile:person:wallet-ready-example",
+            "label": "Wallet-ready example profile",
+            "aliases": ["wallet-ready-example", "wallet ready"],
+            "node_id": "node:person:example",
+            "archive_id": "archive:personal:test",
+            "archive_type": "personal",
+            "archive_root": archive_root,
+            "operator_id": "person:example",
+            "authority_mode": "draft_only",
+            "node": {
+                "node_id": "node:person:example",
+                "node_kind": "person",
+                "display_label": "Example Person",
+            },
+            "wallet": {
+                "wallet_id": "wallet:local:example",
+                "fingerprint": "wom-fp-example",
+                "custody": "local_device",
+                "signing_status": "placeholder",
+                "signer_ref": "signer:local-placeholder",
+            },
+            "token": {"state": "missing"},
+        }
+
     def snapshot_archive_files(self, archive_root: Path) -> dict[str, str]:
         snapshot: dict[str, str] = {}
         for path in sorted(item for item in archive_root.rglob("*") if item.is_file()):
@@ -291,10 +317,11 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(result["lifecycle_action"], "profile_list")
         self.assertEqual(result["registry_path"], "<local-path-redacted>")
         self.assertEqual(result["default_profile"], "profile:personal:me")
-        self.assertEqual(len(result["profiles"]), 2)
+        self.assertEqual(len(result["profiles"]), 3)
         self.assertEqual(result["profiles"][0]["archive_root"], "<local-path-redacted>")
         self.assertEqual(result["profiles"][0]["token_state"], "present")
         self.assertEqual(result["profiles"][1]["token_state"], "missing")
+        self.assertEqual(result["profiles"][2]["profile_id"], "profile:person:wallet-ready-example")
         self.assertNotIn("token_ref", json.dumps(result))
 
     def test_profile_resolve_exact_profile_id_match_succeeds(self) -> None:
@@ -440,6 +467,266 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(list_code, 0, list_output)
             self.assertEqual(resolve_code, 0, resolve_output)
             self.assertEqual(after, before)
+
+    def test_profile_wallet_preview_returns_wallet_fields_for_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root)
+            self.assertEqual(init_code, 0, init_output)
+            registry = self.write_profile_registry(
+                Path(tmp) / "profiles.yml",
+                [self.wallet_ready_profile(str(archive_root.resolve()))],
+                default_profile="profile:person:wallet-ready-example",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "profile-wallet",
+                    str(archive_root),
+                    "--registry",
+                    str(registry),
+                    "--profile",
+                    "profile:person:wallet-ready-example",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "profile_wallet_preview")
+            self.assertEqual(result["profile"]["profile_id"], "profile:person:wallet-ready-example")
+            self.assertEqual(result["node_identity_preview"]["node_id"], "node:person:example")
+            self.assertEqual(result["wallet_identity_preview"]["wallet_id"], "wallet:local:example")
+            self.assertEqual(result["wallet_identity_preview"]["signing_status"], "placeholder")
+            self.assertFalse(result["signing_readiness"]["real_signing_available"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn(str(archive_root.resolve()), output)
+
+    def test_profile_wallet_preview_legacy_profile_without_wallet_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, archive_id="archive:personal:me")
+            self.assertEqual(init_code, 0, init_output)
+            registry = self.write_profile_registry(
+                Path(tmp) / "profiles.yml",
+                self.example_profiles(str(archive_root.resolve())),
+            )
+
+            code, output = self.run_cli(
+                [
+                    "profile-wallet",
+                    str(archive_root),
+                    "--registry",
+                    str(registry),
+                    "--profile",
+                    "personal",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["wallet_identity_preview"]["available"], False)
+            self.assertEqual(result["signing_readiness"]["status"], "not_configured")
+            self.assertEqual(result["node_identity_preview"]["node_kind"], "person")
+
+    def test_profile_wallet_preview_writes_no_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root)
+            self.assertEqual(init_code, 0, init_output)
+            registry = self.write_profile_registry(
+                Path(tmp) / "profiles.yml",
+                [self.wallet_ready_profile(str(archive_root.resolve()))],
+                default_profile="profile:person:wallet-ready-example",
+            )
+            before = {
+                path.relative_to(tmp).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(Path(tmp).rglob("*"))
+                if path.is_file()
+            }
+
+            code, output = self.run_cli(
+                [
+                    "profile-wallet",
+                    str(archive_root),
+                    "--registry",
+                    str(registry),
+                    "--profile",
+                    "Wallet-ready example profile",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            after = {
+                path.relative_to(tmp).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(Path(tmp).rglob("*"))
+                if path.is_file()
+            }
+            self.assertEqual(code, 0, output)
+            self.assertEqual(after, before)
+
+    def test_profile_wallet_unknown_profile_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root)
+            self.assertEqual(init_code, 0, init_output)
+            registry = self.write_profile_registry(Path(tmp) / "profiles.yml", self.example_profiles())
+
+            code, output = self.run_cli(
+                [
+                    "profile-wallet",
+                    str(archive_root),
+                    "--registry",
+                    str(registry),
+                    "--profile",
+                    "missing-profile",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["resolution_state"], "not_found")
+            self.assertTrue(any("not found" in item for item in result["blockers"]))
+
+    def test_profile_wallet_requires_dry_run_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root)
+            self.assertEqual(init_code, 0, init_output)
+            registry = self.write_profile_registry(
+                Path(tmp) / "profiles.yml",
+                [self.wallet_ready_profile(str(archive_root.resolve()))],
+                default_profile="profile:person:wallet-ready-example",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "profile-wallet",
+                    str(archive_root),
+                    "--registry",
+                    str(registry),
+                    "--profile",
+                    "wallet-ready-example",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1, output)
+            self.assertIn("requires --dry-run", output)
+
+    def test_profile_wallet_blocks_secret_fields_in_wallet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root)
+            self.assertEqual(init_code, 0, init_output)
+            private_key_field = "private" + "_key"
+            cases = [
+                (private_key_field, "placeholder-key-material-must-not-be-stored"),
+                ("seed", "placeholder-recovery-words-must-not-be-stored"),
+            ]
+
+            for key, value in cases:
+                with self.subTest(key=key):
+                    profile = self.wallet_ready_profile(str(archive_root.resolve()))
+                    profile["wallet"][key] = value
+                    registry = self.write_profile_registry(
+                        Path(tmp) / f"profiles-{key}.yml",
+                        [profile],
+                        default_profile="profile:person:wallet-ready-example",
+                    )
+                    code, output = self.run_cli(
+                        [
+                            "profile-wallet",
+                            str(archive_root),
+                            "--registry",
+                            str(registry),
+                            "--profile",
+                            "wallet-ready-example",
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    blockers = "\n".join(result["blockers"])
+                    self.assertIn(key, blockers)
+                    self.assertIn("secret-like field", blockers)
+
+    def test_profile_wallet_blocks_raw_wallet_address_in_wallet_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root)
+            self.assertEqual(init_code, 0, init_output)
+            profile = self.wallet_ready_profile(str(archive_root.resolve()))
+            profile["wallet"]["wallet_id"] = "0x" + "a" * 40
+            registry = self.write_profile_registry(
+                Path(tmp) / "profiles.yml",
+                [profile],
+                default_profile="profile:person:wallet-ready-example",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "profile-wallet",
+                    str(archive_root),
+                    "--registry",
+                    str(registry),
+                    "--profile",
+                    "wallet-ready-example",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("wallet address" in item for item in result["blockers"]))
+
+    def test_profile_wallet_optional_fields_do_not_break_profile_list_and_resolve(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self.write_profile_registry(
+                Path(tmp) / "profiles.yml",
+                [self.wallet_ready_profile()],
+                default_profile="profile:person:wallet-ready-example",
+            )
+
+            list_code, list_output = self.run_cli(["profile-list", "--registry", str(registry), "--format", "json"])
+            resolve_code, resolve_output = self.run_cli(
+                [
+                    "profile-resolve",
+                    "--registry",
+                    str(registry),
+                    "--target",
+                    "wallet-ready-example",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(list_code, 0, list_output)
+            self.assertEqual(resolve_code, 0, resolve_output)
+            self.assertEqual(json.loads(list_output)["profiles"][0]["profile_id"], "profile:person:wallet-ready-example")
+            self.assertEqual(json.loads(resolve_output)["selected_profile"]["profile_id"], "profile:person:wallet-ready-example")
 
     def test_profile_registry_version_mismatch_blocks_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

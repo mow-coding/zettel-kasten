@@ -197,6 +197,7 @@ class McpServerTests(unittest.TestCase):
             tool_names = {tool["name"] for tool in tools["result"]["tools"]}
             self.assertIn("wom_profile_list", tool_names)
             self.assertIn("wom_profile_resolve", tool_names)
+            self.assertIn("wom_profile_wallet_check", tool_names)
             self.assertIn("archive_doctor", tool_names)
             self.assertIn("archive_runtime_context", tool_names)
             self.assertIn("github_repository_setup_plan", tool_names)
@@ -246,6 +247,13 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("wom_profile_register", tool_names)
             self.assertNotIn("wom_profile_apply", tool_names)
             self.assertNotIn("wom_profile_token_register", tool_names)
+            self.assertNotIn("wom_profile_wallet_apply", tool_names)
+            self.assertNotIn("wom_profile_wallet_register", tool_names)
+            self.assertNotIn("wom_profile_wallet_sign", tool_names)
+            self.assertNotIn("wallet_apply", tool_names)
+            self.assertNotIn("wallet_register", tool_names)
+            self.assertNotIn("wallet_sign", tool_names)
+            self.assertNotIn("wallet_keygen", tool_names)
             self.assertNotIn("profile_token_register", tool_names)
             self.assertNotIn("archive_runtime_context_apply", tool_names)
             self.assertNotIn("github_repository_setup_apply", tool_names)
@@ -427,6 +435,89 @@ class McpServerTests(unittest.TestCase):
                 structured = result["structuredContent"]
                 self.assertFalse(structured["redaction"]["local_paths_redacted"])
                 self.assertEqual(structured["target_archive_context_preview"]["archive_root"], archive_root)
+            finally:
+                self.stop_server(process)
+
+    def test_wom_profile_wallet_check_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = self.copy_fake_archive(tmp_root / "archive")
+            registry = self.write_profile_registry(tmp_root / "profiles.yml", str(archive_root.resolve()))
+            before = {
+                path.relative_to(tmp_root).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(tmp_root.rglob("*"))
+                if path.is_file()
+            }
+            process = self.start_server()
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "wom_profile_wallet_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "registry": str(registry),
+                                "profile": "personal",
+                                "dry_run": True,
+                                "redact_local_paths": False,
+                            },
+                        },
+                    },
+                )
+
+                result = response["result"]
+                structured = result["structuredContent"]
+                self.assertFalse(result["isError"])
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "profile_wallet_preview")
+                self.assertTrue(structured["redaction"]["local_paths_redacted"])
+                self.assertFalse(structured["signing_readiness"]["real_signing_available"])
+                self.assertNotIn(str(archive_root.resolve()), json.dumps(structured))
+                self.assertTrue(
+                    any("AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1" in warning for warning in structured["warnings"])
+                )
+            finally:
+                self.stop_server(process)
+
+            after = {
+                path.relative_to(tmp_root).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(tmp_root.rglob("*"))
+                if path.is_file()
+            }
+            self.assertEqual(after, before)
+
+    def test_wom_profile_wallet_check_rejects_non_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = self.copy_fake_archive(tmp_root / "archive")
+            registry = self.write_profile_registry(tmp_root / "profiles.yml", str(archive_root.resolve()))
+            process = self.start_server()
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "wom_profile_wallet_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "registry": str(registry),
+                                "profile": "personal",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+
+                result = response["result"]
+                self.assertTrue(result["isError"])
+                self.assertIn("dry-run only", result["structuredContent"]["error"])
             finally:
                 self.stop_server(process)
 
