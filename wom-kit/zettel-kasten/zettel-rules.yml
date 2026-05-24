@@ -1,0 +1,203 @@
+schema_version: wom-kit/zettel-kasten-rules/v0.2-draft
+zettel_kasten_id: zettel-kasten:wom-kit:base
+status: draft
+description: >
+  Machine-readable draft rules for zettel writing, review, promotion, revision,
+  and retirement. These rules complement specs/zettel-lifecycle.md.
+
+paths:
+  draft_inbox: inbox/
+  canonical_zettels: zettels/
+  workbench: workbench/
+  receipts: receipts/
+
+note_kinds:
+  - id: fleeting_capture
+    canonical_allowed: false
+    default_path: inbox/
+    description: Quick capture or raw AI draft.
+
+  - id: source_note
+    canonical_allowed: true
+    default_path: zettels/
+    description: Note about a source such as a book, web page, scan, PDF, video, or original object.
+
+  - id: permanent_note
+    canonical_allowed: true
+    default_path: zettels/
+    description: Self-contained thought or explanation intended to remain useful later.
+
+  - id: record_note
+    canonical_allowed: true
+    default_path: zettels/
+    description: Durable record of an event, document, school record, health record, or life fact.
+
+  - id: decision_note
+    canonical_allowed: true
+    default_path: zettels/
+    description: Compact decision record with context and consequences.
+
+  - id: meeting_minutes
+    canonical_allowed: true
+    default_path: meeting-minutes/
+    description: Chronological notes from a substantial conversation or meeting.
+
+  - id: object_summary
+    canonical_allowed: true
+    default_path: zettels/
+    description: Human-readable summary of one or more original file objects.
+
+  - id: project_note
+    canonical_allowed: true
+    default_path: zettels/
+    description: Working note tied to an active project.
+
+lifecycle_stages:
+  - captured
+  - draft
+  - promotion_candidate
+  - promoted
+  - revised
+  - superseded
+  - archived
+  - redacted
+
+draft_rules:
+  default_status: draft
+  default_path: inbox/
+  ai_may_create_without_human_approval: true
+  required_frontmatter:
+    - id
+    - title
+    - created_at
+    - updated_at
+    - archive_id
+    - status
+    - facets
+    - assets
+    - edges
+    - provenance
+    - visibility
+  recommended_frontmatter:
+    - kind
+    - promotion
+  allowed_draft_traits:
+    - rough_language
+    - uncertainty
+    - todo_markers
+    - unresolved_questions
+    - multiple_ideas
+    - temporary_tags
+  forbidden_draft_traits:
+    - committed_provider_urls
+    - long_lived_secrets
+    - private_source_leakage
+    - fake_source_certainty
+
+minting_rules: &v029_minting_rules
+  default_target_status: canonical
+  default_target_path: zettels/
+  requires_human_approval: true
+  requires_checklist: true
+  preserves_draft_reference: true
+  update_fields:
+    - status
+    - updated_at
+    - mint.stage
+    - mint.reviewed_by
+    - mint.minted_at
+    - mint.receipt_path
+    - mint.draft_snapshot_path
+    - promotion.stage
+    - promotion.reviewed_by
+    - promotion.reviewed_at
+  checklist:
+    - id: one_clear_purpose
+      question: Does this zettel have one clear purpose?
+      required: true
+    - id: understandable_title
+      question: Can the title be understood outside the original chat?
+      required: true
+    - id: future_self_contained
+      question: Will the body make sense months later?
+      required: true
+    - id: source_clarity
+      question: Are claims sourced or marked as personal interpretation?
+      required: true
+    - id: object_id_only
+      question: Are original files referenced by object_id instead of provider URLs?
+      required: true
+    - id: stable_facets
+      question: Are facets stable enough for retrieval?
+      required: true
+    - id: allowed_edges
+      question: Do edges use allowed link types?
+      required: true
+    - id: explicit_visibility
+      question: Are visibility and source visibility explicit?
+      required: true
+    - id: provenance_present
+      question: Does provenance explain where this zettel came from?
+      required: true
+    - id: sensitive_content_reviewed
+      question: Has sensitive content been reviewed?
+      required: true
+
+promotion_rules:
+  <<: *v029_minting_rules
+  legacy_compatibility: true
+
+split_rules:
+  idea_note_rule: one idea per permanent_note unless a clear reason is recorded.
+  record_note_rule: one event, object, meeting, decision, or source per record_note.
+  split_when:
+    - unrelated_ideas
+    - mixed_private_and_shareable_content
+    - source_summary_and_private_conclusion_conflict
+    - incompatible_visibility_scopes
+    - too_many_unresolved_questions_for_canonical_memory
+  do_not_split_when:
+    - split_would_make_context_harder_to_understand
+    - note_is_a_single_event_record
+    - note_is_a_single_meeting_minutes_record
+    - note_is_a_single_original_object_summary
+
+canonical_body_rules:
+  should_be:
+    - self_contained
+    - plainly_written
+    - short_enough_to_reuse
+    - explicit_about_uncertainty
+    - linked_to_related_records
+    - clear_about_sources
+  recommended_sections:
+    - title
+    - main_note
+    - context
+    - evidence_or_source
+    - links
+  sections_are_required: false
+
+revision_rules:
+  small_edits_may_update_in_place:
+    - typo_fix
+    - formatting_fix
+    - obvious_metadata_correction
+    - add_missing_object_id
+  meaning_changing_edits_require:
+    - receipt_or_superseding_zettel
+  create_new_zettel_when:
+    - conclusion_changes
+    - old_note_is_historically_important
+    - visibility_boundary_changes
+    - note_is_used_by_workpack_or_other_archive
+    - edit_would_hide_mistake_or_decision_reversal
+
+ai_behavior:
+  - Write drafts first unless the user explicitly asks for canonical minting.
+  - Treat minting as a human decision, with promotion kept only as a legacy compatibility layer.
+  - Preserve user intent, doubts, and corrections.
+  - Suggest splitting drafts with multiple purposes.
+  - Prefer typed edges over vague links.
+  - Preserve private sources when deriving shareable zettels.
+  - Record substantial project work in meeting minutes and decision logs.

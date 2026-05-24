@@ -33,9 +33,9 @@ raw-data/
 /*-zettel-kasten-mapping-*.md
 
 # Public release safety: portfolio/private strategy drafts are not part of the showcase repo.
-/ai-archive-kit/specs/*context-brief*.md
-/ai-archive-kit/specs/local-*.md
-/ai-archive-kit/specs/portfolio-operating-manual-*.md
+/wom-kit/specs/*context-brief*.md
+/wom-kit/specs/local-*.md
+/wom-kit/specs/portfolio-operating-manual-*.md
 
 # Python/cache/build artifacts
 __pycache__/

@@ -96,21 +96,21 @@ The archive should never silently rewrite a user's memory.
 Current public baseline:
 
 ```text
-v0.2.18 public showcase baseline
+v0.2.19 public showcase baseline
 ```
 
 This baseline is for early review and prototyping. It is not yet a stable `v1.0.0` protocol.
 
 ## 8. Current Internal Package Version
 
-The current `ai-archive-kit` package metadata is:
+The current `wom-kit` package metadata is:
 
 ```text
-0.2.18
+0.2.19
 ```
 
 Therefore the first public compatibility tag for this repository should be:
 
 ```text
-v0.2.18
+v0.2.19
 ```

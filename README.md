@@ -2,7 +2,7 @@
 
 > Widesider of Modernity: a local-first, AI-native, Web3-oriented archive and communication system for widening the horizon of human memory.
 
-[한국어 README](README.ko.md) · [Documentation Map](ai-archive-kit/docs/public-documentation-map.md) · [Upgrade Guide](UPGRADE.md) · [Changelog](CHANGELOG.md) · [Release Notes](ai-archive-kit/docs/releases/) · [Security](SECURITY.md)
+[한국어 README](README.ko.md) · [Documentation Map](wom-kit/docs/public-documentation-map.md) · [Upgrade Guide](UPGRADE.md) · [Changelog](CHANGELOG.md) · [Release Notes](wom-kit/docs/releases/) · [Security](SECURITY.md)
 
 `WOM` stands for `Widesider of Modernity`.
 
@@ -23,7 +23,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.18 pre-release
+v0.2.19 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -44,6 +44,7 @@ What exists today:
 - read-only `runtime-context` output so terminal-capable AI runtimes can confirm the active archive before drafting, dry-runs, or mint approval requests.
 - read-only profile registry resolution so AI runtimes resolve the requested target profile before assuming the default archive.
 - profile-aware `create-draft --dry-run` so AI runtimes preview inbox drafts and replay approved draft writes without minting.
+- current local implementation/tooling lives in `wom-kit/` and imports as `wom_kit`.
 
 What does not exist yet:
 
@@ -69,14 +70,14 @@ In other words:
 
 The system starts from the archive node, not from a social app.
 
-See [Naming And Terminology](ai-archive-kit/docs/concepts/naming-and-terminology.md) for the current naming freeze.
+See [Naming And Terminology](wom-kit/docs/concepts/naming-and-terminology.md) for the current naming freeze.
 
 For the full design philosophy, including the human data primitive model, AX rationale, and Web3-like `ZET` sharing model, see:
 
-- [Foundational Product Whitepaper](ai-archive-kit/docs/concepts/foundational-product-whitepaper.md)
-- [Product Philosophy](ai-archive-kit/docs/concepts/product-philosophy.md)
-- [WOM Safe HTML Profile](ai-archive-kit/docs/concepts/wom-safe-html-profile.md)
-- [Public Documentation Map](ai-archive-kit/docs/public-documentation-map.md)
+- [Foundational Product Whitepaper](wom-kit/docs/concepts/foundational-product-whitepaper.md)
+- [Product Philosophy](wom-kit/docs/concepts/product-philosophy.md)
+- [WOM Safe HTML Profile](wom-kit/docs/concepts/wom-safe-html-profile.md)
+- [Public Documentation Map](wom-kit/docs/public-documentation-map.md)
 
 The public project records are intentionally separated into:
 
@@ -93,7 +94,7 @@ A `zet` is always text.
 
 It is a document created by a human, or drafted by AI under human supervision, then minted into a private archive.
 
-In v0.2, zets remain Markdown-compatible for authoring and import compatibility. The long-term canonical/interchange/rendering target is the [WOM Safe HTML Profile](ai-archive-kit/docs/concepts/wom-safe-html-profile.md), not arbitrary HTML.
+In v0.2, zets remain Markdown-compatible for authoring and import compatibility. The long-term canonical/interchange/rendering target is the [WOM Safe HTML Profile](wom-kit/docs/concepts/wom-safe-html-profile.md), not arbitrary HTML.
 
 Minting means:
 
@@ -151,7 +152,7 @@ zets and metadata     -> Git repository
 search text           -> SQLite/search index
 ```
 
-See [Source Object Storage Policy](ai-archive-kit/docs/source-object-storage-policy.md).
+See [Source Object Storage Policy](wom-kit/docs/source-object-storage-policy.md).
 
 ## Text Provenance
 
@@ -170,7 +171,7 @@ L5 minted zet
 
 OCR and AI transcription are useful, but they are model-dependent derived records. They should keep source object id, derivation method, tool/model version, confidence when available, and review status.
 
-See [Text Provenance Hierarchy](ai-archive-kit/docs/text-provenance-hierarchy.md).
+See [Text Provenance Hierarchy](wom-kit/docs/text-provenance-hierarchy.md).
 
 ## Versioning
 
@@ -179,6 +180,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.19
 v0.2.18
 v0.2.17
 v0.2.16
@@ -199,7 +201,7 @@ See [Versioning](VERSIONING.md) and [Upgrade Guide](UPGRADE.md).
 ## Repository Layout
 
 ```text
-ai-archive-kit/
+wom-kit/
   specs/        product and protocol specifications
   docs/         setup, security, onboarding, release, and operating notes
   plans/        implementation plans and public-safe work logs
@@ -214,17 +216,17 @@ ai-archive-kit/
 
 The public documentation is organized by purpose:
 
-- product blueprint / design philosophy: [Documentation Map](ai-archive-kit/docs/public-documentation-map.md)
-- implementation reference research: [Implementation Research](ai-archive-kit/specs/zettelkasten-zet-implementation-research.md)
-- implementation plans: [Plans Directory](ai-archive-kit/plans/)
-- work logs: [Work Logs](ai-archive-kit/plans/)
+- product blueprint / design philosophy: [Documentation Map](wom-kit/docs/public-documentation-map.md)
+- implementation reference research: [Implementation Research](wom-kit/specs/zettelkasten-zet-implementation-research.md)
+- implementation plans: [Plans Directory](wom-kit/plans/)
+- work logs: [Work Logs](wom-kit/plans/)
 
-Start with [Public Documentation Map](ai-archive-kit/docs/public-documentation-map.md) if you want to understand the project before reading code.
+Start with [Public Documentation Map](wom-kit/docs/public-documentation-map.md) if you want to understand the project before reading code.
 
 ## Quick Verification
 
 ```bash
-cd ai-archive-kit
+cd wom-kit
 python -m unittest discover -s tests
 python cli/archive.py doctor examples/fake-life-archive --strict
 ```
@@ -253,7 +255,7 @@ Do not commit:
 
 Real usage should happen in a private archive repository and separate object storage.
 
-See [Open Source Publication Model](ai-archive-kit/docs/open-source-publication-model.md).
+See [Open Source Publication Model](wom-kit/docs/open-source-publication-model.md).
 
 ## Authorship
 

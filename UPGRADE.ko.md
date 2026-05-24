@@ -28,23 +28,45 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.18` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.18.md` |
-| `v0.2.17` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.17.md` |
-| `v0.2.16` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.16.md` |
-| `v0.2.15` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.15.md` |
-| `v0.2.14` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.14.md` |
-| `v0.2.13` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.13.md` |
-| `v0.2.12` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.12.md` |
-| `v0.2.11` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.11.md` |
-| `v0.2.10` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.10.md` |
-| `v0.2.9` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.9.md` |
-| `v0.2.8` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.8.md` |
-| `v0.2.7` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.7.md` |
-| `v0.2.6` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.6.md` |
-| `v0.2.5` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.5.md` |
-| `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
-| `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
-| `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+| `v0.2.19` | current public pre-release | `wom-kit/docs/releases/v0.2.19.md` |
+| `v0.2.18` | superseded public pre-release | `wom-kit/docs/releases/v0.2.18.md` |
+| `v0.2.17` | superseded public pre-release | `wom-kit/docs/releases/v0.2.17.md` |
+| `v0.2.16` | superseded public pre-release | `wom-kit/docs/releases/v0.2.16.md` |
+| `v0.2.15` | superseded public pre-release | `wom-kit/docs/releases/v0.2.15.md` |
+| `v0.2.14` | superseded public pre-release | `wom-kit/docs/releases/v0.2.14.md` |
+| `v0.2.13` | superseded public pre-release | `wom-kit/docs/releases/v0.2.13.md` |
+| `v0.2.12` | superseded public pre-release | `wom-kit/docs/releases/v0.2.12.md` |
+| `v0.2.11` | superseded public pre-release | `wom-kit/docs/releases/v0.2.11.md` |
+| `v0.2.10` | superseded public pre-release | `wom-kit/docs/releases/v0.2.10.md` |
+| `v0.2.9` | superseded public pre-release | `wom-kit/docs/releases/v0.2.9.md` |
+| `v0.2.8` | superseded public pre-release | `wom-kit/docs/releases/v0.2.8.md` |
+| `v0.2.7` | superseded public pre-release | `wom-kit/docs/releases/v0.2.7.md` |
+| `v0.2.6` | superseded public pre-release | `wom-kit/docs/releases/v0.2.6.md` |
+| `v0.2.5` | superseded public pre-release | `wom-kit/docs/releases/v0.2.5.md` |
+| `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
+| `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
+| `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.18`에서 `v0.2.19`로
+
+이번 버전은 WOM-kit naming/path cleanup을 위한 호환 가능한 패치입니다.
+
+바뀐 점:
+
+- 구현 폴더가 `wom-kit/`으로 바뀌었습니다.
+- Python import package가 `wom_kit`으로 바뀌었습니다.
+- package metadata의 project name이 `wom-kit`이 되었습니다.
+- 기존 `archive`, `archive-mcp` console script는 compatibility surface로 유지됩니다.
+- 설치 환경에서는 선호 alias인 `wom`, `wom-mcp`도 사용할 수 있습니다.
+
+private archive migration은 필요 없습니다.
+
+현재 명령 예시는 새 path/package를 사용합니다:
+
+```bash
+python wom-kit/cli/archive.py doctor wom-kit/examples/fake-life-archive --strict
+python -m wom_kit.archive_cli doctor wom-kit/examples/fake-life-archive --strict
+```
 
 ## `v0.2.17`에서 `v0.2.18`로
 
@@ -78,7 +100,7 @@ git checkout v0.2.18
 - `archive profile-resolve --registry <path> --target <query> --format json` 명령이 추가되었습니다.
 - MCP에도 읽기 전용 `wom_profile_list`, `wom_profile_resolve` 도구가 추가되었습니다.
 - AI runtime이 runtime-context나 draft 작업 전에 요청된 profile을 먼저 확인할 수 있습니다.
-- 예시 registry는 `ai-archive-kit/templates/profiles/wom-profiles.example.yml`에 추가되었습니다.
+- 예시 registry는 `wom-kit/templates/profiles/wom-profiles.example.yml`에 추가되었습니다.
 
 private archive migration은 필요 없습니다.
 
@@ -336,7 +358,7 @@ new version -> updated rule set
 앞으로 공개 릴리스는 반드시 다음을 포함해야 합니다.
 
 - changelog entry,
-- `ai-archive-kit/docs/releases/` 아래 release note,
+- `wom-kit/docs/releases/` 아래 release note,
 - compatibility statement,
 - migration instructions,
 - test/doctor verification status,

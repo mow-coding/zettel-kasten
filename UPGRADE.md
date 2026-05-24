@@ -16,7 +16,7 @@ MAJOR upgrade -> breaking protocol/schema changes
 
 Before upgrading a real archive:
 
-1. Read the target version note in `ai-archive-kit/docs/releases/`.
+1. Read the target version note in `wom-kit/docs/releases/`.
 2. Back up the private archive repository and object manifests.
 3. Run `archive doctor --strict`.
 4. Run migration commands in dry-run mode first when available.
@@ -28,23 +28,45 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.18` | current public pre-release | `ai-archive-kit/docs/releases/v0.2.18.md` |
-| `v0.2.17` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.17.md` |
-| `v0.2.16` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.16.md` |
-| `v0.2.15` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.15.md` |
-| `v0.2.14` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.14.md` |
-| `v0.2.13` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.13.md` |
-| `v0.2.12` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.12.md` |
-| `v0.2.11` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.11.md` |
-| `v0.2.10` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.10.md` |
-| `v0.2.9` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.9.md` |
-| `v0.2.8` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.8.md` |
-| `v0.2.7` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.7.md` |
-| `v0.2.6` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.6.md` |
-| `v0.2.5` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.5.md` |
-| `v0.2.4` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.4.md` |
-| `v0.2.3` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.3.md` |
-| `v0.2.2` | superseded public pre-release | `ai-archive-kit/docs/releases/v0.2.2.md` |
+| `v0.2.19` | current public pre-release | `wom-kit/docs/releases/v0.2.19.md` |
+| `v0.2.18` | superseded public pre-release | `wom-kit/docs/releases/v0.2.18.md` |
+| `v0.2.17` | superseded public pre-release | `wom-kit/docs/releases/v0.2.17.md` |
+| `v0.2.16` | superseded public pre-release | `wom-kit/docs/releases/v0.2.16.md` |
+| `v0.2.15` | superseded public pre-release | `wom-kit/docs/releases/v0.2.15.md` |
+| `v0.2.14` | superseded public pre-release | `wom-kit/docs/releases/v0.2.14.md` |
+| `v0.2.13` | superseded public pre-release | `wom-kit/docs/releases/v0.2.13.md` |
+| `v0.2.12` | superseded public pre-release | `wom-kit/docs/releases/v0.2.12.md` |
+| `v0.2.11` | superseded public pre-release | `wom-kit/docs/releases/v0.2.11.md` |
+| `v0.2.10` | superseded public pre-release | `wom-kit/docs/releases/v0.2.10.md` |
+| `v0.2.9` | superseded public pre-release | `wom-kit/docs/releases/v0.2.9.md` |
+| `v0.2.8` | superseded public pre-release | `wom-kit/docs/releases/v0.2.8.md` |
+| `v0.2.7` | superseded public pre-release | `wom-kit/docs/releases/v0.2.7.md` |
+| `v0.2.6` | superseded public pre-release | `wom-kit/docs/releases/v0.2.6.md` |
+| `v0.2.5` | superseded public pre-release | `wom-kit/docs/releases/v0.2.5.md` |
+| `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
+| `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
+| `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.18` To `v0.2.19`
+
+This is a compatible WOM-kit naming and path cleanup patch.
+
+What changed:
+
+- the implementation folder is now `wom-kit/`,
+- the Python import package is now `wom_kit`,
+- package metadata now uses the project name `wom-kit`,
+- `archive` and `archive-mcp` remain available as compatibility console scripts,
+- preferred aliases `wom` and `wom-mcp` are available when installed from the package metadata.
+
+No private archive migration is required.
+
+Current commands should use the new paths:
+
+```bash
+python wom-kit/cli/archive.py doctor wom-kit/examples/fake-life-archive --strict
+python -m wom_kit.archive_cli doctor wom-kit/examples/fake-life-archive --strict
+```
 
 ## From `v0.2.17` To `v0.2.18`
 
@@ -78,7 +100,7 @@ What changed:
 - added `archive profile-resolve --registry <path> --target <query> --format json`,
 - added read-only MCP tools `wom_profile_list` and `wom_profile_resolve`,
 - added token-state aware profile resolution before runtime context and draft work,
-- added an example registry template at `ai-archive-kit/templates/profiles/wom-profiles.example.yml`.
+- added an example registry template at `wom-kit/templates/profiles/wom-profiles.example.yml`.
 
 No private archive migration is required.
 
@@ -336,7 +358,7 @@ Future sharing and collaboration features should make the sender/receiver versio
 Every future public release should include:
 
 - changelog entry,
-- release note under `ai-archive-kit/docs/releases/`,
+- release note under `wom-kit/docs/releases/`,
 - compatibility statement,
 - migration instructions,
 - test/doctor verification status,

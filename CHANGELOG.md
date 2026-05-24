@@ -4,6 +4,27 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.19 - 2026-05-25
+
+WOM-kit naming and path cleanup patch.
+
+Added:
+
+- renamed the implementation folder from the old placeholder path to `wom-kit/`,
+- renamed the Python import package to `wom_kit`,
+- changed package metadata to `wom-kit`,
+- kept compatibility console scripts `archive` and `archive-mcp`,
+- added preferred console script aliases `wom` and `wom-mcp`,
+- updated current-facing docs, CLI/MCP docs, schema titles, examples, tests, and wrapper scripts to use `WOM-kit`, `wom-kit`, and `wom_kit` by context.
+
+Compatibility:
+
+- repository root remains `zettel-kasten`,
+- command behavior is unchanged,
+- lifecycle commands remain available,
+- the old package/folder names are not current product names,
+- this release does not add source-intake, GitHub repo creation, provider sync, UI, or any change to WOM/zet/ZET philosophy.
+
 ## v0.2.18 - 2026-05-24
 
 Profile-aware draft zet creation dry-run patch.
@@ -115,7 +136,7 @@ Added:
 
 Compatibility:
 
-- `ai-archive-kit`, `zettels/`, `receipts/`, `workpacks/`, and existing schema names remain unchanged for v0.2 compatibility,
+- `wom-kit`, `zettels/`, `receipts/`, `workpacks/`, and existing schema names remain unchanged for v0.2 compatibility,
 - `promote`, `share`, `mint-zettel`, `pack`, and `import` remain available,
 - no private archive migration is required.
 
@@ -346,7 +367,7 @@ Public documentation and repository hygiene patch.
 Added:
 
 - `UPGRADE.md`,
-- per-version release notes under `ai-archive-kit/docs/releases/`,
+- per-version release notes under `wom-kit/docs/releases/`,
 - clearer version compatibility guidance,
 - neutralized public examples that looked too close to local/private context.
 

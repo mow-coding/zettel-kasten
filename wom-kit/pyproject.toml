@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wom-kit"
+version = "0.2.19"
+description = "WOM-kit local-first, AI-native CLI and MCP tooling for zet-centered WOM nodes."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "PyYAML>=6.0",
+]
+
+[project.scripts]
+archive = "wom_kit.archive_cli:main"
+archive-mcp = "wom_kit.mcp_server:main"
+wom = "wom_kit.archive_cli:main"
+wom-mcp = "wom_kit.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

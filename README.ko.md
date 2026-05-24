@@ -2,7 +2,7 @@
 
 > Widesider of Modernity: 인간의 기억 지평을 넓히기 위한 local-first, AI-native, Web3 지향 archive/communication system.
 
-[English README](README.md) · [공개 문서 지도](ai-archive-kit/docs/public-documentation-map.ko.md) · [업그레이드 가이드](UPGRADE.ko.md) · [변경 기록](CHANGELOG.md) · [릴리스 노트](ai-archive-kit/docs/releases/) · [보안 정책](SECURITY.md)
+[English README](README.md) · [공개 문서 지도](wom-kit/docs/public-documentation-map.ko.md) · [업그레이드 가이드](UPGRADE.ko.md) · [변경 기록](CHANGELOG.md) · [릴리스 노트](wom-kit/docs/releases/) · [보안 정책](SECURITY.md)
 
 `WOM`은 `Widesider of Modernity`의 약자입니다.
 
@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.2.18 pre-release
+v0.2.19 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -44,6 +44,7 @@ v0.2.18 pre-release
 - terminal-capable AI runtime이 draft, dry-run, mint 승인 요청 전에 현재 archive를 확인할 수 있는 읽기 전용 `runtime-context` 출력.
 - AI runtime이 default archive를 가정하지 않고 요청된 target profile을 먼저 확인할 수 있는 읽기 전용 profile registry resolve.
 - AI runtime이 inbox draft를 먼저 미리 보고 승인된 draft write만 replay할 수 있는 profile-aware `create-draft --dry-run`.
+- 현재 local implementation/tooling은 `wom-kit/`에 있고 Python import package는 `wom_kit`입니다.
 
 아직 없는 것:
 
@@ -69,15 +70,15 @@ v0.2.18 pre-release
 
 이 시스템은 social app이 아니라 archive node에서 출발합니다.
 
-현재 명칭 기준은 [Naming And Terminology](ai-archive-kit/docs/concepts/naming-and-terminology.ko.md)를 보세요.
+현재 명칭 기준은 [Naming And Terminology](wom-kit/docs/concepts/naming-and-terminology.ko.md)를 보세요.
 
 인간 데이터 원형, AX 흐름에서의 의미, Web3-like `ZET` 통신 모델까지 포함한 전체 설계 철학은 다음 문서를 보세요.
 
-- [기초 제품 백서](ai-archive-kit/docs/concepts/foundational-product-whitepaper.ko.md)
-- [Product Philosophy](ai-archive-kit/docs/concepts/product-philosophy.md)
-- [한국어 Product Philosophy](ai-archive-kit/docs/concepts/product-philosophy.ko.md)
-- [WOM Safe HTML Profile](ai-archive-kit/docs/concepts/wom-safe-html-profile.ko.md)
-- [공개 문서 지도](ai-archive-kit/docs/public-documentation-map.ko.md)
+- [기초 제품 백서](wom-kit/docs/concepts/foundational-product-whitepaper.ko.md)
+- [Product Philosophy](wom-kit/docs/concepts/product-philosophy.md)
+- [한국어 Product Philosophy](wom-kit/docs/concepts/product-philosophy.ko.md)
+- [WOM Safe HTML Profile](wom-kit/docs/concepts/wom-safe-html-profile.ko.md)
+- [공개 문서 지도](wom-kit/docs/public-documentation-map.ko.md)
 
 공개 프로젝트 기록은 의도적으로 다음처럼 분리합니다.
 
@@ -94,7 +95,7 @@ v0.2.18 pre-release
 
 사람이 직접 쓰거나, AI가 초안을 만들고 사람이 감독/승인한 문서입니다. 민팅되면 private archive 안의 공식 기록이 됩니다.
 
-v0.2에서는 authoring/import compatibility를 위해 Markdown 기반 zets를 유지합니다. 장기 canonical/interchange/rendering target은 arbitrary HTML이 아니라 [WOM Safe HTML Profile](ai-archive-kit/docs/concepts/wom-safe-html-profile.ko.md)입니다.
+v0.2에서는 authoring/import compatibility를 위해 Markdown 기반 zets를 유지합니다. 장기 canonical/interchange/rendering target은 arbitrary HTML이 아니라 [WOM Safe HTML Profile](wom-kit/docs/concepts/wom-safe-html-profile.ko.md)입니다.
 
 민팅이란:
 
@@ -152,7 +153,7 @@ zets와 metadata  -> Git repository
 search text      -> SQLite/search index
 ```
 
-자세한 내용은 [Source Object Storage Policy](ai-archive-kit/docs/source-object-storage-policy.md)를 보세요.
+자세한 내용은 [Source Object Storage Policy](wom-kit/docs/source-object-storage-policy.md)를 보세요.
 
 ## 텍스트 provenance
 
@@ -171,7 +172,7 @@ L5 minted zet
 
 OCR과 AI 전사는 유용하지만, 모델에 따라 달라질 수 있는 derived record입니다. 따라서 source object id, derivation method, tool/model version, confidence, review status를 남겨야 합니다.
 
-자세한 내용은 [Text Provenance Hierarchy](ai-archive-kit/docs/text-provenance-hierarchy.md)를 보세요.
+자세한 내용은 [Text Provenance Hierarchy](wom-kit/docs/text-provenance-hierarchy.md)를 보세요.
 
 ## 버전 관리
 
@@ -180,6 +181,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.19
 v0.2.18
 v0.2.17
 v0.2.16
@@ -199,7 +201,7 @@ v1.0.0
 ## 저장소 구조
 
 ```text
-ai-archive-kit/
+wom-kit/
   specs/        제품/프로토콜 명세
   docs/         설치, 보안, 온보딩, 릴리스, 운영 문서
   plans/        구현 계획과 공개 가능한 작업일지
@@ -214,17 +216,17 @@ ai-archive-kit/
 
 공개 문서는 목적에 따라 나뉩니다.
 
-- 제품 기획안 / 설계 철학: [공개 문서 지도](ai-archive-kit/docs/public-documentation-map.ko.md)
-- 구현을 위한 레퍼런스 조사: [Implementation Research](ai-archive-kit/specs/zettelkasten-zet-implementation-research.md)
-- 구현 계획: [Plans Directory](ai-archive-kit/plans/)
-- 작업일지: [Work Logs](ai-archive-kit/plans/)
+- 제품 기획안 / 설계 철학: [공개 문서 지도](wom-kit/docs/public-documentation-map.ko.md)
+- 구현을 위한 레퍼런스 조사: [Implementation Research](wom-kit/specs/zettelkasten-zet-implementation-research.md)
+- 구현 계획: [Plans Directory](wom-kit/plans/)
+- 작업일지: [Work Logs](wom-kit/plans/)
 
-코드부터 보기 전에 프로젝트를 이해하고 싶다면 [공개 문서 지도](ai-archive-kit/docs/public-documentation-map.ko.md)부터 읽는 것을 추천합니다.
+코드부터 보기 전에 프로젝트를 이해하고 싶다면 [공개 문서 지도](wom-kit/docs/public-documentation-map.ko.md)부터 읽는 것을 추천합니다.
 
 ## 빠른 검증
 
 ```bash
-cd ai-archive-kit
+cd wom-kit
 python -m unittest discover -s tests
 python cli/archive.py doctor examples/fake-life-archive --strict
 ```
@@ -253,7 +255,7 @@ doctor reports 0 errors and 0 warnings
 
 실제 사용은 private archive repository와 별도 object storage에서 이루어져야 합니다.
 
-자세한 내용은 [Open Source Publication Model](ai-archive-kit/docs/open-source-publication-model.md)을 보세요.
+자세한 내용은 [Open Source Publication Model](wom-kit/docs/open-source-publication-model.md)을 보세요.
 
 ## 저자
 
