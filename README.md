@@ -23,7 +23,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.21 pre-release
+v0.2.22 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -47,6 +47,7 @@ What exists today:
 - current local implementation/tooling lives in `wom-kit/` and imports as `wom_kit`.
 - dry-run-first GitHub repository setup planning for WOM profiles, with local-only approval metadata and no provider API calls.
 - dry-run-first objet storage setup planning for WOM profiles, with local-only approval metadata and no bucket creation, upload, sync, copy, or hashing.
+- dry-run-only source intake planning so AI runtimes can classify source/objet references before draft creation without reading bodies, hashing, importing, uploading, or calling provider APIs.
 
 What does not exist yet:
 
@@ -184,6 +185,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.22
 v0.2.21
 v0.2.20
 v0.2.18

@@ -6,7 +6,7 @@ Think of the roles this way:
 
 ```text
 GitHub = versioned map and review history
-Object storage = large media/object warehouse
+Objet storage = large media/objet warehouse
 Local PC / SSD / Notion / Google Drive = source worlds
 SQLite = rebuildable search index
 WOM-kit = control plane that connects and verifies the above
@@ -47,6 +47,22 @@ provenance
 ```
 
 It does not read file bodies, summarize content with AI, call live provider APIs, or calculate full file hashes.
+
+## Source Intake Planner
+
+After a source map exists, use source intake to classify one item before creating an inbox draft:
+
+```powershell
+python cli\archive.py source-intake .\my-archive `
+  --dry-run `
+  --source local:docs `
+  --item-id sourceitem:local_docs:example `
+  --format json
+```
+
+`source-intake` can also use `--source <source_id> --relative-path <path-inside-source>`. It returns safe `source_refs_for_draft` for `create-draft --dry-run`.
+
+It does not read file bodies, calculate full hashes, copy, upload, import, OCR, transcribe, extract, or call provider APIs.
 
 ## CLI
 
@@ -126,6 +142,7 @@ MCP exposes:
 ```text
 list_sources
 source_scan_plan
+source_intake_plan
 ```
 
 It does not expose a real source scan apply tool. Human-approved writes stay in the CLI.

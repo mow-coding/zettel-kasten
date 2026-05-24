@@ -13,6 +13,8 @@ Commands:
           Plan GitHub repository metadata for a WOM profile.
   object-storage
           Plan object storage metadata for WOM objets.
+  source-intake
+          Plan safe source/objet refs before draft creation.
   init    Create a new archive from a built-in template.
   index   Build a generated local SQLite search index.
   parcel Create a portable parcel from a view. Alias: pack.
@@ -1444,6 +1446,60 @@ def command_object_storage(args: argparse.Namespace) -> int:
             print(f"Receipt: {result['receipt_path']}")
         elif result.get("provider_setup_receipt_preview"):
             print(f"Proposed receipt: {result['provider_setup_receipt_preview']['receipt_path']}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_source_intake(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("Source intake is dry-run only in v0.2.22. Use --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.source_intake_plan(
+            Path(args.archive_root),
+            local_path=args.local_path,
+            source_id=args.source,
+            item_id=args.item_id,
+            relative_path=args.relative_path,
+            objet_ref=args.objet_ref,
+            object_id=args.object_id,
+            provider=args.provider,
+            provider_object_id=args.provider_object_id,
+            provider_kind=args.provider_kind,
+            ai_artifact_ref=args.ai_artifact_ref,
+            runtime=args.runtime,
+            artifact_kind=args.artifact_kind,
+            expected_archive_id=args.expected_archive_id,
+            expected_type=args.expected_type,
+            profile_id=args.profile_id,
+            source_role=args.source_role,
+            title=args.title,
+            mime=args.mime,
+            redact_local_paths=args.redact_local_paths,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        print(f"Source intake dry-run {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Input kind: {result.get('input_kind') or '-'}")
+        print(f"Objet status: {result.get('objet_status') or '-'}")
+        if result.get("source_refs_for_draft"):
+            print("Source refs for draft:")
+            for ref in result["source_refs_for_draft"]:
+                print(f"- {ref.get('type')}:{ref.get('value')}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -3274,6 +3330,59 @@ def build_parser() -> argparse.ArgumentParser:
     )
     object_storage.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     object_storage.set_defaults(func=command_object_storage)
+
+    source_intake = subcommands.add_parser(
+        "source-intake",
+        help="Dry-run source/objet intake planning before draft creation.",
+    )
+    source_intake.add_argument("archive_root", help="Archive root to inspect.")
+    source_intake.add_argument("--dry-run", action="store_true", help="Preview source/objet classification without writing files.")
+    source_intake.add_argument("--local-path", help="Single local file path to classify by metadata only.")
+    source_intake.add_argument("--source", help="Registered source id for source map item lookup.")
+    source_intake.add_argument("--item-id", help="Source map item id to classify.")
+    source_intake.add_argument("--relative-path", help="Source-relative item path to classify.")
+    source_intake.add_argument("--objet-ref", help="WOM objet ref such as objet:sha256:<hash>.")
+    source_intake.add_argument("--object-id", help="Technical object_id such as sha256:<hash>.")
+    source_intake.add_argument("--provider", help="Provider name for metadata-only provider reference.")
+    source_intake.add_argument("--provider-object-id", help="Safe provider object id. Do not pass URLs.")
+    source_intake.add_argument("--provider-kind", help="Safe provider item kind.")
+    source_intake.add_argument("--ai-artifact-ref", help="Safe local AI artifact reference.")
+    source_intake.add_argument(
+        "--runtime",
+        choices=sorted(archive_services.SOURCE_INTAKE_RUNTIMES),
+        help="AI runtime for --ai-artifact-ref.",
+    )
+    source_intake.add_argument("--artifact-kind", help="Safe AI artifact kind label.")
+    source_intake.add_argument("--expected-archive-id", help="Expected archive id; mismatch blocks.")
+    source_intake.add_argument(
+        "--expected-type",
+        choices=sorted(archive_services.RUNTIME_CONTEXT_ARCHIVE_TYPES),
+        help="Expected archive type; mismatch blocks.",
+    )
+    source_intake.add_argument("--profile-id", help="Resolved WOM profile id for downstream draft context.")
+    source_intake.add_argument(
+        "--source-role",
+        choices=sorted(archive_services.SOURCE_INTAKE_ROLES),
+        default=archive_services.SOURCE_INTAKE_DEFAULT_ROLE,
+        help="Role this source should play in the draft.",
+    )
+    source_intake.add_argument("--title", help="Non-secret label for the source.")
+    source_intake.add_argument("--mime", help="Optional MIME label; no content sniffing is performed.")
+    source_intake.add_argument(
+        "--redact-local-paths",
+        dest="redact_local_paths",
+        action="store_true",
+        default=True,
+        help="Redact local absolute paths. This is the default.",
+    )
+    source_intake.add_argument(
+        "--no-redact-local-paths",
+        dest="redact_local_paths",
+        action="store_false",
+        help="Include local paths for trusted local debugging.",
+    )
+    source_intake.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    source_intake.set_defaults(func=command_source_intake)
 
     list_zettels = subcommands.add_parser("list-zettels", help="List draft and/or canonical zettels.")
     list_zettels.add_argument("archive_root", help="Archive root to inspect.")

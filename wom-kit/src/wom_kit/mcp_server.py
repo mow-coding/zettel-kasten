@@ -150,6 +150,37 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "source_intake_plan",
+        "description": "Plan safe source/objet references before draft creation. Read-only metadata-only dry-run; never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, or calls provider APIs.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "dry_run": {"type": "boolean", "default": True},
+                "local_path": {"type": "string"},
+                "source": {"type": "string"},
+                "item_id": {"type": "string"},
+                "relative_path": {"type": "string"},
+                "objet_ref": {"type": "string"},
+                "object_id": {"type": "string"},
+                "provider": {"type": "string"},
+                "provider_object_id": {"type": "string"},
+                "provider_kind": {"type": "string"},
+                "ai_artifact_ref": {"type": "string"},
+                "runtime": {"type": "string", "enum": sorted(archive_services.SOURCE_INTAKE_RUNTIMES)},
+                "artifact_kind": {"type": "string"},
+                "expected_archive_id": {"type": "string"},
+                "expected_type": {"type": "string"},
+                "profile_id": {"type": "string"},
+                "source_role": {"type": "string", "enum": sorted(archive_services.SOURCE_INTAKE_ROLES)},
+                "title": {"type": "string"},
+                "mime": {"type": "string"},
+                "redact_local_paths": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "archive_init",
         "description": "Initialize a new personal, company, or family archive from safe defaults. Target must be absent or empty.",
         "inputSchema": {
@@ -642,6 +673,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_github_repository_setup_plan(arguments)
     if name == "object_storage_setup_plan":
         return tool_object_storage_setup_plan(arguments)
+    if name == "source_intake_plan":
+        return tool_source_intake_plan(arguments)
     if name == "archive_init":
         return tool_archive_init(arguments)
     if name == "archive_onboarding_plan":
@@ -803,6 +836,42 @@ def tool_object_storage_setup_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"object_storage_setup_plan: {state}.", result)
+
+
+def tool_source_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is False:
+        raise ToolError("source_intake_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    local_path_value = optional_string_arg(arguments, "local_path")
+    local_path = require_path_arg({"local_path": local_path_value}, "local_path") if local_path_value else None
+    requested_redaction = bool(arguments.get("redact_local_paths", True))
+    redact_local_paths = mcp_redact_local_paths(requested_redaction)
+    result = call_service(
+        archive_services.source_intake_plan,
+        archive_root,
+        local_path=local_path,
+        source_id=optional_string_arg(arguments, "source"),
+        item_id=optional_string_arg(arguments, "item_id"),
+        relative_path=optional_string_arg(arguments, "relative_path"),
+        objet_ref=optional_string_arg(arguments, "objet_ref"),
+        object_id=optional_string_arg(arguments, "object_id"),
+        provider=optional_string_arg(arguments, "provider"),
+        provider_object_id=optional_string_arg(arguments, "provider_object_id"),
+        provider_kind=optional_string_arg(arguments, "provider_kind"),
+        ai_artifact_ref=optional_string_arg(arguments, "ai_artifact_ref"),
+        runtime=optional_string_arg(arguments, "runtime"),
+        artifact_kind=optional_string_arg(arguments, "artifact_kind"),
+        expected_archive_id=optional_string_arg(arguments, "expected_archive_id"),
+        expected_type=optional_string_arg(arguments, "expected_type"),
+        profile_id=optional_string_arg(arguments, "profile_id"),
+        source_role=optional_string_arg(arguments, "source_role") or archive_services.SOURCE_INTAKE_DEFAULT_ROLE,
+        title=optional_string_arg(arguments, "title"),
+        mime=optional_string_arg(arguments, "mime"),
+        redact_local_paths=redact_local_paths,
+    )
+    add_mcp_redaction_warning(result, requested_redaction, redact_local_paths)
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"source_intake_plan: {state}.", result)
 
 
 def tool_archive_init(arguments: dict[str, Any]) -> dict[str, Any]:

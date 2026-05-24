@@ -252,7 +252,19 @@ archives/<archive_id>/objets/
 
 Dry-run writes nothing and calls no provider APIs. Approved mode writes only safe local provider metadata and a setup receipt. It still does not create buckets, run OAuth, upload, sync, copy source files, hash files, or import source content.
 
-## 9. Text Provenance Hierarchy
+## 9. v0.2.22 Source Intake Planner
+
+WOM-kit v0.2.22 adds a dry-run-only source intake planner:
+
+```bash
+archive source-intake <archive-root> --dry-run --object-id sha256:<hash> --format json
+```
+
+Use it before `create-draft --dry-run` when a draft is based on a presentation, document, image, provider item, local file, source map item, manifested objet, or AI artifact.
+
+The planner returns safe `source_refs_for_draft`, `objet_status`, object storage context, and content access flags. It writes nothing and does not read file bodies, calculate full hashes, copy, upload, import, OCR, transcribe, extract, call provider APIs, create drafts, or mint.
+
+## 10. Text Provenance Hierarchy
 
 The archive should preserve the difference between:
 

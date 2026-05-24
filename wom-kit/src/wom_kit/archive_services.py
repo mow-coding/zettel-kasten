@@ -21,6 +21,7 @@ from .paths import (
     archive_relative_path,
     contains_forbidden_location_reference,
     is_path_within_root,
+    normalize_archive_relative_path,
     resolve_archive_relative_path,
 )
 from .schema_validator import validate_schema
@@ -105,7 +106,26 @@ MINT_AUTHORITY_MODE = "basic"
 MINT_CHECKLIST_VERSION = "zet-mint/v0.2"
 SOURCE_SCAN_MODE = "metadata_only"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+OBJECT_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 DRAFT_CREATION_MODES = {"human_written", "ai_assisted", "ai_generated", "imported", "derived"}
+SOURCE_INTAKE_ROLES = {"primary_source", "context", "attachment", "derived_context"}
+SOURCE_INTAKE_DEFAULT_ROLE = "primary_source"
+SOURCE_INTAKE_RUNTIMES = {"codex", "claude_code", "other"}
+SOURCE_INTAKE_SAFE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._+-]{0,199}$")
+SOURCE_INTAKE_ARTIFACT_KIND_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+SOURCE_INTAKE_OBJECT_STORAGE_PROVIDERS = {
+    "object_storage",
+    "cloudflare_r2",
+    "cloudflare-r2",
+    "backblaze_b2",
+    "backblaze-b2",
+    "aws_s3",
+    "aws-s3",
+    "google_cloud_storage",
+    "google-cloud-storage",
+    "generic_s3",
+    "generic-s3",
+}
 DRAFT_SECRET_VALUE_RE = re.compile(
     r"(?i)(?:api[_-]?key|secret|token|password|credential|aws_secret_access_key)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{12,}"
     r"|-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----"
@@ -6877,6 +6897,782 @@ def load_source_map_entries(archive_root: Path, relative_path: str) -> list[dict
         if isinstance(record, dict):
             entries.append(record)
     return entries
+
+
+def source_intake_plan(
+    archive_root: Path | str,
+    *,
+    local_path: Path | str | None = None,
+    source_id: str | None = None,
+    item_id: str | None = None,
+    relative_path: str | None = None,
+    objet_ref: str | None = None,
+    object_id: str | None = None,
+    provider: str | None = None,
+    provider_object_id: str | None = None,
+    provider_kind: str | None = None,
+    ai_artifact_ref: str | None = None,
+    runtime: str | None = None,
+    artifact_kind: str | None = None,
+    expected_archive_id: str | None = None,
+    expected_type: str | None = None,
+    profile_id: str | None = None,
+    source_role: str = SOURCE_INTAKE_DEFAULT_ROLE,
+    title: str | None = None,
+    mime: str | None = None,
+    redact_local_paths: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_config = read_archive_config(root)
+    archive_id = str(archive_config.get("archive_id") or "")
+    archive_type = archive_config.get("type") if isinstance(archive_config.get("type"), str) else None
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if expected_archive_id and expected_archive_id != archive_id:
+        blockers.append(f"Expected archive id mismatch: expected {expected_archive_id}, found {archive_id or 'unknown'}.")
+    if expected_type and expected_type != archive_type:
+        blockers.append(f"Expected archive type mismatch: expected {expected_type}, found {archive_type or 'unknown'}.")
+
+    role = (source_role or SOURCE_INTAKE_DEFAULT_ROLE).strip()
+    if role not in SOURCE_INTAKE_ROLES:
+        blockers.append("source_role must be one of: " + ", ".join(sorted(SOURCE_INTAKE_ROLES)) + ".")
+        role = SOURCE_INTAKE_DEFAULT_ROLE
+
+    for field_name, field_value in {
+        "profile_id": profile_id,
+        "title": title,
+        "mime": mime,
+    }.items():
+        if field_value and not safe_source_intake_text(str(field_value)):
+            blockers.append(f"{field_name} must not contain local paths, provider URLs, tokens, or secrets.")
+
+    locator_kinds = source_intake_locator_kinds(
+        local_path=local_path,
+        source_id=source_id,
+        item_id=item_id,
+        relative_path=relative_path,
+        objet_ref=objet_ref,
+        object_id=object_id,
+        provider=provider,
+        provider_object_id=provider_object_id,
+        provider_kind=provider_kind,
+        ai_artifact_ref=ai_artifact_ref,
+        runtime=runtime,
+        artifact_kind=artifact_kind,
+        blockers=blockers,
+    )
+    input_kind = locator_kinds[0] if len(locator_kinds) == 1 else None
+    if len(locator_kinds) != 1:
+        blockers.append("Exactly one source locator mode is required.")
+
+    result_body = source_intake_empty_body(
+        archive_id=archive_id,
+        profile_id=profile_id,
+        input_kind=input_kind,
+        source_role=role,
+        object_storage_context=object_storage_context(root),
+    )
+
+    if input_kind == "local_path":
+        apply_local_path_source_intake(
+            root,
+            result_body,
+            Path(str(local_path)),
+            title=title,
+            mime=mime,
+            source_role=role,
+            redact_local_paths=redact_local_paths,
+            blockers=blockers,
+            warnings=warnings,
+        )
+    elif input_kind == "source_map_item":
+        apply_source_map_item_source_intake(
+            root,
+            result_body,
+            source_id=str(source_id or ""),
+            item_id=str(item_id or ""),
+            relative_path=None,
+            title=title,
+            mime=mime,
+            source_role=role,
+            blockers=blockers,
+            warnings=warnings,
+        )
+    elif input_kind == "source_map_relative_path":
+        apply_source_map_item_source_intake(
+            root,
+            result_body,
+            source_id=str(source_id or ""),
+            item_id=None,
+            relative_path=str(relative_path or ""),
+            title=title,
+            mime=mime,
+            source_role=role,
+            blockers=blockers,
+            warnings=warnings,
+        )
+    elif input_kind == "objet_ref":
+        resolved_object_id = object_id_from_objet_ref(str(objet_ref or ""), blockers)
+        apply_manifest_object_source_intake(
+            root,
+            result_body,
+            resolved_object_id,
+            title=title,
+            mime=mime,
+            source_role=role,
+            direct_lookup=True,
+            blockers=blockers,
+            warnings=warnings,
+        )
+    elif input_kind == "object_id":
+        normalized_object_id = normalize_object_id(str(object_id or ""), blockers)
+        apply_manifest_object_source_intake(
+            root,
+            result_body,
+            normalized_object_id,
+            title=title,
+            mime=mime,
+            source_role=role,
+            direct_lookup=True,
+            blockers=blockers,
+            warnings=warnings,
+        )
+    elif input_kind == "provider_object":
+        apply_provider_object_source_intake(
+            result_body,
+            provider=str(provider or ""),
+            provider_object_id=str(provider_object_id or ""),
+            provider_kind=str(provider_kind or ""),
+            title=title,
+            mime=mime,
+            source_role=role,
+            blockers=blockers,
+        )
+    elif input_kind == "ai_artifact":
+        apply_ai_artifact_source_intake(
+            result_body,
+            ai_artifact_ref=str(ai_artifact_ref or ""),
+            runtime=str(runtime or ""),
+            artifact_kind=str(artifact_kind or ""),
+            title=title,
+            mime=mime,
+            source_role=role,
+            blockers=blockers,
+        )
+
+    if not result_body["object_storage_context"]["object_storage_configured"]:
+        warnings.append("Run the object storage / objet setup planner before real objet capture.")
+
+    if blockers:
+        result_body["objet_status"] = "blocked"
+    result_body["ok"] = not blockers
+    result_body["blockers"] = unique_preserve_order(blockers)
+    result_body["warnings"] = unique_preserve_order(warnings)
+    result_body["next_safe_actions"] = source_intake_next_safe_actions(result_body)
+    return json_safe(result_body)
+
+
+def source_intake_empty_body(
+    *,
+    archive_id: str,
+    profile_id: str | None,
+    input_kind: str | None,
+    source_role: str,
+    object_storage_context: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "dry_run": True,
+        "lifecycle_action": "source_intake_plan",
+        "archive_id": archive_id,
+        "profile_id": profile_id,
+        "input_kind": input_kind,
+        "source_kind": None,
+        "source_role": source_role,
+        "objet_status": None,
+        "source_refs_for_draft": [],
+        "objet_ref": {},
+        "provider_object_ref": {},
+        "object_storage_context": object_storage_context,
+        "content_access": {
+            "metadata_only": True,
+            "content_read": False,
+            "copied": False,
+            "uploaded": False,
+            "imported": False,
+            "ocr_performed": False,
+            "transcription_performed": False,
+            "external_api_called": False,
+            "full_hash_calculated": False,
+        },
+        "draft_provenance_suggestions": {},
+        "source_metadata": {},
+        "blockers": [],
+        "warnings": [],
+        "next_safe_actions": [],
+        "would_change": [],
+    }
+
+
+def source_intake_locator_kinds(
+    *,
+    local_path: Path | str | None,
+    source_id: str | None,
+    item_id: str | None,
+    relative_path: str | None,
+    objet_ref: str | None,
+    object_id: str | None,
+    provider: str | None,
+    provider_object_id: str | None,
+    provider_kind: str | None,
+    ai_artifact_ref: str | None,
+    runtime: str | None,
+    artifact_kind: str | None,
+    blockers: list[str],
+) -> list[str]:
+    kinds: list[str] = []
+    if local_path is not None:
+        kinds.append("local_path")
+    if source_id and item_id:
+        kinds.append("source_map_item")
+    if source_id and relative_path:
+        kinds.append("source_map_relative_path")
+    if objet_ref:
+        kinds.append("objet_ref")
+    if object_id:
+        kinds.append("object_id")
+    if provider or provider_object_id or provider_kind:
+        kinds.append("provider_object")
+        if not (provider and provider_object_id and provider_kind):
+            blockers.append("Provider locator requires --provider, --provider-object-id, and --provider-kind.")
+    if ai_artifact_ref or runtime or artifact_kind:
+        kinds.append("ai_artifact")
+        if not (ai_artifact_ref and runtime and artifact_kind):
+            blockers.append("AI artifact locator requires --ai-artifact-ref, --runtime, and --artifact-kind.")
+    if source_id and not (item_id or relative_path):
+        blockers.append("Source locator requires --item-id or --relative-path.")
+    if (item_id or relative_path) and not source_id:
+        blockers.append("Source locator requires --source.")
+    return kinds
+
+
+def apply_local_path_source_intake(
+    root: Path,
+    result: dict[str, Any],
+    local_path: Path,
+    *,
+    title: str | None,
+    mime: str | None,
+    source_role: str,
+    redact_local_paths: bool,
+    blockers: list[str],
+    warnings: list[str],
+) -> None:
+    raw_path = str(local_path)
+    if "\x00" in raw_path or source_intake_has_provider_url(raw_path) or source_intake_secret_like(raw_path):
+        blockers.append("local_path must be a local file path, not a provider URL, token, or secret.")
+        result["objet_status"] = "blocked"
+        return
+    candidate = local_path.expanduser().resolve()
+    if not candidate.exists():
+        blockers.append("local_path does not exist.")
+        result["objet_status"] = "blocked"
+        return
+    if not candidate.is_file():
+        blockers.append("local_path must point to a file for source intake planning.")
+        result["objet_status"] = "blocked"
+        return
+
+    stat = candidate.stat()
+    guessed_mime = safe_mime(mime or mimetypes.guess_type(candidate.name)[0])
+    label = safe_source_label(title, candidate.name, redact_local_paths)
+    result["source_kind"] = classify_source_kind(guessed_mime, candidate.suffix)
+    result["source_metadata"] = {
+        "label": label,
+        "extension": candidate.suffix.lower(),
+        "mime": guessed_mime,
+        "size_bytes": stat.st_size,
+        "modified_at": datetime.fromtimestamp(stat.st_mtime).astimezone().replace(microsecond=0).isoformat(),
+        "local_path": "<redacted-local-path>" if redact_local_paths else str(candidate),
+        "body_read": False,
+        "full_hash_calculated": False,
+    }
+
+    manifest_record = manifest_record_for_local_path(root, candidate)
+    if manifest_record:
+        set_manifest_object_intake_result(result, manifest_record, source_role=source_role, title=title, mime=mime)
+    else:
+        result["objet_status"] = "candidate_unmanifested"
+        result["source_refs_for_draft"] = [
+            {"type": "source_intake_candidate", "value": f"candidate:{safe_slug(label)}", "role": source_role}
+        ]
+        result["draft_provenance_suggestions"] = {
+            "source": "source_intake_candidate",
+            "derived_from": [f"candidate:{safe_slug(label)}"],
+        }
+
+    if not local_path_inside_registered_source_root(root, candidate):
+        warnings.append("Local file is outside registered source roots; register or scan the source before real objet capture.")
+    if candidate.suffix.lower() in {".md", ".markdown", ".txt"}:
+        warnings.append(".md/.txt files may already be zets or text notes; confirm whether this is an objet before capture.")
+
+
+def apply_source_map_item_source_intake(
+    root: Path,
+    result: dict[str, Any],
+    *,
+    source_id: str,
+    item_id: str | None,
+    relative_path: str | None,
+    title: str | None,
+    mime: str | None,
+    source_role: str,
+    blockers: list[str],
+    warnings: list[str],
+) -> None:
+    if source_intake_secret_like(source_id) or contains_forbidden_location_reference(source_id):
+        blockers.append("source must not contain local paths, provider URLs, tokens, or secrets.")
+        return
+    if relative_path:
+        try:
+            normalized_relative = normalize_source_intake_relative_path(relative_path)
+        except ArchivePathError as exc:
+            blockers.append(f"relative_path is unsafe: {exc}.")
+            return
+    else:
+        normalized_relative = None
+    try:
+        binding = source_binding_by_id(root, source_id)
+    except ArchiveServiceError as exc:
+        blockers.append(str(exc))
+        return
+    map_relative = source_map_relative_path(source_id)
+    entries = load_source_map_entries(root, map_relative)
+    match: dict[str, Any] | None = None
+    for entry in entries:
+        if item_id and str(entry.get("item_id") or "") == item_id:
+            match = entry
+            break
+        if normalized_relative and str(entry.get("relative_path") or "").replace("\\", "/") == normalized_relative:
+            match = entry
+            break
+    if match is None:
+        blockers.append("Source map item was not found.")
+        return
+
+    source_mime = safe_mime(mime or str(match.get("mime") or ""))
+    label = safe_source_map_label(title, match)
+    result["source_kind"] = classify_source_kind(source_mime, str(match.get("relative_path") or ""))
+    result["source_metadata"] = {
+        "label": label,
+        "source_id": source_id,
+        "source_type": binding.get("source_type"),
+        "source_map_path": map_relative,
+        "item_id": match.get("item_id"),
+        "item_kind": match.get("item_kind"),
+        "relative_path": match.get("relative_path"),
+        "mime": source_mime,
+        "size_bytes": match.get("size_bytes"),
+        "modified_at": match.get("modified_at"),
+        "scan_status": match.get("scan_status"),
+    }
+    object_id_value = str(match.get("object_id") or "").strip()
+    if object_id_value:
+        normalized = normalize_object_id(object_id_value, blockers)
+        record = find_manifest_record(root, normalized)
+        if record:
+            set_manifest_object_intake_result(result, record, source_role=source_role, title=title, mime=mime)
+        else:
+            result["objet_status"] = "candidate_unmanifested"
+            warnings.append("Source map item has an object_id, but the object manifest record was not found.")
+            result["objet_ref"] = {"ref": f"objet:{normalized}", "object_id": normalized, "manifested": False}
+            result["source_refs_for_draft"] = [{"type": "object_id", "value": normalized, "role": source_role}]
+        result["source_refs_for_draft"].append(
+            {"type": "source_map_item", "value": str(match.get("item_id") or item_id or normalized_relative), "role": "supporting_context"}
+        )
+    else:
+        result["objet_status"] = "candidate_unmanifested"
+        source_item_value = str(match.get("item_id") or normalized_relative or "")
+        result["source_refs_for_draft"] = [{"type": "source_map_item", "value": source_item_value, "role": source_role}]
+        result["draft_provenance_suggestions"] = {
+            "source": "source_map_item",
+            "derived_from": [source_item_value],
+        }
+
+    if str(match.get("relative_path") or "").lower().endswith((".md", ".markdown", ".txt")):
+        warnings.append(".md/.txt files may already be zets or text notes; confirm whether this is an objet before capture.")
+
+
+def apply_manifest_object_source_intake(
+    root: Path,
+    result: dict[str, Any],
+    object_id_value: str,
+    *,
+    title: str | None,
+    mime: str | None,
+    source_role: str,
+    direct_lookup: bool,
+    blockers: list[str],
+    warnings: list[str],
+) -> None:
+    if not object_id_value:
+        return
+    record = find_manifest_record(root, object_id_value)
+    if record is None:
+        if direct_lookup:
+            blockers.append("object_id or objet_ref does not resolve to objects/manifests/files.jsonl.")
+        result["objet_status"] = "blocked"
+        return
+    set_manifest_object_intake_result(result, record, source_role=source_role, title=title, mime=mime)
+    if str(record.get("logical_key") or "").lower().endswith((".md", ".markdown", ".txt")):
+        warnings.append(".md/.txt manifest records may already be zets or text notes; confirm whether this is an objet.")
+
+
+def apply_provider_object_source_intake(
+    result: dict[str, Any],
+    *,
+    provider: str,
+    provider_object_id: str,
+    provider_kind: str,
+    title: str | None,
+    mime: str | None,
+    source_role: str,
+    blockers: list[str],
+) -> None:
+    if not safe_source_intake_ref(provider) or not safe_source_intake_ref(provider_object_id) or not safe_source_intake_artifact_kind(provider_kind):
+        blockers.append("provider, provider_object_id, and provider_kind must be safe refs, not URLs, paths, tokens, or secrets.")
+        return
+    source_mime = safe_mime(mime)
+    label = title.strip() if isinstance(title, str) and title.strip() else provider_object_id
+    value = f"{provider}:{provider_kind}:{provider_object_id}"
+    result["source_kind"] = "provider_item"
+    result["objet_status"] = "provider_reference"
+    result["provider_object_ref"] = {
+        "provider": provider,
+        "provider_kind": provider_kind,
+        "provider_object_id": provider_object_id,
+        "manifested": False,
+    }
+    result["source_metadata"] = {
+        "label": label,
+        "mime": source_mime,
+        "provider": provider,
+        "provider_kind": provider_kind,
+    }
+    result["source_refs_for_draft"] = [{"type": "provider_object_ref", "value": value, "role": source_role}]
+    result["draft_provenance_suggestions"] = {
+        "source": "provider_object_ref",
+        "derived_from": [value],
+    }
+
+
+def apply_ai_artifact_source_intake(
+    result: dict[str, Any],
+    *,
+    ai_artifact_ref: str,
+    runtime: str,
+    artifact_kind: str,
+    title: str | None,
+    mime: str | None,
+    source_role: str,
+    blockers: list[str],
+) -> None:
+    normalized_runtime = runtime.strip()
+    if normalized_runtime not in SOURCE_INTAKE_RUNTIMES:
+        blockers.append("runtime must be one of: " + ", ".join(sorted(SOURCE_INTAKE_RUNTIMES)) + ".")
+    if not safe_source_intake_ref(ai_artifact_ref):
+        blockers.append("ai_artifact_ref must be a safe ref, not a URL, path, token, or secret.")
+    if not safe_source_intake_artifact_kind(artifact_kind):
+        blockers.append("artifact_kind must be a safe label.")
+    if blockers:
+        return
+    source_mime = safe_mime(mime)
+    label = title.strip() if isinstance(title, str) and title.strip() else ai_artifact_ref
+    result["source_kind"] = "ai_artifact"
+    result["objet_status"] = "ai_artifact"
+    result["source_metadata"] = {
+        "label": label,
+        "runtime": normalized_runtime,
+        "artifact_kind": artifact_kind,
+        "mime": source_mime,
+    }
+    result["source_refs_for_draft"] = [{"type": "ai_artifact", "value": ai_artifact_ref, "role": source_role}]
+    result["draft_provenance_suggestions"] = {
+        "source": "ai_artifact",
+        "assisted_by": [f"ai_runtime:{normalized_runtime}"],
+        "derived_from": [ai_artifact_ref],
+    }
+
+
+def set_manifest_object_intake_result(
+    result: dict[str, Any],
+    record: dict[str, Any],
+    *,
+    source_role: str,
+    title: str | None,
+    mime: str | None,
+) -> None:
+    object_id_value = str(record.get("object_id") or "")
+    source_mime = safe_mime(mime or str(record.get("mime") or ""))
+    logical_key = str(record.get("logical_key") or "")
+    result["source_kind"] = classify_source_kind(source_mime, logical_key)
+    result["objet_status"] = "manifested"
+    result["objet_ref"] = {
+        "ref": f"objet:{object_id_value}",
+        "object_id": object_id_value,
+        "manifested": True,
+        "manifest_path": "objects/manifests/files.jsonl",
+        "logical_key": logical_key or None,
+        "mime": source_mime,
+        "size_bytes": record.get("size_bytes") if isinstance(record.get("size_bytes"), int) else None,
+    }
+    existing_metadata = result["source_metadata"] if isinstance(result.get("source_metadata"), dict) else {}
+    existing_label = existing_metadata.get("label") if isinstance(existing_metadata.get("label"), str) else None
+    label = title.strip() if isinstance(title, str) and title.strip() else existing_label or logical_key or object_id_value
+    result["source_metadata"] = {
+        **existing_metadata,
+        "label": label,
+        "logical_key": logical_key or None,
+        "mime": source_mime,
+        "size_bytes": record.get("size_bytes") if isinstance(record.get("size_bytes"), int) else None,
+    }
+    result["source_refs_for_draft"] = [{"type": "object_id", "value": object_id_value, "role": source_role}]
+    result["draft_provenance_suggestions"] = {
+        "source": "object_manifest",
+        "derived_from": [object_id_value],
+    }
+
+
+def source_intake_next_safe_actions(result: dict[str, Any]) -> list[str]:
+    status = result.get("objet_status")
+    actions = ["create-draft --dry-run with source_refs_for_draft", "mint only through separate human approval"]
+    if status == "manifested":
+        return actions
+    if status == "candidate_unmanifested":
+        return [
+            "register or scan the source in metadata-only mode if needed",
+            "run the object storage / objet setup planner before real objet capture",
+            "wait for a future explicit objet capture/import flow before canonical object_id citation",
+            *actions,
+        ]
+    if status == "provider_reference":
+        return [
+            "export or register provider metadata without storing raw provider URLs",
+            "wait for a future provider capture/import flow before canonical object_id citation",
+            *actions,
+        ]
+    if status == "ai_artifact":
+        return [
+            "keep the AI artifact ref as provenance context",
+            *actions,
+        ]
+    return []
+
+
+def object_storage_context(root: Path) -> dict[str, Any]:
+    provider_doc = load_provider_bindings(root)
+    candidates: list[dict[str, Any]] = []
+    for binding in provider_bindings_list(provider_doc):
+        provider = str(binding.get("provider") or "")
+        provider_kind = str(binding.get("provider_kind") or "")
+        resource = binding.get("resource") if isinstance(binding.get("resource"), dict) else {}
+        if provider.lower() not in SOURCE_INTAKE_OBJECT_STORAGE_PROVIDERS and provider_kind.lower() not in SOURCE_INTAKE_OBJECT_STORAGE_PROVIDERS:
+            continue
+        candidates.append(
+            drop_none_values(
+                {
+                    "binding_id": binding.get("binding_id"),
+                    "provider": provider,
+                    "provider_kind": provider_kind or None,
+                    "bucket": resource.get("bucket"),
+                    "prefix": resource.get("prefix"),
+                    "visibility": resource.get("visibility"),
+                    "enabled": binding.get("enabled") is not False,
+                }
+            )
+        )
+    configured = any(item.get("enabled") for item in candidates)
+    return {
+        "object_storage_configured": configured,
+        "candidate_storage_providers": candidates,
+        "manual_setup_required": not configured,
+        "upload_performed": False,
+        "provider_api_called": False,
+    }
+
+
+def normalize_object_id(value: str, blockers: list[str]) -> str:
+    text = value.strip().lower()
+    if SHA256_RE.match(text):
+        text = f"sha256:{text}"
+    if not OBJECT_ID_RE.match(text):
+        blockers.append("object_id must be formatted as sha256:<64 lowercase hex characters>.")
+        return ""
+    return text
+
+
+def object_id_from_objet_ref(value: str, blockers: list[str]) -> str:
+    text = value.strip().lower()
+    if not text.startswith("objet:"):
+        blockers.append("objet_ref must be formatted as objet:sha256:<64 lowercase hex characters>.")
+        return ""
+    return normalize_object_id(text.removeprefix("objet:"), blockers)
+
+
+def find_manifest_record(root: Path, object_id_value: str) -> dict[str, Any] | None:
+    if not object_id_value:
+        return None
+    for record in load_manifest_records(root):
+        if str(record.get("object_id") or "").lower() == object_id_value.lower():
+            return record
+    return None
+
+
+def manifest_record_for_local_path(root: Path, candidate: Path) -> dict[str, Any] | None:
+    relative: str | None = None
+    try:
+        if candidate.resolve().is_relative_to(root.resolve()):
+            relative = archive_relative_path(candidate, root)
+    except (OSError, RuntimeError, ValueError, ArchivePathError):
+        relative = None
+    if not relative:
+        return None
+    for record in load_manifest_records(root):
+        if record.get("logical_key") == relative:
+            return record
+        locations = record.get("locations")
+        if isinstance(locations, list):
+            for location in locations:
+                if isinstance(location, dict) and location.get("path") == relative:
+                    return record
+    return None
+
+
+def local_path_inside_registered_source_root(root: Path, candidate: Path) -> bool:
+    for binding in source_bindings_list(load_source_bindings(root)):
+        source_id = str(binding.get("source_id") or "")
+        root_ref = str(binding.get("root_ref") or "")
+        roots: list[Path] = []
+        if root_ref.startswith("archive:"):
+            try:
+                roots.append(archive_internal_path(root, root_ref.removeprefix("archive:")))
+            except ArchiveServiceError:
+                pass
+        elif root_ref and os.environ.get(root_ref):
+            roots.append(Path(os.environ[root_ref]).expanduser().resolve())
+        local_profile_root = local_source_root_path(root, source_id)
+        if local_profile_root is not None:
+            roots.append(local_profile_root)
+        for source_root in roots:
+            try:
+                if candidate.resolve().is_relative_to(source_root.resolve()):
+                    return True
+            except (OSError, RuntimeError, ValueError):
+                continue
+    return False
+
+
+def normalize_source_intake_relative_path(value: str) -> str:
+    normalized = normalize_archive_relative_path(value)
+    if contains_forbidden_location_reference(normalized) or source_intake_secret_like(normalized):
+        raise ArchivePathError("relative path must not contain provider URLs, local paths, tokens, or secrets")
+    return normalized
+
+
+def safe_source_label(title: str | None, filename: str, redact_local_paths: bool) -> str:
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    suffix = Path(filename).suffix.lower()
+    if redact_local_paths:
+        return f"local-file{suffix}" if suffix else "local-file"
+    return filename
+
+
+def safe_source_map_label(title: str | None, item: dict[str, Any]) -> str:
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    item_title = item.get("title")
+    if isinstance(item_title, str) and item_title.strip():
+        return item_title.strip()
+    relative = item.get("relative_path")
+    if isinstance(relative, str) and relative.strip():
+        return Path(relative.replace("\\", "/")).name
+    item_id = item.get("item_id")
+    return str(item_id or "source-map-item")
+
+
+def safe_mime(value: str | None) -> str | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9.+-]{0,99}/[A-Za-z0-9][A-Za-z0-9.+-]{0,99}$", text):
+        return None
+    if source_intake_secret_like(text) or contains_forbidden_location_reference(text):
+        return None
+    return text
+
+
+def classify_source_kind(mime: str | None, path_or_ext: str | None = None) -> str:
+    suffix = Path(path_or_ext or "").suffix.lower()
+    if mime:
+        if mime.startswith("image/"):
+            return "image"
+        if mime.startswith("audio/"):
+            return "audio"
+        if mime.startswith("video/"):
+            return "video"
+        if mime in {"application/pdf"}:
+            return "document"
+        if mime.startswith("text/"):
+            return "text"
+    if suffix in {".ppt", ".pptx"}:
+        return "presentation"
+    if suffix in {".xls", ".xlsx", ".csv"}:
+        return "spreadsheet"
+    if suffix in {".pdf", ".doc", ".docx", ".hwp", ".hwpx", ".odt", ".rtf"}:
+        return "document"
+    if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic"}:
+        return "image"
+    if suffix in {".mp3", ".wav", ".m4a", ".flac", ".ogg"}:
+        return "audio"
+    if suffix in {".mp4", ".mov", ".mkv", ".webm"}:
+        return "video"
+    if suffix in {".md", ".markdown", ".txt"}:
+        return "text"
+    return "file"
+
+
+def safe_source_intake_text(value: str) -> bool:
+    return not (contains_forbidden_location_reference(value) or DRAFT_SECRET_VALUE_RE.search(value) or source_intake_secret_like(value))
+
+
+def safe_source_intake_ref(value: str) -> bool:
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    if "@" in text or "://" in text or "\\" in text or "/" in text or "#" in text or "?" in text or "\x00" in text:
+        return False
+    if contains_forbidden_location_reference(text) or source_intake_secret_like(text):
+        return False
+    return bool(SOURCE_INTAKE_SAFE_REF_RE.match(text))
+
+
+def safe_source_intake_artifact_kind(value: str) -> bool:
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    if contains_forbidden_location_reference(text) or source_intake_secret_like(text):
+        return False
+    return bool(SOURCE_INTAKE_ARTIFACT_KIND_RE.match(text))
+
+
+def source_intake_has_provider_url(value: str) -> bool:
+    return bool(re.search(r"(?i)\b(?:s3|b2|r2|gs)://|://", value))
+
+
+def source_intake_secret_like(value: str) -> bool:
+    return bool(DRAFT_SECRET_VALUE_RE.search(value) or GITHUB_SECRET_LIKE_RE.search(value))
 
 
 def source_scan_dry_run(

@@ -34,6 +34,9 @@ read-zettel
 create-draft
   Create a draft zettel in inbox/.
 
+source-intake --dry-run
+  Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
+
 github-repo --dry-run
   Plan a private GitHub repository for a resolved WOM profile without writing files or calling GitHub.
 
@@ -406,6 +409,17 @@ python wom-kit\cli\archive.py object-storage .\tmp-my-archive `
 ```
 
 The default bucket/container proposal is `zettel-kasten-<normalized-profile-slug>-objets`, with `archives/<archive_id>/objets/` as the default prefix. Approved mode writes only `provider-bindings.yml`, a provider setup receipt, and optional ignored local profile hints when `--write-local-profile` is supplied.
+
+Plan a source/objet reference before drafting:
+
+```powershell
+python wom-kit\cli\archive.py source-intake .\tmp-my-archive `
+  --dry-run `
+  --object-id sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
+  --format json
+```
+
+`source-intake` accepts exactly one locator mode: `--local-path`, `--source` with `--item-id`, `--source` with `--relative-path`, `--objet-ref`, `--object-id`, provider object refs, or AI artifact refs. It returns metadata-only classification, `objet_status`, object storage context, and safe `source_refs_for_draft` that can be passed to `create-draft --dry-run`.
 
 ## Tests
 

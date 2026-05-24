@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.21` | current public pre-release | `wom-kit/docs/releases/v0.2.21.md` |
+| `v0.2.22` | current public pre-release | `wom-kit/docs/releases/v0.2.22.md` |
+| `v0.2.21` | superseded public pre-release | `wom-kit/docs/releases/v0.2.21.md` |
 | `v0.2.20` | superseded public pre-release | `wom-kit/docs/releases/v0.2.20.md` |
 | `v0.2.19` | superseded public pre-release | `wom-kit/docs/releases/v0.2.19.md` |
 | `v0.2.18` | superseded public pre-release | `wom-kit/docs/releases/v0.2.18.md` |
@@ -48,6 +49,28 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.21` To `v0.2.22`
+
+This is a compatible source intake planner patch.
+
+What changed:
+
+- added `archive source-intake <archive-root> --dry-run --format json`,
+- added metadata-only locator planning for local files, source map items, source-relative paths, manifested objets, provider refs, and AI artifacts,
+- added draft-ready `source_refs_for_draft` so AI runtimes can feed safe refs into `create-draft --dry-run`,
+- added object storage context reporting from `provider-bindings.yml`,
+- added read-only MCP `source_intake_plan`.
+
+No private archive migration is required.
+
+This release does not read file bodies, calculate full hashes, copy, upload, import, OCR, transcribe, extract, call provider APIs, create drafts automatically, mint, or sync providers.
+
+```bash
+archive source-intake <archive-root> --dry-run \
+  --object-id sha256:<hash> \
+  --format json
+```
 
 ## From `v0.2.20` To `v0.2.21`
 

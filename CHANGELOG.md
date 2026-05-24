@@ -4,6 +4,26 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.22 - 2026-05-25
+
+Source intake planner patch.
+
+Added:
+
+- `archive source-intake <archive-root> --dry-run --format json`, a dry-run-only planner for classifying source/objet references before draft creation,
+- locator support for local files, source map items, source-relative paths, `objet:sha256:...`, technical `object_id`, provider object refs, and AI artifact refs,
+- stable source intake JSON with draft-ready `source_refs_for_draft`, objet status, object storage context, content access flags, blockers, warnings, and next safe actions,
+- object storage context reporting from `provider-bindings.yml`,
+- read-only MCP `source_intake_plan`.
+
+Compatibility:
+
+- no private archive migration is required,
+- source intake writes nothing,
+- no file body is read and no full SHA-256 is calculated,
+- no copy, upload, import, OCR, transcription, parser extraction, provider API call, automatic draft creation, mint, or provider sync is implemented,
+- MCP exposes no source intake apply/capture/upload/sync/provider API tool.
+
 ## v0.2.21 - 2026-05-25
 
 Object storage / objet setup planner patch.

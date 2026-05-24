@@ -85,6 +85,18 @@ archive object-storage <archive-root> --dry-run \
 
 Approved mode writes only local metadata and a setup receipt. It does not create buckets, start OAuth, call provider APIs, upload, sync, copy source files, hash files, or import source content.
 
+`archive source-intake --dry-run` reads `provider-bindings.yml` only to report object storage context:
+
+```text
+object_storage_configured
+candidate_storage_providers
+manual_setup_required
+upload_performed: false
+provider_api_called: false
+```
+
+Source intake never checks credentials, creates buckets, uploads, syncs, copies, hashes, imports, or calls provider APIs.
+
 ## Secret Boundary
 
 Provider bindings may store:

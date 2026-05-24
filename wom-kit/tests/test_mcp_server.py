@@ -201,6 +201,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("archive_runtime_context", tool_names)
             self.assertIn("github_repository_setup_plan", tool_names)
             self.assertIn("object_storage_setup_plan", tool_names)
+            self.assertIn("source_intake_plan", tool_names)
             self.assertIn("create_draft_zettel", tool_names)
             self.assertIn("archive_index", tool_names)
             self.assertIn("archive_search", tool_names)
@@ -247,6 +248,11 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("object_storage_connect", tool_names)
             self.assertNotIn("object_storage_upload", tool_names)
             self.assertNotIn("object_storage_sync", tool_names)
+            self.assertNotIn("source_intake_apply", tool_names)
+            self.assertNotIn("objet_capture", tool_names)
+            self.assertNotIn("object_storage_upload", tool_names)
+            self.assertNotIn("source_scan_apply", tool_names)
+            self.assertNotIn("provider_api_call", tool_names)
             self.assertNotIn("share_archive_scope", tool_names)
             self.assertNotIn("delegate_zet", tool_names)
             self.assertNotIn("attest_zet", tool_names)
@@ -624,6 +630,100 @@ class McpServerTests(unittest.TestCase):
                                 "profile_id": "profile:personal:HongGilDong",
                                 "profile_slug": "HongGilDong",
                                 "storage_account_ref": "storage:account:honggildong",
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_source_intake_plan_tool_writes_nothing_and_respects_allowed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            private_source = allowed_root / "My Private Diary.pdf"
+            private_source.write_text("metadata only\n", encoding="utf-8")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "source_intake_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "object_id": "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"])
+                self.assertTrue(structured["dry_run"])
+                self.assertEqual(structured["lifecycle_action"], "source_intake_plan")
+                self.assertEqual(structured["objet_status"], "manifested")
+                self.assertEqual(structured["source_refs_for_draft"][0]["type"], "object_id")
+                self.assertFalse(structured["content_access"]["content_read"])
+                self.assertFalse(structured["content_access"]["full_hash_calculated"])
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                redaction_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "source_intake_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "local_path": str(private_source),
+                                "redact_local_paths": False,
+                            },
+                        },
+                    },
+                )
+                redaction_result = redaction_response["result"]
+                self.assertFalse(redaction_result["isError"])
+                redacted = redaction_result["structuredContent"]
+                self.assertEqual(redacted["source_metadata"]["label"], "local-file.pdf")
+                self.assertEqual(redacted["source_metadata"]["local_path"], "<redacted-local-path>")
+                self.assertNotIn(str(private_source), json.dumps(redacted))
+                self.assertTrue(any("local path disclosure" in warning for warning in redacted["warnings"]))
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "source_intake_plan",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "object_id": "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136",
                             },
                         },
                     },

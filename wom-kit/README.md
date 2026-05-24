@@ -120,6 +120,9 @@ github-repo
 object-storage
   Plan object storage setup for WOM objets. Dry-run writes nothing. Approved mode writes only local provider metadata and a setup receipt; it does not create buckets, upload, sync, copy, hash, or import source files.
 
+source-intake
+  Classify one source/objet locator before draft creation. Dry-run only; returns safe source refs without reading bodies, hashing, copying, uploading, importing, OCR, transcription, extraction, or provider API calls.
+
 init
   Initialize a personal, company, or family archive from a safe template.
 
@@ -326,7 +329,9 @@ This file is a rebuildable map, not the archive itself. The durable archive stil
 
 `archive mint-zet --dry-run` checks the minting gate using `minting_rules` in `zettel-kasten/zettel-rules.yml`, with legacy `promotion_rules` as a v0.2 fallback. It reports blockers, warnings, missing human-review items, near duplicates, the proposed canonical path, the proposed mint receipt path, and the proposed draft snapshot path. It writes nothing. `archive mint-zettel` remains a v0.2 compatibility alias.
 
-`archive create-draft --dry-run` is the safe preview step after profile resolution and runtime context. It returns `lifecycle_action: create_draft`, the target archive summary, proposed `inbox/` path, frontmatter preview, body hash, blockers, warnings, and approval replay values. It writes nothing. For profile-bound AI draft writes, replay requires `--draft-approved-by` and `--expected-body-sha256`; this approval only creates an inbox draft and never mints canonical memory.
+`archive source-intake --dry-run` is the safe classification step before drafting from a source/objet. It accepts exactly one locator, returns `source_refs_for_draft`, reports object storage context, and writes nothing. It does not read file bodies, hash, copy, upload, import, OCR, transcribe, extract, call provider APIs, create drafts, or mint.
+
+`archive create-draft --dry-run` is the safe preview step after profile resolution, runtime context, and optional source intake. It returns `lifecycle_action: create_draft`, the target archive summary, proposed `inbox/` path, frontmatter preview, body hash, blockers, warnings, and approval replay values. It writes nothing. For profile-bound AI draft writes, replay requires `--draft-approved-by` and `--expected-body-sha256`; this approval only creates an inbox draft and never mints canonical memory.
 
 Real minting is CLI-only and intentionally explicit:
 
@@ -428,7 +433,7 @@ plans/phase-3-implementation-plan.md
 plans/phase-4-lineage-trust-plan.md
 ```
 
-Phase 2 is complete for the safe local toolkit subset. Phase 3 added real promotion. v0.2.8 added the product-facing minting lifecycle with canonical zettel, mint receipt, and draft snapshot outputs. v0.2.9 stabilizes minting terminology while preserving promotion compatibility. v0.2.10 adds dry-run `delegate-zet`, `attest-zet`, and `anchor-zet` lifecycle previews. v0.2.11 adds the delegate capability contract with `counterparty_bound` and `claimable_once` dry-run policies. v0.2.12 adds CLI-only real delegate receipt writes. v0.2.13 adds the WOM naming baseline and compatibility-safe aliases: `mint-zet`, `parcel`, and `admit`. v0.2.14 records the `WOM`/`zet`/`ZET` distinction and defines the WOM Safe HTML Profile as a compatibility-safe documentation baseline. v0.2.15 adds `archive check-safe-html --dry-run` as a read-only CLI validator that previews WOM Safe HTML Profile compatibility for v0.2 Markdown-compatible zets. v0.2.16 adds the read-only WOM AI Runtime Context Layer so terminal-capable AI runtimes can confirm archive identity, type, paths, write policy, and safe actions before drafting or mint approval. v0.2.17 adds the read-only WOM Profile Registry dry-run layer so AI runtimes resolve the requested target profile before assuming the default archive. v0.2.18 adds profile-aware `create-draft --dry-run` and replay-safe inbox draft creation for AI runtimes. v0.2.19 renames the implementation/tooling layer to WOM-kit with `wom-kit/` and `wom_kit`. v0.2.20 adds a dry-run-first GitHub repository setup planner for WOM profiles with local-only approval metadata. v0.2.21 adds a dry-run-first object storage / objet setup planner for WOM profiles with local-only approval metadata. Phase 4 adds the lineage/trust dry-run baseline and the first owner/operator identity model. Phase 7B adds CLI-only real ownership transfer plus provider change planning. Phase 8B adds one-command setup orchestration above the Docker-first runtime. Phase 8C hardens the local installer and container runtime. Phase 9 starts Notion and Google Drive export import. Real parcel/workpack import, real share/merge/fork, live external provider API sync, OS keyring integration, UI, Markdown-to-WOM-Safe-HTML conversion, profile registration, token storage, source content import, object storage upload/sync, and CI matrix remain future work.
+Phase 2 is complete for the safe local toolkit subset. Phase 3 added real promotion. v0.2.8 added the product-facing minting lifecycle with canonical zettel, mint receipt, and draft snapshot outputs. v0.2.9 stabilizes minting terminology while preserving promotion compatibility. v0.2.10 adds dry-run `delegate-zet`, `attest-zet`, and `anchor-zet` lifecycle previews. v0.2.11 adds the delegate capability contract with `counterparty_bound` and `claimable_once` dry-run policies. v0.2.12 adds CLI-only real delegate receipt writes. v0.2.13 adds the WOM naming baseline and compatibility-safe aliases: `mint-zet`, `parcel`, and `admit`. v0.2.14 records the `WOM`/`zet`/`ZET` distinction and defines the WOM Safe HTML Profile as a compatibility-safe documentation baseline. v0.2.15 adds `archive check-safe-html --dry-run` as a read-only CLI validator that previews WOM Safe HTML Profile compatibility for v0.2 Markdown-compatible zets. v0.2.16 adds the read-only WOM AI Runtime Context Layer so terminal-capable AI runtimes can confirm archive identity, type, paths, write policy, and safe actions before drafting or mint approval. v0.2.17 adds the read-only WOM Profile Registry dry-run layer so AI runtimes resolve the requested target profile before assuming the default archive. v0.2.18 adds profile-aware `create-draft --dry-run` and replay-safe inbox draft creation for AI runtimes. v0.2.19 renames the implementation/tooling layer to WOM-kit with `wom-kit/` and `wom_kit`. v0.2.20 adds a dry-run-first GitHub repository setup planner for WOM profiles with local-only approval metadata. v0.2.21 adds a dry-run-first object storage / objet setup planner for WOM profiles with local-only approval metadata. v0.2.22 adds dry-run-only source intake planning before draft creation. Phase 4 adds the lineage/trust dry-run baseline and the first owner/operator identity model. Phase 7B adds CLI-only real ownership transfer plus provider change planning. Phase 8B adds one-command setup orchestration above the Docker-first runtime. Phase 8C hardens the local installer and container runtime. Phase 9 starts Notion and Google Drive export import. Real parcel/workpack import, real share/merge/fork, live external provider API sync, OS keyring integration, UI, Markdown-to-WOM-Safe-HTML conversion, profile registration, token storage, source content import, object storage upload/sync, source intake apply/capture, and CI matrix remain future work.
 
 ## Minimal MCP Server
 
@@ -460,6 +465,7 @@ archive_doctor
 archive_runtime_context
 github_repository_setup_plan
 object_storage_setup_plan
+source_intake_plan
 archive_init
 list_zettels
 read_zettel
@@ -476,7 +482,7 @@ anchor_zet_check
 ownership_transfer_check
 ```
 
-The MCP server is intentionally local and stdio-only. It exposes `wom_profile_list`, `wom_profile_resolve`, `archive_runtime_context`, `github_repository_setup_plan`, and `object_storage_setup_plan` as read-only, and exposes `mint_zettel_check`, legacy `promotion_check`, `share_check`, `delegate_zet_check`, `attest_zet_check`, `anchor_zet_check`, and `ownership_transfer_check` as dry-run only. `create_draft_zettel` can dry-run without writing, and normal profile-bound AI writes require draft approval plus expected body hash replay values. It does not expose real profile registration, token registration, real minting, legacy real promotion, real delegate writes, real sharing, real claim registries, real attestation writes, real anchoring writes, real merge, real fork, real ownership transfer, or object storage apply/create/connect/upload/sync tools; AI-created zettels go to `inbox/`. The ownership transfer check includes a provider change plan, but MCP still cannot apply local ownership changes or external provider account changes.
+The MCP server is intentionally local and stdio-only. It exposes `wom_profile_list`, `wom_profile_resolve`, `archive_runtime_context`, `github_repository_setup_plan`, `object_storage_setup_plan`, and `source_intake_plan` as read-only, and exposes `mint_zettel_check`, legacy `promotion_check`, `share_check`, `delegate_zet_check`, `attest_zet_check`, `anchor_zet_check`, and `ownership_transfer_check` as dry-run only. `create_draft_zettel` can dry-run without writing, and normal profile-bound AI writes require draft approval plus expected body hash replay values. It does not expose real profile registration, token registration, real minting, legacy real promotion, real delegate writes, real sharing, real claim registries, real attestation writes, real anchoring writes, real merge, real fork, real ownership transfer, source intake apply/capture, or object storage apply/create/connect/upload/sync tools; AI-created zettels go to `inbox/`. The ownership transfer check includes a provider change plan, but MCP still cannot apply local ownership changes or external provider account changes.
 
 Archive ownership is separate from archive operation. A family, company, or other group can own an archive while named people operate it. For example, parents can operate a child-related archive under a family owner, and a later receipt-backed transfer can move ownership to the child.
 
@@ -487,7 +493,7 @@ Archive ownership is separate from archive operation. A family, company, or othe
 - Zettels reference original files by `object_id`, not provider URLs.
 - Object storage providers are replaceable through manifests.
 - External provider accounts are described in `provider-bindings.yml` with env/keyring references, not secrets.
-- Objet storage setup can be planned locally, but bucket creation, upload, sync, copy, hashing, and source import remain outside WOM-kit v0.2.21.
+- Objet storage setup can be planned locally, but bucket creation, upload, sync, copy, hashing, source intake apply/capture, and source import remain outside WOM-kit v0.2.22.
 - Ownership transfer can update the archive identity locally, but external provider permissions remain manual until a future explicit integration.
 - Provenance and visibility fields are mandatory in shared or derived records.
 - Local profiles and secrets are ignored by default.

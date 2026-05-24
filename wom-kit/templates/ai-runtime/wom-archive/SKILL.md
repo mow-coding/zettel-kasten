@@ -34,6 +34,14 @@ Use `--strict` when the AI must stop on archive type mismatch or doctor warnings
 
 Before writing an AI-assisted inbox draft, preview it:
 
+If the draft is based on a presentation, document, image, provider item, or AI artifact, first classify the source/objet reference:
+
+```bash
+archive source-intake <archive-root> --dry-run --format json
+```
+
+Use exactly one locator mode. Continue with `create-draft --dry-run` only after `ok` is true and the returned `source_refs_for_draft` are safe for the intended draft.
+
 ```bash
 archive create-draft <archive-root> --dry-run --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --format json
 ```
@@ -56,6 +64,7 @@ Continue only when:
 Prefer these actions:
 
 - run create-draft dry-run,
+- run source-intake dry-run before drafting from source/objet material,
 - create approved draft in inbox,
 - run mint dry-run,
 - run check-safe-html dry-run,
@@ -71,6 +80,7 @@ Do not:
 - assume the current/default profile is the target when the user names another profile,
 - register profiles or tokens through MCP,
 - scan the whole disk,
+- read file bodies, hash files, copy, upload, import, OCR, transcribe, extract, or call provider APIs during source intake,
 - treat "upload" or "post" language as mint approval,
 - create a profile-bound AI draft without `draft_approved_by` and `expected_body_sha256`,
 - create an AI-assisted or AI-generated draft without `assisted_by`,

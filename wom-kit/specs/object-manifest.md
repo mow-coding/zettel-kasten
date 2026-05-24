@@ -1,6 +1,6 @@
 # Object Manifest Spec v0.1
 
-Original files are represented as content-addressed objects.
+Original files are represented as content-addressed objets. The technical identifier remains `object_id`.
 
 The zettel layer should reference originals by `object_id`. Actual storage locations belong in the object manifest or SQLite metadata tables.
 
@@ -43,11 +43,11 @@ aws_s3
 google_drive_export
 ```
 
-## Document Objects
+## Document Objets
 
-Object storage is not limited to media files.
+Objet storage is not limited to media files.
 
-Document files can also be represented as content-addressed source objects:
+Document files can also be represented as content-addressed source objets:
 
 ```text
 .hwp
@@ -63,12 +63,12 @@ Document files can also be represented as content-addressed source objects:
 
 If a `.md` file is a minted zettel, it belongs in the zettel layer.
 
-If a `.md` or `.txt` file is an imported original source, it belongs in the source/object layer and should be referenced by `object_id`.
+If a `.md` or `.txt` file is an imported original source, it belongs in the source/objet layer and should be referenced by `object_id`.
 
 The recommended default is:
 
 ```text
-original source files -> local object store and/or object storage
+original source files -> local objet store and/or object storage provider
 object identity -> object manifest
 derived text -> derived text records with provenance
 zets and metadata -> Git repository
@@ -77,7 +77,7 @@ search text -> SQLite/search index
 
 ## Derived Text Boundary
 
-Text derived from an object should not be confused with the object itself.
+Text derived from an objet should not be confused with the objet itself.
 
 Examples:
 
@@ -105,7 +105,7 @@ Born-digital text has higher authority than OCR-derived text. OCR and AI transcr
 
 ## Portability Rule
 
-The same object may have many physical locations but one logical identity.
+The same objet may have many physical locations but one logical identity.
 
 ```text
 logical duplication = bad
@@ -127,3 +127,9 @@ url: s3://...
 url: b2://...
 url: https://storage-provider.example/...
 ```
+
+## Source Intake Boundary
+
+`archive source-intake --dry-run` can resolve a supplied `object_id` or `objet:sha256:...` only when it already exists in `objects/manifests/files.jsonl`.
+
+If the objet is missing from the manifest, source intake blocks instead of inventing a fake `object_id`. For local files and provider refs that are not manifested yet, it returns candidate/provider refs and next safe actions only.

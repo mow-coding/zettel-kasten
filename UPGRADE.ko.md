@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.21` | current public pre-release | `wom-kit/docs/releases/v0.2.21.md` |
+| `v0.2.22` | current public pre-release | `wom-kit/docs/releases/v0.2.22.md` |
+| `v0.2.21` | superseded public pre-release | `wom-kit/docs/releases/v0.2.21.md` |
 | `v0.2.20` | superseded public pre-release | `wom-kit/docs/releases/v0.2.20.md` |
 | `v0.2.19` | superseded public pre-release | `wom-kit/docs/releases/v0.2.19.md` |
 | `v0.2.18` | superseded public pre-release | `wom-kit/docs/releases/v0.2.18.md` |
@@ -48,6 +49,28 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.21`에서 `v0.2.22`로
+
+이번 버전은 source intake를 먼저 dry-run으로 계획하는 호환 가능한 패치입니다.
+
+바뀐 점:
+
+- `archive source-intake <archive-root> --dry-run --format json` 명령을 추가했습니다.
+- local file, source map item, source-relative path, manifested objet, provider ref, AI artifact를 metadata-only로 분류합니다.
+- draft에 넘길 수 있는 안전한 `source_refs_for_draft`를 반환합니다.
+- `provider-bindings.yml`을 읽어 object storage context를 보고합니다.
+- MCP에는 읽기 전용 `source_intake_plan`만 추가했습니다.
+
+private archive migration은 필요 없습니다.
+
+이번 버전은 file body 읽기, full hash 계산, copy, upload, import, OCR, transcription, extraction, provider API 호출, 자동 draft creation, mint, provider sync를 하지 않습니다.
+
+```bash
+archive source-intake <archive-root> --dry-run \
+  --object-id sha256:<hash> \
+  --format json
+```
 
 ## `v0.2.20`에서 `v0.2.21`로
 

@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.18 planning and implementation baseline
+Status: v0.2.22 planning and implementation baseline
 
 ## Purpose
 
@@ -95,6 +95,24 @@ expected_body_sha256
 
 This approval only creates an inbox draft. Minting remains a separate `mint-zet --approve --reviewed-by` step.
 
+## Source Intake Dry-Run
+
+Before drafting from a presentation, document, image, provider item, or AI artifact, the AI should classify the source/objet reference:
+
+```bash
+archive source-intake <archive-root> --dry-run --format json
+```
+
+MCP:
+
+```text
+source_intake_plan
+```
+
+The planner accepts exactly one locator mode, such as a local path, source map item, `objet:sha256:...`, technical `object_id`, provider object ref, or AI artifact ref. It returns `source_refs_for_draft`, `objet_status`, object storage context, content access flags, blockers, warnings, and next safe actions.
+
+It writes nothing and does not read file bodies, calculate full hashes, copy, upload, import, OCR, transcribe, extract, call provider APIs, create drafts, or mint.
+
 ## Expected AI Runtime Flow
 
 An AI runtime should start with:
@@ -104,10 +122,11 @@ An AI runtime should start with:
 2. confirm or switch target archive context
 3. call runtime context with expected archive id and type
 4. check ok/blockers/warnings
-5. run create-draft dry-run and show the proposed inbox draft
-6. replay the draft only after human draft approval
-7. run mint dry-run before asking for mint approval
-8. use CLI approval paths for real minting
+5. run source-intake dry-run when a source/objet/provider/AI artifact is involved
+6. run create-draft dry-run with the returned safe source refs and show the proposed inbox draft
+7. replay the draft only after human draft approval
+8. run mint dry-run before asking for mint approval
+9. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -120,6 +139,7 @@ The skill tells the AI to:
 
 - resolve the requested profile first when the user names a target archive/profile,
 - then run runtime context,
+- run source-intake dry-run before drafting from source/objet material,
 - use create-draft dry-run before any profile-bound draft write,
 - keep paths archive-relative,
 - avoid exposing local absolute paths,
@@ -135,6 +155,7 @@ Allowed v0.2.18 direction:
 
 - profile list and profile resolve,
 - runtime context,
+- source intake dry-run,
 - doctor,
 - list/read zets,
 - create-draft dry-run and approved inbox draft writes,

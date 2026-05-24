@@ -79,6 +79,9 @@ github_repository_setup_plan
 object_storage_setup_plan
   Plan private object storage metadata for WOM objets. This is read-only and never creates buckets/containers, starts OAuth, calls provider APIs, uploads, syncs, copies, hashes, or imports source files.
 
+source_intake_plan
+  Classify one source/objet locator and return safe draft refs. This is read-only and never reads file bodies, calculates full hashes, copies, uploads, imports, OCRs, transcribes, extracts, calls provider APIs, creates drafts, or mints.
+
 archive_init
   Initialize a personal/company/family archive from safe defaults.
 
@@ -163,6 +166,7 @@ ownership_transfer_check
 - `archive_runtime_context` is read-only, uses archive-relative paths by default, and redacts local absolute paths unless `AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1` is set on the MCP server and the caller explicitly disables redaction.
 - `github_repository_setup_plan` is read-only and writes nothing. MCP exposes no GitHub apply/create/connect/push/sync tool.
 - `object_storage_setup_plan` is read-only and writes nothing. MCP exposes no object storage apply/create/connect/upload/sync tool.
+- `source_intake_plan` is read-only and writes nothing. MCP exposes no source intake apply, objet capture, object storage upload, source scan apply, provider API call, automatic draft creation, or mint tool.
 - `archive_index` writes only the generated search map at `db/archive-index.sqlite`.
 - `archive_onboarding_plan` previews first setup but does not create archive folders, provider bindings, or `.env` files.
 - `real_pilot_plan` previews the real-use path but does not create personal/team archive folders.

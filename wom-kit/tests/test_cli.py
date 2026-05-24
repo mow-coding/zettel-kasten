@@ -1134,6 +1134,395 @@ class ArchiveCliTests(unittest.TestCase):
                 (archive_root / "receipts" / "providers" / "zettel_kasten_honggildong_objets.object-storage-setup.json").exists()
             )
 
+    def test_source_intake_local_path_dry_run_returns_safe_metadata_and_writes_no_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = self.copy_fake_archive(tmp_root / "archive")
+            source_file = tmp_root / "presentation-notes.pdf"
+            source_file.write_text("fake pdf metadata only\n", encoding="utf-8")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--local-path",
+                    str(source_file),
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "source_intake_plan")
+            self.assertEqual(result["input_kind"], "local_path")
+            self.assertEqual(result["objet_status"], "candidate_unmanifested")
+            self.assertEqual(result["source_metadata"]["label"], "local-file.pdf")
+            self.assertEqual(result["source_metadata"]["extension"], ".pdf")
+            self.assertEqual(result["source_metadata"]["mime"], "application/pdf")
+            self.assertEqual(result["source_metadata"]["size_bytes"], source_file.stat().st_size)
+            self.assertEqual(result["source_metadata"]["local_path"], "<redacted-local-path>")
+            self.assertFalse(result["content_access"]["content_read"])
+            self.assertFalse(result["content_access"]["full_hash_calculated"])
+            self.assertFalse(result["content_access"]["copied"])
+            self.assertFalse(result["content_access"]["uploaded"])
+            self.assertNotIn(str(source_file), output)
+            self.assertTrue(any("outside registered source roots" in warning for warning in result["warnings"]))
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+    def test_source_intake_requires_exactly_one_locator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            local_file = archive_root / "objects" / "sample" / "fake-school-record.txt"
+            object_id = "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+
+            code, output = self.run_cli(["source-intake", str(archive_root), "--dry-run", "--format", "json"])
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("Exactly one" in blocker for blocker in result["blockers"]))
+
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--local-path",
+                    str(local_file),
+                    "--object-id",
+                    object_id,
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("Exactly one" in blocker for blocker in result["blockers"]))
+
+    def test_source_intake_manifest_object_id_and_missing_object_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            object_id = "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+
+            code, output = self.run_cli(
+                ["source-intake", str(archive_root), "--dry-run", "--object-id", object_id, "--format", "json"]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["objet_status"], "manifested")
+            self.assertEqual(result["objet_ref"]["ref"], f"objet:{object_id}")
+            self.assertEqual(result["source_refs_for_draft"][0]["type"], "object_id")
+            self.assertEqual(result["source_refs_for_draft"][0]["value"], object_id)
+
+            missing = "sha256:" + "f" * 64
+            code, output = self.run_cli(
+                ["source-intake", str(archive_root), "--dry-run", "--object-id", missing, "--format", "json"]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["objet_status"], "blocked")
+            self.assertTrue(any("does not resolve" in blocker for blocker in result["blockers"]))
+
+    def test_source_intake_source_map_item_resolves_to_draft_ready_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--source",
+                    "local:fake-sample-objects",
+                    "--item-id",
+                    "sourceitem:local_fake_sample_objects:fake-school-record",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["input_kind"], "source_map_item")
+            self.assertEqual(result["objet_status"], "candidate_unmanifested")
+            self.assertEqual(result["source_refs_for_draft"][0]["type"], "source_map_item")
+            self.assertEqual(
+                result["source_refs_for_draft"][0]["value"],
+                "sourceitem:local_fake_sample_objects:fake-school-record",
+            )
+            self.assertFalse(result["content_access"]["content_read"])
+
+    def test_source_intake_source_map_relative_path_resolves_and_blocks_traversal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--source",
+                    "local:fake-sample-objects",
+                    "--relative-path",
+                    "fake-family-memory.txt",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["input_kind"], "source_map_relative_path")
+            self.assertEqual(result["source_metadata"]["relative_path"], "fake-family-memory.txt")
+            self.assertEqual(result["source_refs_for_draft"][0]["type"], "source_map_item")
+            self.assertEqual(
+                result["source_refs_for_draft"][0]["value"],
+                "sourceitem:local_fake_sample_objects:fake-family-memory",
+            )
+            self.assertFalse(result["content_access"]["content_read"])
+
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--source",
+                    "local:fake-sample-objects",
+                    "--relative-path",
+                    "../secret.txt",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("relative_path is unsafe" in blocker for blocker in result["blockers"]))
+
+    def test_source_intake_provider_and_ai_artifact_safety(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--provider",
+                    "google_drive",
+                    "--provider-object-id",
+                    "drivefile_123",
+                    "--provider-kind",
+                    "presentation",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["objet_status"], "provider_reference")
+            self.assertEqual(result["provider_object_ref"]["provider_object_id"], "drivefile_123")
+            self.assertEqual(result["source_refs_for_draft"][0]["type"], "provider_object_ref")
+
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--provider",
+                    "google_drive",
+                    "--provider-object-id",
+                    "https://example.com/private-file",
+                    "--provider-kind",
+                    "presentation",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("provider_object_id" in blocker for blocker in result["blockers"]))
+
+            for bad_provider_ref in ["s3://private-bucket/object", "token-provider-object", "person@example.com"]:
+                with self.subTest(provider_object_id=bad_provider_ref):
+                    code, output = self.run_cli(
+                        [
+                            "source-intake",
+                            str(archive_root),
+                            "--dry-run",
+                            "--provider",
+                            "google_drive",
+                            "--provider-object-id",
+                            bad_provider_ref,
+                            "--provider-kind",
+                            "presentation",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(any("provider_object_id" in blocker for blocker in result["blockers"]))
+
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--ai-artifact-ref",
+                    "artifact:presentation-outline",
+                    "--artifact-kind",
+                    "presentation_script",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("AI artifact locator requires" in blocker for blocker in result["blockers"]))
+
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--ai-artifact-ref",
+                    "artifact:presentation-outline",
+                    "--runtime",
+                    "codex",
+                    "--artifact-kind",
+                    "presentation_script",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["objet_status"], "ai_artifact")
+            self.assertEqual(result["source_refs_for_draft"][0]["type"], "ai_artifact")
+            self.assertEqual(result["draft_provenance_suggestions"]["assisted_by"], ["ai_runtime:codex"])
+
+    def test_source_intake_object_storage_context_warns_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:no-objet-storage")
+            self.assertEqual(init_code, 0, init_output)
+            provider_path = archive_root / "provider-bindings.yml"
+            provider_doc = archive_cli.load_yaml(provider_path.read_text(encoding="utf-8"))
+            provider_doc["bindings"] = [
+                binding
+                for binding in provider_doc.get("bindings", [])
+                if binding.get("provider") not in {"object_storage", "cloudflare_r2", "backblaze_b2"}
+            ]
+            provider_path.write_text(archive_cli.dump_yaml(provider_doc), encoding="utf-8")
+            source_file = archive_root / "objects" / "sample.pdf"
+            source_file.parent.mkdir(parents=True, exist_ok=True)
+            source_file.write_text("metadata only\n", encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--local-path",
+                    str(source_file),
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertFalse(result["object_storage_context"]["object_storage_configured"])
+            self.assertTrue(result["object_storage_context"]["manual_setup_required"])
+            self.assertTrue(any("object storage / objet setup planner" in warning for warning in result["warnings"]))
+
+    def test_source_intake_refs_work_with_create_draft_and_mint_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            intake_code, intake_output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--object-id",
+                    "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(intake_code, 0, intake_output)
+            source_ref = json.loads(intake_output)["source_refs_for_draft"][0]
+            source_ref_arg = f"{source_ref['type']}:{source_ref['value']}"
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Objet backed draft",
+                    "--body",
+                    "# Objet backed draft\n\nThis draft cites an existing manifested objet for test coverage.",
+                    "--dry-run",
+                    "--source-ref",
+                    source_ref_arg,
+                    "--format",
+                    "json",
+                ]
+            )
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertEqual(dry_result["frontmatter_preview"]["source_refs"][0]["value"], source_ref["value"])
+
+            create_code, create_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Objet backed draft",
+                    "--body",
+                    "# Objet backed draft\n\nThis draft cites an existing manifested objet for test coverage.",
+                    "--source-ref",
+                    source_ref_arg,
+                    "--format",
+                    "json",
+                ]
+            )
+            create_result = json.loads(create_output)
+            self.assertEqual(create_code, 0, create_output)
+            draft_path = archive_root / create_result["path"]
+            match = archive_cli.FRONTMATTER_RE.match(draft_path.read_text(encoding="utf-8"))
+            self.assertIsNotNone(match)
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            body = draft_path.read_text(encoding="utf-8")[match.end() :].lstrip()
+            frontmatter["kind"] = "permanent_note"
+            frontmatter["facets"] = {"domain": "test"}
+            frontmatter["promotion"] = {
+                "stage": "promotion_candidate",
+                "ready_for_promotion": True,
+                "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
+            }
+            draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+
+            mint_code, mint_output = self.run_cli(
+                ["mint-zet", str(archive_root), "--path", create_result["path"], "--dry-run", "--format", "json"]
+            )
+            mint_result = json.loads(mint_output)
+            self.assertEqual(mint_code, 0, mint_output)
+            self.assertIn(
+                {"type": source_ref["type"], "value": source_ref["value"]},
+                mint_result["receipt_preview"]["source_refs"],
+            )
+
     def test_runtime_context_no_redact_local_paths_includes_local_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
