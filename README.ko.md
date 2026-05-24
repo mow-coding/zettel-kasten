@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.2.23 pre-release
+v0.2.24 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -49,6 +49,7 @@ v0.2.23 pre-release
 - WOM profile별 오브제 저장소 setup을 먼저 dry-run으로 계획하고, 승인 시에도 local metadata만 쓰는 objet storage setup planner.
 - AI runtime이 draft를 만들기 전에 source/objet reference를 dry-run으로 분류하는 source intake planner. 본문 읽기, hash 계산, import, upload, provider API 호출은 하지 않습니다.
 - `create-draft`가 source-intake plan JSON의 safe source refs를 draft preview/write로 안전하게 이어 줄 수 있습니다.
+- 기존 draft/canonical zet 하나에서 header를 read-only dry-run으로 미리 보는 block header preview가 있습니다. mint, 파일 수정, objet body 읽기, provider 호출은 하지 않습니다.
 
 아직 없는 것:
 
@@ -187,6 +188,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.24
 v0.2.23
 v0.2.22
 v0.2.21

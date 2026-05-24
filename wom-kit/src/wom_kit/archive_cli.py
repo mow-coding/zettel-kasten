@@ -15,6 +15,8 @@ Commands:
           Plan object storage metadata for WOM objets.
   source-intake
           Plan safe source/objet refs before draft creation.
+  block-header
+          Preview the derived block header for one draft or canonical zet.
   init    Create a new archive from a built-in template.
   index   Build a generated local SQLite search index.
   parcel Create a portable parcel from a view. Alias: pack.
@@ -1615,6 +1617,40 @@ def command_create_draft(args: argparse.Namespace) -> int:
         else:
             print(f"Created draft zettel {result['zettel_id']} at {result['path']}")
     return 0 if result.get("ok", True) else 1
+
+
+def command_block_header(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.block_header_preview(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            relative_path=args.path,
+            dry_run=args.dry_run,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Block header dry-run for {result.get('zettel_id') or result.get('source_path') or '-'}")
+        if result.get("source_path"):
+            print(f"Source path: {result['source_path']}")
+        if result.get("header_sha256"):
+            print(f"Header SHA-256: {result['header_sha256']}")
+        if result.get("block_hash_preview"):
+            print(f"Block hash preview: {result['block_hash_preview']}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        print("Block header dry-run passed." if result["ok"] else "Block header dry-run blocked.")
+    return 0 if result.get("ok") else 1
 
 
 def command_promote(args: argparse.Namespace) -> int:
@@ -3411,6 +3447,14 @@ def build_parser() -> argparse.ArgumentParser:
     read_target.add_argument("--path", help="Archive-relative zettel path to read.")
     read_zettel.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     read_zettel.set_defaults(func=command_read_zettel)
+
+    block_header = subcommands.add_parser("block-header", help="Preview the derived block header for one zet.")
+    block_header.add_argument("archive_root", help="Archive root to inspect.")
+    block_header.add_argument("--path", help="Archive-relative zet path inside inbox/ or zettels/.")
+    block_header.add_argument("--zettel-id", help="zet id to inspect.")
+    block_header.add_argument("--dry-run", action="store_true", help="Preview the block header without writing files.")
+    block_header.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    block_header.set_defaults(func=command_block_header)
 
     create_draft = subcommands.add_parser("create-draft", help="Create a draft zettel in inbox/.")
     create_draft.add_argument("archive_root", help="Archive root to write to.")

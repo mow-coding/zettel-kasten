@@ -203,6 +203,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("object_storage_setup_plan", tool_names)
             self.assertIn("source_intake_plan", tool_names)
             self.assertIn("create_draft_zettel", tool_names)
+            self.assertIn("block_header_check", tool_names)
             self.assertIn("archive_index", tool_names)
             self.assertIn("archive_search", tool_names)
             self.assertIn("promotion_check", tool_names)
@@ -233,6 +234,15 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("mint_zettel", tool_names)
             self.assertNotIn("archive_mint_zettel", tool_names)
             self.assertNotIn("mint_zettel_apply", tool_names)
+            self.assertNotIn("block_header_apply", tool_names)
+            self.assertNotIn("mint_block", tool_names)
+            self.assertNotIn("block_mint", tool_names)
+            self.assertNotIn("token", tool_names)
+            self.assertNotIn("coin", tool_names)
+            self.assertNotIn("NFT", tool_names)
+            self.assertNotIn("staking", tool_names)
+            self.assertNotIn("transport", tool_names)
+            self.assertNotIn("relay", tool_names)
             self.assertNotIn("wom_profile_register", tool_names)
             self.assertNotIn("wom_profile_apply", tool_names)
             self.assertNotIn("wom_profile_token_register", tool_names)
@@ -1240,6 +1250,41 @@ class McpServerTests(unittest.TestCase):
                 self.assertTrue(result["dry_run"])
                 self.assertEqual(result["proposed_path"], "inbox/zet_20260524_mcp_dry_run.md")
                 self.assertFalse((archive_root / result["proposed_path"]).exists())
+        finally:
+            self.stop_server(process)
+
+    def test_block_header_check_writes_nothing(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "block_header_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "path": "inbox/zet_20260519_draft_ai_lunch_note.md",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "block_header_preview")
+                self.assertEqual(structured["source_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+                self.assertEqual(structured["block_model"]["block_formula"], "zet + header")
+                self.assertRegex(structured["header_sha256"], r"^[0-9a-f]{64}$")
+                self.assertNotIn(str(archive_root.resolve()), json.dumps(structured))
         finally:
             self.stop_server(process)
 

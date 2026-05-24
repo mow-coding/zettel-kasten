@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.23` | current public pre-release | `wom-kit/docs/releases/v0.2.23.md` |
+| `v0.2.24` | current public pre-release | `wom-kit/docs/releases/v0.2.24.md` |
+| `v0.2.23` | superseded public pre-release | `wom-kit/docs/releases/v0.2.23.md` |
 | `v0.2.22` | superseded public pre-release | `wom-kit/docs/releases/v0.2.22.md` |
 | `v0.2.21` | superseded public pre-release | `wom-kit/docs/releases/v0.2.21.md` |
 | `v0.2.20` | superseded public pre-release | `wom-kit/docs/releases/v0.2.20.md` |
@@ -50,6 +51,28 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.23` To `v0.2.24`
+
+This is a compatible block header preview patch.
+
+What changed:
+
+- added `archive block-header <archive-root> --path <zet-path> --dry-run --format json`,
+- added `archive block-header <archive-root> --zettel-id <id> --dry-run --format json`,
+- added read-only header derivation for `block = zet + header`,
+- added deterministic body, header, and block hash previews,
+- added read-only MCP `block_header_check`.
+
+No private archive migration is required.
+
+This release does not modify zets, mint, write receipts, read referenced objet/source file bodies, calculate referenced source hashes, follow provider URLs, call provider APIs, or implement transport/economic layers.
+
+Safe conceptual order:
+
+```text
+zet -> header -> block -> receipt -> attestations -> anchors -> possible token layer later
+```
 
 ## From `v0.2.22` To `v0.2.23`
 

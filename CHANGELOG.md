@@ -4,6 +4,28 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.24 - 2026-05-25
+
+Block header preview patch.
+
+Added:
+
+- `archive block-header <archive-root> --path <zet-path> --dry-run --format json`,
+- `archive block-header <archive-root> --zettel-id <id> --dry-run --format json`,
+- read-only header derivation for `block = zet + header`,
+- deterministic `zet_body_sha256`, `header_sha256`, and `block_hash_preview`,
+- referenced zet, objet, and receipt summaries from frontmatter metadata,
+- read-only MCP `block_header_check`.
+
+Compatibility:
+
+- no private archive migration is required,
+- no zets are modified,
+- no minting or receipt writing is performed,
+- no referenced objet/source file body is read or hashed,
+- no provider URL is followed and no provider API is called,
+- ZET remains the sharing layer; the product term is `block`, not a ZET-prefixed block term.
+
 ## v0.2.23 - 2026-05-25
 
 Source intake draft composer patch.

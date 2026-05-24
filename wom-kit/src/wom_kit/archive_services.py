@@ -137,6 +137,7 @@ SOURCE_INTAKE_OBJECT_STORAGE_PROVIDERS = {
     "generic_s3",
     "generic-s3",
 }
+BLOCK_HEADER_VERSION = "wom-block-header/v0.1-draft"
 DRAFT_SECRET_VALUE_RE = re.compile(
     r"(?i)(?:api[_-]?key|secret|token|password|credential|aws_secret_access_key)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{12,}"
     r"|-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----"
@@ -1888,6 +1889,220 @@ def extract_mint_local_ai_sessions(frontmatter: dict[str, Any]) -> list[dict[str
     if isinstance(session, dict):
         return [json_safe(session)]
     return []
+
+
+def normalize_text_for_block_hash(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def sha256_json_hex(value: Any) -> str:
+    encoded = json.dumps(json_safe(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def header_string_is_private_or_unsafe(value: str) -> bool:
+    return bool(
+        contains_forbidden_location_reference(value)
+        or "://" in value
+        or DRAFT_SECRET_VALUE_RE.search(value)
+        or GITHUB_SECRET_LIKE_RE.search(value)
+    )
+
+
+def sanitize_block_header_value(value: Any, warnings: list[str], field_path: str = "$") -> Any:
+    if isinstance(value, dict):
+        return {str(key): sanitize_block_header_value(child, warnings, f"{field_path}.{key}") for key, child in value.items()}
+    if isinstance(value, list):
+        return [sanitize_block_header_value(child, warnings, f"{field_path}[{index}]") for index, child in enumerate(value)]
+    if isinstance(value, str):
+        if header_string_is_private_or_unsafe(value):
+            warnings.append(f"Redacted private or unsafe reference in {field_path}.")
+            return "<redacted-reference>"
+        return value
+    return json_safe(value)
+
+
+def unique_dicts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        key = json.dumps(json_safe(item), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
+def collect_object_refs_from_value(value: Any, source: str, refs: list[dict[str, Any]]) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if isinstance(child, str):
+                text = child.strip()
+                if key == "object_id" and OBJECT_ID_RE.match(text):
+                    refs.append({"type": "object_id", "value": text, "source": source})
+                elif key in {"objet_ref", "ref"} and text.startswith("objet:sha256:"):
+                    refs.append({"type": "objet_ref", "value": text, "source": source})
+                elif text.startswith("objet:sha256:"):
+                    refs.append({"type": "objet_ref", "value": text, "source": source})
+            collect_object_refs_from_value(child, source, refs)
+        return
+    if isinstance(value, list):
+        for child in value:
+            collect_object_refs_from_value(child, source, refs)
+
+
+def collect_referenced_objets(frontmatter: dict[str, Any]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    assets = frontmatter.get("assets")
+    if isinstance(assets, list):
+        collect_object_refs_from_value(assets, "assets", refs)
+    source_refs = frontmatter.get("source_refs")
+    if isinstance(source_refs, list):
+        for item in source_refs:
+            if not isinstance(item, dict):
+                continue
+            ref_type = str(item.get("type") or "").strip()
+            value = str(item.get("value") or "").strip()
+            if ref_type == "object_id" and OBJECT_ID_RE.match(value):
+                refs.append({"type": "object_id", "value": value, "source": "source_refs"})
+            elif ref_type == "objet_ref" and value.startswith("objet:sha256:"):
+                refs.append({"type": "objet_ref", "value": value, "source": "source_refs"})
+            elif value.startswith("objet:sha256:"):
+                refs.append({"type": "objet_ref", "value": value, "source": "source_refs"})
+    source_intake = frontmatter.get("source_intake")
+    if isinstance(source_intake, dict):
+        collect_object_refs_from_value(source_intake, "source_intake", refs)
+    return unique_dicts(refs)
+
+
+def collect_referenced_zets(frontmatter: dict[str, Any]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    edges = frontmatter.get("edges")
+    if not isinstance(edges, list):
+        return refs
+    for item in edges:
+        if not isinstance(item, dict):
+            continue
+        target = str(item.get("target") or item.get("zettel_id") or item.get("target_id") or "").strip()
+        if not target.startswith("zet_"):
+            continue
+        refs.append(drop_none_values({"id": target, "edge_type": item.get("type") if isinstance(item.get("type"), str) else None}))
+    return unique_dicts(refs)
+
+
+def collect_receipts_from_value(value: Any, source: str, refs: list[dict[str, Any]]) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if isinstance(child, str):
+                text = child.strip()
+                if ("receipt" in key or text.startswith("receipts/")) and not header_string_is_private_or_unsafe(text):
+                    refs.append({"path": text, "source": source})
+            collect_receipts_from_value(child, source, refs)
+        return
+    if isinstance(value, list):
+        for child in value:
+            collect_receipts_from_value(child, source, refs)
+
+
+def collect_referenced_receipts(frontmatter: dict[str, Any]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for key in ["mint", "promotion", "source_intake"]:
+        value = frontmatter.get(key)
+        if isinstance(value, dict):
+            collect_receipts_from_value(value, key, refs)
+    return unique_dicts(refs)
+
+
+def block_header_preview(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("block-header is dry-run only; pass --dry-run.")
+    if bool(zettel_id) == bool(relative_path):
+        blockers.append("Exactly one of zettel_id or path is required.")
+
+    path: Path | None = None
+    source_path: str | None = None
+    frontmatter: dict[str, Any] = {}
+    body = ""
+    if not blockers:
+        try:
+            path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
+            source_path = archive_relative_path(path, root)
+            raw_text = path.read_text(encoding="utf-8")
+            frontmatter, body = split_zettel_text(raw_text)
+            frontmatter = json_safe(frontmatter)
+        except (ArchiveServiceError, OSError, UnicodeError) as exc:
+            blockers.append(str(exc))
+
+    resolved_zettel_id = str(frontmatter.get("id") or zettel_id or "")
+    title = frontmatter.get("title")
+    status = frontmatter.get("status")
+    kind = frontmatter.get("kind")
+    referenced_zets = collect_referenced_zets(frontmatter)
+    referenced_objets = collect_referenced_objets(frontmatter)
+    referenced_receipts = collect_referenced_receipts(frontmatter)
+    header_preview = {
+        "header_version": BLOCK_HEADER_VERSION,
+        "zettel_id": resolved_zettel_id or None,
+        "archive_id": str(frontmatter.get("archive_id") or archive_id),
+        "title": title,
+        "status": status,
+        "kind": kind,
+        "source_refs": frontmatter.get("source_refs") if isinstance(frontmatter.get("source_refs"), list) else [],
+        "source_intake": frontmatter.get("source_intake") if isinstance(frontmatter.get("source_intake"), dict) else {},
+        "assets": frontmatter.get("assets") if isinstance(frontmatter.get("assets"), list) else [],
+        "objet_refs": referenced_objets,
+        "edges": frontmatter.get("edges") if isinstance(frontmatter.get("edges"), list) else [],
+        "referenced_zets": referenced_zets,
+        "mint": frontmatter.get("mint") if isinstance(frontmatter.get("mint"), dict) else {},
+        "promotion": frontmatter.get("promotion") if isinstance(frontmatter.get("promotion"), dict) else {},
+        "receipts": referenced_receipts,
+        "provenance": frontmatter.get("provenance") if isinstance(frontmatter.get("provenance"), dict) else {},
+        "visibility": frontmatter.get("visibility") if isinstance(frontmatter.get("visibility"), dict) else {},
+    }
+    header_preview = sanitize_block_header_value(header_preview, warnings, "$.header_preview")
+    normalized_body = normalize_text_for_block_hash(body)
+    zet_body_sha256 = hashlib.sha256(normalized_body.encode("utf-8")).hexdigest() if path is not None else None
+    header_sha256 = sha256_json_hex(header_preview) if path is not None else None
+    block_hash_preview = (
+        sha256_json_hex({"zet_body_sha256": zet_body_sha256, "header_sha256": header_sha256})
+        if path is not None
+        else None
+    )
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "block_header_preview",
+        "archive_id": archive_id,
+        "zettel_id": resolved_zettel_id or None,
+        "source_path": source_path,
+        "status": status,
+        "block_model": {
+            "zet_is_minimum_text_unit": True,
+            "block_formula": "zet + header",
+            "sharing_layer_note": "ZET is the sharing layer, not the block itself",
+        },
+        "zet_body_sha256": zet_body_sha256,
+        "header_preview": json_safe(header_preview),
+        "header_sha256": header_sha256,
+        "block_hash_preview": block_hash_preview,
+        "referenced_zets": json_safe(referenced_zets),
+        "referenced_objets": json_safe(referenced_objets),
+        "referenced_receipts": json_safe(referenced_receipts),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+    }
 
 
 def list_views(archive_root: Path | str) -> dict[str, Any]:

@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.23` | current public pre-release | `wom-kit/docs/releases/v0.2.23.md` |
+| `v0.2.24` | current public pre-release | `wom-kit/docs/releases/v0.2.24.md` |
+| `v0.2.23` | superseded public pre-release | `wom-kit/docs/releases/v0.2.23.md` |
 | `v0.2.22` | superseded public pre-release | `wom-kit/docs/releases/v0.2.22.md` |
 | `v0.2.21` | superseded public pre-release | `wom-kit/docs/releases/v0.2.21.md` |
 | `v0.2.20` | superseded public pre-release | `wom-kit/docs/releases/v0.2.20.md` |
@@ -50,6 +51,28 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.23`에서 `v0.2.24`로
+
+이번 버전은 block header를 read-only dry-run으로 미리 보는 호환 패치입니다.
+
+바뀐 점:
+
+- `archive block-header <archive-root> --path <zet-path> --dry-run --format json`을 추가했습니다.
+- `archive block-header <archive-root> --zettel-id <id> --dry-run --format json`을 추가했습니다.
+- `block = zet + header` 모델에 맞춰 header preview를 만듭니다.
+- body, header, block hash preview를 안정적으로 계산합니다.
+- MCP에는 read-only `block_header_check`만 추가했습니다.
+
+private archive migration은 필요 없습니다.
+
+이 버전은 zet 수정, mint, receipt 쓰기, referenced objet/source file body 읽기, referenced source hash 계산, provider URL 추적, provider API 호출, transport/economic layer 구현을 하지 않습니다.
+
+안전한 개념 순서는 다음과 같습니다.
+
+```text
+zet -> header -> block -> receipt -> attestations -> anchors -> possible token layer later
+```
 
 ## `v0.2.22`에서 `v0.2.23`으로
 

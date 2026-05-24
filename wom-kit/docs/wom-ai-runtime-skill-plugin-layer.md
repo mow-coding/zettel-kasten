@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.23 planning and implementation baseline
+Status: v0.2.24 planning and implementation baseline
 
 ## Purpose
 
@@ -121,6 +121,24 @@ archive create-draft <archive-root> --dry-run --source-intake-plan source-intake
 
 The draft composer validates the plan, merges safe refs into draft `source_refs`, stores optional `source_intake` metadata, and does not store the local plan file path. It does not read or follow the original source locator.
 
+## Block Header Preview
+
+After a draft or canonical zet exists, an AI runtime may preview its block header:
+
+```bash
+archive block-header <archive-root> --path <zet-path> --dry-run --format json
+```
+
+The model is:
+
+```text
+block = zet + header
+```
+
+The zet remains the minimum human-supervised text information unit. The header is derived from refs, hashes, provenance, policy, receipts, source refs, and objet refs. ZET is the later sharing layer for delegate, attest, and anchor flows; it is not the block itself.
+
+The preview writes nothing, does not mint, does not read referenced objet/source file bodies, does not calculate referenced source hashes, and does not call provider APIs.
+
 ## Expected AI Runtime Flow
 
 An AI runtime should start with:
@@ -133,8 +151,9 @@ An AI runtime should start with:
 5. run source-intake dry-run when a source/objet/provider/AI artifact is involved
 6. run create-draft dry-run with `--source-intake-plan` and show the proposed inbox draft
 7. replay the draft only after human draft approval
-8. run mint dry-run before asking for mint approval
-9. use CLI approval paths for real minting
+8. optionally run block-header dry-run for the draft/header preview
+9. run mint dry-run before asking for mint approval
+10. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -164,6 +183,7 @@ Allowed v0.2.18 direction:
 - profile list and profile resolve,
 - runtime context,
 - source intake dry-run,
+- block header preview,
 - doctor,
 - list/read zets,
 - create-draft dry-run, source-intake plan composition, and approved inbox draft writes,
@@ -180,6 +200,8 @@ Not allowed in this layer yet:
 - source scan apply,
 - source registration apply,
 - source intake apply/capture/upload/sync,
+- block header apply or block minting,
+- token, coin, NFT, staking, transport, relay, or provider apply tools,
 - real sharing,
 - real transfer,
 - UI automation as the canonical write path.

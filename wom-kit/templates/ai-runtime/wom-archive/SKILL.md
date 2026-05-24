@@ -50,6 +50,20 @@ Do not manually copy local paths from the source intake output into the draft. L
 
 After human draft approval, replay the same `draft_id`, `created_at`, `expected_body_sha256`, expected archive id/type, and profile id. Draft approval is only for `inbox/`; minting still needs a separate `mint-zet --approve --reviewed-by` step.
 
+To preview the header for an existing draft or canonical zet:
+
+```bash
+archive block-header <archive-root> --path <zet-path> --dry-run --format json
+```
+
+Remember the model:
+
+```text
+block = zet + header
+```
+
+The zet remains the minimum human-supervised text unit. ZET is the sharing layer, not the block itself.
+
 ## Read The Result
 
 Continue only when:
@@ -67,6 +81,7 @@ Prefer these actions:
 
 - run create-draft dry-run,
 - run source-intake dry-run before drafting from source/objet material,
+- run block-header dry-run when the user asks about block/header structure,
 - create approved draft in inbox,
 - run mint dry-run,
 - run check-safe-html dry-run,
@@ -84,6 +99,8 @@ Do not:
 - scan the whole disk,
 - read file bodies, hash files, copy, upload, import, OCR, transcribe, extract, or call provider APIs during source intake,
 - treat a source-intake plan as permission to capture/import/upload the source,
+- treat block-header preview as mint approval,
+- implement token, coin, NFT, staking, relay, transport, or provider mutation behavior,
 - treat "upload" or "post" language as mint approval,
 - create a profile-bound AI draft without `draft_approved_by` and `expected_body_sha256`,
 - create an AI-assisted or AI-generated draft without `assisted_by`,

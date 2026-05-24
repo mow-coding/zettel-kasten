@@ -218,6 +218,24 @@ Draft approval is scoped to `inbox_draft_only`. It must not be reused as mint ap
 
 When a draft cites a v0.2.22 source intake plan, v0.2.23 `create-draft --source-intake-plan` validates that the plan is a successful metadata-only dry-run before merging refs. The draft may store optional `source_intake` metadata, but must not store the local plan file path or follow local source paths from the plan.
 
+## Block Header Preview
+
+v0.2.24 adds a read-only preview step for the conceptual block model:
+
+```text
+block = zet + header
+```
+
+The zet remains the minimum human-supervised text information unit. The header is derived from refs, hashes, provenance, policy, receipts, source refs, and objet refs. ZET is the sharing layer that can later delegate, attest, and anchor blocks; it is not the block itself.
+
+`archive block-header --dry-run` reads one target zet file and writes nothing. It does not mint, modify zets, read referenced objet/source file bodies, calculate referenced source hashes, follow provider URLs, or call provider APIs.
+
+Safe order:
+
+```text
+zet -> header -> block -> receipt -> attestations -> anchors -> possible token layer later
+```
+
 ## Promotion Rules
 
 A zettel may be promoted from `inbox/` to `zettels/` only when the user explicitly approves.

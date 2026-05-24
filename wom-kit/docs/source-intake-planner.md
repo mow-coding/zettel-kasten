@@ -21,6 +21,7 @@ profile-resolve
 -> create-draft --dry-run with --source-intake-plan
 -> human draft approval
 -> create inbox draft
+-> optional block-header --dry-run
 -> mint only with separate approval
 ```
 

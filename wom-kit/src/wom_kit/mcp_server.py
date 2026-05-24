@@ -393,6 +393,20 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "block_header_check",
+        "description": "Dry-run preview of the derived block header for one draft or canonical zet.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "zettel_id": {"type": "string"},
+                "path": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "create_draft_zettel",
         "description": "Create an AI draft zettel in inbox/. This does not mint to canonical memory.",
         "inputSchema": {
@@ -702,6 +716,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_list_zettels(arguments)
     if name == "read_zettel":
         return tool_read_zettel(arguments)
+    if name == "block_header_check":
+        return tool_block_header_check(arguments)
     if name == "create_draft_zettel":
         return tool_create_draft_zettel(arguments)
     if name == "list_views":
@@ -1102,6 +1118,21 @@ def tool_read_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
         f"Read zettel {frontmatter.get('id', result['path']) if isinstance(frontmatter, dict) else result['path']}.",
         result,
     )
+
+
+def tool_block_header_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    zettel_id = optional_string_arg(arguments, "zettel_id")
+    relative_path = optional_string_arg(arguments, "path")
+    result = call_service(
+        archive_services.block_header_preview,
+        archive_root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        dry_run=bool(arguments.get("dry_run", True)),
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"block_header_check: {state}.", result)
 
 
 def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:

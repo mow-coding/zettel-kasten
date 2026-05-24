@@ -2,6 +2,14 @@
 
 A zettel is the canonical human-readable record unit.
 
+In current WOM language, the minimum human-supervised text information unit is the `zet`. A `block` does not replace a zet:
+
+```text
+block = zet + header
+```
+
+The header contains refs, hashes, provenance, policy, receipts, source refs, and objet refs around the zet. ZET is the later sharing/communication layer for delegate, attest, and anchor flows; it is not the block itself.
+
 The file format is Markdown with YAML frontmatter.
 
 AI may draft zettels in `inbox/`, but canonical records in `zettels/` require explicit human minting unless an archive changes that policy.
@@ -228,6 +236,25 @@ promotion:
 ```
 
 AI may prepare a minting candidate, but the user decides what becomes canonical durable memory in the default HITL flow.
+
+## Block Header Preview
+
+`archive block-header --dry-run` derives a header preview from one existing draft or canonical zet.
+
+The preview:
+
+- reads only the target zet file,
+- hashes only the zet body text for `zet_body_sha256`,
+- hashes only normalized header metadata for `header_sha256`,
+- hashes `{zet_body_sha256, header_sha256}` for `block_hash_preview`,
+- never hashes referenced objet/source file bodies,
+- never mints or writes receipts.
+
+Safe conceptual order:
+
+```text
+zet -> header -> block -> receipt -> attestations -> anchors -> possible token layer later
+```
 
 ## Minting Checklist
 

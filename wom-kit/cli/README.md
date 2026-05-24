@@ -34,6 +34,9 @@ read-zettel
 create-draft
   Create a draft zettel in inbox/. It can consume a validated source-intake dry-run plan with --source-intake-plan.
 
+block-header --dry-run
+  Preview the derived header for one draft or canonical zet. This returns `block = zet + header` metadata and hashes without writing, minting, reading objet bodies, or calling providers.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
@@ -438,6 +441,17 @@ python wom-kit\cli\archive.py create-draft .\tmp-my-archive `
 ```
 
 `create-draft` validates the plan before using it. The plan must be a successful source-intake dry-run with no blockers and metadata-only content access. WOM-kit does not read the original source file, follow local paths in the plan, or store the local plan file path in draft frontmatter.
+
+Preview a block header from an existing zet:
+
+```powershell
+python wom-kit\cli\archive.py block-header wom-kit\examples\fake-life-archive `
+  --path inbox\zet_20260519_draft_ai_lunch_note.md `
+  --dry-run `
+  --format json
+```
+
+The preview reads only the target zet file. It derives header metadata from frontmatter, hashes only the zet body text and normalized header preview, and does not hash referenced objet/source files.
 
 ## Tests
 

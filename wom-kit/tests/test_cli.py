@@ -1766,6 +1766,260 @@ class ArchiveCliTests(unittest.TestCase):
                     self.assertFalse(result["ok"])
                     self.assertTrue(result["blockers"])
 
+    def write_block_header_fixture(self, archive_root: Path) -> tuple[Path, str, str]:
+        object_id = "sha256:" + "b" * 64
+        intake_object_id = "sha256:" + "c" * 64
+        draft_path = archive_root / "inbox" / "zet_20260525_block_header_fixture.md"
+        frontmatter = {
+            "id": "zet_20260525_block_header_fixture",
+            "title": "Block header fixture",
+            "created_at": "2026-05-25T10:11:12+09:00",
+            "updated_at": "2026-05-25T10:11:12+09:00",
+            "archive_id": "archive:personal:fake-life",
+            "status": "draft",
+            "kind": "fleeting_capture",
+            "facets": {},
+            "assets": [{"object_id": object_id, "role": "source_scan", "label": "Fixture objet"}],
+            "edges": [{"type": "references", "target": "zet_20240504_fake_lunch_thought"}],
+            "source_refs": [
+                {"type": "object_id", "value": object_id, "role": "primary_source"},
+                {"type": "objet_ref", "value": f"objet:{intake_object_id}", "role": "context"},
+            ],
+            "source_intake": {
+                "plan_sha256": "sha256:" + "d" * 64,
+                "input_kind": "object_id",
+                "source_kind": "document",
+                "objet_status": "manifested",
+                "object_id": intake_object_id,
+                "receipt_path": "receipts/sources/source-intake-fixture.json",
+                "content_access": {
+                    "metadata_only": True,
+                    "content_read": False,
+                    "copied": False,
+                    "uploaded": False,
+                    "imported": False,
+                    "ocr_performed": False,
+                    "transcription_performed": False,
+                    "external_api_called": False,
+                    "full_hash_calculated": False,
+                },
+            },
+            "provenance": {
+                "created_by": "ai_runtime:codex",
+                "created_in": "archive:personal:fake-life",
+                "source": "user_conversation",
+                "derived_from": [object_id],
+            },
+            "visibility": {"scope": "private", "allowed_archives": [], "source_visibility": "private"},
+            "promotion": {
+                "stage": "captured",
+                "ready_for_promotion": False,
+                "receipt_path": "receipts/promotion/zet_20260525_block_header_fixture.promotion.json",
+            },
+            "mint": {
+                "stage": "mint_preview",
+                "receipt_path": "receipts/mint/zet_20260525_block_header_fixture.mint.json",
+            },
+        }
+        body = "# Block header fixture\n\nThis body is the only zet text hashed by block-header.\n"
+        draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+        object_path = archive_root / "objects" / "sample" / "block-fixture-source.txt"
+        object_path.parent.mkdir(parents=True, exist_ok=True)
+        object_path.write_text("original objet bytes that must not affect block header hashes\n", encoding="utf-8")
+        return draft_path, object_id, intake_object_id
+
+    def test_block_header_path_dry_run_returns_header_preview_and_writes_no_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+            code, output = self.run_cli(
+                [
+                    "block-header",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(before, after)
+            self.assertEqual(result["lifecycle_action"], "block_header_preview")
+            self.assertEqual(result["source_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+            self.assertEqual(result["block_model"]["block_formula"], "zet + header")
+            self.assertEqual(result["header_preview"]["header_version"], "wom-block-header/v0.1-draft")
+            self.assertRegex(result["zet_body_sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(result["header_sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(result["block_hash_preview"], r"^[0-9a-f]{64}$")
+
+    def test_block_header_zettel_id_dry_run_works(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            code, output = self.run_cli(
+                [
+                    "block-header",
+                    str(archive_root),
+                    "--zettel-id",
+                    "zet_20240504_fake_lunch_thought",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["source_path"], "zettels/zet_20240504_fake_lunch_thought.md")
+            self.assertEqual(result["zettel_id"], "zet_20240504_fake_lunch_thought")
+
+    def test_block_header_requires_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            code, output = self.run_cli(
+                [
+                    "block-header",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertFalse(result["dry_run"])
+            self.assertIn("block-header is dry-run only; pass --dry-run.", result["blockers"])
+
+    def test_block_header_requires_exactly_one_locator_and_blocks_missing_or_unsafe_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            cases = [
+                ["block-header", str(archive_root), "--dry-run", "--format", "json"],
+                [
+                    "block-header",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--zettel-id",
+                    "zet_20260519_draft_ai_lunch_note",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ],
+                ["block-header", str(archive_root), "--zettel-id", "zet_missing", "--dry-run", "--format", "json"],
+                ["block-header", str(archive_root), "--path", "../private.md", "--dry-run", "--format", "json"],
+            ]
+            for args in cases:
+                with self.subTest(args=args):
+                    code, output = self.run_cli(args)
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(result["blockers"])
+
+    def test_block_header_collects_refs_and_hashes_are_deterministic_without_objet_body_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path, object_id, intake_object_id = self.write_block_header_fixture(archive_root)
+            args = [
+                "block-header",
+                str(archive_root),
+                "--path",
+                archive_cli.archive_relative_path(draft_path, archive_root),
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+
+            first_code, first_output = self.run_cli(args)
+            second_code, second_output = self.run_cli(args)
+            first = json.loads(first_output)
+            second = json.loads(second_output)
+            self.assertEqual(first_code, 0, first_output)
+            self.assertEqual(second_code, 0, second_output)
+            self.assertEqual(first["zet_body_sha256"], second["zet_body_sha256"])
+            self.assertEqual(first["header_sha256"], second["header_sha256"])
+            self.assertEqual(first["block_hash_preview"], second["block_hash_preview"])
+            self.assertIn({"id": "zet_20240504_fake_lunch_thought", "edge_type": "references"}, first["referenced_zets"])
+            self.assertTrue(any(ref["value"] == object_id and ref["source"] == "assets" for ref in first["referenced_objets"]))
+            self.assertTrue(any(ref["value"] == intake_object_id and ref["source"] == "source_intake" for ref in first["referenced_objets"]))
+            receipt_paths = {item["path"] for item in first["referenced_receipts"]}
+            self.assertIn("receipts/mint/zet_20260525_block_header_fixture.mint.json", receipt_paths)
+            self.assertIn("receipts/promotion/zet_20260525_block_header_fixture.promotion.json", receipt_paths)
+            self.assertIn("receipts/sources/source-intake-fixture.json", receipt_paths)
+
+            object_file = archive_root / "objects" / "sample" / "block-fixture-source.txt"
+            object_file.write_text("changed objet bytes should not change block header preview\n", encoding="utf-8")
+            third_code, third_output = self.run_cli(args)
+            third = json.loads(third_output)
+            self.assertEqual(third_code, 0, third_output)
+            self.assertEqual(first["zet_body_sha256"], third["zet_body_sha256"])
+            self.assertEqual(first["header_sha256"], third["header_sha256"])
+            self.assertEqual(first["block_hash_preview"], third["block_hash_preview"])
+
+    def test_block_header_redacts_local_absolute_paths_from_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path, _object_id, _intake_object_id = self.write_block_header_fixture(archive_root)
+            frontmatter, body = archive_services.split_zettel_text(draft_path.read_text(encoding="utf-8"))
+            frontmatter["source_refs"].append({"type": "local_file", "value": str(Path(tmp) / "private" / "source.pdf")})
+            draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "block-header",
+                    str(archive_root),
+                    "--path",
+                    archive_cli.archive_relative_path(draft_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertNotIn(str(Path(tmp)), output)
+            self.assertIn("<redacted-reference>", output)
+            self.assertTrue(result["warnings"])
+
+    def test_block_header_hashes_sanitized_projection_not_raw_private_frontmatter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path, _object_id, _intake_object_id = self.write_block_header_fixture(archive_root)
+            frontmatter, body = archive_services.split_zettel_text(draft_path.read_text(encoding="utf-8"))
+
+            hashes = []
+            for private_ref in ["C:\\Users\\example\\private-one.pdf", "C:\\Users\\example\\private-two.pdf"]:
+                frontmatter["source_refs"] = [
+                    {"type": "local_file", "value": private_ref, "role": "private_debug_source"}
+                ]
+                draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+                code, output = self.run_cli(
+                    [
+                        "block-header",
+                        str(archive_root),
+                        "--path",
+                        archive_cli.archive_relative_path(draft_path, archive_root),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+                result = json.loads(output)
+                self.assertEqual(code, 0, output)
+                self.assertIn("<redacted-reference>", output)
+                self.assertTrue(result["warnings"])
+                hashes.append(result["header_sha256"])
+
+            self.assertEqual(hashes[0], hashes[1])
+
     def test_runtime_context_no_redact_local_paths_includes_local_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
