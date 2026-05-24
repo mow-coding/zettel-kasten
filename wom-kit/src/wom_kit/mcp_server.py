@@ -126,6 +126,30 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "object_storage_setup_plan",
+        "description": "Plan object storage metadata for WOM objets. Read-only; never creates buckets, uploads, syncs, copies, hashes, OAuth, or API calls.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "provider": {"type": "string"},
+                "profile_id": {"type": "string"},
+                "profile_slug": {"type": "string"},
+                "storage_account_ref": {"type": "string"},
+                "bucket_name": {"type": "string"},
+                "region": {"type": "string"},
+                "endpoint_ref": {"type": "string"},
+                "objet_prefix": {"type": "string"},
+                "visibility": {
+                    "type": "string",
+                    "enum": sorted(archive_services.OBJECT_STORAGE_ALLOWED_VISIBILITIES),
+                    "default": archive_services.OBJECT_STORAGE_DEFAULT_VISIBILITY,
+                },
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "archive_init",
         "description": "Initialize a new personal, company, or family archive from safe defaults. Target must be absent or empty.",
         "inputSchema": {
@@ -616,6 +640,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_archive_runtime_context(arguments)
     if name == "github_repository_setup_plan":
         return tool_github_repository_setup_plan(arguments)
+    if name == "object_storage_setup_plan":
+        return tool_object_storage_setup_plan(arguments)
     if name == "archive_init":
         return tool_archive_init(arguments)
     if name == "archive_onboarding_plan":
@@ -758,6 +784,25 @@ def tool_github_repository_setup_plan(arguments: dict[str, Any]) -> dict[str, An
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"github_repository_setup_plan: {state}.", result)
+
+
+def tool_object_storage_setup_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.object_storage_setup_plan,
+        archive_root,
+        provider=optional_string_arg(arguments, "provider"),
+        profile_id=optional_string_arg(arguments, "profile_id"),
+        profile_slug=optional_string_arg(arguments, "profile_slug"),
+        storage_account_ref=optional_string_arg(arguments, "storage_account_ref"),
+        bucket_name=optional_string_arg(arguments, "bucket_name"),
+        region=optional_string_arg(arguments, "region"),
+        endpoint_ref=optional_string_arg(arguments, "endpoint_ref"),
+        objet_prefix=optional_string_arg(arguments, "objet_prefix"),
+        visibility=optional_string_arg(arguments, "visibility") or archive_services.OBJECT_STORAGE_DEFAULT_VISIBILITY,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"object_storage_setup_plan: {state}.", result)
 
 
 def tool_archive_init(arguments: dict[str, Any]) -> dict[str, Any]:

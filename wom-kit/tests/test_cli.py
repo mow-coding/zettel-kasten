@@ -30,7 +30,7 @@ PROMOTION_CHECKLIST_IDS = [
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from wom_kit import archive_cli
+from wom_kit import archive_cli, archive_services
 
 
 class ArchiveCliTests(unittest.TestCase):
@@ -848,6 +848,290 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
             self.assertFalse(
                 (archive_root / "receipts" / "providers" / "zettel_kasten_honggildong.github-repository-setup.json").exists()
+            )
+
+    def test_object_storage_dry_run_generates_bucket_prefix_and_writes_no_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "object-storage",
+                    str(archive_root),
+                    "--dry-run",
+                    "--provider",
+                    "cloudflare-r2",
+                    "--profile-id",
+                    "profile:personal:HongGilDong",
+                    "--profile-slug",
+                    "HongGilDong",
+                    "--storage-account-ref",
+                    "storage:account:honggildong",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "object_storage_setup_plan")
+            self.assertEqual(result["proposed_bucket_name"], "zettel-kasten-honggildong-objets")
+            self.assertEqual(result["proposed_objet_prefix"], "archives/archive:personal:fake-life/objets/")
+            self.assertEqual(result["proposed_visibility"], "private")
+            self.assertEqual(result["provider"], "cloudflare-r2")
+            self.assertFalse(result["provider_setup_receipt_preview"]["external_actions"]["provider_api_called"])
+            self.assertFalse(result["provider_setup_receipt_preview"]["external_actions"]["files_uploaded"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+    def test_object_storage_invalid_provider_bucket_slug_and_secret_refs_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            common = [
+                "object-storage",
+                str(archive_root),
+                "--dry-run",
+                "--profile-id",
+                "profile:personal:test",
+                "--profile-slug",
+                "HongGilDong",
+                "--storage-account-ref",
+                "storage:account:test",
+                "--format",
+                "json",
+            ]
+
+            code, output = self.run_cli(common + ["--provider", "ftp"])
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("provider" in blocker for blocker in result["blockers"]))
+
+            for bad_bucket in ["Zettel-Kasten-Hong", "zettel.kasten.hong", "zettel_kasten_hong", "zettel-kasten/hong", "a" * 64]:
+                with self.subTest(bucket=bad_bucket):
+                    code, output = self.run_cli(common + ["--provider", "cloudflare-r2", "--bucket-name", bad_bucket])
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(any("bucket_name" in blocker for blocker in result["blockers"]))
+
+            for bad_slug in ["홍길동", "bad slug", "../bad", "person@example.com", "secret-slug"]:
+                with self.subTest(slug=bad_slug):
+                    code, output = self.run_cli(common + ["--provider", "cloudflare-r2", "--profile-slug", bad_slug])
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(any("profile_slug" in blocker for blocker in result["blockers"]))
+
+            for bad_ref in ["person@example.com", "https://example.com/private", "example.com", "../secret", "token-account"]:
+                with self.subTest(account_ref=bad_ref):
+                    code, output = self.run_cli(
+                        common + ["--provider", "cloudflare-r2", "--storage-account-ref", bad_ref]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(any("storage_account_ref" in blocker for blocker in result["blockers"]))
+
+            for bad_endpoint in ["https://example.com/private", "s3://bucket-name", "example.com", "http:foo", "../secret"]:
+                with self.subTest(endpoint_ref=bad_endpoint):
+                    code, output = self.run_cli(
+                        common
+                        + [
+                            "--provider",
+                            "cloudflare-r2",
+                            "--endpoint-ref",
+                            bad_endpoint,
+                        ]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(any("endpoint_ref" in blocker for blocker in result["blockers"]))
+
+    def test_object_storage_non_ascii_profile_without_explicit_slug_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            code, output = self.run_cli(
+                [
+                    "object-storage",
+                    str(archive_root),
+                    "--dry-run",
+                    "--provider",
+                    "cloudflare-r2",
+                    "--profile-id",
+                    "profile:personal:홍길동",
+                    "--storage-account-ref",
+                    "storage:account:honggildong",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("Non-ASCII" in blocker for blocker in result["blockers"]))
+
+    def test_object_storage_approve_requires_reviewed_by(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            code, output = self.run_cli(
+                [
+                    "object-storage",
+                    str(archive_root),
+                    "--approve",
+                    "--provider",
+                    "cloudflare-r2",
+                    "--profile-id",
+                    "profile:personal:HongGilDong",
+                    "--profile-slug",
+                    "HongGilDong",
+                    "--storage-account-ref",
+                    "storage:account:honggildong",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1)
+            self.assertIn("--reviewed-by", output)
+
+    def test_object_storage_approve_writes_only_local_metadata_and_doctor_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:objet-plan")
+            self.assertEqual(init_code, 0, init_output)
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "object-storage",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--write-local-profile",
+                    "--provider",
+                    "cloudflare-r2",
+                    "--profile-id",
+                    "profile:personal:HongGilDong",
+                    "--profile-slug",
+                    "HongGilDong",
+                    "--storage-account-ref",
+                    "storage:account:honggildong",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertFalse(result["dry_run"])
+            self.assertFalse(result["provider_api_called"])
+            self.assertFalse(result["bucket_created"])
+            self.assertFalse(result["files_uploaded"])
+            self.assertFalse(result["sync_started"])
+            self.assertFalse(result["files_hashed"])
+            self.assertFalse((archive_root / ".git").exists())
+            self.assertEqual(
+                set(result["changed_paths"]),
+                {
+                    "provider-bindings.yml",
+                    "receipts/providers/zettel_kasten_honggildong_objets.object-storage-setup.json",
+                    "profiles/local/object-storage-accounts.local.yml",
+                },
+            )
+            after = self.snapshot_archive_files(archive_root)
+            changed = {path for path in after if before.get(path) != after[path]} | {path for path in before if path not in after}
+            self.assertEqual(changed, set(result["changed_paths"]))
+            provider_text = (archive_root / "provider-bindings.yml").read_text(encoding="utf-8")
+            receipt_text = (archive_root / result["receipt_path"]).read_text(encoding="utf-8")
+            self.assertIn("provider: object_storage", provider_text)
+            self.assertIn("provider_kind: cloudflare-r2", provider_text)
+            self.assertIn("bucket: zettel-kasten-honggildong-objets", provider_text)
+            for text in [provider_text, receipt_text]:
+                self.assertNotIn("github_pat_", text)
+                self.assertNotIn("person@example.com", text)
+                self.assertNotIn("https://example.com", text)
+                self.assertNotIn("PRIVATE KEY", text)
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict", "--format", "json"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_object_storage_local_profile_preserves_multiple_buckets_for_same_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:objet-plan")
+            self.assertEqual(init_code, 0, init_output)
+
+            common = [
+                "object-storage",
+                str(archive_root),
+                "--approve",
+                "--reviewed-by",
+                "person:me",
+                "--write-local-profile",
+                "--provider",
+                "cloudflare-r2",
+                "--profile-id",
+                "profile:personal:HongGilDong",
+                "--profile-slug",
+                "HongGilDong",
+                "--storage-account-ref",
+                "storage:account:honggildong",
+                "--format",
+                "json",
+            ]
+            first_code, first_output = self.run_cli(common)
+            self.assertEqual(first_code, 0, first_output)
+            second_code, second_output = self.run_cli(common + ["--bucket-name", "zettel-kasten-honggildong-media"])
+            self.assertEqual(second_code, 0, second_output)
+
+            provider_data = archive_cli.load_yaml((archive_root / "provider-bindings.yml").read_text(encoding="utf-8"))
+            object_buckets = sorted(
+                binding["resource"]["bucket"]
+                for binding in provider_data["bindings"]
+                if binding.get("provider") == "object_storage"
+            )
+            self.assertEqual(
+                object_buckets,
+                ["zettel-kasten-honggildong-media", "zettel-kasten-honggildong-objets"],
+            )
+
+            local_data = archive_cli.load_yaml(
+                (archive_root / "profiles" / "local" / "object-storage-accounts.local.yml").read_text(encoding="utf-8")
+            )
+            local_buckets = sorted(item["bucket_name"] for item in local_data["object_storage_accounts"])
+            self.assertEqual(local_buckets, object_buckets)
+
+    def test_object_storage_approve_rolls_back_provider_binding_when_later_write_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:objet-plan")
+            self.assertEqual(init_code, 0, init_output)
+            local_profile_parent = archive_root / "profiles" / "local"
+            local_profile_parent.parent.mkdir(parents=True, exist_ok=True)
+            local_profile_parent.write_text("not a directory\n", encoding="utf-8")
+            before = self.snapshot_archive_files(archive_root)
+
+            with self.assertRaises((archive_services.ArchiveServiceError, OSError)):
+                archive_services.approve_object_storage_setup_plan(
+                    archive_root,
+                    reviewed_by="person:me",
+                    write_local_profile=True,
+                    provider="cloudflare-r2",
+                    profile_id="profile:personal:HongGilDong",
+                    profile_slug="HongGilDong",
+                    storage_account_ref="storage:account:honggildong",
+                )
+
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertFalse(
+                (archive_root / "receipts" / "providers" / "zettel_kasten_honggildong_objets.object-storage-setup.json").exists()
             )
 
     def test_runtime_context_no_redact_local_paths_includes_local_paths(self) -> None:

@@ -15,8 +15,9 @@
           "binding_id": {"type": "string"},
           "provider": {
             "type": "string",
-            "enum": ["github", "cloudflare_r2", "backblaze_b2", "neon", "external_ssd", "rclone", "restic", "keepassxc"]
+            "enum": ["github", "object_storage", "cloudflare_r2", "backblaze_b2", "neon", "external_ssd", "rclone", "restic", "keepassxc"]
           },
+          "provider_kind": {"type": "string"},
           "enabled": {"type": "boolean"},
           "purpose": {"type": "string"},
           "resource": {"type": "object"},

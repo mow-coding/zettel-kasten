@@ -96,7 +96,7 @@ The archive should never silently rewrite a user's memory.
 Current public baseline:
 
 ```text
-v0.2.20 public showcase baseline
+v0.2.21 public showcase baseline
 ```
 
 This baseline is for early review and prototyping. It is not yet a stable `v1.0.0` protocol.
@@ -106,11 +106,11 @@ This baseline is for early review and prototyping. It is not yet a stable `v1.0.
 The current `wom-kit` package metadata is:
 
 ```text
-0.2.20
+0.2.21
 ```
 
-Therefore the first public compatibility tag for this repository should be:
+Therefore the current public compatibility tag for this repository should be:
 
 ```text
-v0.2.20
+v0.2.21
 ```

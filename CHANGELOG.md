@@ -4,6 +4,28 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.21 - 2026-05-25
+
+Object storage / objet setup planner patch.
+
+Added:
+
+- `archive object-storage <archive-root> --dry-run --format json`, a dry-run-first planner for profile-scoped objet storage setup,
+- safe default bucket/container naming as `zettel-kasten-<normalized-profile-slug>-objets`,
+- default objet prefix planning as `archives/<archive_id>/objets/`,
+- strict safety gates for provider kind, profile slug, bucket/container name, region, endpoint reference, and storage account reference,
+- `--approve --reviewed-by` local-only approval that updates `provider-bindings.yml` and writes a provider setup receipt without creating a bucket/container,
+- optional ignored local object storage account hints with `--write-local-profile`,
+- read-only MCP `object_storage_setup_plan`.
+
+Compatibility:
+
+- no bucket/container is created,
+- no OAuth, provider API, upload, sync, source copy, file hashing, or source import operation is run,
+- approved mode writes only local archive metadata and receipts,
+- MCP exposes no object storage apply/create/connect/upload/sync tool,
+- WOM/zet/ZET philosophy and WOM-kit naming remain unchanged.
+
 ## v0.2.20 - 2026-05-25
 
 GitHub profile repository setup planner patch.

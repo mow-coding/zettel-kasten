@@ -23,7 +23,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.20 pre-release
+v0.2.21 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -46,6 +46,7 @@ What exists today:
 - profile-aware `create-draft --dry-run` so AI runtimes preview inbox drafts and replay approved draft writes without minting.
 - current local implementation/tooling lives in `wom-kit/` and imports as `wom_kit`.
 - dry-run-first GitHub repository setup planning for WOM profiles, with local-only approval metadata and no provider API calls.
+- dry-run-first objet storage setup planning for WOM profiles, with local-only approval metadata and no bucket creation, upload, sync, copy, or hashing.
 
 What does not exist yet:
 
@@ -127,7 +128,9 @@ many:many ZET relation -> collaboration workspace
 
 ## Storage Model
 
-Object storage is not only for media files.
+Objet storage is not only for media files.
+
+In WOM product language, source/original files stored outside Git are `objets`. Cloud and provider APIs may still call the technical storage layer `object storage`.
 
 Original documents and captures are source objects when they are used as evidence:
 
@@ -146,7 +149,7 @@ Original documents and captures are source objects when they are used as evidenc
 Recommended default:
 
 ```text
-original source files -> local object store and/or object storage
+original source files -> local objet store and/or object storage provider
 object identity       -> object manifest
 derived text          -> provenance-aware derived text records
 zets and metadata     -> Git repository
@@ -181,6 +184,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.21
 v0.2.20
 v0.2.18
 v0.2.17
@@ -254,7 +258,7 @@ Do not commit:
 - personal files or media,
 - local machine paths or private filenames.
 
-Real usage should happen in a private archive repository and separate object storage.
+Real usage should happen in a private archive repository and separate objet storage/object storage provider.
 
 See [Open Source Publication Model](wom-kit/docs/open-source-publication-model.md).
 

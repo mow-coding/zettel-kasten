@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.2.20 pre-release
+v0.2.21 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -46,6 +46,7 @@ v0.2.20 pre-release
 - AI runtime이 inbox draft를 먼저 미리 보고 승인된 draft write만 replay할 수 있는 profile-aware `create-draft --dry-run`.
 - 현재 local implementation/tooling은 `wom-kit/`에 있고 Python import package는 `wom_kit`입니다.
 - WOM profile별 GitHub repository setup을 먼저 dry-run으로 계획하고, 승인 시에도 local metadata만 쓰는 GitHub repository setup planner.
+- WOM profile별 오브제 저장소 setup을 먼저 dry-run으로 계획하고, 승인 시에도 local metadata만 쓰는 objet storage setup planner.
 
 아직 없는 것:
 
@@ -128,9 +129,11 @@ AI는 기억을 정리하고 연결하는 조력자이며,
 
 ## 저장 모델
 
-객체 스토리지는 사진/영상만 넣는 곳이 아닙니다.
+오브제 저장소는 사진/영상만 넣는 곳이 아닙니다.
 
-원본으로 사용되는 문서와 캡처도 source object입니다.
+WOM 제품 언어에서 Git 밖에 두는 source/original file은 `objet`/오브제입니다. Cloud provider API에서만 기술 용어 `object storage`를 씁니다.
+
+원본으로 사용되는 문서와 캡처도 source/original objet입니다.
 
 - `.hwp`
 - `.hwpx`
@@ -147,7 +150,7 @@ AI는 기억을 정리하고 연결하는 조력자이며,
 추천 기본 구조:
 
 ```text
-원본 source 파일 -> local object store 또는 object storage
+원본 source 파일 -> local objet store 또는 object storage provider
 object identity  -> object manifest
 derived text     -> provenance가 있는 derived text record
 zets와 metadata  -> Git repository
@@ -182,6 +185,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.21
 v0.2.20
 v0.2.18
 v0.2.17
@@ -254,7 +258,7 @@ doctor reports 0 errors and 0 warnings
 - 개인 파일이나 미디어,
 - 로컬 PC 경로 또는 private filename.
 
-실제 사용은 private archive repository와 별도 object storage에서 이루어져야 합니다.
+실제 사용은 private archive repository와 별도 오브제 저장소/object storage provider에서 이루어져야 합니다.
 
 자세한 내용은 [Open Source Publication Model](wom-kit/docs/open-source-publication-model.md)을 보세요.
 

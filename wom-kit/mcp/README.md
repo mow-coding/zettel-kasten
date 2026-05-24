@@ -76,6 +76,9 @@ archive_runtime_context
 github_repository_setup_plan
   Plan a private GitHub repository for a resolved WOM profile. This is read-only and never creates repositories, starts OAuth, calls GitHub APIs, runs `gh`, configures git remotes, pushes, or syncs.
 
+object_storage_setup_plan
+  Plan private object storage metadata for WOM objets. This is read-only and never creates buckets/containers, starts OAuth, calls provider APIs, uploads, syncs, copies, hashes, or imports source files.
+
 archive_init
   Initialize a personal/company/family archive from safe defaults.
 
@@ -159,6 +162,7 @@ ownership_transfer_check
 - `archive_doctor` is read-only.
 - `archive_runtime_context` is read-only, uses archive-relative paths by default, and redacts local absolute paths unless `AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1` is set on the MCP server and the caller explicitly disables redaction.
 - `github_repository_setup_plan` is read-only and writes nothing. MCP exposes no GitHub apply/create/connect/push/sync tool.
+- `object_storage_setup_plan` is read-only and writes nothing. MCP exposes no object storage apply/create/connect/upload/sync tool.
 - `archive_index` writes only the generated search map at `db/archive-index.sqlite`.
 - `archive_onboarding_plan` previews first setup but does not create archive folders, provider bindings, or `.env` files.
 - `real_pilot_plan` previews the real-use path but does not create personal/team archive folders.
@@ -174,6 +178,6 @@ ownership_transfer_check
 - `delegate_zet_check`, `attest_zet_check`, and `anchor_zet_check` preview the future zet sharing lifecycle, including claimable-once capability binding previews, but do not write receipts, metadata, zettels, workpacks, claim registries, or transport messages.
 - `ownership_transfer_check` previews ownership transfer and external provider changes, but does not write receipts or change `archive-identity.yml`.
 - Ownership transfer receipt examples can be validated by `archive_doctor` when they live under `receipts/lineage/*.ownership-transfer.json`.
-- Real pilot apply, restore drill apply, real onboarding apply, profile registration, token registration, external import apply, source registration apply, source scan apply, minting/promotion into canonical `zettels/`, real archive sharing, real ownership transfer, runtime context apply, and external provider account mutation are intentionally not exposed through MCP.
+- Real pilot apply, restore drill apply, real onboarding apply, profile registration, token registration, external import apply, source registration apply, source scan apply, minting/promotion into canonical `zettels/`, real archive sharing, real ownership transfer, runtime context apply, object storage apply, and external provider account mutation are intentionally not exposed through MCP.
 - In Docker Compose, MCP paths are allowlisted to `/archives` through `AI_ARCHIVE_MCP_ALLOWED_ROOTS=/archives`.
 - Tool result paths use archive-relative `/` paths so JSON-RPC output is stable across Windows, macOS, and Linux.

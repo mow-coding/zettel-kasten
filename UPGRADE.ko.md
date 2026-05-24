@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.20` | current public pre-release | `wom-kit/docs/releases/v0.2.20.md` |
+| `v0.2.21` | current public pre-release | `wom-kit/docs/releases/v0.2.21.md` |
+| `v0.2.20` | superseded public pre-release | `wom-kit/docs/releases/v0.2.20.md` |
 | `v0.2.19` | superseded public pre-release | `wom-kit/docs/releases/v0.2.19.md` |
 | `v0.2.18` | superseded public pre-release | `wom-kit/docs/releases/v0.2.18.md` |
 | `v0.2.17` | superseded public pre-release | `wom-kit/docs/releases/v0.2.17.md` |
@@ -47,6 +48,33 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.20`에서 `v0.2.21`로
+
+이번 버전은 object storage/objet setup을 먼저 dry-run으로 계획하는 호환 가능한 패치입니다.
+
+바뀐 점:
+
+- `archive object-storage <archive-root> --dry-run --format json` 명령을 추가했습니다.
+- 기본 bucket/container 이름은 `zettel-kasten-<normalized-profile-slug>-objets`입니다.
+- 기본 오브제 prefix는 `archives/<archive_id>/objets/`입니다.
+- provider kind, profile slug, bucket/container name, region, endpoint ref, storage account ref에 안전성 검사를 추가했습니다.
+- `--approve --reviewed-by`는 provider API를 건드리지 않고 local metadata와 setup receipt만 씁니다.
+- `--write-local-profile`은 ignored local object storage account hint만 `profiles/local/` 아래에 씁니다.
+- MCP에는 읽기 전용 `object_storage_setup_plan`만 추가했습니다.
+
+private archive migration은 필요 없습니다.
+
+이번 버전은 bucket/container 생성, OAuth, provider API 호출, upload, sync, source file copy, file hash 계산, source content import를 하지 않습니다.
+
+```bash
+archive object-storage <archive-root> --dry-run \
+  --provider cloudflare-r2 \
+  --profile-id profile:personal:HongGilDong \
+  --profile-slug HongGilDong \
+  --storage-account-ref storage:account:honggildong \
+  --format json
+```
 
 ## `v0.2.19`에서 `v0.2.20`로
 

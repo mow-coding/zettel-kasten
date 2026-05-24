@@ -38,6 +38,25 @@ bindings:
       archive_id: archive:personal:example
       profile_id: profile:personal:HongGilDong
       profile_slug: HongGilDong
+  - binding_id: object_storage:cloudflare-r2:zettel-kasten-honggildong-objets
+    provider: object_storage
+    provider_kind: cloudflare-r2
+    enabled: true
+    purpose: objet_storage_metadata_and_manual_setup_plan
+    resource:
+      bucket: zettel-kasten-honggildong-objets
+      prefix: archives/archive:personal:example/objets/
+      visibility: private
+      region: auto
+      endpoint_ref: provider:endpoint:cloudflare-r2
+    auth:
+      method: token_ref_or_env
+      token_env: R2_TOKEN
+      account_ref: storage:account:honggildong
+    owner_mapping:
+      archive_id: archive:personal:example
+      profile_id: profile:personal:HongGilDong
+      profile_slug: HongGilDong
 ```
 
 WOM-kit v0.2.20 can plan this GitHub binding with:
@@ -52,6 +71,19 @@ archive github-repo <archive-root> --dry-run \
 ```
 
 Approved mode writes only local metadata and a setup receipt. It does not create a repository, start OAuth, call GitHub APIs, run `gh`, configure git remotes, push, or sync.
+
+WOM-kit v0.2.21 can plan the object storage / objet binding with:
+
+```bash
+archive object-storage <archive-root> --dry-run \
+  --provider cloudflare-r2 \
+  --profile-id profile:personal:HongGilDong \
+  --profile-slug HongGilDong \
+  --storage-account-ref storage:account:honggildong \
+  --format json
+```
+
+Approved mode writes only local metadata and a setup receipt. It does not create buckets, start OAuth, call provider APIs, upload, sync, copy source files, hash files, or import source content.
 
 ## Secret Boundary
 
@@ -83,6 +115,7 @@ password-manager exports
 
 ```text
 github
+object_storage
 cloudflare_r2
 backblaze_b2
 neon

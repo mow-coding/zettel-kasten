@@ -11,6 +11,8 @@ Commands:
           Print read-only AI runtime context for a mounted archive.
   github-repo
           Plan GitHub repository metadata for a WOM profile.
+  object-storage
+          Plan object storage metadata for WOM objets.
   init    Create a new archive from a built-in template.
   index   Build a generated local SQLite search index.
   parcel Create a portable parcel from a view. Alias: pack.
@@ -1368,6 +1370,76 @@ def command_github_repo(args: argparse.Namespace) -> int:
         print(f"Archive: {result['archive_id']}")
         print(f"Profile: {result.get('profile_id') or '-'}")
         print(f"Repository: {result.get('github_owner') or '-'}/{result.get('proposed_repo_name') or '-'}")
+        if result.get("receipt_path"):
+            print(f"Receipt: {result['receipt_path']}")
+        elif result.get("provider_setup_receipt_preview"):
+            print(f"Proposed receipt: {result['provider_setup_receipt_preview']['receipt_path']}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_object_storage(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("Object storage setup requires --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("Object storage setup requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+
+    try:
+        if args.dry_run:
+            result = archive_services.object_storage_setup_plan(
+                Path(args.archive_root),
+                provider=args.provider,
+                profile_id=args.profile_id,
+                profile_slug=args.profile_slug,
+                storage_account_ref=args.storage_account_ref,
+                bucket_name=args.bucket_name,
+                region=args.region,
+                endpoint_ref=args.endpoint_ref,
+                objet_prefix=args.objet_prefix,
+                visibility=args.visibility,
+            )
+        else:
+            result = archive_services.approve_object_storage_setup_plan(
+                Path(args.archive_root),
+                reviewed_by=args.reviewed_by,
+                write_local_profile=args.write_local_profile,
+                provider=args.provider,
+                profile_id=args.profile_id,
+                profile_slug=args.profile_slug,
+                storage_account_ref=args.storage_account_ref,
+                bucket_name=args.bucket_name,
+                region=args.region,
+                endpoint_ref=args.endpoint_ref,
+                objet_prefix=args.objet_prefix,
+                visibility=args.visibility,
+            )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        mode = "dry-run" if result["dry_run"] else "approved"
+        state = "passed" if result["ok"] else "blocked"
+        print(f"Object storage setup {mode} {state}.")
+        print(f"Archive: {result['archive_id']}")
+        print(f"Profile: {result.get('profile_id') or '-'}")
+        print(f"Provider: {result.get('provider') or '-'}")
+        print(f"Bucket: {result.get('proposed_bucket_name') or '-'}")
+        print(f"Objet prefix: {result.get('proposed_objet_prefix') or '-'}")
         if result.get("receipt_path"):
             print(f"Receipt: {result['receipt_path']}")
         elif result.get("provider_setup_receipt_preview"):
@@ -3168,6 +3240,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     github_repo.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     github_repo.set_defaults(func=command_github_repo)
+
+    object_storage = subcommands.add_parser(
+        "object-storage",
+        help="Plan object storage setup for WOM objets without creating buckets or uploading files.",
+    )
+    object_storage.add_argument("archive_root", help="Archive root to plan for.")
+    object_storage.add_argument("--dry-run", action="store_true", help="Preview local metadata and manual object storage steps without writing files.")
+    object_storage.add_argument("--provider", help="Provider kind: cloudflare-r2, aws-s3, backblaze-b2, google-cloud-storage, or generic-s3.")
+    object_storage.add_argument("--profile-id", help="Resolved WOM profile id.")
+    object_storage.add_argument("--profile-slug", help="ASCII profile slug used in the proposed bucket/container name.")
+    object_storage.add_argument("--storage-account-ref", help="Safe storage account reference such as storage:account:example.")
+    object_storage.add_argument("--bucket-name", help="Override bucket/container name. Must pass conservative lowercase safety rules.")
+    object_storage.add_argument("--region", help="Safe provider region label. Defaults to auto.")
+    object_storage.add_argument("--endpoint-ref", help="Safe endpoint reference. Do not pass raw provider URLs.")
+    object_storage.add_argument("--objet-prefix", help="Provider-relative prefix for WOM objets. Defaults to archives/<archive_id>/objets/.")
+    object_storage.add_argument(
+        "--visibility",
+        choices=sorted(archive_services.OBJECT_STORAGE_ALLOWED_VISIBILITIES),
+        default=archive_services.OBJECT_STORAGE_DEFAULT_VISIBILITY,
+        help="Proposed bucket/container visibility. Defaults to private.",
+    )
+    object_storage.add_argument(
+        "--approve",
+        action="store_true",
+        help="Write versioned provider metadata and a setup receipt only; never create buckets, upload, sync, copy, or hash files.",
+    )
+    object_storage.add_argument("--reviewed-by", help="Reviewer id required with --approve.")
+    object_storage.add_argument(
+        "--write-local-profile",
+        action="store_true",
+        help="Write ignored local object storage account hints under profiles/local/ when approving.",
+    )
+    object_storage.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    object_storage.set_defaults(func=command_object_storage)
 
     list_zettels = subcommands.add_parser("list-zettels", help="List draft and/or canonical zettels.")
     list_zettels.add_argument("archive_root", help="Archive root to inspect.")

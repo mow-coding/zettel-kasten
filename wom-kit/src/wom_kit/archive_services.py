@@ -128,6 +128,7 @@ RESTORE_DRILL_EXCLUDED_PATHS = [
 ]
 PROVIDER_TYPES = {
     "github",
+    "object_storage",
     "cloudflare_r2",
     "backblaze_b2",
     "neon",
@@ -138,6 +139,7 @@ PROVIDER_TYPES = {
 }
 PROVIDER_REFERENCE_URLS = {
     "github": "https://docs.github.com/en/organizations/managing-user-access-to-your-organizations-repositories/managing-repository-roles/repository-roles-for-an-organization",
+    "object_storage": "object-storage-provider-manual",
     "cloudflare_r2": "https://developers.cloudflare.com/r2/api/tokens/",
     "backblaze_b2": "https://www.backblaze.com/docs/cloud-storage-application-key-capabilities",
     "neon": "https://neon.com/docs/get-started-with-neon/connect-neon",
@@ -159,6 +161,26 @@ GITHUB_SECRET_LIKE_RE = re.compile(
     r"(?i)\b(?:ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9]{20,}|"
     r"token|secret|password|oauth|cookie|credential)\b"
 )
+OBJECT_STORAGE_SETUP_RECEIPTS_DIR = "receipts/providers"
+OBJECT_STORAGE_ALLOWED_PROVIDERS = {
+    "cloudflare-r2",
+    "aws-s3",
+    "backblaze-b2",
+    "google-cloud-storage",
+    "generic-s3",
+}
+OBJECT_STORAGE_DEFAULT_VISIBILITY = "private"
+OBJECT_STORAGE_ALLOWED_VISIBILITIES = {"private"}
+OBJECT_STORAGE_BUCKET_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$")
+OBJECT_STORAGE_REGION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$")
+OBJECT_STORAGE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,119}$")
+OBJECT_STORAGE_PROVIDER_TOKEN_ENVS = {
+    "cloudflare-r2": "R2_TOKEN",
+    "aws-s3": "AWS_OBJECT_STORAGE_TOKEN",
+    "backblaze-b2": "B2_OBJECT_STORAGE_TOKEN",
+    "google-cloud-storage": "GCS_OBJECT_STORAGE_TOKEN",
+    "generic-s3": "OBJECT_STORAGE_TOKEN",
+}
 ONBOARDING_PROVIDER_PROFILES = {
     "local_only": {
         "description": "Local archive plus physical/local backup and external secret vault guidance.",
@@ -3652,6 +3674,13 @@ def provider_required_actions(provider: str, owner_mapping: dict[str, Any]) -> l
             "Remove or reduce previous owner/operator access after the transfer receipt is verified.",
             "Rotate deploy keys or tokens that were tied to the previous owner.",
         ]
+    if provider == "object_storage":
+        return [
+            "Review the external object storage bucket/container, IAM policy, lifecycle policy, and billing owner.",
+            "Create or rotate scoped credentials outside the archive and keep only env/token refs in provider-bindings.yml.",
+            "Run a provider-native dry-run/list check before uploading any objet files.",
+            "Do not upload, sync, copy, or hash source/original files from this provider binding step.",
+        ]
     if provider == "cloudflare_r2":
         return [
             "Review the Cloudflare account, R2 bucket, and API token access policy.",
@@ -4262,6 +4291,647 @@ def merge_github_local_profile(data: dict[str, Any], entry: dict[str, Any]) -> d
     if not replaced:
         result.append(json_safe(entry))
     data["github_accounts"] = result
+    return data
+
+
+def object_storage_setup_plan(
+    archive_root: Path | str,
+    *,
+    provider: str | None = None,
+    profile_id: str | None = None,
+    profile_slug: str | None = None,
+    storage_account_ref: str | None = None,
+    bucket_name: str | None = None,
+    region: str | None = None,
+    endpoint_ref: str | None = None,
+    objet_prefix: str | None = None,
+    visibility: str = OBJECT_STORAGE_DEFAULT_VISIBILITY,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_config = read_archive_config(root)
+    archive_id = str(archive_config.get("archive_id") or "")
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    resolved_provider = normalize_object_storage_provider(provider)
+    if not resolved_provider:
+        blockers.append("provider is required.")
+    elif resolved_provider not in OBJECT_STORAGE_ALLOWED_PROVIDERS:
+        blockers.append("provider must be one of: " + ", ".join(sorted(OBJECT_STORAGE_ALLOWED_PROVIDERS)) + ".")
+
+    resolved_profile_id = (profile_id or "").strip()
+    if not resolved_profile_id:
+        blockers.append("profile_id is required.")
+    resolved_slug = resolve_github_profile_slug(resolved_profile_id, profile_slug, blockers, warnings)
+    bucket_slug = object_storage_bucket_slug(resolved_slug)
+    resolved_bucket = resolve_object_storage_bucket_name(bucket_name, bucket_slug, blockers)
+    resolved_visibility = (visibility or OBJECT_STORAGE_DEFAULT_VISIBILITY).strip().lower()
+    resolved_account_ref = (storage_account_ref or "").strip()
+    resolved_region = (region or "auto").strip()
+    resolved_endpoint_ref = (endpoint_ref or default_object_storage_endpoint_ref(resolved_provider)).strip()
+    resolved_prefix = resolve_objet_prefix(objet_prefix, archive_id, blockers)
+
+    if not archive_id:
+        blockers.append("archive.yml does not contain archive_id.")
+    if resolved_visibility not in OBJECT_STORAGE_ALLOWED_VISIBILITIES:
+        blockers.append("visibility must be private.")
+    if not safe_object_storage_account_ref(resolved_account_ref):
+        blockers.append("storage_account_ref must be a safe account reference, not an email, URL, token, secret, or path.")
+    if not safe_object_storage_region(resolved_region):
+        blockers.append("region must be a safe region label.")
+    if resolved_endpoint_ref and not safe_object_storage_ref(resolved_endpoint_ref):
+        blockers.append("endpoint_ref must be a safe endpoint reference, not a URL, token, secret, or path.")
+
+    warnings.append("Bucket/container global availability is not checked by this dry-run.")
+
+    provider_binding = build_object_storage_provider_binding(
+        archive_id=archive_id,
+        profile_id=resolved_profile_id,
+        profile_slug=resolved_slug,
+        provider_kind=resolved_provider,
+        storage_account_ref=resolved_account_ref,
+        bucket_name=resolved_bucket,
+        region=resolved_region,
+        endpoint_ref=resolved_endpoint_ref,
+        objet_prefix=resolved_prefix,
+        visibility=resolved_visibility,
+    )
+    local_profile_preview = build_object_storage_local_profile_preview(
+        profile_id=resolved_profile_id,
+        profile_slug=resolved_slug,
+        provider_kind=resolved_provider,
+        storage_account_ref=resolved_account_ref,
+        bucket_name=resolved_bucket,
+        region=resolved_region,
+        endpoint_ref=resolved_endpoint_ref,
+        objet_prefix=resolved_prefix,
+        visibility=resolved_visibility,
+    )
+    policy_preview = build_objet_storage_policy_preview(
+        archive_id=archive_id,
+        provider_kind=resolved_provider,
+        bucket_name=resolved_bucket,
+        objet_prefix=resolved_prefix,
+        visibility=resolved_visibility,
+    )
+    receipt_path = object_storage_provider_setup_receipt_path(resolved_bucket)
+    manual_steps = object_storage_manual_steps(resolved_provider, resolved_bucket, resolved_region, resolved_prefix)
+    receipt_preview = build_object_storage_provider_setup_receipt(
+        archive_id=archive_id,
+        profile_id=resolved_profile_id,
+        profile_slug=resolved_slug,
+        provider_kind=resolved_provider,
+        storage_account_ref=resolved_account_ref,
+        bucket_name=resolved_bucket,
+        region=resolved_region,
+        endpoint_ref=resolved_endpoint_ref,
+        objet_prefix=resolved_prefix,
+        visibility=resolved_visibility,
+        receipt_path=receipt_path,
+        reviewed_by="<required-on-approve>",
+        timestamp="<execution-time>",
+        dry_run=True,
+        manual_steps=manual_steps,
+    )
+
+    provider_doc = load_provider_bindings(root)
+    if provider_doc.get("archive_id") and provider_doc.get("archive_id") != archive_id:
+        blockers.append("provider-bindings.yml archive_id must match archive.yml archive_id.")
+    if archive_internal_path(root, receipt_path).exists():
+        blockers.append(f"Proposed provider setup receipt already exists: {receipt_path}.")
+
+    provider_action = "update provider-bindings.yml" if archive_internal_path(root, "provider-bindings.yml").exists() else "create provider-bindings.yml"
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "object_storage_setup_plan",
+        "archive_id": archive_id,
+        "profile_id": resolved_profile_id or None,
+        "profile_slug": resolved_slug or None,
+        "provider": resolved_provider or None,
+        "proposed_bucket_name": resolved_bucket or None,
+        "proposed_objet_prefix": resolved_prefix or None,
+        "proposed_visibility": resolved_visibility,
+        "storage_account_ref": resolved_account_ref or None,
+        "region": resolved_region or None,
+        "endpoint_ref": resolved_endpoint_ref or None,
+        "provider_binding_preview": json_safe(provider_binding),
+        "local_profile_preview": json_safe(local_profile_preview),
+        "provider_setup_receipt_preview": json_safe(receipt_preview),
+        "objet_storage_policy_preview": json_safe(policy_preview),
+        "manual_steps": manual_steps,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [provider_action, f"write {receipt_path}"],
+    }
+
+
+def approve_object_storage_setup_plan(
+    archive_root: Path | str,
+    *,
+    reviewed_by: str,
+    write_local_profile: bool = False,
+    provider: str | None = None,
+    profile_id: str | None = None,
+    profile_slug: str | None = None,
+    storage_account_ref: str | None = None,
+    bucket_name: str | None = None,
+    region: str | None = None,
+    endpoint_ref: str | None = None,
+    objet_prefix: str | None = None,
+    visibility: str = OBJECT_STORAGE_DEFAULT_VISIBILITY,
+) -> dict[str, Any]:
+    reviewer = (reviewed_by or "").strip()
+    if not reviewer:
+        raise ArchiveServiceError("Object storage setup approval requires reviewed_by.")
+    validate_github_safe_metadata(reviewer, "reviewed_by")
+
+    root = require_existing_archive_root(archive_root)
+    plan = object_storage_setup_plan(
+        root,
+        provider=provider,
+        profile_id=profile_id,
+        profile_slug=profile_slug,
+        storage_account_ref=storage_account_ref,
+        bucket_name=bucket_name,
+        region=region,
+        endpoint_ref=endpoint_ref,
+        objet_prefix=objet_prefix,
+        visibility=visibility,
+    )
+    if plan["blockers"]:
+        raise ArchiveServiceError("Object storage setup blocked by dry-run: " + "; ".join(plan["blockers"]))
+
+    now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    provider_path = archive_internal_path(root, "provider-bindings.yml")
+    receipt_relative = plan["provider_setup_receipt_preview"]["receipt_path"]
+    receipt_path = archive_internal_path(root, receipt_relative)
+    if receipt_path.exists():
+        raise ArchiveServiceError(f"Proposed provider setup receipt already exists: {receipt_relative}.")
+
+    provider_doc = load_provider_bindings(root)
+    if provider_doc.get("archive_id") and provider_doc.get("archive_id") != plan["archive_id"]:
+        raise ArchiveServiceError("provider-bindings.yml archive_id must match archive.yml archive_id.")
+    provider_doc["version"] = "provider-bindings/v0.1"
+    provider_doc["archive_id"] = plan["archive_id"]
+    provider_doc["bindings"] = upsert_object_storage_provider_binding(
+        provider_bindings_list(provider_doc),
+        plan["provider_binding_preview"],
+    )
+
+    receipt = build_object_storage_provider_setup_receipt(
+        archive_id=plan["archive_id"],
+        profile_id=plan["profile_id"],
+        profile_slug=plan["profile_slug"],
+        provider_kind=plan["provider"],
+        storage_account_ref=plan["storage_account_ref"],
+        bucket_name=plan["proposed_bucket_name"],
+        region=plan["region"],
+        endpoint_ref=plan["endpoint_ref"],
+        objet_prefix=plan["proposed_objet_prefix"],
+        visibility=plan["proposed_visibility"],
+        receipt_path=receipt_relative,
+        reviewed_by=reviewer,
+        timestamp=now,
+        dry_run=False,
+        manual_steps=plan["manual_steps"],
+    )
+    receipt["result"] = {
+        "changed_paths": ["provider-bindings.yml", receipt_relative],
+        "provider_api_called": False,
+        "bucket_created": False,
+        "files_uploaded": False,
+        "sync_started": False,
+        "files_hashed": False,
+    }
+
+    changed_paths = ["provider-bindings.yml", receipt_relative]
+    local_profile: dict[str, Any] | None = None
+    local_profile_path: Path | None = None
+    local_profile_relative = "profiles/local/object-storage-accounts.local.yml"
+    if write_local_profile:
+        ensure_local_profile_gitignore(root)
+        local_profile_path = archive_internal_path(root, local_profile_relative)
+        local_profile = merge_object_storage_local_profile(
+            load_local_object_storage_profile(local_profile_path),
+            plan["local_profile_preview"]["entry"],
+        )
+        changed_paths.append(local_profile_relative)
+        receipt["result"]["changed_paths"] = changed_paths
+
+    provider_original_text = provider_path.read_text(encoding="utf-8") if provider_path.exists() else None
+    local_profile_original_text = (
+        local_profile_path.read_text(encoding="utf-8")
+        if write_local_profile and local_profile_path is not None and local_profile_path.exists()
+        else None
+    )
+    created_receipt = False
+
+    def restore_text(path: Path, original_text: str | None) -> None:
+        if original_text is None:
+            if path.exists():
+                path.unlink()
+            return
+        write_text_atomic(path, original_text)
+
+    try:
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        with receipt_path.open("x", encoding="utf-8") as handle:
+            created_receipt = True
+            handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+        provider_path.parent.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(provider_path, dump_yaml(json_safe(provider_doc)))
+        if write_local_profile and local_profile_path is not None and local_profile is not None:
+            local_profile_path.parent.mkdir(parents=True, exist_ok=True)
+            write_text_atomic(local_profile_path, dump_yaml(json_safe(local_profile)))
+    except Exception:
+        if created_receipt and receipt_path.exists():
+            try:
+                receipt_path.unlink()
+            except OSError:
+                pass
+        try:
+            restore_text(provider_path, provider_original_text)
+        except OSError:
+            pass
+        if write_local_profile and local_profile_path is not None:
+            try:
+                restore_text(local_profile_path, local_profile_original_text)
+            except OSError:
+                pass
+        raise
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "lifecycle_action": "object_storage_setup_plan",
+        "archive_id": plan["archive_id"],
+        "profile_id": plan["profile_id"],
+        "profile_slug": plan["profile_slug"],
+        "provider": plan["provider"],
+        "proposed_bucket_name": plan["proposed_bucket_name"],
+        "proposed_objet_prefix": plan["proposed_objet_prefix"],
+        "proposed_visibility": plan["proposed_visibility"],
+        "storage_account_ref": plan["storage_account_ref"],
+        "region": plan["region"],
+        "endpoint_ref": plan["endpoint_ref"],
+        "provider_binding": json_safe(plan["provider_binding_preview"]),
+        "receipt_path": receipt_relative,
+        "provider_setup_receipt": json_safe(receipt),
+        "local_profile_path": local_profile_relative if write_local_profile else None,
+        "manual_steps": plan["manual_steps"],
+        "changed_paths": changed_paths,
+        "provider_api_called": False,
+        "bucket_created": False,
+        "files_uploaded": False,
+        "sync_started": False,
+        "files_hashed": False,
+        "warnings": plan["warnings"],
+    }
+
+
+def normalize_object_storage_provider(provider: str | None) -> str:
+    value = (provider or "").strip().lower().replace("_", "-")
+    aliases = {
+        "r2": "cloudflare-r2",
+        "cloudflare": "cloudflare-r2",
+        "s3": "aws-s3",
+        "b2": "backblaze-b2",
+        "gcs": "google-cloud-storage",
+        "google": "google-cloud-storage",
+    }
+    return aliases.get(value, value)
+
+
+def object_storage_bucket_slug(profile_slug: str) -> str:
+    value = re.sub(r"[^a-z0-9-]+", "-", (profile_slug or "").lower())
+    value = re.sub(r"-{2,}", "-", value).strip("-")
+    return value
+
+
+def resolve_object_storage_bucket_name(bucket_name: str | None, bucket_slug: str, blockers: list[str]) -> str:
+    proposed = (bucket_name or "").strip()
+    if not proposed and bucket_slug:
+        proposed = f"zettel-kasten-{bucket_slug}-objets"
+    if not safe_object_storage_bucket_name(proposed):
+        blockers.append(
+            "bucket_name must use lowercase ASCII letters, numbers, and hyphens only; "
+            "start and end with an alphanumeric character; avoid dots, underscores, slashes, spaces, and URL fragments; "
+            "and be at most 63 characters."
+        )
+    return proposed
+
+
+def safe_object_storage_bucket_name(value: str) -> bool:
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    if any(item in text for item in [".", "_", " ", "/", "\\", ":", "#", "?", "&", "=", "@"]):
+        return False
+    if GITHUB_SECRET_LIKE_RE.search(text):
+        return False
+    return bool(OBJECT_STORAGE_BUCKET_RE.match(text))
+
+
+def default_object_storage_endpoint_ref(provider_kind: str) -> str:
+    return f"provider:endpoint:{provider_kind or 'object-storage'}"
+
+
+def resolve_objet_prefix(objet_prefix: str | None, archive_id: str, blockers: list[str]) -> str:
+    prefix = (objet_prefix or "").strip()
+    if not prefix and archive_id:
+        prefix = f"archives/{archive_id}/objets/"
+    if prefix and not prefix.endswith("/"):
+        prefix += "/"
+    if not safe_objet_prefix(prefix):
+        blockers.append("objet_prefix must be a safe relative provider prefix, not a local path, URL, traversal path, token, or secret.")
+    return prefix
+
+
+def safe_objet_prefix(value: str) -> bool:
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    normalized = text.replace("\\", "/")
+    if normalized.startswith("/") or normalized.startswith("./") or "//" in normalized:
+        return False
+    if any(part == ".." for part in normalized.split("/")):
+        return False
+    if "://" in normalized or "#" in normalized or "?" in normalized:
+        return False
+    if GITHUB_SECRET_LIKE_RE.search(normalized):
+        return False
+    if contains_forbidden_location_reference(normalized):
+        return False
+    return True
+
+
+def safe_object_storage_region(value: str) -> bool:
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    if "@" in text or "://" in text or "/" in text or "\\" in text or "#" in text or "?" in text:
+        return False
+    if GITHUB_SECRET_LIKE_RE.search(text):
+        return False
+    return bool(OBJECT_STORAGE_REGION_RE.match(text))
+
+
+def safe_object_storage_account_ref(value: str) -> bool:
+    if not value:
+        return False
+    return safe_object_storage_ref(value)
+
+
+def safe_object_storage_ref(value: str) -> bool:
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    if "@" in text or "://" in text or "\\" in text or "/" in text or "#" in text or "?" in text:
+        return False
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", text) and not (
+        text.lower().startswith("storage:account:")
+        or text.lower().startswith("provider:endpoint:")
+        or text.lower().startswith("keyring:")
+    ):
+        return False
+    if "." in text and not text.lower().startswith("provider:endpoint:"):
+        return False
+    if GITHUB_SECRET_LIKE_RE.search(text):
+        return False
+    return bool(OBJECT_STORAGE_REF_RE.match(text))
+
+
+def build_object_storage_provider_binding(
+    *,
+    archive_id: str,
+    profile_id: str,
+    profile_slug: str,
+    provider_kind: str,
+    storage_account_ref: str,
+    bucket_name: str,
+    region: str,
+    endpoint_ref: str,
+    objet_prefix: str,
+    visibility: str,
+) -> dict[str, Any]:
+    return {
+        "binding_id": f"object_storage:{provider_kind}:{bucket_name}",
+        "provider": "object_storage",
+        "provider_kind": provider_kind,
+        "enabled": True,
+        "purpose": "objet_storage_metadata_and_manual_setup_plan",
+        "resource": {
+            "bucket": bucket_name,
+            "prefix": objet_prefix,
+            "visibility": visibility,
+            "region": region,
+            "endpoint_ref": endpoint_ref,
+        },
+        "auth": {
+            "method": "token_ref_or_env",
+            "token_env": OBJECT_STORAGE_PROVIDER_TOKEN_ENVS.get(provider_kind, "OBJECT_STORAGE_TOKEN"),
+            "account_ref": storage_account_ref,
+        },
+        "owner_mapping": {
+            "archive_id": archive_id,
+            "profile_id": profile_id,
+            "profile_slug": profile_slug,
+        },
+        "notes": "Manual object storage setup plan only; WOM-kit does not create buckets, upload objets, sync, copy, or hash files.",
+    }
+
+
+def build_object_storage_local_profile_preview(
+    *,
+    profile_id: str,
+    profile_slug: str,
+    provider_kind: str,
+    storage_account_ref: str,
+    bucket_name: str,
+    region: str,
+    endpoint_ref: str,
+    objet_prefix: str,
+    visibility: str,
+) -> dict[str, Any]:
+    entry = {
+        "profile_id": profile_id,
+        "profile_slug": profile_slug,
+        "provider_kind": provider_kind,
+        "storage_account_ref": storage_account_ref,
+        "bucket_name": bucket_name,
+        "region": region,
+        "endpoint_ref": endpoint_ref,
+        "objet_prefix": objet_prefix,
+        "visibility": visibility,
+        "token_env": OBJECT_STORAGE_PROVIDER_TOKEN_ENVS.get(provider_kind, "OBJECT_STORAGE_TOKEN"),
+    }
+    return {
+        "path": "profiles/local/object-storage-accounts.local.yml",
+        "ignored_by_default": True,
+        "entry": entry,
+    }
+
+
+def build_objet_storage_policy_preview(
+    *,
+    archive_id: str,
+    provider_kind: str,
+    bucket_name: str,
+    objet_prefix: str,
+    visibility: str,
+) -> dict[str, Any]:
+    return {
+        "archive_id": archive_id,
+        "term": "objet",
+        "technical_layer": "object_storage",
+        "provider_kind": provider_kind,
+        "bucket": bucket_name,
+        "prefix": objet_prefix,
+        "visibility": visibility,
+        "stores": [
+            "source/original files",
+            "images",
+            "audio",
+            "video",
+            "PDFs",
+            "PPTX/DOCX/HWPX/spreadsheets",
+            "large artifacts that should not live directly in Git",
+        ],
+        "git_storage": False,
+        "content_uploaded": False,
+        "content_hashed": False,
+        "source_imported": False,
+    }
+
+
+def object_storage_manual_steps(provider_kind: str, bucket_name: str, region: str, objet_prefix: str) -> list[str]:
+    return [
+        f"Manually create a private {provider_kind} bucket/container named {bucket_name}.",
+        f"Reserve the prefix {objet_prefix} for this archive's objets.",
+        f"Configure scoped credentials outside the archive and expose only an env/token ref such as {OBJECT_STORAGE_PROVIDER_TOKEN_ENVS.get(provider_kind, 'OBJECT_STORAGE_TOKEN')}.",
+        "Check provider bucket-name availability manually; WOM-kit does not call provider APIs.",
+        "Run doctor --strict after local metadata approval.",
+    ]
+
+
+def object_storage_provider_setup_receipt_path(bucket_name: str) -> str:
+    safe_bucket = safe_slug(bucket_name or "object-storage")
+    return f"{OBJECT_STORAGE_SETUP_RECEIPTS_DIR}/{safe_bucket}.object-storage-setup.json"
+
+
+def build_object_storage_provider_setup_receipt(
+    *,
+    archive_id: str,
+    profile_id: str,
+    profile_slug: str,
+    provider_kind: str,
+    storage_account_ref: str,
+    bucket_name: str,
+    region: str,
+    endpoint_ref: str,
+    objet_prefix: str,
+    visibility: str,
+    receipt_path: str,
+    reviewed_by: str,
+    timestamp: str,
+    dry_run: bool,
+    manual_steps: list[str],
+) -> dict[str, Any]:
+    return {
+        "receipt_id": f"receipt:provider-setup:object-storage:{provider_kind}:{bucket_name}",
+        "receipt_path": receipt_path,
+        "lifecycle_action": "object_storage_setup_plan",
+        "provider": "object_storage",
+        "provider_kind": provider_kind,
+        "dry_run": dry_run,
+        "timestamp": timestamp,
+        "archive_id": archive_id,
+        "profile_id": profile_id,
+        "profile_slug": profile_slug,
+        "resource": {
+            "bucket": bucket_name,
+            "prefix": objet_prefix,
+            "visibility": visibility,
+            "region": region,
+            "endpoint_ref": endpoint_ref,
+        },
+        "auth": {
+            "method": "token_ref_or_env",
+            "token_env": OBJECT_STORAGE_PROVIDER_TOKEN_ENVS.get(provider_kind, "OBJECT_STORAGE_TOKEN"),
+            "account_ref": storage_account_ref,
+        },
+        "reviewed_by": reviewed_by,
+        "external_actions": {
+            "provider_api_called": False,
+            "bucket_created": False,
+            "oauth_started": False,
+            "files_uploaded": False,
+            "sync_started": False,
+            "files_copied": False,
+            "files_hashed": False,
+            "source_content_imported": False,
+        },
+        "manual_steps": manual_steps,
+    }
+
+
+def upsert_object_storage_provider_binding(bindings: list[dict[str, Any]], new_binding: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    replaced = False
+    new_key = object_storage_binding_compare_key(new_binding)
+    for binding in bindings:
+        if object_storage_binding_compare_key(binding) == new_key:
+            result.append(json_safe(new_binding))
+            replaced = True
+        else:
+            result.append(json_safe(binding))
+    if not replaced:
+        result.append(json_safe(new_binding))
+    return result
+
+
+def object_storage_binding_compare_key(binding: dict[str, Any]) -> tuple[str, str, str]:
+    resource = binding.get("resource") if isinstance(binding.get("resource"), dict) else {}
+    return (
+        str(binding.get("provider") or "").lower(),
+        str(binding.get("provider_kind") or "").lower(),
+        str(resource.get("bucket") or binding.get("binding_id") or "").lower(),
+    )
+
+
+def load_local_object_storage_profile(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {
+            "version": "wom-local-object-storage-profile/v0.1",
+            "object_storage_accounts": [],
+        }
+    data = load_yaml(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ArchiveServiceError("Local object storage profile hint must be a YAML object.")
+    if not isinstance(data.get("object_storage_accounts"), list):
+        data["object_storage_accounts"] = []
+    data["version"] = str(data.get("version") or "wom-local-object-storage-profile/v0.1")
+    return json_safe(data)
+
+
+def merge_object_storage_local_profile(data: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+    accounts = data.get("object_storage_accounts") if isinstance(data.get("object_storage_accounts"), list) else []
+    result: list[dict[str, Any]] = []
+    replaced = False
+    for item in accounts:
+        if not isinstance(item, dict):
+            continue
+        same_provider_kind = str(item.get("provider_kind") or "").lower() == str(entry.get("provider_kind") or "").lower()
+        same_bucket = str(item.get("bucket_name") or "").lower() == str(entry.get("bucket_name") or "").lower()
+        if same_provider_kind and same_bucket:
+            result.append(json_safe(entry))
+            replaced = True
+        else:
+            result.append(json_safe(item))
+    if not replaced:
+        result.append(json_safe(entry))
+    data["object_storage_accounts"] = result
     return data
 
 

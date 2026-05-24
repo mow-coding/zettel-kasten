@@ -40,6 +40,12 @@ github-repo --dry-run
 github-repo --approve --reviewed-by
   Write only local provider metadata and a provider setup receipt. This does not create a repository, configure remotes, push, or sync.
 
+object-storage --dry-run
+  Plan private object storage for WOM objets without writing files, creating buckets, calling provider APIs, uploading, syncing, copying, hashing, or importing source content.
+
+object-storage --approve --reviewed-by
+  Write only local provider metadata and a provider setup receipt. This does not create buckets, authenticate, upload, sync, copy, hash, or import source files.
+
 mint-zet --dry-run
   Check minting readiness and preview canonical path, mint receipt, and draft snapshot without writing.
 
@@ -386,6 +392,20 @@ python wom-kit\cli\archive.py providers .\some-archive --format json
 ```
 
 `provider-bindings.yml` describes GitHub, R2/B2, Neon, local backup, sync, backup, and keyring references without storing actual secrets. External permission changes remain manual and are listed in `provider_change_plan`. Real share, merge, fork, and external provider mutation are intentionally unavailable.
+
+Plan objet storage metadata without touching any provider:
+
+```powershell
+python wom-kit\cli\archive.py object-storage .\tmp-my-archive `
+  --dry-run `
+  --provider cloudflare-r2 `
+  --profile-id profile:personal:HongGilDong `
+  --profile-slug HongGilDong `
+  --storage-account-ref storage:account:honggildong `
+  --format json
+```
+
+The default bucket/container proposal is `zettel-kasten-<normalized-profile-slug>-objets`, with `archives/<archive_id>/objets/` as the default prefix. Approved mode writes only `provider-bindings.yml`, a provider setup receipt, and optional ignored local profile hints when `--write-local-profile` is supplied.
 
 ## Tests
 

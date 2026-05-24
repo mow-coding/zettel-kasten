@@ -136,6 +136,14 @@ archive github-repo <archive-root> --dry-run --profile-id <profile-id> --profile
 
 The v0.2.20 planner proposes a private `zettel-kasten-<profile_slug>` repository, provider binding metadata, local profile hints, a setup receipt preview, and manual steps. Dry-run writes nothing. Approved mode writes only local metadata and a receipt; it still does not create a GitHub repository, start OAuth, call GitHub APIs, run `gh`, configure remotes, push, or sync.
 
+Before planning object storage for WOM objets, the AI should run:
+
+```text
+archive object-storage <archive-root> --dry-run --provider <provider> --profile-id <profile-id> --profile-slug <ascii-slug> --storage-account-ref <safe-ref> --format json
+```
+
+The v0.2.21 planner proposes a private bucket/container such as `zettel-kasten-<normalized-profile-slug>-objets`, an `archives/<archive_id>/objets/` prefix, provider binding metadata, local profile hints, a setup receipt preview, an objet storage policy preview, and manual steps. Dry-run writes nothing. Approved mode writes only local metadata and a receipt; it still does not create buckets, start OAuth, call provider APIs, upload, sync, copy, hash, or import source files.
+
 But the AI should not silently:
 
 - create provider accounts,
@@ -197,9 +205,9 @@ If yes:
 - configure Git remotes only after a separate explicit human step,
 - do not commit secrets.
 
-### Stage 4: Object Storage
+### Stage 4: Objet Storage
 
-Ask which object storage should hold large originals:
+Ask which objet storage should hold large originals:
 
 ```text
 local only
@@ -211,7 +219,9 @@ other S3-compatible storage
 
 If object storage is selected:
 
-- use provider login/API key flow,
+- run `archive object-storage --dry-run`,
+- review the proposed bucket/container, prefix, provider binding, and receipt,
+- use provider login/API key flow outside WOM-kit,
 - store credentials in keyring/env/local profile,
 - write only references in `provider-bindings.yml`,
 - run upload/list dry-run,

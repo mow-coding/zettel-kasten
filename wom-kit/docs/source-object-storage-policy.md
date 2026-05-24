@@ -1,7 +1,7 @@
-# Source Object Storage Policy
+# Source Objet Storage Policy
 
-Status: planning baseline
-Date: 2026-05-23
+Status: active baseline
+Date: 2026-05-25
 
 This document answers a basic but important question:
 
@@ -13,7 +13,7 @@ Where do files like hwp, hwpx, docx, xlsx, pdf, txt, and md live?
 
 `zet` is always text.
 
-But files that a `zet` refers to are source/original objects.
+But files that a `zet` refers to are source/original objets.
 
 That means:
 
@@ -22,19 +22,21 @@ zet
   -> v0.2 Markdown-compatible text + metadata envelope
   -> long-term WOM Safe HTML Profile canonical/interchange target
 
-source/original object
+source/original objet
   -> hwp, hwpx, docx, xlsx, pdf, txt, md, images, audio, video, exports, and other files
 ```
 
 The system should not confuse these two layers.
 
-## 2. Object Storage Is Not Only For Media
+In WOM product language, the source/original item is an `objet`. The technical provider layer may still be called `object storage` because that is the standard API category used by S3-compatible services.
 
-Object storage is the archive warehouse for original files.
+## 2. Objet Storage Is Not Only For Media
+
+Objet storage is the archive warehouse for original files.
 
 It is not limited to photos, videos, or audio.
 
-Document files can also be stored as objects:
+Document files can also be stored as objets:
 
 - `.hwp`
 - `.hwpx`
@@ -53,17 +55,17 @@ The key question is not "is this media?"
 The better question is:
 
 ```text
-Is this an original source object that a zet may cite, summarize, analyze, or derive from?
+Is this an original source objet that a zet may cite, summarize, analyze, or derive from?
 ```
 
-If yes, it belongs in the source/object layer.
+If yes, it belongs in the source/objet layer.
 
 ## 3. Recommended Default
 
 Default policy:
 
 ```text
-Original files -> local object store and/or object storage
+Original files -> local objet store and/or object storage provider
 Object identity -> object manifest
 Derived text -> derived text records with provenance
 zets and metadata -> Git repository
@@ -74,45 +76,45 @@ Human conclusions -> minted zets
 In practical terms:
 
 - Git should store zets, schemas, manifests, receipts, and small public-safe examples.
-- Object storage should store original binary or document files when they are real archive sources.
+- Objet storage should store original binary or document files when they are real archive sources.
 - Derived OCR/transcription/extraction text should be stored with provenance and review status.
 - SQLite/search indexes may store extracted text for search, but indexes are rebuildable.
-- zets should cite original objects through `object_id`, not by embedding the file itself.
+- zets should cite original objets through `object_id`, not by embedding the file itself.
 
 ## 4. File-Type Guidance
 
 ### HWP / HWPX
 
-Treat as source/original document objects.
+Treat as source/original document objets.
 
 Recommended storage:
 
 ```text
-object storage or local object store
+object storage provider or local objet store
 ```
 
-The system may later extract text for search or AI drafting, but the original `.hwp` or `.hwpx` remains the source object.
+The system may later extract text for search or AI drafting, but the original `.hwp` or `.hwpx` remains the source objet.
 
 ### DOCX / XLSX / PPTX
 
-Treat as source/original document objects.
+Treat as source/original document objets.
 
 Recommended storage:
 
 ```text
-object storage or local object store
+object storage provider or local objet store
 ```
 
-These are structured documents, but Git diffs are usually not useful for them. Keep the original as an object and store extracted text/metadata separately.
+These are structured documents, but Git diffs are usually not useful for them. Keep the original as an objet and store extracted text/metadata separately.
 
 ### PDF
 
-Treat as a source/original object.
+Treat as a source/original objet.
 
 Recommended storage:
 
 ```text
-object storage or local object store
+object storage provider or local objet store
 ```
 
 The system may keep extracted text, OCR results, page references, or summaries as derived metadata or zets.
@@ -132,10 +134,10 @@ There are two cases.
 
 If the `.txt` or `.md` file is a minted `zet`, store it in Git under the zettel layer.
 
-If the `.txt` or `.md` file is an imported original source, treat it as a source object:
+If the `.txt` or `.md` file is an imported original source, treat it as a source objet:
 
 ```text
-source object -> object manifest
+source objet -> object manifest
 derived conclusion -> minted zet
 ```
 
@@ -143,7 +145,7 @@ This distinction matters because a copied original note and a newly minted canon
 
 ### CSV
 
-Treat as a source/original object unless it is a tiny public-safe example.
+Treat as a source/original objet unless it is a tiny public-safe example.
 
 The system may also derive:
 
@@ -180,22 +182,22 @@ Git is less ideal for:
 
 So the archive should avoid using Git as the universal warehouse.
 
-## 6. Why Keep Object Manifests?
+## 6. Why Keep Objet Manifests?
 
 The object manifest lets the system say:
 
 ```text
-This zet was derived from exactly this original object.
+This zet was derived from exactly this original objet.
 ```
 
 without forcing the original file to live in the same Git repo.
 
-The same object may have several physical locations:
+The same objet may have several physical locations:
 
 ```text
 local PC
 external SSD
-object storage
+object storage provider
 Google Drive export
 Notion export
 backup disk
@@ -221,9 +223,36 @@ register source file
 -> canonical zet cites object_id
 ```
 
-The original document remains an object. The minted zet becomes durable archive memory.
+The original document remains an objet. The minted zet becomes durable archive memory.
 
-## 8. Text Provenance Hierarchy
+## 8. v0.2.21 Setup Planner
+
+WOM-kit v0.2.21 adds a dry-run-first setup planner for the technical object storage provider layer:
+
+```bash
+archive object-storage <archive-root> --dry-run \
+  --provider cloudflare-r2 \
+  --profile-id profile:personal:HongGilDong \
+  --profile-slug HongGilDong \
+  --storage-account-ref storage:account:honggildong \
+  --format json
+```
+
+The default bucket/container proposal is:
+
+```text
+zettel-kasten-<normalized-profile-slug>-objets
+```
+
+The default prefix proposal is:
+
+```text
+archives/<archive_id>/objets/
+```
+
+Dry-run writes nothing and calls no provider APIs. Approved mode writes only safe local provider metadata and a setup receipt. It still does not create buckets, run OAuth, upload, sync, copy source files, hash files, or import source content.
+
+## 9. Text Provenance Hierarchy
 
 The archive should preserve the difference between:
 
@@ -237,6 +266,6 @@ minted zet
 
 These are all text-like artifacts, but they do not have the same authority.
 
-OCR and AI transcription can improve as models improve, so they must remain traceable to the original object and tool/model that produced them.
+OCR and AI transcription can improve as models improve, so they must remain traceable to the original objet and tool/model that produced them.
 
 See `text-provenance-hierarchy.md`.

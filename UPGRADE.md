@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.20` | current public pre-release | `wom-kit/docs/releases/v0.2.20.md` |
+| `v0.2.21` | current public pre-release | `wom-kit/docs/releases/v0.2.21.md` |
+| `v0.2.20` | superseded public pre-release | `wom-kit/docs/releases/v0.2.20.md` |
 | `v0.2.19` | superseded public pre-release | `wom-kit/docs/releases/v0.2.19.md` |
 | `v0.2.18` | superseded public pre-release | `wom-kit/docs/releases/v0.2.18.md` |
 | `v0.2.17` | superseded public pre-release | `wom-kit/docs/releases/v0.2.17.md` |
@@ -47,6 +48,33 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.20` To `v0.2.21`
+
+This is a compatible object storage/objet setup planner patch.
+
+What changed:
+
+- added `archive object-storage <archive-root> --dry-run --format json`,
+- added safe default bucket/container naming as `zettel-kasten-<normalized-profile-slug>-objets`,
+- added default objet prefix planning as `archives/<archive_id>/objets/`,
+- added strict safety gates for provider kind, profile slug, bucket/container name, region, endpoint reference, and storage account reference,
+- added `--approve --reviewed-by` for local-only provider metadata and setup receipt writes,
+- added optional ignored local object storage account hints with `--write-local-profile`,
+- added read-only MCP `object_storage_setup_plan`.
+
+No private archive migration is required.
+
+This release does not create buckets, run OAuth, call provider APIs, upload, sync, copy source files, hash files, or import source content.
+
+```bash
+archive object-storage <archive-root> --dry-run \
+  --provider cloudflare-r2 \
+  --profile-id profile:personal:HongGilDong \
+  --profile-slug HongGilDong \
+  --storage-account-ref storage:account:honggildong \
+  --format json
+```
 
 ## From `v0.2.19` To `v0.2.20`
 

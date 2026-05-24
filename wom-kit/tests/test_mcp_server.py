@@ -200,6 +200,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("archive_doctor", tool_names)
             self.assertIn("archive_runtime_context", tool_names)
             self.assertIn("github_repository_setup_plan", tool_names)
+            self.assertIn("object_storage_setup_plan", tool_names)
             self.assertIn("create_draft_zettel", tool_names)
             self.assertIn("archive_index", tool_names)
             self.assertIn("archive_search", tool_names)
@@ -241,6 +242,11 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("github_repository_connect", tool_names)
             self.assertNotIn("github_repository_push", tool_names)
             self.assertNotIn("github_repository_sync", tool_names)
+            self.assertNotIn("object_storage_setup_apply", tool_names)
+            self.assertNotIn("object_storage_create", tool_names)
+            self.assertNotIn("object_storage_connect", tool_names)
+            self.assertNotIn("object_storage_upload", tool_names)
+            self.assertNotIn("object_storage_sync", tool_names)
             self.assertNotIn("share_archive_scope", tool_names)
             self.assertNotIn("delegate_zet", tool_names)
             self.assertNotIn("attest_zet", tool_names)
@@ -545,6 +551,79 @@ class McpServerTests(unittest.TestCase):
                                 "profile_slug": "HongGilDong",
                                 "github_owner": "example-user",
                                 "github_account_ref": "github:account:honggildong",
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_object_storage_setup_plan_tool_writes_nothing_and_respects_allowed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "object_storage_setup_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "provider": "cloudflare-r2",
+                                "profile_id": "profile:personal:HongGilDong",
+                                "profile_slug": "HongGilDong",
+                                "storage_account_ref": "storage:account:honggildong",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"])
+                self.assertTrue(structured["dry_run"])
+                self.assertEqual(structured["lifecycle_action"], "object_storage_setup_plan")
+                self.assertEqual(structured["proposed_bucket_name"], "zettel-kasten-honggildong-objets")
+                self.assertFalse(structured["provider_setup_receipt_preview"]["external_actions"]["provider_api_called"])
+                self.assertFalse(structured["provider_setup_receipt_preview"]["external_actions"]["files_uploaded"])
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "object_storage_setup_plan",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "provider": "cloudflare-r2",
+                                "profile_id": "profile:personal:HongGilDong",
+                                "profile_slug": "HongGilDong",
+                                "storage_account_ref": "storage:account:honggildong",
                             },
                         },
                     },
