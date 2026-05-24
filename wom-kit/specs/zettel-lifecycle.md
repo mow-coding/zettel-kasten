@@ -155,6 +155,22 @@ source_refs:
   - type: local_ai_session
     value: session:example
     role: prompt_context
+source_intake:
+  plan_sha256: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  input_kind: ai_artifact
+  source_kind: ai_artifact
+  objet_status: ai_artifact
+  object_storage_configured: false
+  content_access:
+    metadata_only: true
+    content_read: false
+    copied: false
+    uploaded: false
+    imported: false
+    ocr_performed: false
+    transcription_performed: false
+    external_api_called: false
+    full_hash_calculated: false
 local_ai_sessions:
   - runtime: codex
     session_ref: session:example
@@ -199,6 +215,8 @@ mint dry-run -> human mint approval -> canonical memory
 ```
 
 Draft approval is scoped to `inbox_draft_only`. It must not be reused as mint approval.
+
+When a draft cites a v0.2.22 source intake plan, v0.2.23 `create-draft --source-intake-plan` validates that the plan is a successful metadata-only dry-run before merging refs. The draft may store optional `source_intake` metadata, but must not store the local plan file path or follow local source paths from the plan.
 
 ## Promotion Rules
 

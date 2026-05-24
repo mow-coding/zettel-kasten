@@ -416,6 +416,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "supervised_by": {"type": "array", "items": {"type": "string"}},
                 "derived_from": {"type": "array", "items": {"type": "string"}},
                 "source_refs": {"type": "array", "items": {"type": "object"}},
+                "source_intake_plan": {"type": "object"},
                 "local_ai_sessions": {"type": "array", "items": {"type": "object"}},
                 "draft_id": {"type": "string"},
                 "created_at": {"type": "string"},
@@ -1113,6 +1114,9 @@ def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
     visibility = arguments.get("visibility") if isinstance(arguments.get("visibility"), dict) else None
     profile_context = arguments.get("profile_context") if isinstance(arguments.get("profile_context"), dict) else {}
     source_refs = arguments.get("source_refs") if isinstance(arguments.get("source_refs"), list) else []
+    if "source_intake_plan" in arguments and not isinstance(arguments.get("source_intake_plan"), dict):
+        raise ToolError("source_intake_plan must be a structured object, not a local file path.")
+    source_intake_plan = arguments.get("source_intake_plan") if isinstance(arguments.get("source_intake_plan"), dict) else None
     local_ai_sessions = arguments.get("local_ai_sessions") if isinstance(arguments.get("local_ai_sessions"), list) else []
     created_by = optional_string_arg(arguments, "created_by") or "mcp:zettel-kasten-archive-mcp"
     source = optional_string_arg(arguments, "source") or "mcp_tool_call"
@@ -1150,6 +1154,7 @@ def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
         supervised_by=optional_string_list_arg(arguments, "supervised_by"),
         derived_from=optional_string_list_arg(arguments, "derived_from"),
         source_refs=source_refs,
+        source_intake_plan=source_intake_plan,
         local_ai_sessions=local_ai_sessions,
         draft_id=optional_string_arg(arguments, "draft_id"),
         created_at=optional_string_arg(arguments, "created_at"),

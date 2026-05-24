@@ -1586,6 +1586,7 @@ def command_create_draft(args: argparse.Namespace) -> int:
             supervised_by=args.supervised_by,
             derived_from=args.derived_from,
             source_refs=parse_source_ref_pairs(args.source_ref or []),
+            source_intake_plan=load_source_intake_plan_file(args.source_intake_plan),
             local_ai_sessions=build_local_ai_session_refs(args),
             draft_id=args.draft_id,
             created_at=args.created_at,
@@ -3126,6 +3127,18 @@ def parse_source_ref_pairs(items: list[str]) -> list[dict[str, str]]:
     return refs
 
 
+def load_source_intake_plan_file(path: str | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"source-intake plan must be valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("source-intake plan JSON must be an object.")
+    return data
+
+
 def infer_runtime_name(actor: str | None) -> str | None:
     if not actor:
         return None
@@ -3429,6 +3442,7 @@ def build_parser() -> argparse.ArgumentParser:
     create_draft.add_argument("--supervised-by", action="append", help="Supervising actor id. May be repeated.")
     create_draft.add_argument("--derived-from", action="append", help="Safe source ref the draft derives from. May be repeated.")
     create_draft.add_argument("--source-ref", action="append", help="Safe source ref in TYPE:VALUE form. May be repeated.")
+    create_draft.add_argument("--source-intake-plan", help="JSON file from source-intake --dry-run to merge into draft refs.")
     create_draft.add_argument("--local-ai-session", action="append", help="Safe local AI session ref. May be repeated.")
     create_draft.add_argument("--draft-id", help="Deterministic draft zet id for dry-run replay.")
     create_draft.add_argument("--created-at", help="Deterministic ISO timestamp for dry-run replay.")

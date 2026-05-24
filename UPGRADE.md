@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.22` | current public pre-release | `wom-kit/docs/releases/v0.2.22.md` |
+| `v0.2.23` | current public pre-release | `wom-kit/docs/releases/v0.2.23.md` |
+| `v0.2.22` | superseded public pre-release | `wom-kit/docs/releases/v0.2.22.md` |
 | `v0.2.21` | superseded public pre-release | `wom-kit/docs/releases/v0.2.21.md` |
 | `v0.2.20` | superseded public pre-release | `wom-kit/docs/releases/v0.2.20.md` |
 | `v0.2.19` | superseded public pre-release | `wom-kit/docs/releases/v0.2.19.md` |
@@ -49,6 +50,34 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.22` To `v0.2.23`
+
+This is a compatible source intake draft composer patch.
+
+What changed:
+
+- added `archive create-draft --source-intake-plan <json-file>`,
+- validated that consumed source intake plans are successful dry-runs, blocker-free, metadata-only, and safe,
+- merged `source_refs_for_draft` into draft `source_refs` while preserving explicit `--source-ref` values,
+- added optional draft `source_intake` metadata with a plan hash and content access proof,
+- added MCP `create_draft_zettel` support for structured `source_intake_plan` objects.
+
+No private archive migration is required.
+
+This release does not read original source files from the plan, follow local paths inside the plan, apply source intake, capture objets, copy, upload, import, OCR, transcribe, calculate full source hashes, call provider APIs, automatically mint, or add MCP real minting.
+
+```bash
+archive source-intake <archive-root> --dry-run \
+  --object-id sha256:<hash> \
+  --format json > source-intake-plan.json
+
+archive create-draft <archive-root> --dry-run \
+  --title "Draft title" \
+  --body "Draft body" \
+  --source-intake-plan source-intake-plan.json \
+  --format json
+```
 
 ## From `v0.2.21` To `v0.2.22`
 

@@ -32,7 +32,7 @@ read-zettel
   Read one zettel by id or archive-relative path.
 
 create-draft
-  Create a draft zettel in inbox/.
+  Create a draft zettel in inbox/. It can consume a validated source-intake dry-run plan with --source-intake-plan.
 
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
@@ -420,6 +420,24 @@ python wom-kit\cli\archive.py source-intake .\tmp-my-archive `
 ```
 
 `source-intake` accepts exactly one locator mode: `--local-path`, `--source` with `--item-id`, `--source` with `--relative-path`, `--objet-ref`, `--object-id`, provider object refs, or AI artifact refs. It returns metadata-only classification, `objet_status`, object storage context, and safe `source_refs_for_draft` that can be passed to `create-draft --dry-run`.
+
+Compose a draft from the source intake plan without manually copying refs:
+
+```powershell
+python wom-kit\cli\archive.py source-intake .\tmp-my-archive `
+  --dry-run `
+  --object-id sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
+  --format json > source-intake-plan.json
+
+python wom-kit\cli\archive.py create-draft .\tmp-my-archive `
+  --title "Draft title" `
+  --body "Draft body" `
+  --dry-run `
+  --source-intake-plan source-intake-plan.json `
+  --format json
+```
+
+`create-draft` validates the plan before using it. The plan must be a successful source-intake dry-run with no blockers and metadata-only content access. WOM-kit does not read the original source file, follow local paths in the plan, or store the local plan file path in draft frontmatter.
 
 ## Tests
 

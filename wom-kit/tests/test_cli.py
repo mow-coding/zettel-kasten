@@ -1523,6 +1523,249 @@ class ArchiveCliTests(unittest.TestCase):
                 mint_result["receipt_preview"]["source_refs"],
             )
 
+    def test_create_draft_dry_run_consumes_source_intake_plan_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path = Path(tmp) / "source-intake-plan.json"
+            intake_code, intake_output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--object-id",
+                    "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136",
+                    "--profile-id",
+                    "profile:personal:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(intake_code, 0, intake_output)
+            plan_path.write_text(intake_output, encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Plan composed draft",
+                    "--body",
+                    "Draft text composed from safe source intake refs.",
+                    "--dry-run",
+                    "--source-intake-plan",
+                    str(plan_path),
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["dry_run"])
+            self.assertFalse((archive_root / result["proposed_path"]).exists())
+            frontmatter = result["frontmatter_preview"]
+            self.assertEqual(frontmatter["source_refs"][0]["type"], "object_id")
+            self.assertIn("source_intake", frontmatter)
+            self.assertTrue(frontmatter["source_intake"]["plan_sha256"].startswith("sha256:"))
+            self.assertEqual(frontmatter["source_intake"]["content_access"]["metadata_only"], True)
+            self.assertEqual(result["target_archive"]["profile_id"], "profile:personal:test")
+
+    def test_create_draft_write_preserves_source_intake_plan_refs_and_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path = Path(tmp) / "plan.json"
+            object_id = "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            intake_code, intake_output = self.run_cli(
+                ["source-intake", str(archive_root), "--dry-run", "--object-id", object_id, "--format", "json"]
+            )
+            self.assertEqual(intake_code, 0, intake_output)
+            plan_path.write_text(intake_output, encoding="utf-8")
+            body = "Approved draft that keeps source intake metadata."
+            expected_hash = hashlib.sha256((body.rstrip() + "\n").encode("utf-8")).hexdigest()
+
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Approved plan draft",
+                    "--body",
+                    body,
+                    "--source-intake-plan",
+                    str(plan_path),
+                    "--source-ref",
+                    "local_ai_session:session:explicit",
+                    "--draft-id",
+                    "zet_20260525_plan_composer",
+                    "--created-at",
+                    "2026-05-25T09:10:11+09:00",
+                    "--expected-body-sha256",
+                    expected_hash,
+                    "--draft-approved-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            draft_path = archive_root / result["path"]
+            text = draft_path.read_text(encoding="utf-8")
+            self.assertNotIn(str(plan_path), text)
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            self.assertIsNotNone(match)
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            self.assertIn({"type": "object_id", "value": object_id, "role": "primary_source"}, frontmatter["source_refs"])
+            self.assertIn(
+                {"type": "local_ai_session", "value": "session:explicit", "role": "prompt_context"},
+                frontmatter["source_refs"],
+            )
+            self.assertEqual(frontmatter["source_intake"]["objet_status"], "manifested")
+            self.assertIn(object_id, frontmatter["provenance"]["derived_from"])
+
+            frontmatter["kind"] = "permanent_note"
+            frontmatter["facets"] = {"domain": "test"}
+            frontmatter["promotion"] = {
+                "stage": "promotion_candidate",
+                "ready_for_promotion": True,
+                "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
+            }
+            draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body + "\n", encoding="utf-8")
+            mint_code, mint_output = self.run_cli(
+                ["mint-zet", str(archive_root), "--path", result["path"], "--dry-run", "--format", "json"]
+            )
+            mint_result = json.loads(mint_output)
+            self.assertEqual(mint_code, 0, mint_output)
+            self.assertTrue(
+                any(
+                    ref.get("type") == "object_id" and ref.get("value") == object_id
+                    for ref in mint_result["receipt_preview"]["source_refs"]
+                )
+            )
+            self.assertEqual(mint_result["receipt_preview"]["source_intake"]["objet_status"], "manifested")
+
+    def test_create_draft_anonymizes_source_intake_candidate_refs_from_no_redact_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = self.copy_fake_archive(tmp_root / "archive")
+            source_file = tmp_root / "My Private Diary.pdf"
+            source_file.write_text("metadata only\n", encoding="utf-8")
+            plan_path = tmp_root / "local-plan.json"
+            intake_code, intake_output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--local-path",
+                    str(source_file),
+                    "--no-redact-local-paths",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(intake_code, 0, intake_output)
+            plan = json.loads(intake_output)
+            self.assertIn("my_private_diary_pdf", plan["source_refs_for_draft"][0]["value"])
+            plan_path.write_text(intake_output, encoding="utf-8")
+            body = "Approved draft with an anonymized candidate source ref."
+            expected_hash = hashlib.sha256((body.rstrip() + "\n").encode("utf-8")).hexdigest()
+
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Anonymized candidate draft",
+                    "--body",
+                    body,
+                    "--source-intake-plan",
+                    str(plan_path),
+                    "--draft-id",
+                    "zet_20260525_anonymized_candidate",
+                    "--created-at",
+                    "2026-05-25T09:10:11+09:00",
+                    "--expected-body-sha256",
+                    expected_hash,
+                    "--draft-approved-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            draft_path = archive_root / result["path"]
+            text = draft_path.read_text(encoding="utf-8")
+            self.assertNotIn(str(source_file), text)
+            self.assertNotIn(str(plan_path), text)
+            self.assertNotIn("my_private_diary", text.lower())
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            self.assertIsNotNone(match)
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            anonymous_ref = frontmatter["source_refs"][0]["value"]
+            self.assertEqual(frontmatter["source_refs"][0]["type"], "source_intake_candidate")
+            self.assertTrue(anonymous_ref.startswith("candidate:source-intake:"))
+            self.assertNotIn("my_private_diary", anonymous_ref)
+            self.assertEqual(frontmatter["provenance"]["derived_from"], [anonymous_ref])
+
+    def test_create_draft_blocks_invalid_source_intake_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            intake_code, intake_output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--object-id",
+                    "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(intake_code, 0, intake_output)
+            valid_plan = json.loads(intake_output)
+            cases = {
+                "wrong lifecycle_action": {"lifecycle_action": "other_action"},
+                "ok false": {"ok": False},
+                "dry_run false": {"dry_run": False},
+                "blockers present": {"blockers": ["blocked by test"]},
+                "content read": {"content_access": {**valid_plan["content_access"], "content_read": True}},
+                "content uploaded": {"content_access": {**valid_plan["content_access"], "uploaded": True}},
+                "full hash": {"content_access": {**valid_plan["content_access"], "full_hash_calculated": True}},
+                "local path ref": {"source_refs_for_draft": [{"type": "object_id", "value": "C:\\private\\source.txt"}]},
+                "url ref": {"source_refs_for_draft": [{"type": "provider_object_ref", "value": "https://example.invalid/private"}]},
+                "secret ref": {"source_refs_for_draft": [{"type": "provider_object_ref", "value": "token"}]},
+            }
+
+            for name, patch in cases.items():
+                with self.subTest(name=name):
+                    plan = {**valid_plan, **patch}
+                    plan_path = Path(tmp) / f"{name.replace(' ', '-')}.json"
+                    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+                    code, output = self.run_cli(
+                        [
+                            "create-draft",
+                            str(archive_root),
+                            "--title",
+                            "Invalid plan draft",
+                            "--body",
+                            "This dry-run should be blocked.",
+                            "--dry-run",
+                            "--source-intake-plan",
+                            str(plan_path),
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(result["blockers"])
+
     def test_runtime_context_no_redact_local_paths_includes_local_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

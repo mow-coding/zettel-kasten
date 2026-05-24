@@ -65,6 +65,30 @@
         "required": ["session_ref"]
       }
     },
+    "source_intake": {
+      "type": "object",
+      "properties": {
+        "plan_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "input_kind": {"type": "string"},
+        "source_kind": {"type": ["string", "null"]},
+        "objet_status": {"type": ["string", "null"]},
+        "object_storage_configured": {"type": "boolean"},
+        "content_access": {
+          "type": "object",
+          "properties": {
+            "metadata_only": {"type": "boolean"},
+            "content_read": {"type": "boolean"},
+            "copied": {"type": "boolean"},
+            "uploaded": {"type": "boolean"},
+            "imported": {"type": "boolean"},
+            "ocr_performed": {"type": "boolean"},
+            "transcription_performed": {"type": "boolean"},
+            "external_api_called": {"type": "boolean"},
+            "full_hash_calculated": {"type": "boolean"}
+          }
+        }
+      }
+    },
     "draft_creation": {
       "type": "object",
       "properties": {

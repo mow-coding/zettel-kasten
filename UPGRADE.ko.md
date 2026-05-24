@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.22` | current public pre-release | `wom-kit/docs/releases/v0.2.22.md` |
+| `v0.2.23` | current public pre-release | `wom-kit/docs/releases/v0.2.23.md` |
+| `v0.2.22` | superseded public pre-release | `wom-kit/docs/releases/v0.2.22.md` |
 | `v0.2.21` | superseded public pre-release | `wom-kit/docs/releases/v0.2.21.md` |
 | `v0.2.20` | superseded public pre-release | `wom-kit/docs/releases/v0.2.20.md` |
 | `v0.2.19` | superseded public pre-release | `wom-kit/docs/releases/v0.2.19.md` |
@@ -49,6 +50,34 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.22`에서 `v0.2.23`으로
+
+이번 버전은 source intake dry-run 결과를 `create-draft`가 안전하게 소비하도록 하는 호환 패치입니다.
+
+바뀐 점:
+
+- `archive create-draft --source-intake-plan <json-file>`을 추가했습니다.
+- source intake plan이 성공한 dry-run이고, blocker가 없고, metadata-only이며, 안전한 refs만 담았는지 검증합니다.
+- `source_refs_for_draft`를 draft `source_refs`로 병합하면서 기존 `--source-ref`도 보존합니다.
+- draft frontmatter에 선택적 `source_intake` metadata를 추가해 plan hash와 content access proof를 남깁니다.
+- MCP `create_draft_zettel`이 structured `source_intake_plan` object를 받을 수 있습니다.
+
+private archive migration은 필요 없습니다.
+
+이 버전은 원본 source file을 읽거나, plan 안의 local path를 따라가거나, source intake apply, objet capture, copy, upload, import, OCR, transcription, full source hash, provider API call, automatic mint, MCP real minting을 구현하지 않습니다.
+
+```bash
+archive source-intake <archive-root> --dry-run \
+  --object-id sha256:<hash> \
+  --format json > source-intake-plan.json
+
+archive create-draft <archive-root> --dry-run \
+  --title "Draft title" \
+  --body "Draft body" \
+  --source-intake-plan source-intake-plan.json \
+  --format json
+```
 
 ## `v0.2.21`에서 `v0.2.22`로
 

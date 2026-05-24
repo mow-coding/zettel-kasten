@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.22 planning and implementation baseline
+Status: v0.2.23 planning and implementation baseline
 
 ## Purpose
 
@@ -113,6 +113,14 @@ The planner accepts exactly one locator mode, such as a local path, source map i
 
 It writes nothing and does not read file bodies, calculate full hashes, copy, upload, import, OCR, transcribe, extract, call provider APIs, create drafts, or mint.
 
+From v0.2.23, `create-draft` can consume a saved source intake dry-run JSON file:
+
+```bash
+archive create-draft <archive-root> --dry-run --source-intake-plan source-intake-plan.json --format json
+```
+
+The draft composer validates the plan, merges safe refs into draft `source_refs`, stores optional `source_intake` metadata, and does not store the local plan file path. It does not read or follow the original source locator.
+
 ## Expected AI Runtime Flow
 
 An AI runtime should start with:
@@ -123,7 +131,7 @@ An AI runtime should start with:
 3. call runtime context with expected archive id and type
 4. check ok/blockers/warnings
 5. run source-intake dry-run when a source/objet/provider/AI artifact is involved
-6. run create-draft dry-run with the returned safe source refs and show the proposed inbox draft
+6. run create-draft dry-run with `--source-intake-plan` and show the proposed inbox draft
 7. replay the draft only after human draft approval
 8. run mint dry-run before asking for mint approval
 9. use CLI approval paths for real minting
@@ -158,7 +166,7 @@ Allowed v0.2.18 direction:
 - source intake dry-run,
 - doctor,
 - list/read zets,
-- create-draft dry-run and approved inbox draft writes,
+- create-draft dry-run, source-intake plan composition, and approved inbox draft writes,
 - dry-run mint checks,
 - safe HTML dry-run through CLI,
 - onboarding and source planning,
@@ -171,6 +179,7 @@ Not allowed in this layer yet:
 - provider API sync,
 - source scan apply,
 - source registration apply,
+- source intake apply/capture/upload/sync,
 - real sharing,
 - real transfer,
 - UI automation as the canonical write path.

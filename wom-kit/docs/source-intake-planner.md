@@ -18,7 +18,7 @@ and what safe reference can a draft zet cite?
 profile-resolve
 -> runtime-context
 -> source-intake --dry-run
--> create-draft --dry-run with source_refs
+-> create-draft --dry-run with --source-intake-plan
 -> human draft approval
 -> create inbox draft
 -> mint only with separate approval
@@ -69,6 +69,34 @@ would_change
 
 `content_access` is explicit: file bodies are not read, full hashes are not calculated, and no copy/upload/import/OCR/transcription/provider API action occurs.
 
+## Draft Composition
+
+From v0.2.23, `create-draft` can consume a saved source intake dry-run result:
+
+```bash
+archive create-draft <archive-root> \
+  --dry-run \
+  --title "Draft title" \
+  --body "Draft body" \
+  --source-intake-plan source-intake-plan.json \
+  --format json
+```
+
+The composer validates the plan before using it:
+
+- `ok` must be true,
+- `dry_run` must be true,
+- `lifecycle_action` must be `source_intake_plan`,
+- `blockers` must be empty,
+- `source_refs_for_draft` must contain only safe refs,
+- `content_access` must prove metadata-only behavior.
+
+When valid, the safe refs are merged into draft `source_refs`, optional `source_intake` metadata is stored, and the local plan file path is not stored. The composer does not read the original source file or follow local paths inside the plan.
+
+For privacy, `source_intake_candidate` refs from local-file plans are anonymized during draft composition. A candidate ref derived from a filename is rewritten to a plan-hash-based value such as `candidate:source-intake:<hash-prefix>` before it can be stored in draft frontmatter.
+
+`source_intake.plan_sha256` is a commitment to the supplied dry-run JSON plan. It proves which plan object was used for draft composition; it does not independently re-run source intake or prove that the original source file still exists.
+
 ## Objet Rules
 
 - `objet` is the WOM product-language term for source/original files outside Git.
@@ -105,6 +133,7 @@ This release does not:
 - parse/extract document bodies,
 - call provider APIs,
 - create inbox drafts automatically,
+- bypass draft approval,
 - mint canonical memory,
 - sync providers.
 

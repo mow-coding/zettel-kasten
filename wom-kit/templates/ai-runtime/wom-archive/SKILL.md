@@ -40,11 +40,13 @@ If the draft is based on a presentation, document, image, provider item, or AI a
 archive source-intake <archive-root> --dry-run --format json
 ```
 
-Use exactly one locator mode. Continue with `create-draft --dry-run` only after `ok` is true and the returned `source_refs_for_draft` are safe for the intended draft.
+Use exactly one locator mode. Continue with `create-draft --dry-run` only after `ok` is true and the returned plan has no blockers.
 
 ```bash
-archive create-draft <archive-root> --dry-run --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --format json
+archive create-draft <archive-root> --dry-run --source-intake-plan <source-intake-plan.json> --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --format json
 ```
+
+Do not manually copy local paths from the source intake output into the draft. Let `create-draft --source-intake-plan` validate and merge safe refs.
 
 After human draft approval, replay the same `draft_id`, `created_at`, `expected_body_sha256`, expected archive id/type, and profile id. Draft approval is only for `inbox/`; minting still needs a separate `mint-zet --approve --reviewed-by` step.
 
@@ -81,6 +83,7 @@ Do not:
 - register profiles or tokens through MCP,
 - scan the whole disk,
 - read file bodies, hash files, copy, upload, import, OCR, transcribe, extract, or call provider APIs during source intake,
+- treat a source-intake plan as permission to capture/import/upload the source,
 - treat "upload" or "post" language as mint approval,
 - create a profile-bound AI draft without `draft_approved_by` and `expected_body_sha256`,
 - create an AI-assisted or AI-generated draft without `assisted_by`,

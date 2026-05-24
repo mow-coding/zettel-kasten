@@ -157,6 +157,22 @@ source_refs:
   - type: local_ai_session
     value: session:example
     role: prompt_context
+source_intake:
+  plan_sha256: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  input_kind: object_id
+  source_kind: document
+  objet_status: manifested
+  object_storage_configured: true
+  content_access:
+    metadata_only: true
+    content_read: false
+    copied: false
+    uploaded: false
+    imported: false
+    ocr_performed: false
+    transcription_performed: false
+    external_api_called: false
+    full_hash_calculated: false
 local_ai_sessions:
   - runtime: codex
     session_ref: session:example
@@ -170,6 +186,10 @@ draft_creation:
 ```
 
 `draft_creation` approval only authorizes writing an inbox draft. It does not authorize minting canonical memory.
+
+`source_intake` is optional. It records that draft source refs came from a validated dry-run source intake plan. It must not store the local plan file path or local absolute source paths.
+
+`source_intake.plan_sha256` is a commitment to the supplied source intake plan object, not an independent re-verification of the original source. Candidate refs derived from local-file intake are anonymized during draft composition so private filename stems do not become durable draft metadata.
 
 ## Visibility
 

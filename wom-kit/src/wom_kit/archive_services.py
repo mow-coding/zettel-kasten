@@ -113,6 +113,17 @@ SOURCE_INTAKE_DEFAULT_ROLE = "primary_source"
 SOURCE_INTAKE_RUNTIMES = {"codex", "claude_code", "other"}
 SOURCE_INTAKE_SAFE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._+-]{0,199}$")
 SOURCE_INTAKE_ARTIFACT_KIND_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+SOURCE_INTAKE_CONTENT_ACCESS_EXPECTATIONS = {
+    "metadata_only": True,
+    "content_read": False,
+    "copied": False,
+    "uploaded": False,
+    "imported": False,
+    "ocr_performed": False,
+    "transcription_performed": False,
+    "external_api_called": False,
+    "full_hash_calculated": False,
+}
 SOURCE_INTAKE_OBJECT_STORAGE_PROVIDERS = {
     "object_storage",
     "cloudflare_r2",
@@ -532,6 +543,171 @@ def validate_safe_draft_values(value: Any, blockers: list[str], field_path: str 
         blockers.append(f"Secret-like value in {field_path}.")
 
 
+def sha256_json_value(value: Any) -> str:
+    encoded = json.dumps(json_safe(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def safe_source_intake_plan_scalar(value: str) -> bool:
+    text = value.strip()
+    if not text or "\x00" in text or "\n" in text or "\r" in text:
+        return False
+    if "@" in text or source_intake_has_provider_url(text):
+        return False
+    if contains_forbidden_location_reference(text) or source_intake_secret_like(text):
+        return False
+    return True
+
+
+def safe_optional_source_intake_plan_scalar(
+    plan: dict[str, Any],
+    key: str,
+    blockers: list[str],
+) -> str | None:
+    value = plan.get(key)
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if not safe_source_intake_plan_scalar(text):
+        blockers.append(f"source_intake_plan.{key} must be a safe non-secret scalar.")
+        return None
+    return text
+
+
+def validate_source_intake_plan_refs(refs: list[dict[str, Any]], blockers: list[str]) -> None:
+    for index, ref in enumerate(refs):
+        for key in ["type", "value", "role"]:
+            value = ref.get(key)
+            if value is None:
+                continue
+            text = str(value)
+            if not safe_source_intake_plan_scalar(text):
+                blockers.append(f"source_intake_plan.source_refs_for_draft[{index}].{key} is unsafe.")
+
+
+def anonymized_source_intake_candidate(plan_sha256: str) -> str:
+    digest = plan_sha256.removeprefix("sha256:")
+    return f"candidate:source-intake:{digest[:16]}"
+
+
+def anonymize_source_intake_candidate_refs(refs: list[dict[str, Any]], plan_sha256: str) -> list[dict[str, Any]]:
+    anonymous_candidate = anonymized_source_intake_candidate(plan_sha256)
+    result: list[dict[str, Any]] = []
+    for ref in refs:
+        item = dict(ref)
+        if item.get("type") == "source_intake_candidate":
+            item["value"] = anonymous_candidate
+        result.append(item)
+    return result
+
+
+def anonymize_source_intake_candidate_derived_from(items: list[str], plan_sha256: str) -> list[str]:
+    anonymous_candidate = anonymized_source_intake_candidate(plan_sha256)
+    return [anonymous_candidate if item.startswith("candidate:") else item for item in items]
+
+
+def prepare_source_intake_plan_for_draft(
+    plan: dict[str, Any] | None,
+    blockers: list[str],
+) -> dict[str, Any]:
+    prepared = {
+        "source_refs": [],
+        "source_intake": None,
+        "derived_from": [],
+        "profile_id": None,
+    }
+    if plan is None:
+        return prepared
+    plan_blockers: list[str] = []
+    if not isinstance(plan, dict):
+        blockers.append("source_intake_plan must be a JSON object.")
+        return prepared
+
+    if plan.get("ok") is not True:
+        plan_blockers.append("source_intake_plan.ok must be true.")
+    if plan.get("dry_run") is not True:
+        plan_blockers.append("source_intake_plan.dry_run must be true.")
+    if plan.get("lifecycle_action") != "source_intake_plan":
+        plan_blockers.append("source_intake_plan.lifecycle_action must be source_intake_plan.")
+
+    plan_blocker_values = plan.get("blockers")
+    if not isinstance(plan_blocker_values, list) or plan_blocker_values:
+        plan_blockers.append("source_intake_plan.blockers must be an empty list.")
+
+    content_access = plan.get("content_access")
+    if not isinstance(content_access, dict):
+        plan_blockers.append("source_intake_plan.content_access must be an object.")
+        content_access = {}
+    for key, expected in SOURCE_INTAKE_CONTENT_ACCESS_EXPECTATIONS.items():
+        if content_access.get(key) is not expected:
+            plan_blockers.append(f"source_intake_plan.content_access.{key} must be {str(expected).lower()}.")
+
+    raw_refs = plan.get("source_refs_for_draft")
+    if not isinstance(raw_refs, list):
+        plan_blockers.append("source_intake_plan.source_refs_for_draft must be a list.")
+        raw_refs = []
+    refs = normalize_source_refs(raw_refs, plan_blockers)
+    validate_source_intake_plan_refs(refs, plan_blockers)
+
+    suggestions = plan.get("draft_provenance_suggestions")
+    derived_from: list[str] = []
+    if isinstance(suggestions, dict):
+        raw_derived = suggestions.get("derived_from")
+        if isinstance(raw_derived, list):
+            for index, value in enumerate(raw_derived):
+                text = str(value).strip()
+                if not text:
+                    continue
+                if not safe_source_intake_plan_scalar(text):
+                    plan_blockers.append(f"source_intake_plan.draft_provenance_suggestions.derived_from[{index}] is unsafe.")
+                    continue
+                derived_from.append(text)
+        elif raw_derived is not None:
+            plan_blockers.append("source_intake_plan.draft_provenance_suggestions.derived_from must be a list when present.")
+
+    profile_id = safe_optional_source_intake_plan_scalar(plan, "profile_id", plan_blockers)
+    input_kind = safe_optional_source_intake_plan_scalar(plan, "input_kind", plan_blockers)
+    source_kind = safe_optional_source_intake_plan_scalar(plan, "source_kind", plan_blockers)
+    objet_status = safe_optional_source_intake_plan_scalar(plan, "objet_status", plan_blockers)
+
+    if plan_blockers:
+        blockers.extend(plan_blockers)
+        return prepared
+
+    plan_sha256 = sha256_json_value(plan)
+    refs = anonymize_source_intake_candidate_refs(refs, plan_sha256)
+    derived_from = anonymize_source_intake_candidate_derived_from(derived_from, plan_sha256)
+    object_storage = plan.get("object_storage_context") if isinstance(plan.get("object_storage_context"), dict) else {}
+    prepared["source_refs"] = refs
+    prepared["source_intake"] = drop_none_values(
+        {
+            "plan_sha256": plan_sha256,
+            "input_kind": input_kind,
+            "source_kind": source_kind,
+            "objet_status": objet_status,
+            "object_storage_configured": bool(object_storage.get("object_storage_configured")),
+            "content_access": {key: content_access[key] for key in SOURCE_INTAKE_CONTENT_ACCESS_EXPECTATIONS},
+        }
+    )
+    prepared["derived_from"] = derived_from
+    prepared["profile_id"] = profile_id
+    return prepared
+
+
+def merge_unique_strings(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            if item in seen:
+                continue
+            seen.add(item)
+            merged.append(item)
+    return merged
+
+
 def create_draft_zettel(
     archive_root: Path | str,
     *,
@@ -554,6 +730,7 @@ def create_draft_zettel(
     supervised_by: list[str] | None = None,
     derived_from: list[str] | None = None,
     source_refs: list[dict[str, Any]] | None = None,
+    source_intake_plan: dict[str, Any] | None = None,
     local_ai_sessions: list[dict[str, Any]] | None = None,
     draft_id: str | None = None,
     created_at: str | None = None,
@@ -615,8 +792,14 @@ def create_draft_zettel(
 
     assisted = clean_optional_string_list(assisted_by)
     supervised = clean_optional_string_list(supervised_by)
-    derived = clean_optional_string_list(derived_from)
-    refs = normalize_source_refs(source_refs or [], blockers)
+    explicit_derived = clean_optional_string_list(derived_from)
+    source_intake = prepare_source_intake_plan_for_draft(source_intake_plan, blockers)
+    plan_profile_id = source_intake.get("profile_id")
+    if not profile_id and isinstance(plan_profile_id, str):
+        profile_id = plan_profile_id
+    derived = merge_unique_strings(explicit_derived, source_intake.get("derived_from", []))
+    explicit_refs = normalize_source_refs(source_refs or [], blockers)
+    refs = [*explicit_refs, *source_intake.get("source_refs", [])]
     sessions = normalize_local_ai_sessions(local_ai_sessions or [], blockers)
     validate_safe_draft_values(
         {
@@ -690,6 +873,8 @@ def create_draft_zettel(
         frontmatter["provenance"]["supervised_by"] = supervised
     if refs:
         frontmatter["source_refs"] = refs
+    if source_intake.get("source_intake"):
+        frontmatter["source_intake"] = source_intake["source_intake"]
     if sessions:
         frontmatter["local_ai_sessions"] = sessions
     if draft_approved_by or expected_body_sha256:
@@ -1202,6 +1387,7 @@ def mint_zettel(
                 "title": title,
             },
             "source_refs": extract_mint_source_refs(source_frontmatter),
+            "source_intake": extract_mint_source_intake(source_frontmatter),
             "edges": source_frontmatter.get("edges") if isinstance(source_frontmatter.get("edges"), list) else [],
             "local_ai_sessions": extract_mint_local_ai_sessions(source_frontmatter),
             "checklist": dry_run["checklist"],
@@ -1652,6 +1838,7 @@ def build_mint_receipt_preview(
             "title": title,
         },
         "source_refs": extract_mint_source_refs(frontmatter),
+        "source_intake": extract_mint_source_intake(frontmatter),
         "edges": frontmatter.get("edges") if isinstance(frontmatter.get("edges"), list) else [],
         "local_ai_sessions": extract_mint_local_ai_sessions(frontmatter),
         "checklist": checklist,
@@ -1684,6 +1871,13 @@ def extract_mint_source_refs(frontmatter: dict[str, Any]) -> list[dict[str, Any]
                 elif item is not None:
                     refs.append({"type": "derived_from", "value": str(item)})
     return refs
+
+
+def extract_mint_source_intake(frontmatter: dict[str, Any]) -> dict[str, Any]:
+    source_intake = frontmatter.get("source_intake")
+    if isinstance(source_intake, dict):
+        return json_safe(source_intake)
+    return {}
 
 
 def extract_mint_local_ai_sessions(frontmatter: dict[str, Any]) -> list[dict[str, Any]]:

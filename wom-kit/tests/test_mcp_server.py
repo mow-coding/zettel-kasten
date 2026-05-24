@@ -249,6 +249,9 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("object_storage_upload", tool_names)
             self.assertNotIn("object_storage_sync", tool_names)
             self.assertNotIn("source_intake_apply", tool_names)
+            self.assertNotIn("source_intake_capture", tool_names)
+            self.assertNotIn("source_intake_upload", tool_names)
+            self.assertNotIn("source_intake_sync", tool_names)
             self.assertNotIn("objet_capture", tool_names)
             self.assertNotIn("object_storage_upload", tool_names)
             self.assertNotIn("source_scan_apply", tool_names)
@@ -1237,6 +1240,187 @@ class McpServerTests(unittest.TestCase):
                 self.assertTrue(result["dry_run"])
                 self.assertEqual(result["proposed_path"], "inbox/zet_20260524_mcp_dry_run.md")
                 self.assertFalse((archive_root / result["proposed_path"]).exists())
+        finally:
+            self.stop_server(process)
+
+    def test_create_draft_zettel_accepts_source_intake_plan_object_in_dry_run(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = Path(tmp) / "archive"
+                init_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_init",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "archive_type": "personal",
+                                "archive_id": "archive:personal:mcp-plan",
+                                "principal_id": "person:mcp-plan",
+                                "principal_name": "MCP Plan",
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(init_response["result"]["isError"])
+                source_plan = {
+                    "ok": True,
+                    "dry_run": True,
+                    "lifecycle_action": "source_intake_plan",
+                    "archive_id": "archive:personal:mcp-plan",
+                    "profile_id": "profile:personal:mcp-plan",
+                    "input_kind": "ai_artifact",
+                    "source_kind": "ai_artifact",
+                    "objet_status": "ai_artifact",
+                    "source_refs_for_draft": [
+                        {"type": "ai_artifact", "value": "artifact:mcp-safe", "role": "primary_source"}
+                    ],
+                    "object_storage_context": {"object_storage_configured": False},
+                    "content_access": {
+                        "metadata_only": True,
+                        "content_read": False,
+                        "copied": False,
+                        "uploaded": False,
+                        "imported": False,
+                        "ocr_performed": False,
+                        "transcription_performed": False,
+                        "external_api_called": False,
+                        "full_hash_calculated": False,
+                    },
+                    "draft_provenance_suggestions": {"derived_from": ["artifact:mcp-safe"]},
+                    "blockers": [],
+                }
+
+                draft_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "create_draft_zettel",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "title": "MCP source intake composed draft",
+                                "body": "Safe MCP draft body with a source intake plan.",
+                                "dry_run": True,
+                                "source_intake_plan": source_plan,
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(draft_response["result"]["isError"])
+                result = draft_response["result"]["structuredContent"]
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["frontmatter_preview"]["source_refs"][0]["value"], "artifact:mcp-safe")
+                self.assertEqual(result["frontmatter_preview"]["source_intake"]["objet_status"], "ai_artifact")
+                self.assertEqual(result["target_archive"]["profile_id"], "profile:personal:mcp-plan")
+                self.assertFalse((archive_root / result["proposed_path"]).exists())
+        finally:
+            self.stop_server(process)
+
+    def test_create_draft_zettel_rejects_unsafe_source_intake_plan_objects(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = Path(tmp) / "archive"
+                init_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_init",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "archive_type": "personal",
+                                "archive_id": "archive:personal:mcp-plan-block",
+                                "principal_id": "person:mcp-plan-block",
+                                "principal_name": "MCP Plan Block",
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(init_response["result"]["isError"])
+                base_plan = {
+                    "ok": True,
+                    "dry_run": True,
+                    "lifecycle_action": "source_intake_plan",
+                    "archive_id": "archive:personal:mcp-plan-block",
+                    "input_kind": "provider_object",
+                    "source_kind": "provider_item",
+                    "objet_status": "provider_reference",
+                    "source_refs_for_draft": [
+                        {"type": "provider_object_ref", "value": "provider:item:safe", "role": "primary_source"}
+                    ],
+                    "object_storage_context": {"object_storage_configured": False},
+                    "content_access": {
+                        "metadata_only": True,
+                        "content_read": False,
+                        "copied": False,
+                        "uploaded": False,
+                        "imported": False,
+                        "ocr_performed": False,
+                        "transcription_performed": False,
+                        "external_api_called": False,
+                        "full_hash_calculated": False,
+                    },
+                    "draft_provenance_suggestions": {},
+                    "blockers": [],
+                }
+                cases = [
+                    {**base_plan, "dry_run": False},
+                    {**base_plan, "source_refs_for_draft": [{"type": "provider_object_ref", "value": "https://example.invalid/private"}]},
+                ]
+                for index, source_plan in enumerate(cases, start=2):
+                    response = self.send(
+                        process,
+                        {
+                            "jsonrpc": "2.0",
+                            "id": index,
+                            "method": "tools/call",
+                            "params": {
+                                "name": "create_draft_zettel",
+                                "arguments": {
+                                    "archive_root": str(archive_root),
+                                    "title": "MCP blocked plan draft",
+                                    "body": "Safe MCP draft body.",
+                                    "dry_run": True,
+                                    "source_intake_plan": source_plan,
+                                },
+                            },
+                        },
+                    )
+                    self.assertFalse(response["result"]["isError"])
+                    result = response["result"]["structuredContent"]
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(result["blockers"])
+
+                path_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 9,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "create_draft_zettel",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "title": "MCP local plan path",
+                                "body": "Safe MCP draft body.",
+                                "dry_run": True,
+                                "source_intake_plan": "C:\\private\\plan.json",
+                            },
+                        },
+                    },
+                )
+                self.assertTrue(path_response["result"]["isError"])
+                self.assertEqual(list((archive_root / "inbox").glob("*.md")), [])
         finally:
             self.stop_server(process)
 

@@ -4,6 +4,25 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.23 - 2026-05-25
+
+Source intake draft composer patch.
+
+Added:
+
+- `archive create-draft --source-intake-plan <json-file>` for consuming a v0.2.22 `source-intake --dry-run --format json` result,
+- validation that source intake plans are dry-run-only, blocker-free, metadata-only, and safe before refs are merged into draft frontmatter,
+- optional `source_intake` draft frontmatter metadata with a plan hash, source/objet status summary, object storage flag, and content access proof,
+- MCP `create_draft_zettel` support for a structured `source_intake_plan` object,
+- mint receipt previews and receipts preserve `source_refs` and `source_intake` metadata when present.
+
+Compatibility:
+
+- no private archive migration is required,
+- existing `create-draft` behavior remains compatible when `--source-intake-plan` is omitted,
+- the source intake plan file path is not stored in draft frontmatter,
+- no source intake apply, objet capture, file copy/upload/import/OCR/transcription/full hashing/provider API call, automatic minting, or MCP real minting is implemented.
+
 ## v0.2.22 - 2026-05-25
 
 Source intake planner patch.
