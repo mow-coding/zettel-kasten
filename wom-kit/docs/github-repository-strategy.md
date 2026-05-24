@@ -73,6 +73,8 @@ Expected future flow:
 ```text
 one-command setup
 -> local archive identity
+-> WOM profile resolution
+-> GitHub repository setup dry-run
 -> private GitHub repo binding
 -> object storage binding
 -> source-world registration
@@ -81,7 +83,30 @@ one-command setup
 -> human-approved mint
 ```
 
-## 3. Attribution And License
+## 3. v0.2.20 GitHub Repository Setup Planner
+
+WOM-kit v0.2.20 adds a safe planner for profile-scoped GitHub repository setup:
+
+```bash
+archive github-repo <archive-root> --dry-run \
+  --profile-id profile:personal:HongGilDong \
+  --profile-slug HongGilDong \
+  --github-owner example-user \
+  --github-account-ref github:account:honggildong \
+  --format json
+```
+
+The default proposed repository name is:
+
+```text
+zettel-kasten-<profile_slug>
+```
+
+The planner is dry-run-first. Approved mode can write/update `provider-bindings.yml`, write a provider setup receipt, and optionally write an ignored local account hint under `profiles/local/`.
+
+It must not create GitHub repositories, run OAuth, call GitHub APIs, run `gh`, configure git remotes, push, or sync. Those steps remain manual until a future explicitly approved integration exists.
+
+## 4. Attribution And License
 
 The public repo uses the MIT License.
 
@@ -97,7 +122,7 @@ Email: ellie0129@uos.ac.kr
 
 The public `NOTICE.md` records this attribution and invites GitHub stars, thanks, collaboration, and investment inquiries.
 
-## 4. Versioned Public Chain
+## 5. Versioned Public Chain
 
 The public repository should be friendly to readers who want to know which version of the system they are looking at.
 
@@ -119,7 +144,7 @@ define the public rule set.
 
 Users may follow the latest release or remain on an older release. Interoperability works best when users share the same major protocol version.
 
-## 5. Practical Rule
+## 6. Practical Rule
 
 When unsure whether something belongs in the public repo, ask:
 

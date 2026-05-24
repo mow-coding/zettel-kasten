@@ -73,6 +73,9 @@ archive_doctor
 archive_runtime_context
   Return read-only runtime context for a mounted archive. This confirms archive id, type/scope, owner/principal summary, AI write policy, archive-relative paths, safe next actions, and doctor summary before draft, dry-run, or mint approval work. Local paths stay redacted unless AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1 is set on the MCP server.
 
+github_repository_setup_plan
+  Plan a private GitHub repository for a resolved WOM profile. This is read-only and never creates repositories, starts OAuth, calls GitHub APIs, runs `gh`, configures git remotes, pushes, or syncs.
+
 archive_init
   Initialize a personal/company/family archive from safe defaults.
 
@@ -155,6 +158,7 @@ ownership_transfer_check
 - `archive_init` refuses non-empty target folders.
 - `archive_doctor` is read-only.
 - `archive_runtime_context` is read-only, uses archive-relative paths by default, and redacts local absolute paths unless `AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1` is set on the MCP server and the caller explicitly disables redaction.
+- `github_repository_setup_plan` is read-only and writes nothing. MCP exposes no GitHub apply/create/connect/push/sync tool.
 - `archive_index` writes only the generated search map at `db/archive-index.sqlite`.
 - `archive_onboarding_plan` previews first setup but does not create archive folders, provider bindings, or `.env` files.
 - `real_pilot_plan` previews the real-use path but does not create personal/team archive folders.

@@ -146,6 +146,19 @@ PROVIDER_REFERENCE_URLS = {
     "restic": "https://restic.readthedocs.io/",
     "keepassxc": "https://keepassxc.org/docs/",
 }
+GITHUB_REPOSITORY_SETUP_RECEIPTS_DIR = "receipts/providers"
+GITHUB_REPOSITORY_DEFAULT_VISIBILITY = "private"
+GITHUB_REPOSITORY_DEFAULT_REMOTE_PROTOCOL = "ssh"
+GITHUB_REPOSITORY_NAME_PREFIX = "zettel-kasten-"
+GITHUB_REPOSITORY_ALLOWED_VISIBILITIES = {"private"}
+GITHUB_REPOSITORY_REMOTE_PROTOCOLS = {"ssh", "https"}
+GITHUB_REPOSITORY_NAME_RE = re.compile(r"^[A-Za-z0-9-]{1,80}$")
+GITHUB_PROFILE_SLUG_RE = re.compile(r"^[A-Za-z0-9-]+$")
+GITHUB_OWNER_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
+GITHUB_SECRET_LIKE_RE = re.compile(
+    r"(?i)\b(?:ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9]{20,}|"
+    r"token|secret|password|oauth|cookie|credential)\b"
+)
 ONBOARDING_PROVIDER_PROFILES = {
     "local_only": {
         "description": "Local archive plus physical/local backup and external secret vault guidance.",
@@ -3687,6 +3700,569 @@ def provider_required_actions(provider: str, owner_mapping: dict[str, Any]) -> l
             "Never write copied secret values into archive files or receipts.",
         ]
     return ["Review this provider manually because WOM-kit does not automate external account changes."]
+
+
+def github_repository_setup_plan(
+    archive_root: Path | str,
+    *,
+    profile_id: str | None = None,
+    profile_slug: str | None = None,
+    github_owner: str | None = None,
+    github_account_ref: str | None = None,
+    repo_name: str | None = None,
+    visibility: str = GITHUB_REPOSITORY_DEFAULT_VISIBILITY,
+    remote_protocol: str = GITHUB_REPOSITORY_DEFAULT_REMOTE_PROTOCOL,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_config = read_archive_config(root)
+    archive_id = str(archive_config.get("archive_id") or "")
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    resolved_profile_id = (profile_id or "").strip()
+    if not resolved_profile_id:
+        blockers.append("profile_id is required.")
+
+    resolved_slug = resolve_github_profile_slug(resolved_profile_id, profile_slug, blockers, warnings)
+    resolved_repo_name = resolve_github_repo_name(repo_name, resolved_slug, blockers)
+    resolved_visibility = (visibility or GITHUB_REPOSITORY_DEFAULT_VISIBILITY).strip().lower()
+    resolved_remote_protocol = (remote_protocol or GITHUB_REPOSITORY_DEFAULT_REMOTE_PROTOCOL).strip().lower()
+    resolved_owner = (github_owner or "").strip()
+    resolved_account_ref = (github_account_ref or "").strip()
+
+    if not archive_id:
+        blockers.append("archive.yml does not contain archive_id.")
+    if resolved_visibility not in GITHUB_REPOSITORY_ALLOWED_VISIBILITIES:
+        blockers.append("visibility must be private.")
+    if resolved_remote_protocol not in GITHUB_REPOSITORY_REMOTE_PROTOCOLS:
+        blockers.append("remote_protocol must be ssh or https.")
+    if not resolved_owner:
+        blockers.append("github_owner is required.")
+    elif not safe_github_owner(resolved_owner):
+        blockers.append("github_owner must be a GitHub user or org name using ASCII letters, numbers, and hyphens only.")
+    if not resolved_account_ref:
+        blockers.append("github_account_ref is required.")
+    elif not safe_github_account_ref(resolved_account_ref):
+        blockers.append("github_account_ref must be a safe account reference, not an email, URL, token, or path.")
+
+    provider_binding = build_github_provider_binding(
+        archive_id=archive_id,
+        profile_id=resolved_profile_id,
+        profile_slug=resolved_slug,
+        github_owner=resolved_owner,
+        github_account_ref=resolved_account_ref,
+        repo_name=resolved_repo_name,
+        visibility=resolved_visibility,
+        remote_protocol=resolved_remote_protocol,
+    )
+    local_profile_preview = build_github_local_profile_preview(
+        profile_id=resolved_profile_id,
+        profile_slug=resolved_slug,
+        github_owner=resolved_owner,
+        github_account_ref=resolved_account_ref,
+        repo_name=resolved_repo_name,
+        visibility=resolved_visibility,
+        remote_protocol=resolved_remote_protocol,
+    )
+    receipt_path = github_provider_setup_receipt_path(resolved_repo_name)
+    manual_steps = github_repository_manual_steps(resolved_owner, resolved_repo_name, resolved_visibility, resolved_remote_protocol)
+    receipt_preview = build_github_provider_setup_receipt(
+        archive_id=archive_id,
+        profile_id=resolved_profile_id,
+        profile_slug=resolved_slug,
+        github_owner=resolved_owner,
+        github_account_ref=resolved_account_ref,
+        repo_name=resolved_repo_name,
+        visibility=resolved_visibility,
+        remote_protocol=resolved_remote_protocol,
+        receipt_path=receipt_path,
+        reviewed_by="<required-on-approve>",
+        timestamp="<execution-time>",
+        dry_run=True,
+        manual_steps=manual_steps,
+    )
+    provider_doc = load_provider_bindings(root)
+    if provider_doc.get("archive_id") and provider_doc.get("archive_id") != archive_id:
+        blockers.append("provider-bindings.yml archive_id must match archive.yml archive_id.")
+    if archive_internal_path(root, receipt_path).exists():
+        blockers.append(f"Proposed provider setup receipt already exists: {receipt_path}.")
+
+    provider_action = "update provider-bindings.yml" if archive_internal_path(root, "provider-bindings.yml").exists() else "create provider-bindings.yml"
+    would_change = [provider_action, f"write {receipt_path}"]
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "github_repository_setup_plan",
+        "archive_id": archive_id,
+        "profile_id": resolved_profile_id or None,
+        "profile_slug": resolved_slug or None,
+        "proposed_repo_name": resolved_repo_name or None,
+        "proposed_visibility": resolved_visibility,
+        "proposed_remote_protocol": resolved_remote_protocol,
+        "github_owner": resolved_owner or None,
+        "github_account_ref": resolved_account_ref or None,
+        "provider_binding_preview": json_safe(provider_binding),
+        "local_profile_preview": json_safe(local_profile_preview),
+        "provider_setup_receipt_preview": json_safe(receipt_preview),
+        "manual_steps": manual_steps,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": would_change,
+    }
+
+
+def approve_github_repository_setup_plan(
+    archive_root: Path | str,
+    *,
+    reviewed_by: str,
+    write_local_profile: bool = False,
+    profile_id: str | None = None,
+    profile_slug: str | None = None,
+    github_owner: str | None = None,
+    github_account_ref: str | None = None,
+    repo_name: str | None = None,
+    visibility: str = GITHUB_REPOSITORY_DEFAULT_VISIBILITY,
+    remote_protocol: str = GITHUB_REPOSITORY_DEFAULT_REMOTE_PROTOCOL,
+) -> dict[str, Any]:
+    reviewer = (reviewed_by or "").strip()
+    if not reviewer:
+        raise ArchiveServiceError("GitHub repository setup approval requires reviewed_by.")
+    validate_github_safe_metadata(reviewer, "reviewed_by")
+
+    root = require_existing_archive_root(archive_root)
+    plan = github_repository_setup_plan(
+        root,
+        profile_id=profile_id,
+        profile_slug=profile_slug,
+        github_owner=github_owner,
+        github_account_ref=github_account_ref,
+        repo_name=repo_name,
+        visibility=visibility,
+        remote_protocol=remote_protocol,
+    )
+    if plan["blockers"]:
+        raise ArchiveServiceError("GitHub repository setup blocked by dry-run: " + "; ".join(plan["blockers"]))
+
+    now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    provider_path = archive_internal_path(root, "provider-bindings.yml")
+    receipt_relative = plan["provider_setup_receipt_preview"]["receipt_path"]
+    receipt_path = archive_internal_path(root, receipt_relative)
+    if receipt_path.exists():
+        raise ArchiveServiceError(f"Proposed provider setup receipt already exists: {receipt_relative}.")
+
+    provider_doc = load_provider_bindings(root)
+    if provider_doc.get("archive_id") and provider_doc.get("archive_id") != plan["archive_id"]:
+        raise ArchiveServiceError("provider-bindings.yml archive_id must match archive.yml archive_id.")
+    provider_doc["version"] = "provider-bindings/v0.1"
+    provider_doc["archive_id"] = plan["archive_id"]
+    provider_doc["bindings"] = upsert_github_provider_binding(
+        provider_bindings_list(provider_doc),
+        plan["provider_binding_preview"],
+    )
+
+    receipt = build_github_provider_setup_receipt(
+        archive_id=plan["archive_id"],
+        profile_id=plan["profile_id"],
+        profile_slug=plan["profile_slug"],
+        github_owner=plan["github_owner"],
+        github_account_ref=plan["github_account_ref"],
+        repo_name=plan["proposed_repo_name"],
+        visibility=plan["proposed_visibility"],
+        remote_protocol=plan["proposed_remote_protocol"],
+        receipt_path=receipt_relative,
+        reviewed_by=reviewer,
+        timestamp=now,
+        dry_run=False,
+        manual_steps=plan["manual_steps"],
+    )
+    receipt["result"] = {
+        "changed_paths": ["provider-bindings.yml", receipt_relative],
+        "github_api_called": False,
+        "github_repository_created": False,
+        "git_remote_configured": False,
+        "git_push_performed": False,
+    }
+
+    changed_paths = ["provider-bindings.yml", receipt_relative]
+    local_profile: dict[str, Any] | None = None
+    local_profile_path: Path | None = None
+    local_profile_relative = "profiles/local/github-accounts.local.yml"
+    if write_local_profile:
+        ensure_local_profile_gitignore(root)
+        local_profile_path = archive_internal_path(root, local_profile_relative)
+        local_profile = merge_github_local_profile(
+            load_local_github_profile(local_profile_path),
+            plan["local_profile_preview"]["entry"],
+        )
+        changed_paths.append(local_profile_relative)
+        receipt["result"]["changed_paths"] = changed_paths
+
+    provider_original_text = provider_path.read_text(encoding="utf-8") if provider_path.exists() else None
+    local_profile_original_text = (
+        local_profile_path.read_text(encoding="utf-8")
+        if write_local_profile and local_profile_path is not None and local_profile_path.exists()
+        else None
+    )
+    created_receipt = False
+
+    def restore_text(path: Path, original_text: str | None) -> None:
+        if original_text is None:
+            if path.exists():
+                path.unlink()
+            return
+        write_text_atomic(path, original_text)
+
+    try:
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        with receipt_path.open("x", encoding="utf-8") as handle:
+            created_receipt = True
+            handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+        provider_path.parent.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(provider_path, dump_yaml(json_safe(provider_doc)))
+        if write_local_profile and local_profile_path is not None and local_profile is not None:
+            local_profile_path.parent.mkdir(parents=True, exist_ok=True)
+            write_text_atomic(local_profile_path, dump_yaml(json_safe(local_profile)))
+    except Exception:
+        if created_receipt and receipt_path.exists():
+            try:
+                receipt_path.unlink()
+            except OSError:
+                pass
+        try:
+            restore_text(provider_path, provider_original_text)
+        except OSError:
+            pass
+        if write_local_profile and local_profile_path is not None:
+            try:
+                restore_text(local_profile_path, local_profile_original_text)
+            except OSError:
+                pass
+        raise
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "lifecycle_action": "github_repository_setup_plan",
+        "archive_id": plan["archive_id"],
+        "profile_id": plan["profile_id"],
+        "profile_slug": plan["profile_slug"],
+        "proposed_repo_name": plan["proposed_repo_name"],
+        "proposed_visibility": plan["proposed_visibility"],
+        "proposed_remote_protocol": plan["proposed_remote_protocol"],
+        "github_owner": plan["github_owner"],
+        "github_account_ref": plan["github_account_ref"],
+        "provider_binding": json_safe(plan["provider_binding_preview"]),
+        "receipt_path": receipt_relative,
+        "provider_setup_receipt": json_safe(receipt),
+        "local_profile_path": local_profile_relative if write_local_profile else None,
+        "manual_steps": plan["manual_steps"],
+        "changed_paths": changed_paths,
+        "github_api_called": False,
+        "github_repository_created": False,
+        "git_remote_configured": False,
+        "git_push_performed": False,
+        "warnings": plan["warnings"],
+    }
+
+
+def resolve_github_profile_slug(
+    profile_id: str,
+    explicit_slug: str | None,
+    blockers: list[str],
+    warnings: list[str],
+) -> str:
+    raw = (explicit_slug or "").strip()
+    if not raw:
+        candidate = profile_id.rsplit(":", 1)[-1].strip() if profile_id else ""
+        if not candidate:
+            blockers.append("profile_slug is required when profile_id cannot provide an ASCII slug.")
+            return ""
+        if not candidate.isascii():
+            blockers.append("Non-ASCII profile labels or ids require explicit --profile-slug.")
+            return ""
+        raw = candidate
+        warnings.append("profile_slug was derived from profile_id; pass --profile-slug for replayable setup.")
+    if not safe_github_profile_slug_input(raw):
+        blockers.append("profile_slug must use ASCII letters, numbers, and hyphens only, and must not look like a path, URL, email, or secret.")
+        return ""
+    normalized = re.sub(r"-{2,}", "-", raw).strip("-")
+    if not normalized:
+        blockers.append("profile_slug must not be empty after normalization.")
+        return ""
+    return normalized
+
+
+def safe_github_profile_slug_input(value: str) -> bool:
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    if any(item in text for item in ["@", "/", "\\", ":", "#", "?", "&", "="]):
+        return False
+    if text.lower().startswith(("http-", "https-", "www-")):
+        return False
+    if GITHUB_SECRET_LIKE_RE.search(text):
+        return False
+    return bool(GITHUB_PROFILE_SLUG_RE.match(text))
+
+
+def resolve_github_repo_name(repo_name: str | None, profile_slug: str, blockers: list[str]) -> str:
+    proposed = (repo_name or "").strip()
+    if not proposed and profile_slug:
+        proposed = f"{GITHUB_REPOSITORY_NAME_PREFIX}{profile_slug}"
+    if not safe_github_repo_name(proposed):
+        blockers.append(
+            "repo_name must start with zettel-kasten-, use only ASCII letters, numbers, and hyphens, "
+            "avoid spaces/slashes/URL fragments, and be at most 80 characters."
+        )
+        return proposed
+    return proposed
+
+
+def safe_github_repo_name(value: str) -> bool:
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    if len(text) > 80:
+        return False
+    if not text.lower().startswith(GITHUB_REPOSITORY_NAME_PREFIX):
+        return False
+    if any(item in text for item in [" ", "/", "\\", ":", "#", "?", "&", "=", "@"]):
+        return False
+    if GITHUB_SECRET_LIKE_RE.search(text):
+        return False
+    return bool(GITHUB_REPOSITORY_NAME_RE.match(text))
+
+
+def safe_github_owner(value: str) -> bool:
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    if any(item in text for item in ["@", "/", "\\", ":", "#", "?", "&", "="]):
+        return False
+    if GITHUB_SECRET_LIKE_RE.search(text):
+        return False
+    return bool(GITHUB_OWNER_RE.match(text)) and "--" not in text
+
+
+def safe_github_account_ref(value: str) -> bool:
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    if "@" in text or "://" in text or "\\" in text or "/" in text or "#" in text or "?" in text:
+        return False
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", text) and not text.lower().startswith("github:account:"):
+        return False
+    if "." in text and not text.lower().startswith("github:account:"):
+        return False
+    if GITHUB_SECRET_LIKE_RE.search(text):
+        return False
+    return bool(re.match(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,119}$", text))
+
+
+def validate_github_safe_metadata(value: str, field_name: str) -> None:
+    text = value.strip()
+    if contains_forbidden_location_reference(text) or "@" in text or "://" in text or GITHUB_SECRET_LIKE_RE.search(text):
+        raise ArchiveServiceError(f"{field_name} must be a safe actor/reference, not a path, URL, email, token, or secret.")
+
+
+def build_github_provider_binding(
+    *,
+    archive_id: str,
+    profile_id: str,
+    profile_slug: str,
+    github_owner: str,
+    github_account_ref: str,
+    repo_name: str,
+    visibility: str,
+    remote_protocol: str,
+) -> dict[str, Any]:
+    return {
+        "binding_id": f"github:{repo_name}",
+        "provider": "github",
+        "enabled": True,
+        "purpose": "archive_repository_metadata_and_manual_setup_plan",
+        "resource": {
+            "owner": github_owner,
+            "repo": repo_name,
+            "visibility": visibility,
+            "remote_protocol": remote_protocol,
+        },
+        "auth": {
+            "method": "gh_cli_or_token_ref",
+            "token_env": "GITHUB_TOKEN",
+            "account_ref": github_account_ref,
+        },
+        "owner_mapping": {
+            "archive_id": archive_id,
+            "profile_id": profile_id,
+            "profile_slug": profile_slug,
+        },
+        "notes": "Manual GitHub repository setup plan only; WOM-kit does not create repositories or configure remotes.",
+    }
+
+
+def build_github_local_profile_preview(
+    *,
+    profile_id: str,
+    profile_slug: str,
+    github_owner: str,
+    github_account_ref: str,
+    repo_name: str,
+    visibility: str,
+    remote_protocol: str,
+) -> dict[str, Any]:
+    entry = {
+        "profile_id": profile_id,
+        "profile_slug": profile_slug,
+        "github_owner": github_owner,
+        "github_account_ref": github_account_ref,
+        "repo_name": repo_name,
+        "visibility": visibility,
+        "remote_protocol": remote_protocol,
+        "token_env": "GITHUB_TOKEN",
+    }
+    return {
+        "path": "profiles/local/github-accounts.local.yml",
+        "ignored_by_default": True,
+        "entry": entry,
+    }
+
+
+def github_repository_manual_steps(
+    github_owner: str,
+    repo_name: str,
+    visibility: str,
+    remote_protocol: str,
+) -> list[str]:
+    remote_hint = "SSH" if remote_protocol == "ssh" else "HTTPS"
+    return [
+        f"Manually create a {visibility} GitHub repository named {repo_name} under {github_owner}.",
+        f"Configure repository access and branch protection in GitHub before connecting this archive.",
+        f"Only after human review, configure the local git remote outside this planner using {remote_hint}.",
+        "Run doctor --strict after local metadata approval.",
+    ]
+
+
+def github_provider_setup_receipt_path(repo_name: str) -> str:
+    safe_repo = safe_slug(repo_name or "github-repository")
+    return f"{GITHUB_REPOSITORY_SETUP_RECEIPTS_DIR}/{safe_repo}.github-repository-setup.json"
+
+
+def build_github_provider_setup_receipt(
+    *,
+    archive_id: str,
+    profile_id: str,
+    profile_slug: str,
+    github_owner: str,
+    github_account_ref: str,
+    repo_name: str,
+    visibility: str,
+    remote_protocol: str,
+    receipt_path: str,
+    reviewed_by: str,
+    timestamp: str,
+    dry_run: bool,
+    manual_steps: list[str],
+) -> dict[str, Any]:
+    return {
+        "receipt_id": f"receipt:provider-setup:github:{repo_name}",
+        "receipt_path": receipt_path,
+        "lifecycle_action": "github_repository_setup_plan",
+        "provider": "github",
+        "dry_run": dry_run,
+        "timestamp": timestamp,
+        "archive_id": archive_id,
+        "profile_id": profile_id,
+        "profile_slug": profile_slug,
+        "resource": {
+            "owner": github_owner,
+            "repo": repo_name,
+            "visibility": visibility,
+            "remote_protocol": remote_protocol,
+        },
+        "auth": {
+            "method": "gh_cli_or_token_ref",
+            "token_env": "GITHUB_TOKEN",
+            "account_ref": github_account_ref,
+        },
+        "reviewed_by": reviewed_by,
+        "external_actions": {
+            "github_api_called": False,
+            "github_repository_created": False,
+            "oauth_started": False,
+            "gh_cli_called": False,
+            "git_remote_configured": False,
+            "git_push_performed": False,
+        },
+        "manual_steps": manual_steps,
+    }
+
+
+def upsert_github_provider_binding(bindings: list[dict[str, Any]], new_binding: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    replaced = False
+    new_key = github_binding_compare_key(new_binding)
+    for binding in bindings:
+        if github_binding_compare_key(binding) == new_key:
+            result.append(json_safe(new_binding))
+            replaced = True
+        else:
+            result.append(json_safe(binding))
+    if not replaced:
+        result.append(json_safe(new_binding))
+    return result
+
+
+def github_binding_compare_key(binding: dict[str, Any]) -> tuple[str, str, str]:
+    resource = binding.get("resource") if isinstance(binding.get("resource"), dict) else {}
+    owner = str(resource.get("owner") or resource.get("org") or "").lower()
+    repo = str(resource.get("repo") or "").lower()
+    binding_id = str(binding.get("binding_id") or "").lower()
+    return (str(binding.get("provider") or "").lower(), owner, repo or binding_id)
+
+
+def ensure_local_profile_gitignore(root: Path) -> None:
+    gitignore = root / ".gitignore"
+    if not gitignore.is_file():
+        raise ArchiveServiceError("Archive .gitignore must protect profiles/local/ before writing a local profile hint.")
+    text = gitignore.read_text(encoding="utf-8")
+    if "profiles/local/" not in text:
+        raise ArchiveServiceError("Archive .gitignore must include profiles/local/ before writing a local profile hint.")
+
+
+def load_local_github_profile(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {
+            "version": "wom-local-github-profile/v0.1",
+            "github_accounts": [],
+        }
+    data = load_yaml(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ArchiveServiceError("Local GitHub profile hint must be a YAML object.")
+    if not isinstance(data.get("github_accounts"), list):
+        data["github_accounts"] = []
+    data["version"] = str(data.get("version") or "wom-local-github-profile/v0.1")
+    return json_safe(data)
+
+
+def merge_github_local_profile(data: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+    accounts = data.get("github_accounts") if isinstance(data.get("github_accounts"), list) else []
+    result: list[dict[str, Any]] = []
+    replaced = False
+    for item in accounts:
+        if not isinstance(item, dict):
+            continue
+        same_profile = str(item.get("profile_id") or "").lower() == str(entry.get("profile_id") or "").lower()
+        same_account = str(item.get("github_account_ref") or "").lower() == str(entry.get("github_account_ref") or "").lower()
+        if same_profile or same_account:
+            result.append(json_safe(entry))
+            replaced = True
+        else:
+            result.append(json_safe(item))
+    if not replaced:
+        result.append(json_safe(entry))
+    data["github_accounts"] = result
+    return data
 
 
 def ownership_transfer_dry_run(

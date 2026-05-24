@@ -18,7 +18,7 @@ facets:
     - document
     - scan_placeholder
 assets:
-  - object_id: sha256:f10ecba86e51be87488abadead8c6dbef8492928e76449e43eef9b32510c8edb
+  - object_id: sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136
     role: source_document
     label: Fake school record original
 edges: []

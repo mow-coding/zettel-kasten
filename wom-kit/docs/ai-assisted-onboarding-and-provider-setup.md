@@ -128,6 +128,14 @@ archive create-draft <archive-root> --dry-run --expected-archive-id <id> --expec
 
 The dry-run shows the proposed `inbox/` path, frontmatter preview, body hash, and replay values. It writes nothing. A later approved draft write must replay the expected body hash and include `draft-approved-by`; that approval is only for inbox draft creation, not minting.
 
+Before planning a GitHub repository for a WOM profile, the AI should run:
+
+```text
+archive github-repo <archive-root> --dry-run --profile-id <profile-id> --profile-slug <ascii-slug> --github-owner <owner> --github-account-ref <safe-ref> --format json
+```
+
+The v0.2.20 planner proposes a private `zettel-kasten-<profile_slug>` repository, provider binding metadata, local profile hints, a setup receipt preview, and manual steps. Dry-run writes nothing. Approved mode writes only local metadata and a receipt; it still does not create a GitHub repository, start OAuth, call GitHub APIs, run `gh`, configure remotes, push, or sync.
+
 But the AI should not silently:
 
 - create provider accounts,
@@ -181,9 +189,12 @@ Do you want GitHub private repo sync for versioned zets, specs, source maps, and
 
 If yes:
 
-- use `gh auth login`,
-- create/select repo,
-- write safe Git remote config,
+- resolve the WOM profile first,
+- run `archive github-repo --dry-run`,
+- ask for human review,
+- write local provider metadata only with `--approve --reviewed-by`,
+- create/select the actual GitHub repository manually outside this batch,
+- configure Git remotes only after a separate explicit human step,
 - do not commit secrets.
 
 ### Stage 4: Object Storage

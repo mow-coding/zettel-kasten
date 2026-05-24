@@ -1,0 +1,3 @@
+# Keep manifest-hashed fake object fixtures byte-stable across platforms.
+wom-kit/examples/fake-life-archive/objects/sample/*.txt text eol=lf
+wom-kit/examples/fake-life-archive/objects/manifests/*.jsonl text eol=lf

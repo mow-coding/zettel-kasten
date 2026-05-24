@@ -559,6 +559,297 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(code, 0, output)
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
+    def test_github_repo_dry_run_generates_default_private_repo_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "github-repo",
+                    str(archive_root),
+                    "--dry-run",
+                    "--profile-id",
+                    "profile:personal:HongGilDong",
+                    "--profile-slug",
+                    "HongGilDong",
+                    "--github-owner",
+                    "example-user",
+                    "--github-account-ref",
+                    "github:account:honggildong",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "github_repository_setup_plan")
+            self.assertEqual(result["proposed_repo_name"], "zettel-kasten-HongGilDong")
+            self.assertEqual(result["proposed_visibility"], "private")
+            self.assertEqual(result["proposed_remote_protocol"], "ssh")
+            self.assertFalse(result["provider_setup_receipt_preview"]["external_actions"]["github_api_called"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+    def test_github_repo_invalid_slugs_and_unsafe_repo_names_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            common = [
+                "github-repo",
+                str(archive_root),
+                "--dry-run",
+                "--profile-id",
+                "profile:personal:test",
+                "--github-owner",
+                "example-user",
+                "--github-account-ref",
+                "github:account:test",
+                "--format",
+                "json",
+            ]
+
+            for bad_slug in ["bad slug", "../bad", "person@example.com", "https-token", "secret-slug"]:
+                with self.subTest(slug=bad_slug):
+                    code, output = self.run_cli(common + ["--profile-slug", bad_slug])
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(any("profile_slug" in blocker for blocker in result["blockers"]))
+
+            for bad_repo in ["wrong-HongGilDong", "zettel-kasten-Hong/GilDong", "zettel-kasten-Hong GilDong", "zettel-kasten-" + "a" * 90]:
+                with self.subTest(repo=bad_repo):
+                    code, output = self.run_cli(common + ["--profile-slug", "HongGilDong", "--repo-name", bad_repo])
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(any("repo_name" in blocker for blocker in result["blockers"]))
+
+    def test_github_repo_rejects_unsafe_owner_and_account_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            common = [
+                "github-repo",
+                str(archive_root),
+                "--dry-run",
+                "--profile-id",
+                "profile:personal:test",
+                "--profile-slug",
+                "HongGilDong",
+                "--format",
+                "json",
+            ]
+
+            for bad_owner in ["bad/owner", "person@example.com", "https://example.com", "secret-owner"]:
+                with self.subTest(owner=bad_owner):
+                    code, output = self.run_cli(
+                        common + ["--github-owner", bad_owner, "--github-account-ref", "github:account:test"]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(any("github_owner" in blocker for blocker in result["blockers"]))
+
+            for bad_ref in [
+                "person@example.com",
+                "https://example.com/private",
+                "example.com",
+                "http:foo",
+                "../secret",
+                "secret-account",
+            ]:
+                with self.subTest(account_ref=bad_ref):
+                    code, output = self.run_cli(
+                        common + ["--github-owner", "example-user", "--github-account-ref", bad_ref]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(any("github_account_ref" in blocker for blocker in result["blockers"]))
+
+    def test_github_repo_non_ascii_profile_without_explicit_slug_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            code, output = self.run_cli(
+                [
+                    "github-repo",
+                    str(archive_root),
+                    "--dry-run",
+                    "--profile-id",
+                    "profile:personal:홍길동",
+                    "--github-owner",
+                    "example-user",
+                    "--github-account-ref",
+                    "github:account:honggildong",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("Non-ASCII" in blocker for blocker in result["blockers"]))
+
+    def test_github_repo_approve_requires_reviewed_by(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            code, output = self.run_cli(
+                [
+                    "github-repo",
+                    str(archive_root),
+                    "--approve",
+                    "--profile-id",
+                    "profile:personal:HongGilDong",
+                    "--profile-slug",
+                    "HongGilDong",
+                    "--github-owner",
+                    "example-user",
+                    "--github-account-ref",
+                    "github:account:honggildong",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1)
+            self.assertIn("--reviewed-by", output)
+
+    def test_github_repo_approve_writes_only_local_metadata_and_doctor_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:github-plan")
+            self.assertEqual(init_code, 0, init_output)
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "github-repo",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--write-local-profile",
+                    "--profile-id",
+                    "profile:personal:HongGilDong",
+                    "--profile-slug",
+                    "HongGilDong",
+                    "--github-owner",
+                    "example-user",
+                    "--github-account-ref",
+                    "github:account:honggildong",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertFalse(result["dry_run"])
+            self.assertFalse(result["github_api_called"])
+            self.assertFalse(result["github_repository_created"])
+            self.assertFalse(result["git_remote_configured"])
+            self.assertFalse(result["git_push_performed"])
+            self.assertFalse((archive_root / ".git").exists())
+            self.assertEqual(
+                set(result["changed_paths"]),
+                {
+                    "provider-bindings.yml",
+                    "receipts/providers/zettel_kasten_honggildong.github-repository-setup.json",
+                    "profiles/local/github-accounts.local.yml",
+                },
+            )
+            after = self.snapshot_archive_files(archive_root)
+            changed = {path for path in after if before.get(path) != after[path]} | {path for path in before if path not in after}
+            self.assertEqual(changed, set(result["changed_paths"]))
+            provider_text = (archive_root / "provider-bindings.yml").read_text(encoding="utf-8")
+            receipt_text = (archive_root / result["receipt_path"]).read_text(encoding="utf-8")
+            self.assertIn("repo: zettel-kasten-HongGilDong", provider_text)
+            for text in [provider_text, receipt_text]:
+                self.assertNotIn("ghp_", text)
+                self.assertNotIn("github_pat_", text)
+                self.assertNotIn("person@example.com", text)
+                self.assertNotIn("https://example.com", text)
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict", "--format", "json"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_github_repo_approve_local_profile_requires_gitignore_protection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:github-plan")
+            self.assertEqual(init_code, 0, init_output)
+            gitignore_path = archive_root / ".gitignore"
+            gitignore_path.write_text(
+                "\n".join(line for line in gitignore_path.read_text(encoding="utf-8").splitlines() if line.strip() != "profiles/local/") + "\n",
+                encoding="utf-8",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "github-repo",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--write-local-profile",
+                    "--profile-id",
+                    "profile:personal:HongGilDong",
+                    "--profile-slug",
+                    "HongGilDong",
+                    "--github-owner",
+                    "example-user",
+                    "--github-account-ref",
+                    "github:account:honggildong",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1)
+            self.assertIn("profiles/local/", output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+    def test_github_repo_approve_rolls_back_provider_binding_when_local_profile_write_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:github-plan")
+            self.assertEqual(init_code, 0, init_output)
+            local_profile_parent = archive_root / "profiles" / "local"
+            local_profile_parent.parent.mkdir(parents=True, exist_ok=True)
+            local_profile_parent.write_text("not a directory\n", encoding="utf-8")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "github-repo",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--write-local-profile",
+                    "--profile-id",
+                    "profile:personal:HongGilDong",
+                    "--profile-slug",
+                    "HongGilDong",
+                    "--github-owner",
+                    "example-user",
+                    "--github-account-ref",
+                    "github:account:honggildong",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertFalse(
+                (archive_root / "receipts" / "providers" / "zettel_kasten_honggildong.github-repository-setup.json").exists()
+            )
+
     def test_runtime_context_no_redact_local_paths_includes_local_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

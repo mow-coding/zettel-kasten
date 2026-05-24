@@ -23,7 +23,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.19 pre-release
+v0.2.20 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -45,6 +45,7 @@ What exists today:
 - read-only profile registry resolution so AI runtimes resolve the requested target profile before assuming the default archive.
 - profile-aware `create-draft --dry-run` so AI runtimes preview inbox drafts and replay approved draft writes without minting.
 - current local implementation/tooling lives in `wom-kit/` and imports as `wom_kit`.
+- dry-run-first GitHub repository setup planning for WOM profiles, with local-only approval metadata and no provider API calls.
 
 What does not exist yet:
 
@@ -180,7 +181,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.2.19
+v0.2.20
 v0.2.18
 v0.2.17
 v0.2.16

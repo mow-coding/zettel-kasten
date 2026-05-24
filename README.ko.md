@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.2.19 pre-release
+v0.2.20 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -45,6 +45,7 @@ v0.2.19 pre-release
 - AI runtime이 default archive를 가정하지 않고 요청된 target profile을 먼저 확인할 수 있는 읽기 전용 profile registry resolve.
 - AI runtime이 inbox draft를 먼저 미리 보고 승인된 draft write만 replay할 수 있는 profile-aware `create-draft --dry-run`.
 - 현재 local implementation/tooling은 `wom-kit/`에 있고 Python import package는 `wom_kit`입니다.
+- WOM profile별 GitHub repository setup을 먼저 dry-run으로 계획하고, 승인 시에도 local metadata만 쓰는 GitHub repository setup planner.
 
 아직 없는 것:
 
@@ -181,7 +182,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.2.19
+v0.2.20
 v0.2.18
 v0.2.17
 v0.2.16

@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.19` | current public pre-release | `wom-kit/docs/releases/v0.2.19.md` |
+| `v0.2.20` | current public pre-release | `wom-kit/docs/releases/v0.2.20.md` |
+| `v0.2.19` | superseded public pre-release | `wom-kit/docs/releases/v0.2.19.md` |
 | `v0.2.18` | superseded public pre-release | `wom-kit/docs/releases/v0.2.18.md` |
 | `v0.2.17` | superseded public pre-release | `wom-kit/docs/releases/v0.2.17.md` |
 | `v0.2.16` | superseded public pre-release | `wom-kit/docs/releases/v0.2.16.md` |
@@ -46,6 +47,32 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.19`에서 `v0.2.20`로
+
+이번 버전은 WOM profile별 GitHub repository setup을 먼저 dry-run으로 계획하는 호환 패치입니다.
+
+바뀐 점:
+
+- `archive github-repo <archive-root> --dry-run --format json` 명령이 추가되었습니다.
+- 기본 repository 이름은 `zettel-kasten-<profile_slug>`입니다.
+- profile slug, repository name, GitHub owner, account ref에 대해 path/URL/token/email처럼 위험한 값을 막습니다.
+- `--approve --reviewed-by`는 GitHub를 건드리지 않고 local `provider-bindings.yml`과 setup receipt만 씁니다.
+- `--write-local-profile`을 쓰면 ignored local account hint를 `profiles/local/` 아래에 씁니다.
+- MCP에는 읽기 전용 `github_repository_setup_plan`만 추가되었습니다.
+
+private archive migration은 필요 없습니다.
+
+이 버전은 GitHub repository 생성, OAuth, GitHub API 호출, `gh` 실행, git remote 설정, push, sync를 하지 않습니다.
+
+```bash
+archive github-repo <archive-root> --dry-run \
+  --profile-id profile:personal:HongGilDong \
+  --profile-slug HongGilDong \
+  --github-owner example-user \
+  --github-account-ref github:account:honggildong \
+  --format json
+```
 
 ## `v0.2.18`에서 `v0.2.19`로
 

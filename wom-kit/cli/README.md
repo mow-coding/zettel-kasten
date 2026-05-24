@@ -34,6 +34,12 @@ read-zettel
 create-draft
   Create a draft zettel in inbox/.
 
+github-repo --dry-run
+  Plan a private GitHub repository for a resolved WOM profile without writing files or calling GitHub.
+
+github-repo --approve --reviewed-by
+  Write only local provider metadata and a provider setup receipt. This does not create a repository, configure remotes, push, or sync.
+
 mint-zet --dry-run
   Check minting readiness and preview canonical path, mint receipt, and draft snapshot without writing.
 

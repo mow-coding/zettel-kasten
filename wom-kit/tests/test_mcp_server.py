@@ -199,6 +199,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("wom_profile_resolve", tool_names)
             self.assertIn("archive_doctor", tool_names)
             self.assertIn("archive_runtime_context", tool_names)
+            self.assertIn("github_repository_setup_plan", tool_names)
             self.assertIn("create_draft_zettel", tool_names)
             self.assertIn("archive_index", tool_names)
             self.assertIn("archive_search", tool_names)
@@ -235,6 +236,11 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("wom_profile_token_register", tool_names)
             self.assertNotIn("profile_token_register", tool_names)
             self.assertNotIn("archive_runtime_context_apply", tool_names)
+            self.assertNotIn("github_repository_setup_apply", tool_names)
+            self.assertNotIn("github_repository_create", tool_names)
+            self.assertNotIn("github_repository_connect", tool_names)
+            self.assertNotIn("github_repository_push", tool_names)
+            self.assertNotIn("github_repository_sync", tool_names)
             self.assertNotIn("share_archive_scope", tool_names)
             self.assertNotIn("delegate_zet", tool_names)
             self.assertNotIn("attest_zet", tool_names)
@@ -474,6 +480,78 @@ class McpServerTests(unittest.TestCase):
                     any("AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1" in warning for warning in structured["warnings"])
                 )
                 self.assertNotIn(str(archive_root), json.dumps(structured))
+            finally:
+                self.stop_server(process)
+
+    def test_github_repository_setup_plan_tool_writes_nothing_and_respects_allowed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "github_repository_setup_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "profile_id": "profile:personal:HongGilDong",
+                                "profile_slug": "HongGilDong",
+                                "github_owner": "example-user",
+                                "github_account_ref": "github:account:honggildong",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"])
+                self.assertTrue(structured["dry_run"])
+                self.assertEqual(structured["lifecycle_action"], "github_repository_setup_plan")
+                self.assertEqual(structured["proposed_repo_name"], "zettel-kasten-HongGilDong")
+                self.assertFalse(structured["provider_setup_receipt_preview"]["external_actions"]["github_api_called"])
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "github_repository_setup_plan",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "profile_id": "profile:personal:HongGilDong",
+                                "profile_slug": "HongGilDong",
+                                "github_owner": "example-user",
+                                "github_account_ref": "github:account:honggildong",
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
             finally:
                 self.stop_server(process)
 

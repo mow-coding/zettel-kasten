@@ -100,6 +100,32 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "github_repository_setup_plan",
+        "description": "Plan GitHub repository metadata for a WOM profile. Read-only; never creates repos, remotes, pushes, OAuth, or API calls.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "profile_id": {"type": "string"},
+                "profile_slug": {"type": "string"},
+                "github_owner": {"type": "string"},
+                "github_account_ref": {"type": "string"},
+                "repo_name": {"type": "string"},
+                "visibility": {
+                    "type": "string",
+                    "enum": sorted(archive_services.GITHUB_REPOSITORY_ALLOWED_VISIBILITIES),
+                    "default": archive_services.GITHUB_REPOSITORY_DEFAULT_VISIBILITY,
+                },
+                "remote_protocol": {
+                    "type": "string",
+                    "enum": sorted(archive_services.GITHUB_REPOSITORY_REMOTE_PROTOCOLS),
+                    "default": archive_services.GITHUB_REPOSITORY_DEFAULT_REMOTE_PROTOCOL,
+                },
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "archive_init",
         "description": "Initialize a new personal, company, or family archive from safe defaults. Target must be absent or empty.",
         "inputSchema": {
@@ -588,6 +614,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_archive_doctor(arguments)
     if name == "archive_runtime_context":
         return tool_archive_runtime_context(arguments)
+    if name == "github_repository_setup_plan":
+        return tool_github_repository_setup_plan(arguments)
     if name == "archive_init":
         return tool_archive_init(arguments)
     if name == "archive_onboarding_plan":
@@ -712,6 +740,24 @@ def tool_archive_runtime_context(arguments: dict[str, Any]) -> dict[str, Any]:
     add_mcp_redaction_warning(result, requested_redaction, redact_local_paths)
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"archive_runtime_context: {state}.", result)
+
+
+def tool_github_repository_setup_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.github_repository_setup_plan,
+        archive_root,
+        profile_id=optional_string_arg(arguments, "profile_id"),
+        profile_slug=optional_string_arg(arguments, "profile_slug"),
+        github_owner=optional_string_arg(arguments, "github_owner"),
+        github_account_ref=optional_string_arg(arguments, "github_account_ref"),
+        repo_name=optional_string_arg(arguments, "repo_name"),
+        visibility=optional_string_arg(arguments, "visibility") or archive_services.GITHUB_REPOSITORY_DEFAULT_VISIBILITY,
+        remote_protocol=optional_string_arg(arguments, "remote_protocol")
+        or archive_services.GITHUB_REPOSITORY_DEFAULT_REMOTE_PROTOCOL,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"github_repository_setup_plan: {state}.", result)
 
 
 def tool_archive_init(arguments: dict[str, Any]) -> dict[str, Any]:

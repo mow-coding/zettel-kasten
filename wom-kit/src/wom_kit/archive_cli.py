@@ -9,6 +9,8 @@ Commands:
           Resolve a requested WOM profile before runtime-context.
   runtime-context
           Print read-only AI runtime context for a mounted archive.
+  github-repo
+          Plan GitHub repository metadata for a WOM profile.
   init    Create a new archive from a built-in template.
   index   Build a generated local SQLite search index.
   parcel Create a portable parcel from a view. Alias: pack.
@@ -1315,6 +1317,70 @@ def command_runtime_context(args: argparse.Namespace) -> int:
 
     print_json(result)
     return 0 if result["ok"] else 1
+
+
+def command_github_repo(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("GitHub repository setup requires --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("GitHub repository setup requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+
+    try:
+        if args.dry_run:
+            result = archive_services.github_repository_setup_plan(
+                Path(args.archive_root),
+                profile_id=args.profile_id,
+                profile_slug=args.profile_slug,
+                github_owner=args.github_owner,
+                github_account_ref=args.github_account_ref,
+                repo_name=args.repo_name,
+                visibility=args.visibility,
+                remote_protocol=args.remote_protocol,
+            )
+        else:
+            result = archive_services.approve_github_repository_setup_plan(
+                Path(args.archive_root),
+                reviewed_by=args.reviewed_by,
+                write_local_profile=args.write_local_profile,
+                profile_id=args.profile_id,
+                profile_slug=args.profile_slug,
+                github_owner=args.github_owner,
+                github_account_ref=args.github_account_ref,
+                repo_name=args.repo_name,
+                visibility=args.visibility,
+                remote_protocol=args.remote_protocol,
+            )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        mode = "dry-run" if result["dry_run"] else "approved"
+        state = "passed" if result["ok"] else "blocked"
+        print(f"GitHub repository setup {mode} {state}.")
+        print(f"Archive: {result['archive_id']}")
+        print(f"Profile: {result.get('profile_id') or '-'}")
+        print(f"Repository: {result.get('github_owner') or '-'}/{result.get('proposed_repo_name') or '-'}")
+        if result.get("receipt_path"):
+            print(f"Receipt: {result['receipt_path']}")
+        elif result.get("provider_setup_receipt_preview"):
+            print(f"Proposed receipt: {result['provider_setup_receipt_preview']['receipt_path']}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
 
 
 def command_list_zettels(args: argparse.Namespace) -> int:
@@ -3065,6 +3131,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runtime_context.add_argument("--format", choices=["json"], default="json", help="Output format.")
     runtime_context.set_defaults(func=command_runtime_context)
+
+    github_repo = subcommands.add_parser(
+        "github-repo",
+        help="Plan GitHub repository setup for a WOM profile without creating the repository.",
+    )
+    github_repo.add_argument("archive_root", help="Archive root to plan for.")
+    github_repo.add_argument("--dry-run", action="store_true", help="Preview local metadata and manual GitHub steps without writing files.")
+    github_repo.add_argument("--profile-id", help="Resolved WOM profile id.")
+    github_repo.add_argument("--profile-slug", help="ASCII profile slug used in the proposed repository name.")
+    github_repo.add_argument("--github-owner", help="GitHub user or organization name.")
+    github_repo.add_argument("--github-account-ref", help="Safe GitHub account reference such as github:account:example.")
+    github_repo.add_argument("--repo-name", help="Override repository name. Must keep the zettel-kasten- prefix.")
+    github_repo.add_argument(
+        "--visibility",
+        choices=sorted(archive_services.GITHUB_REPOSITORY_ALLOWED_VISIBILITIES),
+        default=archive_services.GITHUB_REPOSITORY_DEFAULT_VISIBILITY,
+        help="Proposed repository visibility. Defaults to private.",
+    )
+    github_repo.add_argument(
+        "--remote-protocol",
+        choices=sorted(archive_services.GITHUB_REPOSITORY_REMOTE_PROTOCOLS),
+        default=archive_services.GITHUB_REPOSITORY_DEFAULT_REMOTE_PROTOCOL,
+        help="Planned local remote protocol. Defaults to ssh.",
+    )
+    github_repo.add_argument(
+        "--approve",
+        action="store_true",
+        help="Write versioned provider metadata and a setup receipt only; never create or connect a GitHub repository.",
+    )
+    github_repo.add_argument("--reviewed-by", help="Reviewer id required with --approve.")
+    github_repo.add_argument(
+        "--write-local-profile",
+        action="store_true",
+        help="Write ignored local GitHub account hints under profiles/local/ when approving.",
+    )
+    github_repo.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    github_repo.set_defaults(func=command_github_repo)
 
     list_zettels = subcommands.add_parser("list-zettels", help="List draft and/or canonical zettels.")
     list_zettels.add_argument("archive_root", help="Archive root to inspect.")

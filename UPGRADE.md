@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.19` | current public pre-release | `wom-kit/docs/releases/v0.2.19.md` |
+| `v0.2.20` | current public pre-release | `wom-kit/docs/releases/v0.2.20.md` |
+| `v0.2.19` | superseded public pre-release | `wom-kit/docs/releases/v0.2.19.md` |
 | `v0.2.18` | superseded public pre-release | `wom-kit/docs/releases/v0.2.18.md` |
 | `v0.2.17` | superseded public pre-release | `wom-kit/docs/releases/v0.2.17.md` |
 | `v0.2.16` | superseded public pre-release | `wom-kit/docs/releases/v0.2.16.md` |
@@ -46,6 +47,32 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.19` To `v0.2.20`
+
+This is a compatible GitHub profile repository setup planner patch.
+
+What changed:
+
+- added `archive github-repo <archive-root> --dry-run --format json`,
+- added safe default repository names as `zettel-kasten-<profile_slug>`,
+- added strict safety gates for profile slugs, repository names, GitHub owners, and account references,
+- added `--approve --reviewed-by` for local-only provider metadata and setup receipt writes,
+- added optional ignored local account hints with `--write-local-profile`,
+- added read-only MCP `github_repository_setup_plan`.
+
+No private archive migration is required.
+
+This release does not create GitHub repositories, run OAuth, call GitHub APIs, run `gh`, configure git remotes, push, or sync.
+
+```bash
+archive github-repo <archive-root> --dry-run \
+  --profile-id profile:personal:HongGilDong \
+  --profile-slug HongGilDong \
+  --github-owner example-user \
+  --github-account-ref github:account:honggildong \
+  --format json
+```
 
 ## From `v0.2.18` To `v0.2.19`
 

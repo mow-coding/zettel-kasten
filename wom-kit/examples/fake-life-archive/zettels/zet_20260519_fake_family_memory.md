@@ -13,7 +13,7 @@ facets:
   event_type: daily_life
   sharing_status: family_shared
 assets:
-  - object_id: sha256:658769117879061a3c9e749621ec9c1e119e3cf397435d829cf4f4a84283f714
+  - object_id: sha256:9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647
     role: source_memory
     label: Fake family memory original
 edges:

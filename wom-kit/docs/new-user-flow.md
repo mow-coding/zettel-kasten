@@ -259,6 +259,41 @@ python wom-kit\cli\archive.py scan-source .\tmp-my-archive `
 
 The scan writes `source-maps/*.jsonl` and `receipts/sources/*.source-scan.json`. It records file names, relative paths, sizes, modified times, visibility, and provenance. It does not read file bodies, summarize content with AI, call provider APIs, or calculate full hashes.
 
+## Flow 2C: Plan A GitHub Repository For A WOM Profile
+
+Use profile resolution before assuming the current archive is the target. Then plan the GitHub repository with dry-run:
+
+```powershell
+python wom-kit\cli\archive.py github-repo .\tmp-my-archive `
+  --dry-run `
+  --profile-id profile:personal:HongGilDong `
+  --profile-slug HongGilDong `
+  --github-owner example-user `
+  --github-account-ref github:account:honggildong `
+  --format json
+```
+
+The default proposed repository name is:
+
+```text
+zettel-kasten-HongGilDong
+```
+
+Dry-run writes nothing. Approved mode writes only local `provider-bindings.yml` metadata and a setup receipt:
+
+```powershell
+python wom-kit\cli\archive.py github-repo .\tmp-my-archive `
+  --approve `
+  --reviewed-by person:me `
+  --profile-id profile:personal:HongGilDong `
+  --profile-slug HongGilDong `
+  --github-owner example-user `
+  --github-account-ref github:account:honggildong `
+  --format json
+```
+
+This flow does not create a GitHub repository, start OAuth, call GitHub APIs, run `gh`, configure git remotes, push, or sync. Those are separate manual steps.
+
 ## Flow 3: AI Creates Drafts
 
 AI should create draft zettels in `inbox/`.

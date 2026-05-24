@@ -26,14 +26,32 @@ bindings:
     enabled: true
     purpose: zettels_specs_code_and_view_definitions
     resource:
-      org: example-org
-      repo: personal-archive
+      owner: example-user
+      repo: zettel-kasten-HongGilDong
+      visibility: private
+      remote_protocol: ssh
     auth:
+      method: gh_cli_or_token_ref
       token_env: GITHUB_TOKEN
+      account_ref: github:account:honggildong
     owner_mapping:
-      admin_team: archive-admins
-      operator_team: archive-operators
+      archive_id: archive:personal:example
+      profile_id: profile:personal:HongGilDong
+      profile_slug: HongGilDong
 ```
+
+WOM-kit v0.2.20 can plan this GitHub binding with:
+
+```bash
+archive github-repo <archive-root> --dry-run \
+  --profile-id profile:personal:HongGilDong \
+  --profile-slug HongGilDong \
+  --github-owner example-user \
+  --github-account-ref github:account:honggildong \
+  --format json
+```
+
+Approved mode writes only local metadata and a setup receipt. It does not create a repository, start OAuth, call GitHub APIs, run `gh`, configure git remotes, push, or sync.
 
 ## Secret Boundary
 

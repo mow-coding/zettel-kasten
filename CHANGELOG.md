@@ -4,6 +4,27 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.20 - 2026-05-25
+
+GitHub profile repository setup planner patch.
+
+Added:
+
+- `archive github-repo <archive-root> --dry-run --format json`, a dry-run-first planner for profile-scoped GitHub repository setup,
+- safe default repository naming as `zettel-kasten-<profile_slug>`,
+- strict profile slug and repository name safety gates for ASCII-only, path-free, URL-free, secret-free values,
+- `--approve --reviewed-by` local-only approval that updates `provider-bindings.yml` and writes a provider setup receipt without creating a GitHub repository,
+- optional ignored local account hints with `--write-local-profile`,
+- read-only MCP `github_repository_setup_plan`.
+
+Compatibility:
+
+- no GitHub repository is created,
+- no OAuth, GitHub API, `gh`, `git remote`, push, or sync operation is run,
+- approved mode writes only local archive metadata and receipts,
+- MCP exposes no GitHub apply/create/connect/push/sync tool,
+- WOM/zet/ZET philosophy and WOM-kit naming remain unchanged.
+
 ## v0.2.19 - 2026-05-25
 
 WOM-kit naming and path cleanup patch.
