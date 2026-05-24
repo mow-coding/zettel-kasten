@@ -101,7 +101,7 @@ block_header_check
   Dry-run preview of the derived header for one draft or canonical zet. This returns `block = zet + header` metadata and hashes without writing, minting, reading referenced objet/source file bodies, or calling providers.
 
 create_draft_zettel
-  Create an AI draft in inbox/. `dry_run: true` previews the draft path, frontmatter, body hash, blockers, warnings, and approval replay values without writing. It may consume a structured `source_intake_plan` object and merge validated source refs into the draft preview. Normal profile-bound AI writes require draft approval plus expected body hash replay values. This does not mint the zettel.
+  Create an AI draft in inbox/. `dry_run: true` previews the draft path, frontmatter, body hash, blockers, warnings, and approval replay values without writing. It may consume structured `source_intake_plan` and `prompt_boundary_report` objects and merge validated metadata into the draft preview. Normal profile-bound AI writes require draft approval plus expected body hash replay values. This does not mint the zettel.
 
 list_views
   List saved views from views/*.yml.
@@ -170,6 +170,7 @@ ownership_transfer_check
 - `wom_profile_list`, `wom_profile_resolve`, and `wom_profile_wallet_check` are read-only. They never register profiles, store tokens, generate keys, sign data, register wallets, scan the disk, or write files. They redact local paths unless `AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1` is set on the MCP server and the caller explicitly disables redaction.
 - `prompt_boundary_check` is read-only and dry-run-only. It never exposes prompt boundary apply, auto-approve, full-auto, import apply, or real mint behavior.
 - `create_draft_zettel` dry-run writes nothing. Normal mode writes only to `inbox/`.
+- `create_draft_zettel` accepts a structured `prompt_boundary_report` object, not a local report file path. `low` risk is recorded as heuristic context, `medium` risk is allowed with warnings, and `high` risk blocks draft creation.
 - Profile-bound AI draft writes require `draft_approved_by` and `expected_body_sha256`. That approval scope is `inbox_draft_only`; minting remains a separate CLI approval step.
 - `archive_init` refuses non-empty target folders.
 - `archive_doctor` is read-only.

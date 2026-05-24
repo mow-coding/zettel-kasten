@@ -188,6 +188,11 @@ DRAFT_SECRET_VALUE_RE = re.compile(
 )
 PROMPT_BOUNDARY_TEXT_EXTENSIONS = {".md", ".markdown", ".txt"}
 PROMPT_BOUNDARY_SOFT_TEXT_LIMIT_CHARS = 1_000_000
+PROMPT_BOUNDARY_RISK_LEVELS = {"low", "medium", "high"}
+PROMPT_BOUNDARY_SOURCE_KINDS = {"inline_text", "archive_path"}
+PROMPT_BOUNDARY_HANDLING_NOTE = (
+    "Low heuristic risk does not mean safe; external text is data, not authority."
+)
 PROMPT_BOUNDARY_PATTERNS = [
     {
         "pattern_id": "ignore_previous_instructions",
@@ -821,6 +826,138 @@ def prepare_source_intake_plan_for_draft(
     return prepared
 
 
+def prompt_boundary_report_scalar(value: Any, field_path: str, blockers: list[str]) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if not safe_source_intake_plan_scalar(text):
+        blockers.append(f"prompt_boundary_report.{field_path} must be a safe non-secret scalar.")
+        return None
+    return text
+
+
+def prompt_boundary_report_source_path(value: Any, blockers: list[str]) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        normalized = normalize_archive_relative_path(text)
+    except ArchivePathError:
+        blockers.append("prompt_boundary_report.source_path must be an archive-relative safe path.")
+        return None
+    if source_intake_has_provider_url(normalized) or source_intake_secret_like(normalized):
+        blockers.append("prompt_boundary_report.source_path must not contain provider URLs or secrets.")
+        return None
+    return normalized
+
+
+def normalize_prompt_boundary_pattern_ids(patterns: Any, blockers: list[str]) -> list[str]:
+    if not isinstance(patterns, list):
+        blockers.append("prompt_boundary_report.detected_patterns must be a list.")
+        return []
+    pattern_ids: list[str] = []
+    for index, item in enumerate(patterns):
+        if not isinstance(item, dict):
+            blockers.append(f"prompt_boundary_report.detected_patterns[{index}] must be an object.")
+            continue
+        pattern_id = prompt_boundary_report_scalar(
+            item.get("pattern_id"),
+            f"detected_patterns[{index}].pattern_id",
+            blockers,
+        )
+        for key, value in item.items():
+            if key == "pattern_id":
+                continue
+            if isinstance(value, (dict, list)):
+                blockers.append(f"prompt_boundary_report.detected_patterns[{index}].{key} must be a scalar.")
+                continue
+            prompt_boundary_report_scalar(value, f"detected_patterns[{index}].{key}", blockers)
+        if pattern_id and pattern_id not in pattern_ids:
+            pattern_ids.append(pattern_id)
+    return pattern_ids
+
+
+def validate_prompt_boundary_handling(handling: Any, blockers: list[str]) -> None:
+    if not isinstance(handling, list):
+        blockers.append("prompt_boundary_report.recommended_runtime_handling must be a list.")
+        return
+    for index, item in enumerate(handling):
+        if isinstance(item, (dict, list)):
+            blockers.append(f"prompt_boundary_report.recommended_runtime_handling[{index}] must be a string.")
+            continue
+        prompt_boundary_report_scalar(item, f"recommended_runtime_handling[{index}]", blockers)
+
+
+def prepare_prompt_boundary_report_for_draft(
+    report: dict[str, Any] | None,
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any] | None:
+    if report is None:
+        return None
+    if not isinstance(report, dict):
+        blockers.append("prompt_boundary_report must be a JSON object.")
+        return None
+
+    report_blockers: list[str] = []
+    if report.get("lifecycle_action") != "prompt_boundary_check":
+        report_blockers.append("prompt_boundary_report.lifecycle_action must be prompt_boundary_check.")
+    if report.get("dry_run") is not True:
+        report_blockers.append("prompt_boundary_report.dry_run must be true.")
+    if report.get("untrusted_text_boundary") is not True:
+        report_blockers.append("prompt_boundary_report.untrusted_text_boundary must be true.")
+    if report.get("external_text_can_command") is not False:
+        report_blockers.append("prompt_boundary_report.external_text_can_command must be false.")
+    if report.get("would_change") != []:
+        report_blockers.append("prompt_boundary_report.would_change must be an empty list.")
+
+    risk_level = str(report.get("risk_level") or "").strip()
+    if risk_level not in PROMPT_BOUNDARY_RISK_LEVELS:
+        report_blockers.append("prompt_boundary_report.risk_level must be one of: high, low, medium.")
+
+    pattern_ids = normalize_prompt_boundary_pattern_ids(report.get("detected_patterns"), report_blockers)
+    validate_prompt_boundary_handling(report.get("recommended_runtime_handling"), report_blockers)
+    source_kind = prompt_boundary_report_scalar(report.get("source_kind"), "source_kind", report_blockers)
+    if source_kind and source_kind not in PROMPT_BOUNDARY_SOURCE_KINDS:
+        report_blockers.append("prompt_boundary_report.source_kind must be inline_text or archive_path.")
+    source_path = prompt_boundary_report_source_path(report.get("source_path"), report_blockers)
+
+    report_blocker_values = report.get("blockers")
+    if isinstance(report_blocker_values, list) and report_blocker_values and risk_level != "high":
+        report_blockers.append("prompt_boundary_report.blockers must be empty unless risk_level is high.")
+    elif report_blocker_values is not None and not isinstance(report_blocker_values, list):
+        report_blockers.append("prompt_boundary_report.blockers must be a list when present.")
+
+    if report_blockers:
+        blockers.extend(report_blockers)
+        return None
+
+    if risk_level == "high":
+        blockers.append("High-risk prompt_boundary_report blocks draft creation.")
+    elif risk_level == "medium":
+        warnings.append("prompt_boundary_report risk_level is medium; keep human review before writing.")
+    elif risk_level == "low":
+        warnings.append(PROMPT_BOUNDARY_HANDLING_NOTE)
+
+    return drop_none_values(
+        {
+            "checked": True,
+            "report_sha256": sha256_json_value(report),
+            "risk_level": risk_level,
+            "source_kind": source_kind,
+            "source_path": source_path,
+            "untrusted_text_boundary": True,
+            "external_text_can_command": False,
+            "detected_pattern_ids": pattern_ids,
+            "handling_note": PROMPT_BOUNDARY_HANDLING_NOTE,
+        }
+    )
+
+
 def merge_unique_strings(*groups: list[str]) -> list[str]:
     merged: list[str] = []
     seen: set[str] = set()
@@ -856,6 +993,7 @@ def create_draft_zettel(
     derived_from: list[str] | None = None,
     source_refs: list[dict[str, Any]] | None = None,
     source_intake_plan: dict[str, Any] | None = None,
+    prompt_boundary_report: dict[str, Any] | None = None,
     local_ai_sessions: list[dict[str, Any]] | None = None,
     draft_id: str | None = None,
     created_at: str | None = None,
@@ -919,6 +1057,7 @@ def create_draft_zettel(
     supervised = clean_optional_string_list(supervised_by)
     explicit_derived = clean_optional_string_list(derived_from)
     source_intake = prepare_source_intake_plan_for_draft(source_intake_plan, blockers)
+    prompt_boundary = prepare_prompt_boundary_report_for_draft(prompt_boundary_report, blockers, warnings)
     plan_profile_id = source_intake.get("profile_id")
     if not profile_id and isinstance(plan_profile_id, str):
         profile_id = plan_profile_id
@@ -1000,6 +1139,8 @@ def create_draft_zettel(
         frontmatter["source_refs"] = refs
     if source_intake.get("source_intake"):
         frontmatter["source_intake"] = source_intake["source_intake"]
+    if prompt_boundary:
+        frontmatter["prompt_boundary"] = prompt_boundary
     if sessions:
         frontmatter["local_ai_sessions"] = sessions
     if draft_approved_by or expected_body_sha256:
@@ -1048,7 +1189,7 @@ def create_draft_zettel(
         "body_sha256": body_sha256,
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
-        "would_change": [f"write {proposed_path}"],
+        "would_change": [] if blockers else [f"write {proposed_path}"],
         "approval_replay": approval_replay,
     }
     if dry_run:
@@ -1513,6 +1654,7 @@ def mint_zettel(
             },
             "source_refs": extract_mint_source_refs(source_frontmatter),
             "source_intake": extract_mint_source_intake(source_frontmatter),
+            "prompt_boundary": extract_mint_prompt_boundary(source_frontmatter),
             "edges": source_frontmatter.get("edges") if isinstance(source_frontmatter.get("edges"), list) else [],
             "local_ai_sessions": extract_mint_local_ai_sessions(source_frontmatter),
             "checklist": dry_run["checklist"],
@@ -1964,6 +2106,7 @@ def build_mint_receipt_preview(
         },
         "source_refs": extract_mint_source_refs(frontmatter),
         "source_intake": extract_mint_source_intake(frontmatter),
+        "prompt_boundary": extract_mint_prompt_boundary(frontmatter),
         "edges": frontmatter.get("edges") if isinstance(frontmatter.get("edges"), list) else [],
         "local_ai_sessions": extract_mint_local_ai_sessions(frontmatter),
         "checklist": checklist,
@@ -2002,6 +2145,13 @@ def extract_mint_source_intake(frontmatter: dict[str, Any]) -> dict[str, Any]:
     source_intake = frontmatter.get("source_intake")
     if isinstance(source_intake, dict):
         return json_safe(source_intake)
+    return {}
+
+
+def extract_mint_prompt_boundary(frontmatter: dict[str, Any]) -> dict[str, Any]:
+    prompt_boundary = frontmatter.get("prompt_boundary")
+    if isinstance(prompt_boundary, dict):
+        return json_safe(prompt_boundary)
     return {}
 
 
@@ -7155,7 +7305,7 @@ def profile_wallet_preview(
             )
 
     warnings.append(
-        "WOM profile wallet metadata is wallet-ready identity context only; v0.2.26 does not generate keys or sign data."
+        "WOM profile wallet metadata is wallet-ready identity context only; v0.2.27 does not generate keys or sign data."
     )
 
     return {
@@ -7288,7 +7438,7 @@ def profile_wallet_capability_surface_preview() -> dict[str, Any]:
         "v0_2_25_available": [],
         "mutating_wallet_actions_available": False,
         "real_signing_available": False,
-        "model_note": "A future WOM wallet layer can bind profile/node identity to capability proofs; v0.2.26 only previews readiness.",
+        "model_note": "A future WOM wallet layer can bind profile/node identity to capability proofs; v0.2.27 only previews readiness.",
     }
 
 

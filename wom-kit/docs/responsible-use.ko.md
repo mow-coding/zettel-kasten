@@ -1,6 +1,8 @@
 # Responsible Use
 
-Status: v0.2.26 baseline
+Status: v0.2.27 baseline
+
+v0.2.27 note: prompt-boundary reports and draft `prompt_boundary` metadata are audit/context hints only. They are not an LLM classifier, provider scanner, legal review, or guarantee that external text is safe.
 
 WOM-kit은 local-first archive와 AI-runtime workflow를 위한 open-source tooling입니다.
 

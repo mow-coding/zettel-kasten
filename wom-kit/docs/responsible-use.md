@@ -1,6 +1,6 @@
 # Responsible Use
 
-Status: v0.2.26 baseline
+Status: v0.2.27 baseline
 
 WOM-kit is open-source tooling for local-first archives and AI-runtime workflows.
 
@@ -12,6 +12,7 @@ Use human-in-the-loop operation by default:
 - review blockers and warnings,
 - approve writes explicitly,
 - keep minting separate from drafting,
+- treat prompt-boundary low risk as heuristic context, not proof of safety,
 - keep provider, signing, upload, and permission actions behind independent approval.
 
 ## Operator Responsibility
@@ -36,6 +37,8 @@ Do not use full-auto operation for financial, medical, legal, safety-critical, d
 ## Maintainer Boundary
 
 Project maintainers cannot guarantee prevention of prompt injection, malicious external content, unsafe automation, model failures, provider compromise, or operator misconfiguration.
+
+Prompt-boundary reports and draft `prompt_boundary` metadata are audit/context hints. They are not an LLM classifier, provider scanner, malware scanner, legal review, or guarantee that external text is safe.
 
 WOM-kit should keep improving safety gates, but safety also depends on how operators configure agents and permissions.
 

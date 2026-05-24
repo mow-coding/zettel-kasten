@@ -1,6 +1,6 @@
 # Prompt Injection Boundary
 
-Status: v0.2.26 baseline
+Status: v0.2.27 baseline
 
 ## Core Principle
 
@@ -39,6 +39,34 @@ prompt_boundary_check
 ```
 
 MCP exposes no prompt boundary apply, auto-approve, full-auto, import apply, or real mint tool.
+
+## Draft Composition
+
+v0.2.27 lets `create-draft` consume a saved prompt-boundary dry-run report:
+
+```bash
+archive create-draft <archive-root> --dry-run --prompt-boundary-report prompt-boundary-report.json --format json
+```
+
+The composer validates that the report is dry-run-only, non-mutating, and still says:
+
+```text
+untrusted_text_boundary: true
+external_text_can_command: false
+would_change: []
+```
+
+When accepted, the draft stores optional `prompt_boundary` metadata: report hash, risk level, source kind/path summary, detected pattern ids, and the handling note. It does not store the inspected text body, the local report file path, local absolute paths, provider URLs, tokens, private keys, seed phrases, wallet secrets, or secret-like values.
+
+Risk handling:
+
+```text
+low    -> allowed, but not proof of safety
+medium -> allowed with warnings
+high   -> blocks draft creation
+```
+
+Mint receipt previews and real mint receipts preserve `prompt_boundary` metadata when present.
 
 ## Limitations
 

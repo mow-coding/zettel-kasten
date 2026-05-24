@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.26` | current public pre-release | `wom-kit/docs/releases/v0.2.26.md` |
+| `v0.2.27` | current public pre-release | `wom-kit/docs/releases/v0.2.27.md` |
+| `v0.2.26` | superseded public pre-release | `wom-kit/docs/releases/v0.2.26.md` |
 | `v0.2.25` | superseded public pre-release | `wom-kit/docs/releases/v0.2.25.md` |
 | `v0.2.24` | superseded public pre-release | `wom-kit/docs/releases/v0.2.24.md` |
 | `v0.2.23` | superseded public pre-release | `wom-kit/docs/releases/v0.2.23.md` |
@@ -53,6 +54,31 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.26` To `v0.2.27`
+
+This is a compatible prompt boundary draft composer patch.
+
+What changed:
+
+- added `archive create-draft --prompt-boundary-report <json-file>`,
+- added optional draft frontmatter `prompt_boundary` metadata,
+- added MCP `create_draft_zettel` support for a structured `prompt_boundary_report` object,
+- mint receipt previews and real mint receipts preserve `prompt_boundary` metadata when present.
+
+No private archive migration is required.
+
+The prompt-boundary report must come from a dry-run `prompt-boundary` check. The composer records only safe metadata such as report hash, risk level, source kind/path summary, detected pattern ids, and the untrusted-text boundary. It does not store inspected text bodies, local absolute report paths, provider URLs, or secrets.
+
+Risk handling:
+
+```text
+low    -> allowed, but not proof of safety
+medium -> allowed with warnings
+high   -> blocks draft creation
+```
+
+This release does not add an LLM prompt classifier, provider scanning, OCR/import apply, source intake apply, ZET transport, real signing, payment, staking, consensus, blockchain, or full-auto behavior.
 
 ## From `v0.2.25` To `v0.2.26`
 

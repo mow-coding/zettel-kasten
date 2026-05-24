@@ -4,6 +4,27 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.27 - 2026-05-25
+
+Prompt boundary draft composer patch.
+
+Added:
+
+- `archive create-draft --prompt-boundary-report <json-file>`,
+- validation that prompt-boundary reports are dry-run-only, non-mutating, and preserve the untrusted-text boundary before draft composition,
+- optional draft frontmatter `prompt_boundary` metadata with report hash, risk level, source kind/path summary, detected pattern ids, and handling note,
+- MCP `create_draft_zettel` support for a structured `prompt_boundary_report` object,
+- mint receipt previews and real mint receipts preserve `prompt_boundary` metadata when present.
+
+Compatibility:
+
+- no private archive migration is required,
+- existing `create-draft` behavior remains compatible when `--prompt-boundary-report` is omitted,
+- low prompt-boundary risk is recorded as heuristic context, not proof of safety,
+- medium risk is allowed with warnings,
+- high risk blocks draft creation,
+- no LLM classifier, provider scanning, OCR/import apply, source intake apply, ZET transport, real signing, payment, staking, consensus, blockchain, or full-auto behavior is implemented.
+
 ## v0.2.26 - 2026-05-25
 
 Prompt injection boundary, responsible use, and runtime model guidance baseline.

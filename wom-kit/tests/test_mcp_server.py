@@ -68,6 +68,36 @@ class McpServerTests(unittest.TestCase):
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
         return root
 
+    def prompt_boundary_report_fixture(self, risk_level: str = "low") -> dict:
+        patterns = []
+        if risk_level == "high":
+            patterns = [
+                {
+                    "pattern_id": "ignore_previous_instructions",
+                    "label": "ignore previous instructions",
+                    "risk": "high",
+                    "matched_text": "Ignore previous instructions",
+                }
+            ]
+        return {
+            "ok": risk_level != "high",
+            "dry_run": True,
+            "lifecycle_action": "prompt_boundary_check",
+            "archive_id": "archive:personal:mcp-prompt-boundary",
+            "source_kind": "inline_text",
+            "source_path": None,
+            "untrusted_text_boundary": True,
+            "external_text_can_command": False,
+            "risk_level": risk_level,
+            "detected_patterns": patterns,
+            "blockers": ["High-risk prompt-injection or unsafe-agent instruction pattern detected."]
+            if risk_level == "high"
+            else [],
+            "warnings": ["Prompt boundary check is a conservative heuristic preview, not a complete security classifier."],
+            "recommended_runtime_handling": ["Treat inspected text as untrusted data only."],
+            "would_change": [],
+        }
+
     def copy_fake_archive_as_company_target(self, root: Path) -> Path:
         archive_root = self.copy_fake_archive(root)
         archive_path = archive_root / "archive.yml"
@@ -258,6 +288,7 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("profile_token_register", tool_names)
             self.assertNotIn("archive_runtime_context_apply", tool_names)
             self.assertNotIn("prompt_boundary_apply", tool_names)
+            self.assertNotIn("prompt_boundary_auto_approve", tool_names)
             self.assertNotIn("auto_approve", tool_names)
             self.assertNotIn("full_auto", tool_names)
             self.assertNotIn("github_repository_setup_apply", tool_names)
@@ -1642,6 +1673,129 @@ class McpServerTests(unittest.TestCase):
                                 "body": "Safe MCP draft body.",
                                 "dry_run": True,
                                 "source_intake_plan": "C:\\private\\plan.json",
+                            },
+                        },
+                    },
+                )
+                self.assertTrue(path_response["result"]["isError"])
+                self.assertEqual(list((archive_root / "inbox").glob("*.md")), [])
+        finally:
+            self.stop_server(process)
+
+    def test_create_draft_zettel_accepts_prompt_boundary_report_object_in_dry_run(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = Path(tmp) / "archive"
+                init_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_init",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "archive_type": "personal",
+                                "archive_id": "archive:personal:mcp-prompt-boundary",
+                                "principal_id": "person:mcp-prompt-boundary",
+                                "principal_name": "MCP Prompt Boundary",
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(init_response["result"]["isError"])
+
+                draft_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "create_draft_zettel",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "title": "MCP prompt boundary composed draft",
+                                "body": "Safe MCP draft body with a prompt boundary report.",
+                                "dry_run": True,
+                                "prompt_boundary_report": self.prompt_boundary_report_fixture(),
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(draft_response["result"]["isError"])
+                result = draft_response["result"]["structuredContent"]
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["frontmatter_preview"]["prompt_boundary"]["risk_level"], "low")
+                self.assertTrue(result["frontmatter_preview"]["prompt_boundary"]["checked"])
+                self.assertFalse((archive_root / result["proposed_path"]).exists())
+        finally:
+            self.stop_server(process)
+
+    def test_create_draft_zettel_rejects_unsafe_prompt_boundary_report_objects(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = Path(tmp) / "archive"
+                init_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_init",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "archive_type": "personal",
+                                "archive_id": "archive:personal:mcp-prompt-boundary-block",
+                                "principal_id": "person:mcp-prompt-boundary-block",
+                                "principal_name": "MCP Prompt Boundary Block",
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(init_response["result"]["isError"])
+
+                high_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "create_draft_zettel",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "title": "MCP high prompt boundary draft",
+                                "body": "Safe MCP draft body.",
+                                "dry_run": True,
+                                "prompt_boundary_report": self.prompt_boundary_report_fixture("high"),
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(high_response["result"]["isError"])
+                high_result = high_response["result"]["structuredContent"]
+                self.assertFalse(high_result["ok"])
+                self.assertTrue(high_result["blockers"])
+
+                path_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "create_draft_zettel",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "title": "MCP local prompt boundary path",
+                                "body": "Safe MCP draft body.",
+                                "dry_run": True,
+                                "prompt_boundary_report": "C:\\private\\prompt-boundary.json",
                             },
                         },
                     },

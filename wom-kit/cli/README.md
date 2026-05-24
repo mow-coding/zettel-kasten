@@ -32,7 +32,7 @@ read-zettel
   Read one zettel by id or archive-relative path.
 
 create-draft
-  Create a draft zettel in inbox/. It can consume a validated source-intake dry-run plan with --source-intake-plan.
+  Create a draft zettel in inbox/. It can consume a validated source-intake dry-run plan with --source-intake-plan and a validated prompt-boundary dry-run report with --prompt-boundary-report.
 
 profile-wallet --dry-run
   Preview wallet-ready WOM profile/node identity metadata. This never generates private keys, signs data, stores secrets, creates wallets, or calls blockchain/provider APIs.
@@ -210,6 +210,19 @@ python wom-kit\cli\archive.py create-draft .\tmp-my-archive `
   --title "Draft title" `
   --body "Draft body"
 ```
+
+Compose a draft preview from a prompt-boundary report:
+
+```powershell
+python wom-kit\cli\archive.py create-draft .\tmp-my-archive `
+  --title "Draft title" `
+  --body "Draft body" `
+  --dry-run `
+  --prompt-boundary-report .\prompt-boundary-report.json `
+  --format json
+```
+
+The report path is not stored in draft frontmatter. `low` risk is not proof of safety, `medium` risk is allowed with warnings, and `high` risk blocks draft creation.
 
 Preview minting without writing canonical memory:
 

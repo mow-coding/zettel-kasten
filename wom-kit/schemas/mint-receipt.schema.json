@@ -35,6 +35,8 @@
       "type": "array",
       "items": {"type": "object"}
     },
+    "source_intake": {"type": "object"},
+    "prompt_boundary": {"type": "object"},
     "edges": {
       "type": "array",
       "items": {"type": "object"}

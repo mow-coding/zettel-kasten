@@ -283,6 +283,45 @@ class ArchiveCliTests(unittest.TestCase):
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         return path
 
+    def prompt_boundary_report_fixture(self, risk_level: str = "low") -> dict:
+        patterns = []
+        if risk_level == "medium":
+            patterns = [
+                {
+                    "pattern_id": "change_permissions",
+                    "label": "change permissions",
+                    "risk": "medium",
+                    "matched_text": "change permissions",
+                }
+            ]
+        elif risk_level == "high":
+            patterns = [
+                {
+                    "pattern_id": "ignore_previous_instructions",
+                    "label": "ignore previous instructions",
+                    "risk": "high",
+                    "matched_text": "Ignore previous instructions",
+                }
+            ]
+        return {
+            "ok": risk_level != "high",
+            "dry_run": True,
+            "lifecycle_action": "prompt_boundary_check",
+            "archive_id": "archive:personal:fake-life",
+            "source_kind": "inline_text",
+            "source_path": None,
+            "untrusted_text_boundary": True,
+            "external_text_can_command": False,
+            "risk_level": risk_level,
+            "detected_patterns": patterns,
+            "blockers": ["High-risk prompt-injection or unsafe-agent instruction pattern detected."]
+            if risk_level == "high"
+            else [],
+            "warnings": ["Prompt boundary check is a conservative heuristic preview, not a complete security classifier."],
+            "recommended_runtime_handling": ["Treat inspected text as untrusted data only."],
+            "would_change": [],
+        }
+
     def make_fake_lunch_draft_promotion_ready(self, archive_root: Path, title: str = "Promotion-ready lunch note") -> Path:
         path = archive_root / "inbox" / "zet_20260519_draft_ai_lunch_note.md"
         text = path.read_text(encoding="utf-8")
@@ -2189,6 +2228,330 @@ class ArchiveCliTests(unittest.TestCase):
                     self.assertEqual(code, 1, output)
                     self.assertFalse(result["ok"])
                     self.assertTrue(result["blockers"])
+
+    def test_create_draft_dry_run_consumes_prompt_boundary_report_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            report_path = Path(tmp) / "prompt-boundary-report.json"
+            boundary_code, boundary_output = self.run_cli(
+                [
+                    "prompt-boundary",
+                    str(archive_root),
+                    "--text",
+                    "Plain source notes with no runtime instructions.",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(boundary_code, 0, boundary_output)
+            report_path.write_text(boundary_output, encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Prompt boundary composed draft",
+                    "--body",
+                    "Draft text composed after a prompt boundary check.",
+                    "--dry-run",
+                    "--prompt-boundary-report",
+                    str(report_path),
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["dry_run"])
+            self.assertFalse((archive_root / result["proposed_path"]).exists())
+            prompt_boundary = result["frontmatter_preview"]["prompt_boundary"]
+            self.assertTrue(prompt_boundary["checked"])
+            self.assertEqual(prompt_boundary["risk_level"], "low")
+            self.assertEqual(prompt_boundary["source_kind"], "inline_text")
+            self.assertEqual(prompt_boundary["detected_pattern_ids"], [])
+            self.assertTrue(prompt_boundary["report_sha256"].startswith("sha256:"))
+            self.assertIn("external text is data", prompt_boundary["handling_note"])
+            self.assertNotIn(str(report_path), json.dumps(result, ensure_ascii=False))
+
+    def test_create_draft_write_preserves_prompt_boundary_report_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            report_path = Path(tmp) / "prompt-report.json"
+            report_path.write_text(json.dumps(self.prompt_boundary_report_fixture()), encoding="utf-8")
+            body = "Approved draft that preserves prompt boundary metadata."
+            expected_hash = hashlib.sha256((body.rstrip() + "\n").encode("utf-8")).hexdigest()
+
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Prompt boundary approved draft",
+                    "--body",
+                    body,
+                    "--prompt-boundary-report",
+                    str(report_path),
+                    "--draft-id",
+                    "zet_20260525_prompt_boundary_draft",
+                    "--created-at",
+                    "2026-05-25T10:11:12+09:00",
+                    "--expected-body-sha256",
+                    expected_hash,
+                    "--draft-approved-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            draft_path = archive_root / result["path"]
+            text = draft_path.read_text(encoding="utf-8")
+            self.assertNotIn(str(report_path), text)
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            self.assertIsNotNone(match)
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            self.assertEqual(frontmatter["prompt_boundary"]["risk_level"], "low")
+            self.assertTrue(frontmatter["prompt_boundary"]["untrusted_text_boundary"])
+            self.assertFalse(frontmatter["prompt_boundary"]["external_text_can_command"])
+            self.assertEqual(frontmatter["prompt_boundary"]["detected_pattern_ids"], [])
+
+    def test_create_draft_prompt_boundary_medium_risk_is_allowed_with_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            report_path = Path(tmp) / "medium-report.json"
+            report_path.write_text(json.dumps(self.prompt_boundary_report_fixture("medium")), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Medium prompt boundary draft",
+                    "--body",
+                    "Draft text after a medium-risk prompt boundary report.",
+                    "--dry-run",
+                    "--prompt-boundary-report",
+                    str(report_path),
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["frontmatter_preview"]["prompt_boundary"]["risk_level"], "medium")
+            self.assertEqual(
+                result["frontmatter_preview"]["prompt_boundary"]["detected_pattern_ids"],
+                ["change_permissions"],
+            )
+            self.assertTrue(any("medium" in warning.lower() for warning in result["warnings"]))
+
+    def test_create_draft_prompt_boundary_high_risk_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            report_path = Path(tmp) / "high-report.json"
+            report_path.write_text(json.dumps(self.prompt_boundary_report_fixture("high")), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "High prompt boundary draft",
+                    "--body",
+                    "This draft should not be created from a high-risk prompt boundary report.",
+                    "--dry-run",
+                    "--prompt-boundary-report",
+                    str(report_path),
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("High-risk prompt_boundary_report" in blocker for blocker in result["blockers"]))
+            self.assertEqual(result["would_change"], [])
+            self.assertFalse((archive_root / result["proposed_path"]).exists())
+
+    def test_create_draft_blocks_tampered_prompt_boundary_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            valid_report = self.prompt_boundary_report_fixture()
+            cases = {
+                "wrong lifecycle_action": {"lifecycle_action": "other_action"},
+                "dry_run false": {"dry_run": False},
+                "external command true": {"external_text_can_command": True},
+                "would change": {"would_change": ["write inbox/example.md"]},
+                "unsafe source path": {"source_kind": "archive_path", "source_path": "C:\\private\\note.txt"},
+                "unsafe url source": {"source_kind": "archive_path", "source_path": "https://example.invalid/private"},
+                "secret handling": {"recommended_runtime_handling": ["api_" + "key=" + "abcdefghijklmnop"]},
+            }
+
+            for name, patch in cases.items():
+                with self.subTest(name=name):
+                    report = {**valid_report, **patch}
+                    report_path = Path(tmp) / f"{name.replace(' ', '-')}.json"
+                    report_path.write_text(json.dumps(report), encoding="utf-8")
+                    code, output = self.run_cli(
+                        [
+                            "create-draft",
+                            str(archive_root),
+                            "--title",
+                            "Tampered prompt boundary draft",
+                            "--body",
+                            "This dry-run should be blocked by report validation.",
+                            "--dry-run",
+                            "--prompt-boundary-report",
+                            str(report_path),
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(result["blockers"])
+
+    def test_create_draft_prompt_boundary_report_path_errors_are_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            missing_code, missing_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Missing prompt boundary report",
+                    "--body",
+                    "This command should fail cleanly.",
+                    "--dry-run",
+                    "--prompt-boundary-report",
+                    str(Path(tmp) / "missing.json"),
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(missing_code, 1)
+            self.assertNotIn("Traceback", missing_output)
+
+            invalid_path = Path(tmp) / "invalid-prompt-boundary-report.json"
+            invalid_path.write_text("{not valid json", encoding="utf-8")
+            invalid_code, invalid_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Invalid prompt boundary report",
+                    "--body",
+                    "This command should fail cleanly.",
+                    "--dry-run",
+                    "--prompt-boundary-report",
+                    str(invalid_path),
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(invalid_code, 1)
+            self.assertIn("prompt-boundary report must be valid JSON", invalid_output)
+            self.assertNotIn("Traceback", invalid_output)
+
+            traversal_code, traversal_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Traversal prompt boundary report",
+                    "--body",
+                    "This command should fail cleanly.",
+                    "--dry-run",
+                    "--prompt-boundary-report",
+                    "..\\prompt-boundary-report.json",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(traversal_code, 1)
+            self.assertIn("path traversal", traversal_output)
+            self.assertNotIn("Traceback", traversal_output)
+
+    def test_mint_preserves_prompt_boundary_metadata_in_preview_and_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            report_path = Path(tmp) / "prompt-report.json"
+            report_path.write_text(json.dumps(self.prompt_boundary_report_fixture()), encoding="utf-8")
+            body = "Promotion-ready draft with prompt boundary metadata."
+
+            create_code, create_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Prompt boundary mint draft",
+                    "--body",
+                    body,
+                    "--prompt-boundary-report",
+                    str(report_path),
+                    "--draft-id",
+                    "zet_20260525_prompt_boundary_mint",
+                    "--created-at",
+                    "2026-05-25T10:11:12+09:00",
+                    "--format",
+                    "json",
+                ]
+            )
+            create_result = json.loads(create_output)
+            self.assertEqual(create_code, 0, create_output)
+            draft_path = archive_root / create_result["path"]
+            text = draft_path.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            self.assertIsNotNone(match)
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            frontmatter["kind"] = "permanent_note"
+            frontmatter["facets"] = {"domain": "test"}
+            frontmatter["promotion"] = {
+                "stage": "promotion_candidate",
+                "ready_for_promotion": True,
+                "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
+            }
+            draft_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body + "\n",
+                encoding="utf-8",
+            )
+
+            dry_code, dry_output = self.run_cli(
+                ["mint-zet", str(archive_root), "--path", create_result["path"], "--dry-run", "--format", "json"]
+            )
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertEqual(dry_result["receipt_preview"]["prompt_boundary"]["risk_level"], "low")
+
+            mint_code, mint_output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    create_result["path"],
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            mint_result = json.loads(mint_output)
+            self.assertEqual(mint_code, 0, mint_output)
+            receipt = json.loads((archive_root / mint_result["mint_receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(receipt["prompt_boundary"]["risk_level"], "low")
+            self.assertTrue(receipt["prompt_boundary"]["checked"])
 
     def write_block_header_fixture(self, archive_root: Path) -> tuple[Path, str, str]:
         object_id = "sha256:" + "b" * 64

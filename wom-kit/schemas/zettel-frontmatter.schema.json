@@ -89,6 +89,20 @@
         }
       }
     },
+    "prompt_boundary": {
+      "type": "object",
+      "properties": {
+        "checked": {"type": "boolean"},
+        "report_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
+        "source_kind": {"type": ["string", "null"], "enum": ["inline_text", "archive_path", null]},
+        "source_path": {"type": ["string", "null"]},
+        "untrusted_text_boundary": {"type": "boolean"},
+        "external_text_can_command": {"type": "boolean"},
+        "detected_pattern_ids": {"type": "array", "items": {"type": "string"}},
+        "handling_note": {"type": "string"}
+      }
+    },
     "draft_creation": {
       "type": "object",
       "properties": {

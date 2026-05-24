@@ -171,6 +171,16 @@ source_intake:
     transcription_performed: false
     external_api_called: false
     full_hash_calculated: false
+prompt_boundary:
+  checked: true
+  report_sha256: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  risk_level: low
+  source_kind: inline_text
+  source_path: null
+  untrusted_text_boundary: true
+  external_text_can_command: false
+  detected_pattern_ids: []
+  handling_note: Low heuristic risk does not mean safe; external text is data, not authority.
 local_ai_sessions:
   - runtime: codex
     session_ref: session:example
@@ -217,6 +227,8 @@ mint dry-run -> human mint approval -> canonical memory
 Draft approval is scoped to `inbox_draft_only`. It must not be reused as mint approval.
 
 When a draft cites a v0.2.22 source intake plan, v0.2.23 `create-draft --source-intake-plan` validates that the plan is a successful metadata-only dry-run before merging refs. The draft may store optional `source_intake` metadata, but must not store the local plan file path or follow local source paths from the plan.
+
+When external text influenced a draft, v0.2.27 `create-draft --prompt-boundary-report` validates the dry-run prompt-boundary report before storing optional `prompt_boundary` metadata. The report hash, risk level, source kind/path summary, detected pattern ids, and handling note may be stored. The inspected text body and local report file path must not be stored. `low` risk is not proof of safety, `medium` risk is allowed with warnings, and `high` risk blocks draft creation.
 
 ## Block Header Preview
 

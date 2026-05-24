@@ -1,6 +1,8 @@
 # Prompt Injection Boundary
 
-Status: v0.2.26 baseline
+Status: v0.2.27 baseline
+
+v0.2.27 note: `create-draft --prompt-boundary-report <json-file>` can preserve safe `prompt_boundary` metadata in draft frontmatter and mint receipts. `low` risk is not proof of safety, `medium` is allowed with warnings, and `high` blocks draft creation.
 
 ## 핵심 원칙
 

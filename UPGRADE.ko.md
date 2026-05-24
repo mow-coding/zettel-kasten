@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.26` | current public pre-release | `wom-kit/docs/releases/v0.2.26.md` |
+| `v0.2.27` | current public pre-release | `wom-kit/docs/releases/v0.2.27.md` |
+| `v0.2.26` | superseded public pre-release | `wom-kit/docs/releases/v0.2.26.md` |
 | `v0.2.25` | superseded public pre-release | `wom-kit/docs/releases/v0.2.25.md` |
 | `v0.2.24` | superseded public pre-release | `wom-kit/docs/releases/v0.2.24.md` |
 | `v0.2.23` | superseded public pre-release | `wom-kit/docs/releases/v0.2.23.md` |
@@ -53,6 +54,21 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.26` To `v0.2.27`
+
+This compatible patch lets `create-draft` consume a dry-run prompt-boundary report:
+
+- `archive create-draft --prompt-boundary-report <json-file>`
+- optional draft frontmatter `prompt_boundary`
+- structured MCP `prompt_boundary_report` input for `create_draft_zettel`
+- mint preview and mint receipt preservation for `prompt_boundary`
+
+No private archive migration is required.
+
+`low` risk is not proof of safety. `medium` is allowed with warnings. `high` blocks draft creation.
+
+This release does not add LLM classification, provider scanning, OCR/import apply, ZET transport, real signing, payments, staking, consensus, blockchain, or full-auto behavior.
 
 ## `v0.2.25`에서 `v0.2.26`으로
 

@@ -183,6 +183,16 @@ source_intake:
     transcription_performed: false
     external_api_called: false
     full_hash_calculated: false
+prompt_boundary:
+  checked: true
+  report_sha256: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  risk_level: low
+  source_kind: inline_text
+  source_path: null
+  untrusted_text_boundary: true
+  external_text_can_command: false
+  detected_pattern_ids: []
+  handling_note: Low heuristic risk does not mean safe; external text is data, not authority.
 local_ai_sessions:
   - runtime: codex
     session_ref: session:example
@@ -200,6 +210,8 @@ draft_creation:
 `source_intake` is optional. It records that draft source refs came from a validated dry-run source intake plan. It must not store the local plan file path or local absolute source paths.
 
 `source_intake.plan_sha256` is a commitment to the supplied source intake plan object, not an independent re-verification of the original source. Candidate refs derived from local-file intake are anonymized during draft composition so private filename stems do not become durable draft metadata.
+
+`prompt_boundary` is optional. It records that a draft used a validated dry-run prompt-boundary report. It must not store the inspected text body, the local report file path, local absolute paths, provider URLs, tokens, private keys, seed phrases, wallet secrets, or secret-like values. `low` risk is heuristic context, not proof of safety. `high` risk blocks draft creation.
 
 ## Visibility
 

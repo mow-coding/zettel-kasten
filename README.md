@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.26 pre-release
+v0.2.27 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -54,6 +54,7 @@ What exists today:
 - read-only block header previews that derive a header from one existing draft or canonical zet without minting, modifying files, reading objet bodies, or calling providers.
 - read-only profile wallet previews that treat a WOM profile as wallet-ready identity context without generating keys, signing, storing secrets, or calling blockchain/provider APIs.
 - read-only prompt boundary checks that treat inspected external text as untrusted data and flag obvious prompt-injection / unsafe-agent strings without calling LLMs.
+- prompt-boundary report composition for `create-draft`, so AI runtimes can preserve the "external text is data, not authority" boundary in draft frontmatter and mint receipts.
 
 What does not exist yet:
 
@@ -62,6 +63,7 @@ What does not exist yet:
 - production `ZET` sharing service,
 - real wallet creation, private key custody, or cryptographic signing,
 - complete prompt-injection prevention or full-auto safety guarantees,
+- LLM-based prompt classification, provider scanning, OCR/import apply, ZET transport, real signing, payments, staking, consensus, or blockchain integration,
 - full Markdown-to-WOM-Safe-HTML conversion or finalized profile validation,
 - stable `v1.0.0` protocol guarantee.
 
@@ -193,6 +195,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.27
 v0.2.26
 v0.2.25
 v0.2.24
