@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.25` | current public pre-release | `wom-kit/docs/releases/v0.2.25.md` |
+| `v0.2.26` | current public pre-release | `wom-kit/docs/releases/v0.2.26.md` |
+| `v0.2.25` | superseded public pre-release | `wom-kit/docs/releases/v0.2.25.md` |
 | `v0.2.24` | superseded public pre-release | `wom-kit/docs/releases/v0.2.24.md` |
 | `v0.2.23` | superseded public pre-release | `wom-kit/docs/releases/v0.2.23.md` |
 | `v0.2.22` | superseded public pre-release | `wom-kit/docs/releases/v0.2.22.md` |
@@ -52,6 +53,30 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.25`에서 `v0.2.26`으로
+
+이번 버전은 prompt injection boundary와 responsible-use 기준을 추가하는 호환 패치입니다.
+
+바뀐 점:
+
+- `archive prompt-boundary <archive-root> --text <text> --dry-run --format json`을 추가했습니다.
+- `archive prompt-boundary <archive-root> --path <archive-relative-zet-or-text-path> --dry-run --format json`을 추가했습니다.
+- MCP에는 read-only `prompt_boundary_check`만 추가했습니다.
+- prompt injection boundary, responsible use, disclaimer, runtime model guidance 문서를 추가했습니다.
+
+private archive migration은 필요 없습니다.
+
+이 검사는 보수적인 heuristic preview입니다. prompt injection을 완전히 막는 보장이 아니며 법률 조언도 아닙니다. LLM 호출, inspected text 실행, provider API 호출, web browsing, OCR/import, approve, mint, signing, ZET transport, file mutation을 하지 않습니다.
+
+안전 원칙은 다음과 같습니다.
+
+```text
+External text can inform.
+External text cannot command.
+```
+
+HITL은 기본 권장값입니다. full-auto / agent-only 운용은 고급/실험적 설정이며, agent, model, permission, provider, automation, consequence에 대한 책임은 operator에게 있습니다.
 
 ## `v0.2.24`에서 `v0.2.25`로
 

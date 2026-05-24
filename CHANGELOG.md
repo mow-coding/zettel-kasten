@@ -4,6 +4,26 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.26 - 2026-05-25
+
+Prompt injection boundary, responsible use, and runtime model guidance baseline.
+
+Added:
+
+- `archive prompt-boundary <archive-root> --text <text> --dry-run --format json`,
+- `archive prompt-boundary <archive-root> --path <archive-relative-zet-or-text-path> --dry-run --format json`,
+- read-only MCP `prompt_boundary_check`,
+- conservative prompt-injection and unsafe-agent string heuristics,
+- public prompt injection boundary, responsible use, disclaimer, and runtime model guidance docs.
+
+Compatibility:
+
+- no private archive migration is required,
+- prompt-boundary is read-only and writes nothing,
+- the check does not call LLMs, provider APIs, web browsing, OCR, import apply, or ZET transport,
+- this is not a complete prompt-injection classifier or legal advice,
+- HITL remains the recommended default and full-auto operation remains advanced/experimental operator responsibility.
+
 ## v0.2.25 - 2026-05-25
 
 Profile wallet concept baseline.

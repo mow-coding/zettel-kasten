@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.2.25 pre-release
+v0.2.26 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -51,6 +51,7 @@ v0.2.25 pre-release
 - `create-draft`가 source-intake plan JSON의 safe source refs를 draft preview/write로 안전하게 이어 줄 수 있습니다.
 - 기존 draft/canonical zet 하나에서 header를 read-only dry-run으로 미리 보는 block header preview가 있습니다. mint, 파일 수정, objet body 읽기, provider 호출은 하지 않습니다.
 - WOM profile을 미래 wallet-ready identity context로 미리 확인하는 read-only profile wallet preview가 있습니다. key 생성, signing, secret 저장, blockchain/provider API 호출은 하지 않습니다.
+- 외부 텍스트를 untrusted data로 취급하고 명백한 prompt-injection / unsafe-agent 문구를 LLM 호출 없이 미리 보는 read-only prompt boundary check가 있습니다.
 
 아직 없는 것:
 
@@ -189,6 +190,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.26
 v0.2.25
 v0.2.24
 v0.2.23

@@ -109,6 +109,9 @@
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
 - [WOM Profile Registry](wom-profile-registry.md)
 - [WOM Profile Wallet Model](wom-profile-wallet-model.md)
+- [Prompt Injection Boundary](prompt-injection-boundary.ko.md)
+- [Responsible Use](responsible-use.ko.md)
+- [Runtime Model Guidance](runtime-model-guidance.ko.md)
 - [One-Command Setup](one-command-setup.md)
 - [New User Flow](new-user-flow.md)
 - [External Imports](external-imports.md)
@@ -143,6 +146,7 @@ local archive
 - [WOM AI Runtime Context Work Log](../plans/work-log-2026-05-24-ai-runtime-context.md)
 - [WOM Profile Registry Work Log](../plans/work-log-2026-05-24-profile-registry.md)
 - [WOM Profile Wallet Concept Work Log](../plans/work-log-2026-05-25-profile-wallet-concept.md)
+- [Prompt Injection Boundary Work Log](../plans/work-log-2026-05-25-prompt-injection-boundary.md)
 - [Draft Provenance Work Log](../plans/work-log-2026-05-24-draft-provenance.md)
 - [WOM-kit Naming Cleanup Work Log](../plans/work-log-2026-05-25-wom-kit-naming-cleanup.md)
 - [Delegate Capability Binding Work Log](../plans/work-log-2026-05-23-delegate-capability-binding.md)
@@ -208,3 +212,4 @@ Schemas:
 
 - [Open Source Publication Model](open-source-publication-model.md)
 - [Security Policy](../../SECURITY.md)
+- [Disclaimer](../../DISCLAIMER.md)

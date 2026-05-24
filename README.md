@@ -2,7 +2,7 @@
 
 > Widesider of Modernity: a local-first, AI-native, Web3-oriented archive and communication system for widening the horizon of human memory.
 
-[한국어 README](README.ko.md) · [Documentation Map](wom-kit/docs/public-documentation-map.md) · [Upgrade Guide](UPGRADE.md) · [Changelog](CHANGELOG.md) · [Release Notes](wom-kit/docs/releases/) · [Security](SECURITY.md)
+[한국어 README](README.ko.md) · [Documentation Map](wom-kit/docs/public-documentation-map.md) · [Upgrade Guide](UPGRADE.md) · [Changelog](CHANGELOG.md) · [Release Notes](wom-kit/docs/releases/) · [Security](SECURITY.md) · [Disclaimer](DISCLAIMER.md)
 
 `WOM` stands for `Widesider of Modernity`.
 
@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.25 pre-release
+v0.2.26 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -53,6 +53,7 @@ What exists today:
 - source-intake plan composition for `create-draft`, so AI runtimes can safely carry source refs into draft previews or approved inbox draft writes without re-reading source files.
 - read-only block header previews that derive a header from one existing draft or canonical zet without minting, modifying files, reading objet bodies, or calling providers.
 - read-only profile wallet previews that treat a WOM profile as wallet-ready identity context without generating keys, signing, storing secrets, or calling blockchain/provider APIs.
+- read-only prompt boundary checks that treat inspected external text as untrusted data and flag obvious prompt-injection / unsafe-agent strings without calling LLMs.
 
 What does not exist yet:
 
@@ -60,6 +61,7 @@ What does not exist yet:
 - live provider integrations,
 - production `ZET` sharing service,
 - real wallet creation, private key custody, or cryptographic signing,
+- complete prompt-injection prevention or full-auto safety guarantees,
 - full Markdown-to-WOM-Safe-HTML conversion or finalized profile validation,
 - stable `v1.0.0` protocol guarantee.
 
@@ -191,6 +193,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.26
 v0.2.25
 v0.2.24
 v0.2.23

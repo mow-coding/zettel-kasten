@@ -76,6 +76,9 @@ archive_doctor
 archive_runtime_context
   Return read-only runtime context for a mounted archive. This confirms archive id, type/scope, owner/principal summary, AI write policy, archive-relative paths, safe next actions, and doctor summary before draft, dry-run, or mint approval work. Local paths stay redacted unless AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1 is set on the MCP server.
 
+prompt_boundary_check
+  Heuristic dry-run prompt-injection boundary check for untrusted text. This never calls LLMs, executes inspected text, approves, mints, calls providers, or writes files.
+
 github_repository_setup_plan
   Plan a private GitHub repository for a resolved WOM profile. This is read-only and never creates repositories, starts OAuth, calls GitHub APIs, runs `gh`, configures git remotes, pushes, or syncs.
 
@@ -165,6 +168,7 @@ ownership_transfer_check
 
 - The server is local stdio only.
 - `wom_profile_list`, `wom_profile_resolve`, and `wom_profile_wallet_check` are read-only. They never register profiles, store tokens, generate keys, sign data, register wallets, scan the disk, or write files. They redact local paths unless `AI_ARCHIVE_MCP_ALLOW_LOCAL_PATHS=1` is set on the MCP server and the caller explicitly disables redaction.
+- `prompt_boundary_check` is read-only and dry-run-only. It never exposes prompt boundary apply, auto-approve, full-auto, import apply, or real mint behavior.
 - `create_draft_zettel` dry-run writes nothing. Normal mode writes only to `inbox/`.
 - Profile-bound AI draft writes require `draft_approved_by` and `expected_body_sha256`. That approval scope is `inbox_draft_only`; minting remains a separate CLI approval step.
 - `archive_init` refuses non-empty target folders.

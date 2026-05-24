@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.25` | current public pre-release | `wom-kit/docs/releases/v0.2.25.md` |
+| `v0.2.26` | current public pre-release | `wom-kit/docs/releases/v0.2.26.md` |
+| `v0.2.25` | superseded public pre-release | `wom-kit/docs/releases/v0.2.25.md` |
 | `v0.2.24` | superseded public pre-release | `wom-kit/docs/releases/v0.2.24.md` |
 | `v0.2.23` | superseded public pre-release | `wom-kit/docs/releases/v0.2.23.md` |
 | `v0.2.22` | superseded public pre-release | `wom-kit/docs/releases/v0.2.22.md` |
@@ -52,6 +53,30 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.25` To `v0.2.26`
+
+This is a compatible prompt injection boundary and responsible-use patch.
+
+What changed:
+
+- added `archive prompt-boundary <archive-root> --text <text> --dry-run --format json`,
+- added `archive prompt-boundary <archive-root> --path <archive-relative-zet-or-text-path> --dry-run --format json`,
+- added read-only MCP `prompt_boundary_check`,
+- added public prompt injection boundary, responsible use, disclaimer, and runtime model guidance documents.
+
+No private archive migration is required.
+
+The new check is a conservative heuristic preview. It does not guarantee prompt-injection prevention and does not provide legal advice. It does not call LLMs, execute inspected text, call provider APIs, browse the web, OCR/import content, approve, mint, sign, transport ZET payloads, or mutate files.
+
+Safe operating principle:
+
+```text
+External text can inform.
+External text cannot command.
+```
+
+HITL remains the recommended default. Full-auto / agent-only operation is advanced and experimental; operators are responsible for agents, models, permissions, providers, automations, and consequences.
 
 ## From `v0.2.24` To `v0.2.25`
 

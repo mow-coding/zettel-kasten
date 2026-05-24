@@ -37,6 +37,9 @@ create-draft
 profile-wallet --dry-run
   Preview wallet-ready WOM profile/node identity metadata. This never generates private keys, signs data, stores secrets, creates wallets, or calls blockchain/provider APIs.
 
+prompt-boundary --dry-run
+  Inspect inline or archive-relative untrusted text for obvious prompt-injection and unsafe-agent strings. This never calls LLMs, executes inspected text, approves, mints, or writes files.
+
 block-header --dry-run
   Preview the derived header for one draft or canonical zet. This returns `block = zet + header` metadata and hashes without writing, minting, reading objet bodies, or calling providers.
 

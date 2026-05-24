@@ -11,6 +11,8 @@ Commands:
           Preview wallet-ready identity metadata for a resolved WOM profile.
   runtime-context
           Print read-only AI runtime context for a mounted archive.
+  prompt-boundary
+          Preview prompt-injection boundary risk for untrusted text.
   github-repo
           Plan GitHub repository metadata for a WOM profile.
   object-storage
@@ -2194,6 +2196,25 @@ def command_check_safe_html(args: argparse.Namespace) -> int:
     return 0 if result["ok"] else 1
 
 
+def command_prompt_boundary(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("prompt-boundary is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.prompt_boundary_check(
+            Path(args.archive_root),
+            text=args.text,
+            relative_path=args.path,
+            dry_run=args.dry_run,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_json(result)
+    return 0 if result["ok"] else 1
+
+
 def command_providers(args: argparse.Namespace) -> int:
     try:
         result = archive_services.provider_bindings_summary(Path(args.archive_root))
@@ -3354,6 +3375,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runtime_context.add_argument("--format", choices=["json"], default="json", help="Output format.")
     runtime_context.set_defaults(func=command_runtime_context)
+
+    prompt_boundary = subcommands.add_parser(
+        "prompt-boundary",
+        help="Dry-run prompt-injection boundary check for untrusted text.",
+    )
+    prompt_boundary.add_argument("archive_root", help="Archive root used for context.")
+    prompt_boundary.add_argument("--text", help="Inline untrusted text to inspect.")
+    prompt_boundary.add_argument("--path", help="Archive-relative zet or text path to inspect.")
+    prompt_boundary.add_argument("--dry-run", action="store_true", help="Preview only; never execute inspected text.")
+    prompt_boundary.add_argument("--format", choices=["json"], default="json", help="Output format.")
+    prompt_boundary.set_defaults(func=command_prompt_boundary)
 
     github_repo = subcommands.add_parser(
         "github-repo",

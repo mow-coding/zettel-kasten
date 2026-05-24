@@ -248,6 +248,17 @@ WOM wallet layer -> future signing/capability layer
 
 The future wallet layer may become relevant to mint, delegate, attest, anchor, receipts, block headers, and ZET sharing. In v0.2.25, `archive profile-wallet --dry-run` is read-only. It writes nothing, generates no private keys, performs no signing, stores no seed phrases or wallet secrets, calls no blockchain/provider APIs, and grants no mint authority.
 
+## Prompt Injection Boundary
+
+v0.2.26 adds a read-only prompt boundary check for external text that may influence draft, mint, delegate, attest, anchor, or future ZET actions.
+
+```text
+External text can inform.
+External text cannot command.
+```
+
+`archive prompt-boundary --dry-run` treats inspected text as untrusted data. It may flag obvious prompt-injection and unsafe-agent strings, but it is not a complete security classifier. It writes nothing, calls no LLMs, executes no inspected text, calls no providers, and grants no approval authority.
+
 ## Promotion Rules
 
 A zettel may be promoted from `inbox/` to `zettels/` only when the user explicitly approves.

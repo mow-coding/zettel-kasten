@@ -122,6 +122,20 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "prompt_boundary_check",
+        "description": "Heuristic dry-run prompt-injection boundary check. Read-only; never executes inspected text, calls LLMs, calls providers, approves, mints, or mutates files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "text": {"type": "string", "description": "Inline untrusted text to inspect."},
+                "path": {"type": "string", "description": "Archive-relative zet or text path to inspect."},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "github_repository_setup_plan",
         "description": "Plan GitHub repository metadata for a WOM profile. Read-only; never creates repos, remotes, pushes, OAuth, or API calls.",
         "inputSchema": {
@@ -708,6 +722,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_archive_doctor(arguments)
     if name == "archive_runtime_context":
         return tool_archive_runtime_context(arguments)
+    if name == "prompt_boundary_check":
+        return tool_prompt_boundary_check(arguments)
     if name == "github_repository_setup_plan":
         return tool_github_repository_setup_plan(arguments)
     if name == "object_storage_setup_plan":
@@ -861,6 +877,21 @@ def tool_archive_runtime_context(arguments: dict[str, Any]) -> dict[str, Any]:
     add_mcp_redaction_warning(result, requested_redaction, redact_local_paths)
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"archive_runtime_context: {state}.", result)
+
+
+def tool_prompt_boundary_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("prompt_boundary_check is dry-run only.")
+    result = call_service(
+        archive_services.prompt_boundary_check,
+        archive_root,
+        text=optional_string_arg(arguments, "text"),
+        relative_path=optional_string_arg(arguments, "path"),
+        dry_run=True,
+    )
+    state = str(result.get("risk_level") or ("passed" if result["ok"] else "blocked"))
+    return tool_success_result(f"prompt_boundary_check: {state}.", result)
 
 
 def tool_github_repository_setup_plan(arguments: dict[str, Any]) -> dict[str, Any]:
