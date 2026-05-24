@@ -43,6 +43,9 @@ prompt-boundary --dry-run
 block-header --dry-run
   Preview the derived header for one draft or canonical zet. This returns `block = zet + header` metadata and hashes without writing, minting, reading objet bodies, or calling providers.
 
+foreign-block --dry-run
+  Preview a foreign/shared block-header JSON artifact or Markdown-compatible foreign zet before trust/import. This writes nothing and never imports, drafts, mints, attests, anchors, applies, or calls providers.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
@@ -469,6 +472,17 @@ python wom-kit\cli\archive.py block-header wom-kit\examples\fake-life-archive `
   --dry-run `
   --format json
 ```
+
+Preview a foreign/shared block before any trust action:
+
+```powershell
+python wom-kit\cli\archive.py foreign-block wom-kit\examples\fake-life-archive `
+  --path workbench\foreign-block-preview.json `
+  --dry-run `
+  --format json
+```
+
+The result uses `trust_state: untrusted_foreign`, keeps `would_change: []`, and reports claimed hashes as `not_verified`.
 
 The preview reads only the target zet file. It derives header metadata from frontmatter, hashes only the zet body text and normalized header preview, and does not hash referenced objet/source files.
 

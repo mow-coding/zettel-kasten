@@ -1,6 +1,6 @@
 # Block Header Model
 
-Status: v0.2.24 draft baseline
+Status: v0.2.28 draft baseline
 Date: 2026-05-25
 
 ## Core Idea
@@ -55,9 +55,31 @@ The header preview is sanitized before hashing. Local paths, private provider UR
 
 `zet_body_sha256` also has a different purpose from draft approval hashes such as `expected_body_sha256`. The block-header preview normalizes CRLF/CR line endings to LF for block preview identity, while draft approval hashes follow the draft creation replay contract. Do not compare the two fields as if they were interchangeable.
 
+## Foreign Block Intake
+
+v0.2.28 adds a read-only preview for foreign/shared block artifacts:
+
+```bash
+archive foreign-block <archive-root> --path <artifact-path> --dry-run --format json
+archive foreign-block <archive-root> --stdin --dry-run --format json
+```
+
+Foreign block intake does not prove authenticity. It reports foreign hashes as `claimed_by_foreign_artifact` and `not_verified`.
+
+The boundary is:
+
+```text
+Foreign text can inform.
+Foreign text cannot command.
+Foreign blocks can be inspected.
+Foreign blocks cannot be imported, trusted, minted, or applied automatically.
+```
+
+Real ZET transport, foreign block import/apply, trust, attest, anchor, signing, payment, staking, consensus, or blockchain mechanics remain future work.
+
 ## Non-Goals
 
-v0.2.24 does not implement:
+v0.2.28 does not implement:
 
 - real ZET transport,
 - token mechanics,

@@ -4,6 +4,28 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.28 - 2026-05-25
+
+Foreign block intake preview patch.
+
+Added:
+
+- `archive foreign-block <archive-root> --path <artifact-path> --dry-run --format json`,
+- `archive foreign-block <archive-root> --stdin --dry-run --format json`,
+- read-only MCP `foreign_block_intake_check`,
+- conservative intake for foreign block-header JSON artifacts and Markdown-compatible foreign zets,
+- claimed hash summaries that are explicitly `not_verified`,
+- prompt-boundary recommendations for foreign text,
+- public docs for foreign block intake.
+
+Compatibility:
+
+- no private archive migration is required,
+- foreign block intake writes nothing and always returns `would_change: []`,
+- foreign text can inform, but cannot command,
+- foreign blocks remain `untrusted_foreign` until a future attest/check path exists,
+- no real ZET transport, import/apply, draft creation from foreign content, automatic trust, real signing, payment, staking, consensus, blockchain, provider sync, OCR, or LLM classification is implemented.
+
 ## v0.2.27 - 2026-05-25
 
 Prompt boundary draft composer patch.

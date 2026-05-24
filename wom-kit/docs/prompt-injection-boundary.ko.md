@@ -1,8 +1,10 @@
 # Prompt Injection Boundary
 
-Status: v0.2.27 baseline
+Status: v0.2.28 baseline
 
 v0.2.27 note: `create-draft --prompt-boundary-report <json-file>` can preserve safe `prompt_boundary` metadata in draft frontmatter and mint receipts. `low` risk is not proof of safety, `medium` is allowed with warnings, and `high` blocks draft creation.
+
+v0.2.28 note: `foreign-block` can inspect shared block/header JSON or Markdown-compatible foreign zet text, but it does not import, trust, draft, mint, attest, anchor, or apply the artifact. Claimed hashes are not verified.
 
 ## 핵심 원칙
 

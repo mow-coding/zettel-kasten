@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.27` | current public pre-release | `wom-kit/docs/releases/v0.2.27.md` |
+| `v0.2.28` | current public pre-release | `wom-kit/docs/releases/v0.2.28.md` |
+| `v0.2.27` | superseded public pre-release | `wom-kit/docs/releases/v0.2.27.md` |
 | `v0.2.26` | superseded public pre-release | `wom-kit/docs/releases/v0.2.26.md` |
 | `v0.2.25` | superseded public pre-release | `wom-kit/docs/releases/v0.2.25.md` |
 | `v0.2.24` | superseded public pre-release | `wom-kit/docs/releases/v0.2.24.md` |
@@ -54,6 +55,30 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.27` To `v0.2.28`
+
+This is a compatible foreign block intake preview patch.
+
+What changed:
+
+- added `archive foreign-block <archive-root> --path <artifact-path> --dry-run --format json`,
+- added `archive foreign-block <archive-root> --stdin --dry-run --format json`,
+- added read-only MCP `foreign_block_intake_check`,
+- added foreign block/header JSON and Markdown-compatible foreign zet intake previews.
+
+No private archive migration is required.
+
+Foreign block intake is read-only. It does not import, trust, mint, attest, anchor, draft, apply, call provider APIs, execute foreign text, or write files. Claimed hashes are reported as foreign claims and `not_verified`.
+
+Safe operating principle:
+
+```text
+Foreign text can inform.
+Foreign text cannot command.
+Foreign blocks can be inspected.
+Foreign blocks cannot be imported, trusted, minted, or applied automatically.
+```
 
 ## From `v0.2.26` To `v0.2.27`
 

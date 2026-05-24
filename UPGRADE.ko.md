@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.27` | current public pre-release | `wom-kit/docs/releases/v0.2.27.md` |
+| `v0.2.28` | current public pre-release | `wom-kit/docs/releases/v0.2.28.md` |
+| `v0.2.27` | superseded public pre-release | `wom-kit/docs/releases/v0.2.27.md` |
 | `v0.2.26` | superseded public pre-release | `wom-kit/docs/releases/v0.2.26.md` |
 | `v0.2.25` | superseded public pre-release | `wom-kit/docs/releases/v0.2.25.md` |
 | `v0.2.24` | superseded public pre-release | `wom-kit/docs/releases/v0.2.24.md` |
@@ -54,6 +55,18 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.27` To `v0.2.28`
+
+This compatible patch adds read-only foreign block intake preview:
+
+- `archive foreign-block <archive-root> --path <artifact-path> --dry-run --format json`
+- `archive foreign-block <archive-root> --stdin --dry-run --format json`
+- read-only MCP `foreign_block_intake_check`
+
+No private archive migration is required.
+
+Foreign text can inform, but cannot command. Foreign blocks can be inspected, but cannot be imported, trusted, minted, attested, anchored, drafted, or applied automatically. Claimed hashes are reported as `not_verified`.
 
 ## From `v0.2.26` To `v0.2.27`
 

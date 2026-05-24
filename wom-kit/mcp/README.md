@@ -100,6 +100,9 @@ read_zettel
 block_header_check
   Dry-run preview of the derived header for one draft or canonical zet. This returns `block = zet + header` metadata and hashes without writing, minting, reading referenced objet/source file bodies, or calling providers.
 
+foreign_block_intake_check
+  Read-only dry-run intake preview for a foreign/shared block-header JSON artifact or Markdown-compatible foreign zet. This keeps the artifact untrusted and never imports, drafts, mints, attests, anchors, applies, calls providers, or writes files.
+
 create_draft_zettel
   Create an AI draft in inbox/. `dry_run: true` previews the draft path, frontmatter, body hash, blockers, warnings, and approval replay values without writing. It may consume structured `source_intake_plan` and `prompt_boundary_report` objects and merge validated metadata into the draft preview. Normal profile-bound AI writes require draft approval plus expected body hash replay values. This does not mint the zettel.
 
@@ -179,6 +182,7 @@ ownership_transfer_check
 - `object_storage_setup_plan` is read-only and writes nothing. MCP exposes no object storage apply/create/connect/upload/sync tool.
 - `source_intake_plan` is read-only and writes nothing. MCP exposes no source intake apply, objet capture, object storage upload, source scan apply, provider API call, automatic draft creation, or mint tool.
 - `block_header_check` is read-only and writes nothing. MCP exposes no block header apply, block mint, token, coin, NFT, staking, transport, relay, or provider apply tool.
+- `foreign_block_intake_check` is read-only and writes nothing. MCP exposes no foreign block apply, import, trust, attest, auto-accept, auto-import, transport, or full-auto tool.
 - `create_draft_zettel` accepts a structured `source_intake_plan` object, not a local plan file path. The plan must be a successful dry-run, blocker-free, metadata-only source intake result before refs are merged.
 - `archive_index` writes only the generated search map at `db/archive-index.sqlite`.
 - `archive_onboarding_plan` previews first setup but does not create archive folders, provider bindings, or `.env` files.

@@ -21,6 +21,8 @@ Commands:
           Plan safe source/objet refs before draft creation.
   block-header
           Preview the derived block header for one draft or canonical zet.
+  foreign-block
+          Preview a foreign/shared block or zet before any trust/import action.
   init    Create a new archive from a built-in template.
   index   Build a generated local SQLite search index.
   parcel Create a portable parcel from a view. Alias: pack.
@@ -1675,6 +1677,36 @@ def command_block_header(args: argparse.Namespace) -> int:
             for warning in result["warnings"]:
                 print(f"- {warning}")
         print("Block header dry-run passed." if result["ok"] else "Block header dry-run blocked.")
+    return 0 if result.get("ok") else 1
+
+
+def command_foreign_block(args: argparse.Namespace) -> int:
+    try:
+        stdin_text = sys.stdin.read() if args.stdin else None
+        result = archive_services.foreign_block_intake_check(
+            Path(args.archive_root),
+            relative_path=args.path,
+            text=stdin_text,
+            dry_run=args.dry_run,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Foreign block intake: {result.get('detected_input_kind') or '-'}")
+        print(f"Trust state: {result.get('trust_state') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        print("Foreign block intake passed." if result.get("ok") else "Foreign block intake blocked.")
     return 0 if result.get("ok") else 1
 
 
@@ -3549,6 +3581,15 @@ def build_parser() -> argparse.ArgumentParser:
     block_header.add_argument("--dry-run", action="store_true", help="Preview the block header without writing files.")
     block_header.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     block_header.set_defaults(func=command_block_header)
+
+    foreign_block = subcommands.add_parser("foreign-block", help="Preview a foreign/shared block or zet before trust/import.")
+    foreign_block.add_argument("archive_root", help="Archive root used for path safety and local context.")
+    foreign_source = foreign_block.add_mutually_exclusive_group(required=True)
+    foreign_source.add_argument("--path", help="Archive-relative foreign artifact path to inspect.")
+    foreign_source.add_argument("--stdin", action="store_true", help="Read the foreign artifact from stdin.")
+    foreign_block.add_argument("--dry-run", action="store_true", help="Preview foreign block intake without writing files.")
+    foreign_block.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    foreign_block.set_defaults(func=command_foreign_block)
 
     create_draft = subcommands.add_parser("create-draft", help="Create a draft zettel in inbox/.")
     create_draft.add_argument("archive_root", help="Archive root to write to.")

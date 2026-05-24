@@ -236,6 +236,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("source_intake_plan", tool_names)
             self.assertIn("create_draft_zettel", tool_names)
             self.assertIn("block_header_check", tool_names)
+            self.assertIn("foreign_block_intake_check", tool_names)
             self.assertIn("archive_index", tool_names)
             self.assertIn("archive_search", tool_names)
             self.assertIn("promotion_check", tool_names)
@@ -267,6 +268,12 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("archive_mint_zettel", tool_names)
             self.assertNotIn("mint_zettel_apply", tool_names)
             self.assertNotIn("block_header_apply", tool_names)
+            self.assertNotIn("foreign_block_apply", tool_names)
+            self.assertNotIn("import_foreign_block", tool_names)
+            self.assertNotIn("trust_foreign_block", tool_names)
+            self.assertNotIn("attest_foreign_block", tool_names)
+            self.assertNotIn("auto_accept", tool_names)
+            self.assertNotIn("auto_import", tool_names)
             self.assertNotIn("mint_block", tool_names)
             self.assertNotIn("block_mint", tool_names)
             self.assertNotIn("token", tool_names)
@@ -1498,6 +1505,81 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(structured["block_model"]["block_formula"], "zet + header")
                 self.assertRegex(structured["header_sha256"], r"^[0-9a-f]{64}$")
                 self.assertNotIn(str(archive_root.resolve()), json.dumps(structured))
+        finally:
+            self.stop_server(process)
+
+    def test_foreign_block_intake_check_writes_nothing(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                content = {
+                    "ok": True,
+                    "dry_run": True,
+                    "lifecycle_action": "block_header_preview",
+                    "source_path": "zettels/zet_foreign.md",
+                    "block_model": {"block_formula": "zet + header"},
+                    "zet_body_sha256": "a" * 64,
+                    "header_sha256": "b" * 64,
+                    "block_hash_preview": "c" * 64,
+                    "referenced_zets": [{"id": "zet_20260525_foreign"}],
+                    "referenced_objets": [],
+                    "referenced_receipts": [],
+                }
+
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "foreign_block_intake_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "content": content,
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "foreign_block_intake")
+                self.assertEqual(structured["trust_state"], "untrusted_foreign")
+                self.assertEqual(structured["would_change"], [])
+                self.assertEqual(structured["hash_summary"]["claimed_header_hash"]["verification_state"], "not_verified")
+        finally:
+            self.stop_server(process)
+
+    def test_foreign_block_intake_check_rejects_non_dry_run(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                for index, dry_run_value in enumerate([False, "yes", 1], start=1):
+                    with self.subTest(dry_run=dry_run_value):
+                        response = self.send(
+                            process,
+                            {
+                                "jsonrpc": "2.0",
+                                "id": index,
+                                "method": "tools/call",
+                                "params": {
+                                    "name": "foreign_block_intake_check",
+                                    "arguments": {
+                                        "archive_root": str(archive_root),
+                                        "text": "# Foreign note\n\nSafe text.",
+                                        "dry_run": dry_run_value,
+                                    },
+                                },
+                            },
+                        )
+                        self.assertTrue(response["result"]["isError"])
         finally:
             self.stop_server(process)
 

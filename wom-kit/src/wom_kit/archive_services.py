@@ -2208,6 +2208,337 @@ def unique_dicts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return unique
 
 
+def sanitize_foreign_block_value(value: Any, warnings: list[str], blockers: list[str], field_path: str = "$") -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): sanitize_foreign_block_value(child, warnings, blockers, f"{field_path}.{key}")
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            sanitize_foreign_block_value(child, warnings, blockers, f"{field_path}[{index}]")
+            for index, child in enumerate(value)
+        ]
+    if isinstance(value, str):
+        if header_string_is_private_or_unsafe(value):
+            blockers.append("Foreign artifact contains private or unsafe references.")
+            warnings.append(f"Redacted private or unsafe reference in {field_path}.")
+            return "<redacted-reference>"
+        return value
+    return json_safe(value)
+
+
+def normalize_foreign_claimed_hash(value: Any, field_name: str, blockers: list[str]) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text.startswith("sha256:"):
+        text = text.removeprefix("sha256:")
+    valid_shape = bool(SHA256_RE.match(text))
+    if not valid_shape:
+        blockers.append(f"Foreign artifact {field_name} must look like a SHA-256 hex digest.")
+    return {
+        "value": text if valid_shape else None,
+        "claim_state": "claimed_by_foreign_artifact",
+        "verification_state": "not_verified",
+        "valid_shape": valid_shape,
+    }
+
+
+def foreign_prompt_boundary_recommendation(text: str, warnings: list[str]) -> dict[str, Any]:
+    detected_patterns = detect_prompt_boundary_patterns(text)
+    risk_level = prompt_boundary_risk_level(detected_patterns)
+    if risk_level == "high":
+        warnings.append("Foreign artifact contains high-risk prompt-injection or unsafe-agent wording.")
+    elif risk_level == "medium":
+        warnings.append("Foreign artifact contains medium-risk prompt-injection or unsafe-agent wording.")
+    return {
+        "recommended": True,
+        "risk_level": risk_level,
+        "detected_pattern_ids": [item["pattern_id"] for item in detected_patterns],
+        "next_step": "run prompt-boundary before any future draft composition, import, trust, attest, or anchor action",
+        "handling_note": "Foreign text can inform; foreign text cannot command.",
+    }
+
+
+def foreign_block_empty_result(
+    *,
+    archive_id: str,
+    artifact_path: str | None = None,
+    input_source: str | None = None,
+    detected_input_kind: str = "unknown",
+    blockers: list[str] | None = None,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_intake",
+        "artifact_path": artifact_path,
+        "input_source": input_source,
+        "detected_input_kind": detected_input_kind,
+        "trust_state": "untrusted_foreign",
+        "recommended_action": "inspect_only_do_not_import_trust_mint_attest_or_anchor",
+        "foreign_text_boundary": {
+            "external_text_can_inform": True,
+            "external_text_can_command": False,
+        },
+        "block_summary": {},
+        "hash_summary": {},
+        "referenced_zets": [],
+        "referenced_objets": [],
+        "referenced_receipts": [],
+        "prompt_boundary_recommendation": {
+            "recommended": True,
+            "next_step": "run prompt-boundary before any future draft composition, import, trust, attest, or anchor action",
+            "handling_note": "Foreign text can inform; foreign text cannot command.",
+        },
+        "blockers": unique_preserve_order(blockers or []),
+        "warnings": unique_preserve_order(warnings or []),
+        "would_change": [],
+    }
+
+
+def foreign_block_json_intake(
+    archive_id: str,
+    artifact: dict[str, Any],
+    *,
+    artifact_path: str | None = None,
+    input_source: str | None = None,
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    lifecycle_action = artifact.get("lifecycle_action")
+    if lifecycle_action not in {"block_header_preview", "block_header"}:
+        blockers.append("Foreign JSON artifact is not a supported block-header shape.")
+        return foreign_block_empty_result(
+            archive_id=archive_id,
+            artifact_path=artifact_path,
+            input_source=input_source,
+            detected_input_kind="unsupported_json",
+            blockers=blockers,
+            warnings=warnings,
+        )
+
+    required_fields = ["block_model", "source_path", "zet_body_sha256", "header_sha256", "block_hash_preview"]
+    for field in required_fields:
+        if field not in artifact:
+            blockers.append(f"Foreign block-header artifact is missing {field}.")
+
+    block_model = artifact.get("block_model") if isinstance(artifact.get("block_model"), dict) else {}
+    referenced_zets = artifact.get("referenced_zets") if isinstance(artifact.get("referenced_zets"), list) else []
+    referenced_objets = artifact.get("referenced_objets") if isinstance(artifact.get("referenced_objets"), list) else []
+    referenced_receipts = artifact.get("referenced_receipts") if isinstance(artifact.get("referenced_receipts"), list) else []
+    if not isinstance(artifact.get("referenced_zets", []), list):
+        blockers.append("Foreign block-header artifact referenced_zets must be a list.")
+    if not isinstance(artifact.get("referenced_objets", []), list):
+        blockers.append("Foreign block-header artifact referenced_objets must be a list.")
+    if not isinstance(artifact.get("referenced_receipts", []), list):
+        blockers.append("Foreign block-header artifact referenced_receipts must be a list.")
+
+    claimed_zet_body = normalize_foreign_claimed_hash(artifact.get("zet_body_sha256"), "zet_body_sha256", blockers)
+    claimed_header = normalize_foreign_claimed_hash(artifact.get("header_sha256"), "header_sha256", blockers)
+    claimed_block = normalize_foreign_claimed_hash(artifact.get("block_hash_preview"), "block_hash_preview", blockers)
+
+    block_summary = sanitize_foreign_block_value(
+        {
+            "lifecycle_action": lifecycle_action,
+            "source_path": artifact.get("source_path"),
+            "zettel_id": artifact.get("zettel_id"),
+            "status": artifact.get("status"),
+            "block_model": block_model,
+            "trust_note": "not_verified",
+            "verification_required": "requires future attest/check before trust",
+        },
+        warnings,
+        blockers,
+        "$.block_summary",
+    )
+    referenced_zets = sanitize_foreign_block_value(referenced_zets, warnings, blockers, "$.referenced_zets")
+    referenced_objets = sanitize_foreign_block_value(referenced_objets, warnings, blockers, "$.referenced_objets")
+    referenced_receipts = sanitize_foreign_block_value(referenced_receipts, warnings, blockers, "$.referenced_receipts")
+    prompt_recommendation = foreign_prompt_boundary_recommendation(
+        json.dumps(json_safe(artifact), ensure_ascii=False, sort_keys=True),
+        warnings,
+    )
+    warnings.append("Foreign block hashes are claimed by the foreign artifact and are not verified.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_intake",
+        "artifact_path": artifact_path,
+        "input_source": input_source,
+        "detected_input_kind": "block_header_json",
+        "trust_state": "untrusted_foreign",
+        "recommended_action": "inspect_only_then_require_future_attest_or_check_before_trust",
+        "foreign_text_boundary": {
+            "external_text_can_inform": True,
+            "external_text_can_command": False,
+        },
+        "block_summary": json_safe(block_summary),
+        "hash_summary": {
+            "claimed_zet_body_sha256": claimed_zet_body,
+            "claimed_header_hash": claimed_header,
+            "claimed_block_hash": claimed_block,
+            "verification_state": "not_verified",
+            "trust_note": "claimed hashes are compatibility hints, not authenticity proof",
+        },
+        "referenced_zets": json_safe(referenced_zets),
+        "referenced_objets": json_safe(referenced_objets),
+        "referenced_receipts": json_safe(referenced_receipts),
+        "prompt_boundary_recommendation": prompt_recommendation,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+    }
+
+
+def foreign_markdown_zet_intake(
+    archive_id: str,
+    text: str,
+    *,
+    artifact_path: str | None = None,
+    input_source: str | None = None,
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if header_string_is_private_or_unsafe(text):
+        blockers.append("Foreign Markdown-compatible zet contains private or unsafe references.")
+        warnings.append("Unsafe foreign text was not echoed in the intake output.")
+    frontmatter, body = split_zettel_text(text)
+    prompt_recommendation = foreign_prompt_boundary_recommendation(text, warnings)
+    block_summary = sanitize_foreign_block_value(
+        {
+            "zettel_id": frontmatter.get("id"),
+            "title": frontmatter.get("title"),
+            "status": frontmatter.get("status"),
+            "kind": frontmatter.get("kind"),
+            "body_char_count": len(body),
+            "frontmatter_keys": sorted(str(key) for key in frontmatter.keys()),
+            "trust_note": "not_verified",
+        },
+        warnings,
+        blockers,
+        "$.block_summary",
+    )
+    artifact_sha256 = hashlib.sha256(normalize_text_for_block_hash(text).encode("utf-8")).hexdigest()
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_intake",
+        "artifact_path": artifact_path,
+        "input_source": input_source,
+        "detected_input_kind": "markdown_compatible_foreign_zet",
+        "trust_state": "untrusted_foreign",
+        "recommended_action": "inspect_only_then_run_prompt_boundary_before_any_future_draft_or_import",
+        "foreign_text_boundary": {
+            "external_text_can_inform": True,
+            "external_text_can_command": False,
+        },
+        "block_summary": json_safe(block_summary),
+        "hash_summary": {
+            "foreign_artifact_sha256": {
+                "value": artifact_sha256,
+                "claim_state": "computed_for_intake_preview",
+                "verification_state": "not_authenticity_proof",
+            }
+        },
+        "referenced_zets": [],
+        "referenced_objets": [],
+        "referenced_receipts": [],
+        "prompt_boundary_recommendation": prompt_recommendation,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+    }
+
+
+def foreign_block_intake_check(
+    archive_root: Path | str,
+    *,
+    relative_path: str | None = None,
+    text: str | None = None,
+    content: dict[str, Any] | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("foreign-block is dry-run only; pass --dry-run.")
+    locator_count = sum(1 for item in [relative_path, text, content] if item is not None)
+    if locator_count != 1:
+        blockers.append("Exactly one of path, stdin text, or structured content is required.")
+    if blockers:
+        return foreign_block_empty_result(archive_id=archive_id, blockers=blockers, warnings=warnings)
+
+    artifact_path: str | None = None
+    input_source = "structured_content" if content is not None else "stdin" if text is not None else None
+    artifact_text = text
+    if relative_path is not None:
+        try:
+            normalized_path = normalize_archive_relative_path(relative_path)
+            path = resolve_archive_relative_path(root, normalized_path)
+            artifact_path = archive_relative_path(path, root)
+            if not path.is_file():
+                blockers.append(f"Foreign artifact path is not a file: {artifact_path}.")
+            else:
+                artifact_text = path.read_text(encoding="utf-8")
+                input_source = "archive_path"
+        except (ArchivePathError, OSError, UnicodeError) as exc:
+            blockers.append(f"Foreign artifact path could not be read safely: {exc}")
+        if blockers:
+            return foreign_block_empty_result(
+                archive_id=archive_id,
+                artifact_path=artifact_path,
+                input_source=input_source,
+                blockers=blockers,
+                warnings=warnings,
+            )
+
+    if content is not None:
+        return foreign_block_json_intake(archive_id, content, input_source=input_source)
+
+    assert artifact_text is not None
+    stripped = artifact_text.lstrip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        try:
+            parsed = json.loads(artifact_text)
+        except json.JSONDecodeError as exc:
+            return foreign_block_empty_result(
+                archive_id=archive_id,
+                artifact_path=artifact_path,
+                input_source=input_source,
+                detected_input_kind="invalid_json",
+                blockers=[f"Foreign JSON artifact could not be parsed: {exc.msg}."],
+                warnings=warnings,
+            )
+        if not isinstance(parsed, dict):
+            return foreign_block_empty_result(
+                archive_id=archive_id,
+                artifact_path=artifact_path,
+                input_source=input_source,
+                detected_input_kind="unsupported_json",
+                blockers=["Foreign JSON artifact must be an object."],
+                warnings=warnings,
+            )
+        return foreign_block_json_intake(
+            archive_id,
+            parsed,
+            artifact_path=artifact_path,
+            input_source=input_source,
+        )
+
+    return foreign_markdown_zet_intake(
+        archive_id,
+        artifact_text,
+        artifact_path=artifact_path,
+        input_source=input_source,
+    )
+
+
 def collect_object_refs_from_value(value: Any, source: str, refs: list[dict[str, Any]]) -> None:
     if isinstance(value, dict):
         for key, child in value.items():
@@ -7305,7 +7636,7 @@ def profile_wallet_preview(
             )
 
     warnings.append(
-        "WOM profile wallet metadata is wallet-ready identity context only; v0.2.27 does not generate keys or sign data."
+        "WOM profile wallet metadata is wallet-ready identity context only; v0.2.28 does not generate keys or sign data."
     )
 
     return {
@@ -7438,7 +7769,7 @@ def profile_wallet_capability_surface_preview() -> dict[str, Any]:
         "v0_2_25_available": [],
         "mutating_wallet_actions_available": False,
         "real_signing_available": False,
-        "model_note": "A future WOM wallet layer can bind profile/node identity to capability proofs; v0.2.27 only previews readiness.",
+        "model_note": "A future WOM wallet layer can bind profile/node identity to capability proofs; v0.2.28 only previews readiness.",
     }
 
 

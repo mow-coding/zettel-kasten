@@ -443,6 +443,21 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "foreign_block_intake_check",
+        "description": "Read-only dry-run intake preview for a foreign/shared block or Markdown-compatible zet before any trust/import action.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "path": {"type": "string"},
+                "content": {"type": "object"},
+                "text": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "create_draft_zettel",
         "description": "Create an AI draft zettel in inbox/. This does not mint to canonical memory.",
         "inputSchema": {
@@ -759,6 +774,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_read_zettel(arguments)
     if name == "block_header_check":
         return tool_block_header_check(arguments)
+    if name == "foreign_block_intake_check":
+        return tool_foreign_block_intake_check(arguments)
     if name == "create_draft_zettel":
         return tool_create_draft_zettel(arguments)
     if name == "list_views":
@@ -1210,6 +1227,27 @@ def tool_block_header_check(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"block_header_check: {state}.", result)
+
+
+def tool_foreign_block_intake_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("foreign_block_intake_check is dry-run only.")
+    content = arguments.get("content") if isinstance(arguments.get("content"), dict) else None
+    if "content" in arguments and content is None:
+        raise ToolError("foreign_block_intake_check content must be a structured object.")
+    text = optional_string_arg(arguments, "text")
+    relative_path = optional_string_arg(arguments, "path")
+    result = call_service(
+        archive_services.foreign_block_intake_check,
+        archive_root,
+        relative_path=relative_path,
+        text=text,
+        content=content,
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"foreign_block_intake_check: {state}.", result)
 
 
 def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
