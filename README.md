@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.37 pre-release
+v0.2.38 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -65,6 +65,7 @@ What exists today:
 - CLI-only approved foreign block quarantine decision records that write exactly one sanitized decision JSON and one receipt after replay-validating the current case and receipt, without trusting, importing, attesting, minting, anchoring, delegating, signing, accepting, applying, sharing, or calling providers.
 - read-only foreign block quarantine decision review indexes that list recorded local decisions and check their decision records, receipts, original quarantine cases, and quarantine receipts without modifying trust state.
 - read-only foreign block decision outcome plans that route one recorded decision into the next safe non-mutating path without trust, import, attestation, minting, acceptance, sharing, signing, provider calls, or ZET transport.
+- read-only foreign block attestation review candidate plans that prepare a safe human-review candidate from an eligible recorded decision without creating trust, import, attestation, signatures, minting, sharing, provider calls, or ZET transport.
 
 What does not exist yet:
 
@@ -206,7 +207,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.2.37
+v0.2.38
 v0.2.36
 v0.2.35
 v0.2.34

@@ -1,6 +1,6 @@
 # Foreign Block Decision Outcome Plan
 
-Status: v0.2.37 baseline
+Status: v0.2.38 compatible baseline
 
 ## Principle
 
@@ -47,6 +47,14 @@ Optional replay and local review context:
 
 `eligible_for_attestation_review` is still not trust. It only means the case may be a candidate for a future explicit attestation review workflow.
 
+In v0.2.38 that next read-only layer is:
+
+```bash
+archive attestation-review-candidate <archive-root> --case-id case-review-001 --dry-run --format json
+```
+
+That candidate planner is still not an attestation. It prepares human-review metadata only.
+
 ## Output Boundary
 
 The output keeps:
@@ -74,9 +82,10 @@ MCP does not expose decision outcome apply, write, accept, import, trust, attest
 
 ## Non-Goals
 
-v0.2.37 does not implement:
+v0.2.38 does not implement:
 
 - quarantine decision outcome acceptance,
+- attestation review candidate acceptance,
 - quarantine decision trust or apply,
 - foreign block import,
 - foreign block trust,

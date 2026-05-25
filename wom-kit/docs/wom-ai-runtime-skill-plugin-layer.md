@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.37 planning and implementation baseline
+Status: v0.2.38 planning and implementation baseline
 
 ## Purpose
 
@@ -48,7 +48,7 @@ wom_profile_wallet_check
 
 Profile resolution must happen before runtime context whenever the user names a target profile. This prevents the AI from assuming the current/default archive is correct.
 
-`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.37 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
+`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.38 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
 
 ## Prompt Boundary Check
 
@@ -360,9 +360,29 @@ The planner maps the recorded decision to a conservative outcome:
 - `needs_more_review` asks for more human context,
 - `eligible_for_attestation_review` becomes `prepare_attestation_review_candidate`.
 
-`eligible_for_attestation_review` is still not trust. It does not create an attestation in v0.2.37.
+`eligible_for_attestation_review` is still not trust. It does not create an attestation in v0.2.38.
 
 The planner writes nothing and does not import, trust, accept, attest, mint, anchor, delegate, sign, execute, apply, call providers, or run ZET transport.
+
+## Foreign Block Attestation Review Candidate Plan
+
+After a recorded decision outcome is `prepare_attestation_review_candidate`, an AI runtime may prepare human-review metadata:
+
+```bash
+archive attestation-review-candidate <archive-root> --case-id <safe-id> --dry-run --format json
+```
+
+MCP:
+
+```text
+foreign_block_attestation_review_candidate_plan
+```
+
+The candidate planner re-reads the current quarantine case, original quarantine receipt, decision record, and decision receipt. It requires the recorded decision to be `eligible_for_attestation_review` and the outcome to be `prepare_attestation_review_candidate`.
+
+The output stays `trust_state: untrusted_foreign`, `candidate_status: planned_not_recorded`, `attestation_status: not_created`, and `would_change: []`. Hash commitments are retained only as claims, not proof of authenticity.
+
+The planner writes nothing and does not import, trust, accept, attest, mint, anchor, delegate, sign, execute, apply, call providers, read foreign bodies, or run ZET transport.
 
 ## Expected AI Runtime Flow
 
@@ -389,8 +409,9 @@ An AI runtime should start with:
 18. use `record-quarantine-decision --dry-run` and then CLI `--approve --reviewed-by` only after human/operator decision-record approval
 19. use `quarantine-decision-review` to index recorded decisions and receipts without modifying them
 20. use `quarantine-decision-outcome --dry-run` to plan the next safe non-mutating path for one recorded decision
-21. run mint dry-run before asking for mint approval
-22. use CLI approval paths for real minting
+21. use `attestation-review-candidate --dry-run` only when the outcome is `prepare_attestation_review_candidate`
+22. run mint dry-run before asking for mint approval
+23. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -417,6 +438,7 @@ The skill tells the AI to:
 - use CLI-only `record-quarantine-decision` approval for local decision records; MCP remains check-only,
 - use quarantine-decision-review to inventory recorded decisions without accepting or applying them,
 - use quarantine-decision-outcome dry-run to plan recorded decision outcomes without applying them,
+- use attestation-review-candidate dry-run only for eligible recorded decisions without creating attestations,
 - keep paths archive-relative,
 - avoid exposing local absolute paths,
 - use dry-run checks before approval requests,
@@ -427,7 +449,7 @@ The skill tells the AI to:
 
 The plugin layer should expose read and preview tools first.
 
-Allowed v0.2.37 direction:
+Allowed v0.2.38 direction:
 
 - profile list and profile resolve,
 - runtime context,
@@ -444,9 +466,10 @@ Allowed v0.2.37 direction:
 - foreign block quarantine decision write check,
 - foreign block quarantine decision review index,
 - foreign block decision outcome plan,
+- foreign block attestation review candidate plan,
 - doctor,
 - list/read zets,
-- create-draft dry-run, source-intake plan composition, prompt-boundary report composition, foreign block intake/trust/packet/quarantine previews, CLI-only quarantine case writes, quarantine review indexes, quarantine decision previews, CLI-only quarantine decision records, quarantine decision review indexes, decision outcome plans, and approved inbox draft writes,
+- create-draft dry-run, source-intake plan composition, prompt-boundary report composition, foreign block intake/trust/packet/quarantine previews, CLI-only quarantine case writes, quarantine review indexes, quarantine decision previews, CLI-only quarantine decision records, quarantine decision review indexes, decision outcome plans, attestation review candidate plans, and approved inbox draft writes,
 - dry-run mint checks,
 - safe HTML dry-run through CLI,
 - onboarding and source planning,
@@ -466,6 +489,7 @@ Not allowed in this layer yet:
 - foreign block quarantine decision apply/write/accept tools through MCP,
 - foreign block quarantine decision review apply/write/accept tools through MCP,
 - foreign block decision outcome apply/write/accept tools through MCP,
+- foreign block attestation review candidate apply/write/accept/sign/attest tools through MCP,
 - prompt boundary apply, auto-approve, or full-auto tools,
 - block header apply or block minting,
 - token, coin, NFT, staking, transport, relay, or provider apply tools,

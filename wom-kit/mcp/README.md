@@ -131,6 +131,9 @@ foreign_block_quarantine_decision_review_index
 foreign_block_decision_outcome_plan
   Read-only outcome planner for one recorded quarantine decision. This returns the next safe non-mutating path, writes nothing, and never trusts, imports, mints, attests, anchors, delegates, signs, executes, accepts, applies, shares, calls providers, creates attestations, or runs ZET transport.
 
+foreign_block_attestation_review_candidate_plan
+  Read-only candidate planner for human attestation review from an eligible recorded quarantine decision. This writes nothing and never trusts, imports, mints, attests, signs, accepts, shares, calls providers, or runs ZET transport.
+
 create_draft_zettel
   Create an AI draft in inbox/. `dry_run: true` previews the draft path, frontmatter, body hash, blockers, warnings, and approval replay values without writing. It may consume structured `source_intake_plan` and `prompt_boundary_report` objects and merge validated metadata into the draft preview. Normal profile-bound AI writes require draft approval plus expected body hash replay values. This does not mint the zettel.
 
@@ -219,6 +222,7 @@ ownership_transfer_check
 - `record_quarantine_decision_check` is read-only and writes nothing. Approved quarantine decision recording is CLI-only and requires `--approve --reviewed-by`; MCP exposes no quarantine decision write/apply/accept/import/trust/attest/receipt-write/full-auto tool.
 - `foreign_block_quarantine_decision_review_index` is read-only and writes nothing. Its decision filter does not relax consistency validation, and included receipt booleans use direct meanings such as `trust_granted: false` and `provider_api_called: false`. MCP exposes no quarantine decision review apply, write, accept, import, trust, attest, receipt write, auto-accept, auto-import, transport, or full-auto tool.
 - `foreign_block_decision_outcome_plan` is read-only and writes nothing. MCP rejects any `dry_run` value other than boolean `true` and exposes no decision outcome apply, write, accept, import, trust, attest, receipt write, auto-accept, auto-import, transport, or full-auto tool.
+- `foreign_block_attestation_review_candidate_plan` is read-only and writes nothing. MCP rejects any `dry_run` value other than boolean `true` and exposes no candidate apply, write, accept, import, trust, attest, sign, receipt write, auto-accept, auto-import, transport, or full-auto tool.
 - `create_draft_zettel` accepts a structured `source_intake_plan` object, not a local plan file path. The plan must be a successful dry-run, blocker-free, metadata-only source intake result before refs are merged.
 - `archive_index` writes only the generated search map at `db/archive-index.sqlite`.
 - `archive_onboarding_plan` previews first setup but does not create archive folders, provider bindings, or `.env` files.

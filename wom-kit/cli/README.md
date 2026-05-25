@@ -79,6 +79,9 @@ quarantine-decision-review --format json
 quarantine-decision-outcome --dry-run
   Plan the next safe non-mutating path for one recorded quarantine decision. This writes nothing and never trusts, imports, mints, attests, anchors, delegates, signs, executes, accepts, applies, shares, calls providers, or creates attestations.
 
+attestation-review-candidate --dry-run
+  Plan a human attestation review candidate from an eligible recorded quarantine decision. This writes nothing and never trusts, imports, mints, attests, signs, shares, calls providers, or runs ZET transport.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
@@ -633,6 +636,20 @@ python wom-kit\cli\archive.py quarantine-decision-outcome wom-kit\examples\fake-
 ```
 
 Use `--expected-decision` for replay safety and `--reviewer` / `--review-note` only as local operator preview context. Raw review-note body text is not echoed or stored. The planner returns `planned_not_applied` and keeps `trust_state: untrusted_foreign`.
+
+Plan a human attestation review candidate from an eligible decision:
+
+```powershell
+python wom-kit\cli\archive.py attestation-review-candidate wom-kit\examples\fake-life-archive `
+  --case-id case-review-001 `
+  --expected-decision eligible_for_attestation_review `
+  --expected-outcome prepare_attestation_review_candidate `
+  --review-scope full_human_review `
+  --dry-run `
+  --format json
+```
+
+`review-note` is local operator context only. The command returns summary metadata and never echoes the raw note body. Hash commitments in existing sanitized records are claims, not proof of authenticity.
 
 The block-header preview reads only the target zet file. It derives header metadata from frontmatter, hashes only the zet body text and normalized header preview, and does not hash referenced objet/source files.
 

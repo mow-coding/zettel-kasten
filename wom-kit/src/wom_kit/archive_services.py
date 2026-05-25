@@ -204,6 +204,29 @@ FOREIGN_BLOCK_DECISION_OUTCOMES = {
     "needs_more_review": "needs_more_review",
     "eligible_for_attestation_review": "prepare_attestation_review_candidate",
 }
+FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_DECISION = "eligible_for_attestation_review"
+FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_OUTCOME = "prepare_attestation_review_candidate"
+FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES = {
+    "identity",
+    "source_refs",
+    "header_hashes",
+    "prompt_boundary",
+    "full_human_review",
+}
+FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_DISALLOWED_ACTIONS = [
+    "trust_foreign_block",
+    "accept_foreign_block",
+    "import_foreign_block",
+    "create_attestation",
+    "write_attestation",
+    "mint",
+    "anchor",
+    "delegate",
+    "sign",
+    "share_through_ZET",
+    "call_provider_api",
+    "full_auto_execution",
+]
 FOREIGN_BLOCK_QUARANTINE_DECISION_DISALLOWED_ACTIONS = [
     "write_quarantine_decision",
     "mark_foreign_block_trusted",
@@ -226,6 +249,10 @@ FOREIGN_BLOCK_QUARANTINE_DECISION_FALSE_FLAGS = [
     "provider_api_called",
     "zet_created",
     "block_shared",
+]
+FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS = [
+    *FOREIGN_BLOCK_QUARANTINE_DECISION_FALSE_FLAGS,
+    "signature_created",
 ]
 FOREIGN_BLOCK_QUARANTINE_DECISION_RECORD_ALLOWED_KEYS = {
     "archive_id",
@@ -5985,6 +6012,268 @@ def foreign_block_decision_outcome_plan(
         "would_change": [],
     }
     for flag in FOREIGN_BLOCK_QUARANTINE_DECISION_FALSE_FLAGS:
+        result[flag] = False
+    return json_safe(result)
+
+
+def attestation_review_candidate_missing_human_checks(review_scope: str) -> list[str]:
+    checks = [
+        "verify identity and authority of prospective attestor",
+        "verify source refs and objet refs without reading private payloads",
+        "verify block/header hash claims remain not trust by themselves",
+        "verify prompt-boundary warnings are reviewed",
+        "confirm no external text is treated as command",
+    ]
+    if review_scope == "identity":
+        return checks[:1] + [checks[-1]]
+    if review_scope == "source_refs":
+        return [checks[1], checks[-1]]
+    if review_scope == "header_hashes":
+        return [checks[2], checks[-1]]
+    if review_scope == "prompt_boundary":
+        return [checks[3], checks[-1]]
+    return checks
+
+
+def attestation_review_candidate_next_safe_actions(ok: bool) -> list[str]:
+    if not ok:
+        return [
+            "fix blockers before preparing attestation review",
+            "keep the foreign block quarantined and untrusted",
+            "do not create attestations in v0.2.38",
+        ]
+    return [
+        "present the candidate packet for human review",
+        "verify identity, source refs, header hashes, and prompt-boundary warnings out of band",
+        "use a future explicit attestation workflow before any attestation is created",
+    ]
+
+
+def foreign_block_attestation_review_candidate_empty_result(
+    *,
+    archive_id: str,
+    case_id: str | None = None,
+    expected_decision: str | None = None,
+    expected_outcome: str | None = None,
+    prospective_attestor: str | None = None,
+    review_scope: str = "full_human_review",
+    review_note_summary: dict[str, Any] | None = None,
+    blockers: list[str] | None = None,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    safe_scope = review_scope if review_scope in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES else "full_human_review"
+    result: dict[str, Any] = {
+        "ok": False,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_attestation_review_candidate_plan",
+        "archive_id": archive_id,
+        "case_id": safe_foreign_quarantine_case_id(case_id),
+        "expected_decision": expected_decision if expected_decision == FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_DECISION else None,
+        "expected_outcome": expected_outcome if expected_outcome == FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_OUTCOME else None,
+        "prospective_attestor": safe_foreign_quarantine_actor_id(prospective_attestor),
+        "review_scope": safe_scope,
+        "review_note_summary": json_safe(review_note_summary or quarantine_decision_outcome_review_note_summary(None, None)),
+        "trust_state": "untrusted_foreign",
+        "candidate_status": "blocked_not_planned",
+        "attestation_status": "not_created",
+        "recorded_decision": None,
+        "proposed_outcome": None,
+        "attestation_review_candidate": None,
+        "blockers": unique_preserve_order(blockers or []),
+        "warnings": unique_preserve_order(warnings or []),
+        "would_change": [],
+    }
+    for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
+        result[flag] = False
+    return json_safe(result)
+
+
+def add_signature_flag_blockers(root: Path, case_id: str, blockers: list[str]) -> None:
+    paths = foreign_quarantine_decision_record_paths(case_id)
+    checked_paths = {
+        "quarantine case": f"quarantine/foreign-blocks/{case_id}/quarantine-case.json",
+        "quarantine receipt": foreign_quarantine_write_paths(case_id)["receipt"],
+        "quarantine decision record": paths["decision_record"],
+        "quarantine decision receipt": paths["receipt"],
+    }
+    for label, relative_path in checked_paths.items():
+        path = archive_internal_path(root, relative_path)
+        if not path.is_file():
+            continue
+        doc = load_json_object_for_review(path, f"{label} {case_id}", blockers)
+        if isinstance(doc, dict) and doc.get("signature_created") is True:
+            blockers.append(f"{label} must not claim signature_created.")
+
+
+def build_attestation_review_candidate_evidence(
+    *,
+    outcome: dict[str, Any],
+    case_summary: dict[str, Any],
+) -> dict[str, Any]:
+    decision_summary = outcome.get("decision_summary") if isinstance(outcome.get("decision_summary"), dict) else {}
+    return json_safe(
+        {
+            "quarantine_case_present": decision_summary.get("case_present") is True,
+            "quarantine_receipt_present": decision_summary.get("original_quarantine_receipt_present") is True,
+            "decision_record_present": bool(decision_summary),
+            "decision_receipt_present": decision_summary.get("receipt_present") is True,
+            "decision": outcome.get("recorded_decision"),
+            "outcome": outcome.get("proposed_outcome"),
+            "case_consistency": decision_summary.get("case_consistency") if isinstance(decision_summary.get("case_consistency"), dict) else {},
+            "original_quarantine_receipt_consistency": (
+                decision_summary.get("original_quarantine_receipt_consistency")
+                if isinstance(decision_summary.get("original_quarantine_receipt_consistency"), dict)
+                else {}
+            ),
+            "decision_receipt_consistency": decision_summary.get("receipt_consistency") if isinstance(decision_summary.get("receipt_consistency"), dict) else {},
+            "source_hash_commitments": {
+                "claim_state": "retained_from_sanitized_quarantine_record",
+                "verification_state": "not_verified",
+                "trust_state": "not_trusted",
+                "claimed_hashes_summary": (
+                    case_summary.get("claimed_hashes_summary")
+                    if isinstance(case_summary.get("claimed_hashes_summary"), dict)
+                    else {"kind": "missing", "count": 0}
+                ),
+            },
+            "header_hash_commitments": {
+                "claim_state": "retained_from_sanitized_quarantine_record",
+                "verification_state": "not_verified",
+                "trust_state": "not_trusted",
+                "note": "hash commitments are claims, not proof of authenticity",
+            },
+            "prompt_boundary_summary": case_summary.get("prompt_boundary_summary") if isinstance(case_summary.get("prompt_boundary_summary"), dict) else {},
+            "reference_summary": case_summary.get("reference_summary") if isinstance(case_summary.get("reference_summary"), dict) else {},
+        }
+    )
+
+
+def foreign_block_attestation_review_candidate_plan(
+    archive_root: Path | str,
+    *,
+    case_id: str | None,
+    dry_run: bool,
+    expected_decision: str | None = None,
+    expected_outcome: str | None = None,
+    prospective_attestor: str | None = None,
+    review_scope: str = "full_human_review",
+    review_note: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    safe_case_id = safe_foreign_quarantine_case_id(case_id)
+    safe_attestor = safe_foreign_quarantine_actor_id(prospective_attestor) if prospective_attestor else None
+    safe_note = safe_foreign_quarantine_review_note(review_note)
+    review_note_summary = quarantine_decision_outcome_review_note_summary(review_note, safe_note)
+    review_scope = (review_scope or "full_human_review").strip()
+
+    if dry_run is not True:
+        blockers.append("attestation-review-candidate is dry-run only; pass --dry-run.")
+    if case_id and safe_case_id is None:
+        blockers.append("case_id must be a safe id using ASCII letters, numbers, hyphens, or underscores.")
+    if not case_id:
+        blockers.append("case_id is required.")
+    if expected_decision and expected_decision != FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_DECISION:
+        blockers.append("expected_decision must be eligible_for_attestation_review for this planner.")
+    if expected_outcome and expected_outcome != FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_OUTCOME:
+        blockers.append("expected_outcome must be prepare_attestation_review_candidate for this planner.")
+    if prospective_attestor and safe_attestor is None:
+        blockers.append("prospective_attestor must be a safe actor id.")
+    if review_scope not in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES:
+        blockers.append("review_scope must be identity, source_refs, header_hashes, prompt_boundary, or full_human_review.")
+    if review_note and safe_note is None:
+        blockers.append("review_note must be short and must not contain local paths, URLs, tokens, or secrets.")
+    if blockers:
+        return foreign_block_attestation_review_candidate_empty_result(
+            archive_id=archive_id,
+            case_id=safe_case_id,
+            expected_decision=expected_decision,
+            expected_outcome=expected_outcome,
+            prospective_attestor=safe_attestor,
+            review_scope=review_scope,
+            review_note_summary=review_note_summary,
+            blockers=blockers,
+            warnings=warnings,
+        )
+
+    assert safe_case_id is not None
+    outcome = foreign_block_decision_outcome_plan(
+        root,
+        case_id=safe_case_id,
+        dry_run=True,
+        expected_decision=FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_DECISION,
+    )
+    warnings.extend(str(item) for item in outcome.get("warnings", []) if isinstance(item, str))
+    blockers.extend(str(item) for item in outcome.get("blockers", []) if isinstance(item, str))
+
+    recorded_decision = outcome.get("recorded_decision") if isinstance(outcome.get("recorded_decision"), str) else None
+    proposed_outcome = outcome.get("proposed_outcome") if isinstance(outcome.get("proposed_outcome"), str) else None
+    if recorded_decision != FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_DECISION:
+        blockers.append("recorded quarantine decision is not eligible for attestation review.")
+    if proposed_outcome != FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_OUTCOME:
+        blockers.append("recorded quarantine decision outcome is not prepare_attestation_review_candidate.")
+
+    add_signature_flag_blockers(root, safe_case_id, blockers)
+
+    case_summary: dict[str, Any] = {}
+    case_path = archive_internal_path(root, f"quarantine/foreign-blocks/{safe_case_id}/quarantine-case.json")
+    if case_path.is_file():
+        case_summary, case_blockers, case_warnings = validate_quarantine_case_summary(
+            root=root,
+            case_path=case_path,
+            case_id_from_path=safe_case_id,
+            include_receipts=True,
+        )
+        blockers.extend(case_blockers)
+        warnings.extend(case_warnings)
+
+    evidence_summary = build_attestation_review_candidate_evidence(outcome=outcome, case_summary=case_summary)
+    ok = not blockers
+    candidate = (
+        {
+            "case_id": safe_case_id,
+            "candidate_status": "planned_not_recorded",
+            "trust_state": "untrusted_foreign",
+            "proposed_review_scope": review_scope,
+            "prospective_attestor": safe_attestor,
+            "evidence_summary": evidence_summary,
+            "missing_human_checks": attestation_review_candidate_missing_human_checks(review_scope),
+            "disallowed_actions": list(FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_DISALLOWED_ACTIONS),
+            "next_safe_actions": attestation_review_candidate_next_safe_actions(True),
+        }
+        if ok
+        else None
+    )
+    result: dict[str, Any] = {
+        "ok": ok,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_attestation_review_candidate_plan",
+        "archive_id": archive_id,
+        "case_id": safe_case_id,
+        "expected_decision": expected_decision if expected_decision == FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_DECISION else None,
+        "expected_outcome": expected_outcome if expected_outcome == FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_OUTCOME else None,
+        "prospective_attestor": safe_attestor,
+        "review_scope": review_scope,
+        "review_note_summary": json_safe(review_note_summary),
+        "trust_state": "untrusted_foreign",
+        "candidate_status": "planned_not_recorded" if ok else "blocked_not_planned",
+        "attestation_status": "not_created",
+        "recorded_decision": recorded_decision,
+        "proposed_outcome": proposed_outcome,
+        "outcome_summary": {
+            "ok": outcome.get("ok") is True,
+            "outcome_status": outcome.get("outcome_status"),
+            "trust_state": outcome.get("trust_state"),
+            "would_change": outcome.get("would_change") if isinstance(outcome.get("would_change"), list) else [],
+        },
+        "attestation_review_candidate": json_safe(candidate),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+    }
+    for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
         result[flag] = False
     return json_safe(result)
 

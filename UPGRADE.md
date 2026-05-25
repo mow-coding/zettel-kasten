@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.37` | current public pre-release | `wom-kit/docs/releases/v0.2.37.md` |
+| `v0.2.38` | current public pre-release | `wom-kit/docs/releases/v0.2.38.md` |
+| `v0.2.37` | superseded public pre-release | `wom-kit/docs/releases/v0.2.37.md` |
 | `v0.2.36` | superseded public pre-release | `wom-kit/docs/releases/v0.2.36.md` |
 | `v0.2.35` | superseded public pre-release | `wom-kit/docs/releases/v0.2.35.md` |
 | `v0.2.34` | superseded public pre-release | `wom-kit/docs/releases/v0.2.34.md` |
@@ -64,6 +65,23 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.37` To `v0.2.38`
+
+This is a compatible foreign block attestation review candidate planning patch.
+
+What changed:
+
+- added `archive attestation-review-candidate <archive-root> --case-id <safe-case-id> --dry-run --format json`,
+- added optional `--expected-decision`, `--expected-outcome`, `--prospective-attestor`, `--review-scope`, and `--review-note`,
+- added read-only MCP `foreign_block_attestation_review_candidate_plan`,
+- added a safe candidate packet for human review when the recorded decision is `eligible_for_attestation_review`.
+
+No private archive migration is required.
+
+The candidate planner reads only sanitized quarantine case, quarantine receipt, decision record, and decision receipt metadata. It writes nothing and does not trust the foreign block, import it, attest it, mint it, anchor it, delegate it, sign it, accept it, apply it, share it, call providers, or run ZET transport.
+
+`prepare_attestation_review_candidate` is still not an attestation. It only means a human can review a candidate packet before any future explicit attestation workflow exists.
 
 ## From `v0.2.36` To `v0.2.37`
 

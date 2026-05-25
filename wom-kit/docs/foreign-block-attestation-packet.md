@@ -1,6 +1,6 @@
 # Foreign Block Attestation Packet Preview
 
-Status: v0.2.34 baseline
+Status: v0.2.38 compatible baseline
 
 ## Principle
 
@@ -89,6 +89,14 @@ archive quarantine-decision <archive-root> --case-id case-review-001 --dry-run -
 
 The preview proposes a candidate future decision path only. It records no decision and still does not create trust, import, attestation, receipt writes, mint outputs, anchors, delegation, signatures, or acceptance.
 
+v0.2.38 adds a later read-only candidate planner after an approved local decision has been recorded as `eligible_for_attestation_review`:
+
+```bash
+archive attestation-review-candidate <archive-root> --case-id case-review-001 --dry-run --format json
+```
+
+That candidate plan is not an attestation. It re-reads the sanitized quarantine case, quarantine receipt, decision record, and decision receipt, then prepares safe human-review metadata only.
+
 ## Safety Checks
 
 The command blocks if the trust report:
@@ -110,9 +118,10 @@ The MCP tool is read-only and dry-run only. It accepts a structured trust report
 
 ## Non-Goals
 
-v0.2.34 does not implement:
+v0.2.38 does not implement:
 
 - quarantine decision apply or write,
+- attestation review candidate apply or write,
 - real trust/apply/import,
 - attestation writes,
 - foreign attestation writes,

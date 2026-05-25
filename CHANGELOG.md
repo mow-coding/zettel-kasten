@@ -4,6 +4,25 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.38 - 2026-05-25
+
+Foreign block attestation review candidate plan patch.
+
+Added:
+
+- `archive attestation-review-candidate <archive-root> --case-id <safe-case-id> --dry-run --format json`,
+- optional `--expected-decision`, `--expected-outcome`, `--prospective-attestor`, `--review-scope`, and `--review-note`,
+- read-only MCP `foreign_block_attestation_review_candidate_plan`,
+- a human-review candidate object for cases whose recorded decision is `eligible_for_attestation_review` and whose planned outcome is `prepare_attestation_review_candidate`.
+
+Compatibility:
+
+- no private archive migration is required,
+- candidate planning writes nothing and never reads the original foreign artifact, source payloads, objet bodies, or provider URLs,
+- all candidates remain `untrusted_foreign`, `planned_not_recorded`, and `not_created`,
+- hashes in existing sanitized records are retained only as commitments or claims, not proof of authenticity,
+- MCP remains read-only and exposes no candidate apply/write/accept/trust/import/attest/sign/mint/full-auto tool.
+
 ## v0.2.37 - 2026-05-25
 
 Foreign block decision outcome plan patch.

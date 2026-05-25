@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Decision Write
 
-Status: v0.2.37 compatible baseline
+Status: v0.2.38 compatible baseline
 
 ## Principle
 
@@ -97,11 +97,22 @@ archive quarantine-decision-outcome <archive-root> --case-id case-review-001 --d
 
 The planner returns `planned_not_applied` and never creates trust, imports, attestations, mint receipts, anchors, delegation, signing, acceptance, provider sync, or ZET transport.
 
+## Attestation Review Candidate Plan
+
+v0.2.38 adds a read-only candidate planner for recorded `eligible_for_attestation_review` decisions:
+
+```bash
+archive attestation-review-candidate <archive-root> --case-id case-review-001 --dry-run --format json
+```
+
+The candidate plan returns `planned_not_recorded` and never creates trust, imports, attestations, signatures, mint receipts, anchors, delegation, acceptance, provider sync, or ZET transport.
+
 ## Non-Goals
 
-v0.2.37 does not implement:
+v0.2.38 does not implement:
 
 - quarantine decision acceptance,
+- attestation review candidate acceptance,
 - quarantine decision trust or apply,
 - foreign block import,
 - foreign block trust,

@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.37` | current public pre-release | `wom-kit/docs/releases/v0.2.37.md` |
+| `v0.2.38` | current public pre-release | `wom-kit/docs/releases/v0.2.38.md` |
+| `v0.2.37` | superseded public pre-release | `wom-kit/docs/releases/v0.2.37.md` |
 | `v0.2.36` | superseded public pre-release | `wom-kit/docs/releases/v0.2.36.md` |
 | `v0.2.35` | superseded public pre-release | `wom-kit/docs/releases/v0.2.35.md` |
 | `v0.2.34` | superseded public pre-release | `wom-kit/docs/releases/v0.2.34.md` |
@@ -64,6 +65,21 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.37` To `v0.2.38`
+
+This is a compatible foreign block attestation review candidate planning patch.
+
+Changed:
+
+- added `archive attestation-review-candidate <archive-root> --case-id <safe-case-id> --dry-run --format json`,
+- added optional `--expected-decision`, `--expected-outcome`, `--prospective-attestor`, `--review-scope`, and `--review-note`,
+- added read-only MCP `foreign_block_attestation_review_candidate_plan`,
+- added a safe candidate packet for human review when the recorded decision is `eligible_for_attestation_review`.
+
+No private archive migration is required.
+
+The planner writes nothing. It does not trust, import, attest, mint, anchor, delegate, sign, accept, apply, share, call providers, or run ZET transport.
 
 ## From `v0.2.36` To `v0.2.37`
 

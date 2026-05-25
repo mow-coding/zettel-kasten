@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Decision Review Index
 
-Status: v0.2.37 compatible baseline
+Status: v0.2.38 compatible baseline
 
 ## Principle
 
@@ -88,6 +88,14 @@ archive quarantine-decision-outcome <archive-root> --case-id case-review-001 --d
 
 The planner validates the same current state more strictly for one case. Missing decision receipts or original quarantine receipts block the plan. The output stays `planned_not_applied` and `untrusted_foreign`.
 
+v0.2.38 adds the next read-only candidate planner only for `eligible_for_attestation_review` decisions:
+
+```bash
+archive attestation-review-candidate <archive-root> --case-id case-review-001 --dry-run --format json
+```
+
+That candidate plan still writes nothing and creates no trust, signature, or attestation.
+
 ## MCP
 
 MCP exposes only:
@@ -102,10 +110,11 @@ MCP does not expose quarantine decision review apply, write, accept, import, tru
 
 ## Non-Goals
 
-v0.2.37 does not implement:
+v0.2.38 does not implement:
 
 - quarantine decision acceptance,
 - quarantine decision outcome acceptance or apply,
+- attestation review candidate acceptance or apply,
 - quarantine decision trust or apply,
 - foreign block import,
 - foreign block trust,
