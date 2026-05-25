@@ -43,6 +43,8 @@ Commands:
           Plan the next safe non-mutating path for one recorded quarantine decision.
   attestation-review-candidate
           Plan a human attestation review candidate from an eligible quarantine decision.
+  record-attestation-review-candidate
+          Preview or approve recording an untrusted attestation review candidate.
   init    Create a new archive from a built-in template.
   index   Build a generated local SQLite search index.
   parcel Create a portable parcel from a view. Alias: pack.
@@ -2059,6 +2061,48 @@ def command_attestation_review_candidate(args: argparse.Namespace) -> int:
             print("Next safe actions:")
             for action in candidate["next_safe_actions"]:
                 print(f"- {action}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok") else 1
+
+
+def command_record_attestation_review_candidate(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.record_attestation_review_candidate(
+            Path(args.archive_root),
+            candidate_plan_path=args.candidate_plan,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+            expected_case_id=args.expected_case_id,
+            expected_review_scope=args.expected_review_scope,
+            expected_attestor=args.expected_attestor,
+            review_note=args.review_note,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Foreign block attestation review candidate record: {result.get('candidate_status') or '-'}")
+        print(f"Trust state: {result.get('trust_state') or '-'}")
+        print(f"Attestation status: {result.get('attestation_status') or '-'}")
+        if result.get("proposed_paths"):
+            print("Proposed paths:")
+            for key, value in result["proposed_paths"].items():
+                print(f"- {key}: {value}")
+        if result.get("files_written"):
+            print("Files written:")
+            for value in result["files_written"]:
+                print(f"- {value}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -4130,6 +4174,30 @@ def build_parser() -> argparse.ArgumentParser:
     attestation_review_candidate.add_argument("--review-note", help="Optional short non-secret operator note. Only summary metadata is returned.")
     attestation_review_candidate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     attestation_review_candidate.set_defaults(func=command_attestation_review_candidate)
+
+    record_attestation_review_candidate = subcommands.add_parser(
+        "record-attestation-review-candidate",
+        help="Preview or approve recording an untrusted foreign block attestation review candidate.",
+    )
+    record_attestation_review_candidate.add_argument("archive_root", help="Archive root used for path safety and local context.")
+    record_attestation_review_candidate.add_argument(
+        "--candidate-plan",
+        required=True,
+        help="JSON file from attestation-review-candidate --dry-run --format json.",
+    )
+    record_attestation_review_candidate.add_argument("--dry-run", action="store_true", help="Preview the candidate record write without writing files.")
+    record_attestation_review_candidate.add_argument("--approve", action="store_true", help="Approve writing the local untrusted candidate record.")
+    record_attestation_review_candidate.add_argument("--reviewed-by", help="Safe actor id approving the candidate record.")
+    record_attestation_review_candidate.add_argument("--expected-case-id", help="Optional safe case id expected from the candidate plan.")
+    record_attestation_review_candidate.add_argument(
+        "--expected-review-scope",
+        choices=sorted(archive_services.FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES),
+        help="Optional review scope expected from the candidate plan.",
+    )
+    record_attestation_review_candidate.add_argument("--expected-attestor", help="Optional safe prospective attestor expected from the candidate plan.")
+    record_attestation_review_candidate.add_argument("--review-note", help="Optional short non-secret operator note. Only summary metadata is stored.")
+    record_attestation_review_candidate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    record_attestation_review_candidate.set_defaults(func=command_record_attestation_review_candidate)
 
     create_draft = subcommands.add_parser("create-draft", help="Create a draft zettel in inbox/.")
     create_draft.add_argument("archive_root", help="Archive root to write to.")

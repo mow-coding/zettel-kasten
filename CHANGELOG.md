@@ -4,6 +4,25 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.39 - 2026-05-25
+
+Foreign block attestation review candidate write approval patch.
+
+Added:
+
+- `archive record-attestation-review-candidate <archive-root> --candidate-plan <json-file> --dry-run --format json`,
+- CLI-only `--approve --reviewed-by <actor-id>` to record an untrusted attestation review candidate,
+- optional replay guards for expected case id, review scope, and prospective attestor,
+- read-only MCP `record_attestation_review_candidate_check`.
+
+Compatibility:
+
+- no private archive migration is required,
+- dry-run writes nothing and approve writes exactly one candidate record plus one receipt,
+- approved records stay `untrusted_foreign`, `recorded_untrusted_candidate`, and `not_created`,
+- recording a candidate does not create trust, import, attestation, signatures, minting, sharing, provider calls, ZET transport, or acceptance,
+- MCP remains read-only and exposes no candidate approve/write/apply/trust/import/attest/sign/mint/full-auto tool.
+
 ## v0.2.38 - 2026-05-25
 
 Foreign block attestation review candidate plan patch.

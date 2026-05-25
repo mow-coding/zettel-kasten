@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.38` | current public pre-release | `wom-kit/docs/releases/v0.2.38.md` |
+| `v0.2.39` | current public pre-release | `wom-kit/docs/releases/v0.2.39.md` |
+| `v0.2.38` | superseded public pre-release | `wom-kit/docs/releases/v0.2.38.md` |
 | `v0.2.37` | superseded public pre-release | `wom-kit/docs/releases/v0.2.37.md` |
 | `v0.2.36` | superseded public pre-release | `wom-kit/docs/releases/v0.2.36.md` |
 | `v0.2.35` | superseded public pre-release | `wom-kit/docs/releases/v0.2.35.md` |
@@ -65,6 +66,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.38` To `v0.2.39`
+
+This is a compatible foreign block attestation review candidate write approval patch.
+
+What changed:
+
+- added `archive record-attestation-review-candidate <archive-root> --candidate-plan <json-file> --dry-run --format json`,
+- added CLI-only `--approve --reviewed-by <actor-id>` for recording an untrusted candidate record and receipt,
+- added optional `--expected-case-id`, `--expected-review-scope`, `--expected-attestor`, and `--review-note`,
+- added read-only MCP `record_attestation_review_candidate_check`.
+
+No private archive migration is required.
+
+Dry-run writes nothing. Approved CLI mode writes exactly two archive-relative files: one candidate record and one receipt. The candidate remains untrusted and does not create an attestation, signature, import, mint, share, provider call, ZET transport, or acceptance.
 
 ## From `v0.2.37` To `v0.2.38`
 

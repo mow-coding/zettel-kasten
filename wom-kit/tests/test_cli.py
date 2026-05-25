@@ -2991,6 +2991,43 @@ class ArchiveCliTests(unittest.TestCase):
         result = json.loads(output)
         return result, result["files_written"]
 
+    def write_foreign_block_attestation_review_candidate_plan(
+        self,
+        archive_root: Path,
+        case_id: str = "case-review-001",
+        review_scope: str = "full_human_review",
+        prospective_attestor: str = "person:attestor",
+    ) -> tuple[Path, dict]:
+        self.write_foreign_block_quarantine_decision_record(
+            archive_root,
+            "eligible_for_attestation_review",
+            case_id,
+        )
+        args = [
+            "attestation-review-candidate",
+            str(archive_root),
+            "--case-id",
+            case_id,
+            "--expected-decision",
+            "eligible_for_attestation_review",
+            "--expected-outcome",
+            "prepare_attestation_review_candidate",
+            "--review-scope",
+            review_scope,
+            "--dry-run",
+            "--format",
+            "json",
+        ]
+        if prospective_attestor:
+            args.extend(["--prospective-attestor", prospective_attestor])
+        code, output = self.run_cli(args)
+        self.assertEqual(code, 0, output)
+        plan = json.loads(output)
+        plan_path = archive_root / "workbench" / f"foreign-block-attestation-review-candidate-{case_id}.json"
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_path.write_text(output, encoding="utf-8")
+        return plan_path, plan
+
     def test_foreign_block_json_artifact_is_untrusted_read_only_preview(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -6511,6 +6548,409 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn("private review note body should not appear", output)
             self.assertNotIn("This body is the only zet text", output)
             self.assertNotIn("authenticity_verified", output)
+
+    def test_record_attestation_review_candidate_dry_run_writes_nothing_and_proposes_two_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _plan = self.write_foreign_block_attestation_review_candidate_plan(archive_root)
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            code, output = self.run_cli(
+                [
+                    "record-attestation-review-candidate",
+                    str(archive_root),
+                    "--candidate-plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--dry-run",
+                    "--expected-case-id",
+                    "case-review-001",
+                    "--expected-review-scope",
+                    "full_human_review",
+                    "--expected-attestor",
+                    "person:attestor",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(before, after)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "record_attestation_review_candidate")
+            self.assertEqual(result["candidate_status"], "not_recorded")
+            self.assertEqual(result["attestation_status"], "not_created")
+            self.assertEqual(result["trust_state"], "untrusted_foreign")
+            self.assertEqual(
+                result["would_change"],
+                [
+                    "quarantine/foreign-blocks/case-review-001/attestation-review-candidate.json",
+                    "receipts/quarantine/case-review-001.foreign-block-attestation-review-candidate.json",
+                ],
+            )
+            self.assertFalse(result["foreign_block_trusted"])
+            self.assertFalse(result["attestation_created"])
+            self.assertFalse(result["signature_created"])
+            self.assertEqual(result["files_written"], [])
+
+    def test_record_attestation_review_candidate_approve_writes_two_untrusted_files_and_doctor_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _plan = self.write_foreign_block_attestation_review_candidate_plan(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "record-attestation-review-candidate",
+                    str(archive_root),
+                    "--candidate-plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--review-note",
+                    "safe note that must not appear",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["candidate_status"], "recorded_untrusted_candidate")
+            self.assertEqual(result["attestation_status"], "not_created")
+            self.assertEqual(len(result["files_written"]), 2)
+            candidate_path = archive_root / result["files_written"][0]
+            receipt_path = archive_root / result["files_written"][1]
+            self.assertTrue(candidate_path.is_file())
+            self.assertTrue(receipt_path.is_file())
+            candidate_doc = json.loads(candidate_path.read_text(encoding="utf-8"))
+            receipt_doc = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(candidate_doc["lifecycle_action"], "foreign_block_attestation_review_candidate_record")
+            self.assertEqual(receipt_doc["receipt_kind"], "foreign_block_attestation_review_candidate")
+            self.assertEqual(candidate_doc["candidate_status"], "recorded_untrusted_candidate")
+            self.assertEqual(receipt_doc["files_written"], result["files_written"])
+            self.assertRegex(candidate_doc["reviewed_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+            self.assertFalse(candidate_doc["foreign_block_trusted"])
+            self.assertFalse(candidate_doc["attestation_created"])
+            self.assertFalse(candidate_doc["signature_created"])
+            self.assertFalse(receipt_doc["trust_granted"])
+            self.assertTrue(receipt_doc["no_original_foreign_body_text_copied"])
+            self.assertNotIn("safe note that must not appear", candidate_path.read_text(encoding="utf-8"))
+            self.assertNotIn("safe note that must not appear", receipt_path.read_text(encoding="utf-8"))
+            self.assertNotIn("This body is the only zet text", output)
+
+            (archive_root / "inbox" / "zet_20260525_block_header_fixture.md").unlink(missing_ok=True)
+            (archive_root / "objects" / "sample" / "block-fixture-source.txt").unlink(missing_ok=True)
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_record_attestation_review_candidate_modes_and_reviewer_are_required(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _plan = self.write_foreign_block_attestation_review_candidate_plan(archive_root)
+            common = [
+                "record-attestation-review-candidate",
+                str(archive_root),
+                "--candidate-plan",
+                archive_cli.archive_relative_path(plan_path, archive_root),
+                "--format",
+                "json",
+            ]
+            cases = [
+                common,
+                common + ["--dry-run", "--approve", "--reviewed-by", "person:reviewer"],
+                common + ["--approve"],
+                common + ["--approve", "--reviewed-by", "person/UNSAFE_REVIEWER"],
+            ]
+            for args in cases:
+                with self.subTest(args=args):
+                    code, output = self.run_cli(args)
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["candidate_status"], "not_recorded")
+                    self.assertEqual(result["attestation_status"], "not_created")
+                    self.assertEqual(result["would_change"], [])
+                    self.assertNotIn("UNSAFE_REVIEWER", output)
+                    self.assertNotIn("Traceback", output)
+
+    def test_record_attestation_review_candidate_unsafe_reviewed_by_blocks_without_echo_or_write(self) -> None:
+        unsafe_values = [
+            "s3" + "://bucket.invalid/private-reviewer",
+            "C:" + "\\private\\reviewer",
+            "ghp_" + "A" * 24,
+        ]
+        for unsafe_value in unsafe_values:
+            with self.subTest(unsafe_value=unsafe_value), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                plan_path, _plan = self.write_foreign_block_attestation_review_candidate_plan(archive_root)
+
+                code, output = self.run_cli(
+                    [
+                        "record-attestation-review-candidate",
+                        str(archive_root),
+                        "--candidate-plan",
+                        archive_cli.archive_relative_path(plan_path, archive_root),
+                        "--approve",
+                        "--reviewed-by",
+                        unsafe_value,
+                        "--format",
+                        "json",
+                    ]
+                )
+
+                result = json.loads(output)
+                self.assertEqual(code, 1, output)
+                self.assertFalse(result["ok"])
+                self.assertTrue(result["blockers"])
+                self.assertEqual(result["candidate_status"], "not_recorded")
+                self.assertEqual(result["attestation_status"], "not_created")
+                self.assertFalse(result["foreign_block_imported"])
+                self.assertFalse(result["foreign_block_trusted"])
+                self.assertFalse(result["attestation_created"])
+                self.assertFalse(result["signature_created"])
+                self.assertFalse(result["provider_api_called"])
+                self.assertEqual(result["would_change"], [])
+                self.assertEqual(result["files_written"], [])
+                self.assertFalse((archive_root / "quarantine/foreign-blocks/case-review-001/attestation-review-candidate.json").exists())
+                self.assertFalse((archive_root / "receipts/quarantine/case-review-001.foreign-block-attestation-review-candidate.json").exists())
+                self.assertNotIn(unsafe_value, output)
+                self.assertNotIn("bucket.invalid", output)
+                self.assertNotIn("private-reviewer", output)
+                self.assertNotIn("ghp_", output)
+
+    def test_record_attestation_review_candidate_unsafe_review_note_blocks_without_echo_or_write(self) -> None:
+        unsafe_note = "operator checked " + "s3" + "://bucket.invalid/private-note.txt with token " + "ghp_" + "B" * 24
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _plan = self.write_foreign_block_attestation_review_candidate_plan(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "record-attestation-review-candidate",
+                    str(archive_root),
+                    "--candidate-plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--review-note",
+                    unsafe_note,
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(result["blockers"])
+            self.assertEqual(result["candidate_status"], "not_recorded")
+            self.assertEqual(result["attestation_status"], "not_created")
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(result["files_written"], [])
+            self.assertFalse((archive_root / "quarantine/foreign-blocks/case-review-001/attestation-review-candidate.json").exists())
+            self.assertFalse((archive_root / "receipts/quarantine/case-review-001.foreign-block-attestation-review-candidate.json").exists())
+            self.assertNotIn(unsafe_note, output)
+            self.assertNotIn("bucket.invalid", output)
+            self.assertNotIn("private-note", output)
+            self.assertNotIn("ghp_", output)
+
+    def test_record_attestation_review_candidate_expected_mismatches_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _plan = self.write_foreign_block_attestation_review_candidate_plan(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "record-attestation-review-candidate",
+                    str(archive_root),
+                    "--candidate-plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--dry-run",
+                    "--expected-case-id",
+                    "different-case",
+                    "--expected-review-scope",
+                    "identity",
+                    "--expected-attestor",
+                    "person:other",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            blockers = " ".join(result["blockers"])
+            self.assertIn("expected_case_id", blockers)
+            self.assertIn("expected_review_scope", blockers)
+            self.assertIn("expected_attestor", blockers)
+
+    def test_record_attestation_review_candidate_rejects_blocked_null_and_tampered_plans(self) -> None:
+        mutations = [
+            ("ok", False, "ok"),
+            ("dry_run", False, "dry_run"),
+            ("trust_state", "trusted", "trust_state"),
+            ("candidate_status", "recorded_untrusted_candidate", "candidate_status"),
+            ("attestation_status", "created", "attestation_status"),
+            ("would_change", ["quarantine/unsafe.json"], "would_change"),
+            ("blockers", ["already blocked"], "blockers"),
+            ("attestation_review_candidate", None, "attestation_review_candidate"),
+            ("signature_created", True, "signature_created"),
+            ("foreign_block_trusted", True, "foreign_block_trusted"),
+        ]
+        for key, value, expected in mutations:
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                plan_path, plan = self.write_foreign_block_attestation_review_candidate_plan(archive_root)
+                plan[key] = value
+                plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+                code, output = self.run_cli(
+                    [
+                        "record-attestation-review-candidate",
+                        str(archive_root),
+                        "--candidate-plan",
+                        archive_cli.archive_relative_path(plan_path, archive_root),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+                result = json.loads(output)
+                self.assertEqual(code, 1, output)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["candidate_status"], "not_recorded")
+                self.assertIn(expected, " ".join(result["blockers"]))
+                self.assertNotIn("Traceback", output)
+
+    def test_record_attestation_review_candidate_tampered_advisory_lists_block(self) -> None:
+        mutations = [
+            ("disallowed_actions", ["trust_foreign_block", "create_attestation", "write_attestation"], "disallowed actions"),
+            ("next_safe_actions", ["present the candidate packet for human review"], "next safe actions"),
+        ]
+        for key, value, expected in mutations:
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                plan_path, plan = self.write_foreign_block_attestation_review_candidate_plan(archive_root)
+                plan["attestation_review_candidate"][key] = value
+                plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+                code, output = self.run_cli(
+                    [
+                        "record-attestation-review-candidate",
+                        str(archive_root),
+                        "--candidate-plan",
+                        archive_cli.archive_relative_path(plan_path, archive_root),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+                result = json.loads(output)
+                self.assertEqual(code, 1, output)
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["candidate_status"], "not_recorded")
+                self.assertIn(expected, " ".join(result["blockers"]))
+                self.assertFalse((archive_root / "quarantine/foreign-blocks/case-review-001/attestation-review-candidate.json").exists())
+                self.assertFalse((archive_root / "receipts/quarantine/case-review-001.foreign-block-attestation-review-candidate.json").exists())
+
+    def test_record_attestation_review_candidate_stale_state_and_overwrite_block(self) -> None:
+        stale_cases = [
+            "quarantine/foreign-blocks/case-review-001/quarantine-case.json",
+            "receipts/quarantine/case-review-001.foreign-block-quarantine.json",
+            "quarantine/foreign-blocks/case-review-001/quarantine-decision.json",
+            "receipts/quarantine/case-review-001.foreign-block-quarantine-decision.json",
+        ]
+        for stale_path in stale_cases:
+            with self.subTest(stale_path=stale_path), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                plan_path, _plan = self.write_foreign_block_attestation_review_candidate_plan(archive_root)
+                (archive_root / stale_path).unlink()
+
+                code, output = self.run_cli(
+                    [
+                        "record-attestation-review-candidate",
+                        str(archive_root),
+                        "--candidate-plan",
+                        archive_cli.archive_relative_path(plan_path, archive_root),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+                result = json.loads(output)
+                self.assertEqual(code, 1, output)
+                self.assertFalse(result["ok"])
+                self.assertIn("missing", " ".join(result["blockers"]).lower())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _plan = self.write_foreign_block_attestation_review_candidate_plan(archive_root)
+            first_code, first_output = self.run_cli(
+                [
+                    "record-attestation-review-candidate",
+                    str(archive_root),
+                    "--candidate-plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(first_code, 0, first_output)
+
+            second_code, second_output = self.run_cli(
+                [
+                    "record-attestation-review-candidate",
+                    str(archive_root),
+                    "--candidate-plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(second_output)
+            self.assertEqual(second_code, 1, second_output)
+            self.assertIn("already exists", " ".join(result["blockers"]))
+
+    def test_record_attestation_review_candidate_rolls_back_partial_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            _plan_path, plan = self.write_foreign_block_attestation_review_candidate_plan(archive_root)
+            original_write = archive_services.write_json_new_file
+
+            def fail_receipt_write(path: Path, payload: dict) -> None:
+                if path.name == "attestation-review-candidate.json":
+                    original_write(path, payload)
+                    return
+                raise OSError("simulated receipt failure")
+
+            with patch.object(archive_services, "write_json_new_file", side_effect=fail_receipt_write):
+                result = archive_services.record_attestation_review_candidate(
+                    archive_root,
+                    candidate_plan=plan,
+                    approve=True,
+                    reviewed_by="person:reviewer",
+                )
+
+            self.assertFalse(result["ok"])
+            self.assertIn("rolled back", " ".join(result["blockers"]))
+            self.assertFalse((archive_root / "quarantine/foreign-blocks/case-review-001/attestation-review-candidate.json").exists())
+            self.assertFalse((archive_root / "receipts/quarantine/case-review-001.foreign-block-attestation-review-candidate.json").exists())
 
     def test_runtime_context_no_redact_local_paths_includes_local_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

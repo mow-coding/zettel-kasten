@@ -63,7 +63,7 @@ class BootstrapTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.strip(), "0.2.38")
+        self.assertEqual(result.stdout.strip(), "0.2.39")
         self.assertEqual(result.stdout.strip(), read_package_version())
 
     def test_windows_setup_dry_run_changes_nothing(self) -> None:

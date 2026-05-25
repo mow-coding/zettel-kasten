@@ -579,6 +579,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("foreign_block_quarantine_decision_review_index", tool_names)
             self.assertIn("foreign_block_decision_outcome_plan", tool_names)
             self.assertIn("foreign_block_attestation_review_candidate_plan", tool_names)
+            self.assertIn("record_attestation_review_candidate_check", tool_names)
             self.assertIn("archive_index", tool_names)
             self.assertIn("archive_search", tool_names)
             self.assertIn("promotion_check", tool_names)
@@ -631,6 +632,9 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("foreign_block_decision_outcome_accept", tool_names)
             self.assertNotIn("foreign_block_attestation_review_candidate_apply", tool_names)
             self.assertNotIn("foreign_block_attestation_review_candidate_write", tool_names)
+            self.assertNotIn("record_attestation_review_candidate_apply", tool_names)
+            self.assertNotIn("record_attestation_review_candidate_write", tool_names)
+            self.assertNotIn("record_attestation_review_candidate_approve", tool_names)
             self.assertNotIn("create_foreign_block_attestation", tool_names)
             self.assertNotIn("sign_foreign_block", tool_names)
             self.assertNotIn("accept_foreign_block", tool_names)
@@ -3062,6 +3066,112 @@ class McpServerTests(unittest.TestCase):
                                         "case_id": "mcp-case-001",
                                         "dry_run": dry_run_value,
                                     },
+                                },
+                            },
+                        )
+                        self.assertTrue(response["result"]["isError"])
+        finally:
+            self.stop_server(process)
+
+    def test_record_attestation_review_candidate_check_writes_nothing(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                self.write_mcp_quarantine_decision_fixture(
+                    archive_root,
+                    "mcp-case-001",
+                    "eligible_for_attestation_review",
+                )
+                plan = archive_services.foreign_block_attestation_review_candidate_plan(
+                    archive_root,
+                    case_id="mcp-case-001",
+                    dry_run=True,
+                    expected_decision="eligible_for_attestation_review",
+                    expected_outcome="prepare_attestation_review_candidate",
+                    prospective_attestor="person:mcp-attestor",
+                    review_scope="identity",
+                )
+                self.assertTrue(plan["ok"])
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "record_attestation_review_candidate_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "candidate_plan": plan,
+                                "expected_case_id": "mcp-case-001",
+                                "expected_review_scope": "identity",
+                                "expected_attestor": "person:mcp-attestor",
+                                "review_note": "safe MCP note",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "record_attestation_review_candidate")
+                self.assertEqual(structured["candidate_status"], "not_recorded")
+                self.assertEqual(structured["attestation_status"], "not_created")
+                self.assertEqual(len(structured["would_change"]), 2)
+                self.assertFalse(structured["foreign_block_trusted"])
+                self.assertFalse(structured["attestation_created"])
+                self.assertFalse(structured["signature_created"])
+                self.assertNotIn("safe MCP note", json.dumps(structured))
+        finally:
+            self.stop_server(process)
+
+    def test_record_attestation_review_candidate_check_rejects_non_dry_run_and_approve(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                self.write_mcp_quarantine_decision_fixture(
+                    archive_root,
+                    "mcp-case-001",
+                    "eligible_for_attestation_review",
+                )
+                plan = archive_services.foreign_block_attestation_review_candidate_plan(
+                    archive_root,
+                    case_id="mcp-case-001",
+                    dry_run=True,
+                    expected_decision="eligible_for_attestation_review",
+                    expected_outcome="prepare_attestation_review_candidate",
+                )
+                self.assertTrue(plan["ok"])
+                for index, arguments in enumerate(
+                    [
+                        {"dry_run": False},
+                        {"dry_run": "yes"},
+                        {"dry_run": 1},
+                        {"dry_run": True, "approve": True},
+                    ],
+                    start=1,
+                ):
+                    payload = {
+                        "archive_root": str(archive_root),
+                        "candidate_plan": plan,
+                    }
+                    payload.update(arguments)
+                    with self.subTest(arguments=arguments):
+                        response = self.send(
+                            process,
+                            {
+                                "jsonrpc": "2.0",
+                                "id": index,
+                                "method": "tools/call",
+                                "params": {
+                                    "name": "record_attestation_review_candidate_check",
+                                    "arguments": payload,
                                 },
                             },
                         )

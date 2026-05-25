@@ -82,6 +82,12 @@ quarantine-decision-outcome --dry-run
 attestation-review-candidate --dry-run
   Plan a human attestation review candidate from an eligible recorded quarantine decision. This writes nothing and never trusts, imports, mints, attests, signs, shares, calls providers, or runs ZET transport.
 
+record-attestation-review-candidate --dry-run
+  Preview the two local files that an approved attestation review candidate record would create. This writes nothing and keeps the foreign block untrusted.
+
+record-attestation-review-candidate --approve --reviewed-by
+  Write only a sanitized untrusted attestation review candidate JSON and a matching receipt after re-validating the candidate plan, current case, receipts, and recorded decision. This never trusts, imports, mints, attests, signs, accepts, shares, calls providers, or runs ZET transport.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 

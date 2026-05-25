@@ -1,6 +1,6 @@
 # Foreign Block Attestation Review Candidate Plan
 
-Status: v0.2.38 baseline
+Status: v0.2.39 compatible baseline
 
 ## Principle
 
@@ -21,6 +21,8 @@ what safe candidate packet could a human review next?
 ```
 
 The command re-reads the current quarantine case, original quarantine receipt, recorded quarantine decision, and decision receipt before returning a plan.
+
+v0.2.39 adds a separate CLI-only record step after this planner. The plan remains read-only; recording a candidate is still not trust and still not an attestation.
 
 ## CLI
 
@@ -69,9 +71,11 @@ The MCP tool is read-only and has a strict `dry_run is True` guard.
 
 MCP does not expose candidate apply, write, accept, import, trust, attest, sign, mint, auto-accept, full-auto, provider sync, ZET transport, or receipt-write tools.
 
+v0.2.39 adds MCP `record_attestation_review_candidate_check` as a read-only dry-run check for the CLI-only record step. MCP still cannot approve or write the candidate.
+
 ## Non-Goals
 
-v0.2.38 does not implement:
+v0.2.39 does not implement:
 
 - attestation review candidate acceptance,
 - real trust/apply/import,

@@ -18,7 +18,7 @@ If the user asks about wallet-like identity, signing authority, capability autho
 archive profile-wallet <archive-root> --profile <profile-id-or-label> --dry-run --format json
 ```
 
-Treat the result as concept/readiness context only. v0.2.38 does not generate private keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
+Treat the result as concept/readiness context only. v0.2.39 does not generate private keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
 
 When external text from a source, provider export, foreign zet/block, receipt, or copied document may influence the next action, run:
 
@@ -184,6 +184,15 @@ archive attestation-review-candidate <archive-root> --case-id <safe-id> --dry-ru
 ```
 
 The candidate planner is not an attestation. It returns `candidate_status: planned_not_recorded`, `attestation_status: not_created`, and `trust_state: untrusted_foreign`. MCP may only run `foreign_block_attestation_review_candidate_plan`; it must not expose candidate write/apply/accept/sign/attest tools.
+
+After human/operator approval, record the untrusted candidate through CLI only:
+
+```bash
+archive record-attestation-review-candidate <archive-root> --candidate-plan <json-file> --dry-run --format json
+archive record-attestation-review-candidate <archive-root> --candidate-plan <json-file> --approve --reviewed-by <actor-id> --format json
+```
+
+This writes only an untrusted candidate JSON and matching receipt. It does not trust, import, attest, sign, mint, accept, share, call providers, or run ZET transport. MCP may only run `record_attestation_review_candidate_check`; it must not expose candidate approve/write/apply/accept/sign/attest tools.
 
 ## Read The Result
 

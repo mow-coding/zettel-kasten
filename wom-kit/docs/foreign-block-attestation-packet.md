@@ -1,6 +1,6 @@
 # Foreign Block Attestation Packet Preview
 
-Status: v0.2.38 compatible baseline
+Status: v0.2.39 compatible baseline
 
 ## Principle
 
@@ -97,6 +97,14 @@ archive attestation-review-candidate <archive-root> --case-id case-review-001 --
 
 That candidate plan is not an attestation. It re-reads the sanitized quarantine case, quarantine receipt, decision record, and decision receipt, then prepares safe human-review metadata only.
 
+v0.2.39 adds a separate CLI-only record step for a valid candidate plan:
+
+```bash
+archive record-attestation-review-candidate <archive-root> --candidate-plan <json-file> --dry-run --format json
+```
+
+Approved mode writes only an untrusted candidate record and matching receipt. It still creates no trust, import, attestation, signature, mint, sharing, provider call, or ZET transport.
+
 ## Safety Checks
 
 The command blocks if the trust report:
@@ -118,10 +126,10 @@ The MCP tool is read-only and dry-run only. It accepts a structured trust report
 
 ## Non-Goals
 
-v0.2.38 does not implement:
+v0.2.39 does not implement:
 
-- quarantine decision apply or write,
-- attestation review candidate apply or write,
+- quarantine decision apply,
+- attestation review candidate apply or acceptance,
 - real trust/apply/import,
 - attestation writes,
 - foreign attestation writes,

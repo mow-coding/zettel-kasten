@@ -1,6 +1,6 @@
 # Foreign Block Decision Outcome Plan
 
-Status: v0.2.38 compatible baseline
+Status: v0.2.39 compatible baseline
 
 ## Principle
 
@@ -55,6 +55,14 @@ archive attestation-review-candidate <archive-root> --case-id case-review-001 --
 
 That candidate planner is still not an attestation. It prepares human-review metadata only.
 
+In v0.2.39 a human/operator can record that candidate through a separate CLI-only approval path:
+
+```bash
+archive record-attestation-review-candidate <archive-root> --candidate-plan <json-file> --approve --reviewed-by person:reviewer --format json
+```
+
+That write records only an untrusted candidate and receipt. It still does not create an attestation.
+
 ## Output Boundary
 
 The output keeps:
@@ -82,7 +90,7 @@ MCP does not expose decision outcome apply, write, accept, import, trust, attest
 
 ## Non-Goals
 
-v0.2.38 does not implement:
+v0.2.39 does not implement:
 
 - quarantine decision outcome acceptance,
 - attestation review candidate acceptance,

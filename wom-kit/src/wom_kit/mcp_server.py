@@ -647,6 +647,27 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "record_attestation_review_candidate_check",
+        "description": "Read-only dry-run check for a CLI-only foreign block attestation review candidate record write.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "path": {"type": "string"},
+                "candidate_plan": {"type": "object"},
+                "expected_case_id": {"type": "string"},
+                "expected_review_scope": {
+                    "type": "string",
+                    "enum": sorted(archive_services.FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES),
+                },
+                "expected_attestor": {"type": "string"},
+                "review_note": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "create_draft_zettel",
         "description": "Create an AI draft zettel in inbox/. This does not mint to canonical memory.",
         "inputSchema": {
@@ -985,6 +1006,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_foreign_block_decision_outcome_plan(arguments)
     if name == "foreign_block_attestation_review_candidate_plan":
         return tool_foreign_block_attestation_review_candidate_plan(arguments)
+    if name == "record_attestation_review_candidate_check":
+        return tool_record_attestation_review_candidate_check(arguments)
     if name == "create_draft_zettel":
         return tool_create_draft_zettel(arguments)
     if name == "list_views":
@@ -1683,6 +1706,37 @@ def tool_foreign_block_attestation_review_candidate_plan(arguments: dict[str, An
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"foreign_block_attestation_review_candidate_plan: {state}.", result)
+
+
+def tool_record_attestation_review_candidate_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("record_attestation_review_candidate_check is dry-run only.")
+    if arguments.get("approve") is not None:
+        raise ToolError("record_attestation_review_candidate_check does not approve or write.")
+    candidate_plan = arguments.get("candidate_plan")
+    if candidate_plan is not None and not isinstance(candidate_plan, dict):
+        raise ToolError("candidate_plan must be a structured object.")
+    path = optional_string_arg(arguments, "path")
+    expected_case_id = optional_string_arg(arguments, "expected_case_id")
+    expected_review_scope = optional_string_arg(arguments, "expected_review_scope")
+    expected_attestor = optional_string_arg(arguments, "expected_attestor")
+    review_note = optional_string_arg(arguments, "review_note")
+    result = call_service(
+        archive_services.record_attestation_review_candidate,
+        archive_root,
+        candidate_plan_path=path,
+        candidate_plan=candidate_plan,
+        dry_run=True,
+        approve=False,
+        reviewed_by=None,
+        expected_case_id=expected_case_id,
+        expected_review_scope=expected_review_scope,
+        expected_attestor=expected_attestor,
+        review_note=review_note,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"record_attestation_review_candidate_check: {state}.", result)
 
 
 def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
