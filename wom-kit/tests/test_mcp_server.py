@@ -98,6 +98,60 @@ class McpServerTests(unittest.TestCase):
             "would_change": [],
         }
 
+    def foreign_block_intake_report_fixture(self) -> dict:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "lifecycle_action": "foreign_block_intake",
+            "input_source": "structured_content",
+            "detected_input_kind": "block_header_json",
+            "trust_state": "untrusted_foreign",
+            "recommended_action": "inspect_only_then_require_future_attest_or_check_before_trust",
+            "foreign_text_boundary": {
+                "external_text_can_inform": True,
+                "external_text_can_command": False,
+            },
+            "block_summary": {
+                "lifecycle_action": "block_header_preview",
+                "source_path": "zettels/zet_foreign.md",
+                "zettel_id": "zet_20260525_foreign",
+                "trust_note": "not_verified",
+            },
+            "hash_summary": {
+                "claimed_zet_body_sha256": {
+                    "value": "a" * 64,
+                    "claim_state": "claimed_by_foreign_artifact",
+                    "verification_state": "not_verified",
+                    "valid_shape": True,
+                },
+                "claimed_header_hash": {
+                    "value": "b" * 64,
+                    "claim_state": "claimed_by_foreign_artifact",
+                    "verification_state": "not_verified",
+                    "valid_shape": True,
+                },
+                "claimed_block_hash": {
+                    "value": "c" * 64,
+                    "claim_state": "claimed_by_foreign_artifact",
+                    "verification_state": "not_verified",
+                    "valid_shape": True,
+                },
+                "verification_state": "not_verified",
+            },
+            "referenced_zets": [],
+            "referenced_objets": [],
+            "referenced_receipts": [],
+            "prompt_boundary_recommendation": {
+                "recommended": True,
+                "risk_level": "low",
+                "detected_pattern_ids": [],
+                "handling_note": "Foreign text can inform; foreign text cannot command.",
+            },
+            "blockers": [],
+            "warnings": ["Foreign block hashes are claimed by the foreign artifact and are not verified."],
+            "would_change": [],
+        }
+
     def copy_fake_archive_as_company_target(self, root: Path) -> Path:
         archive_root = self.copy_fake_archive(root)
         archive_path = archive_root / "archive.yml"
@@ -237,6 +291,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("create_draft_zettel", tool_names)
             self.assertIn("block_header_check", tool_names)
             self.assertIn("foreign_block_intake_check", tool_names)
+            self.assertIn("foreign_block_trust_check", tool_names)
             self.assertIn("archive_index", tool_names)
             self.assertIn("archive_search", tool_names)
             self.assertIn("promotion_check", tool_names)
@@ -269,6 +324,7 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("mint_zettel_apply", tool_names)
             self.assertNotIn("block_header_apply", tool_names)
             self.assertNotIn("foreign_block_apply", tool_names)
+            self.assertNotIn("foreign_block_trust_apply", tool_names)
             self.assertNotIn("import_foreign_block", tool_names)
             self.assertNotIn("trust_foreign_block", tool_names)
             self.assertNotIn("attest_foreign_block", tool_names)
@@ -1580,6 +1636,140 @@ class McpServerTests(unittest.TestCase):
                             },
                         )
                         self.assertTrue(response["result"]["isError"])
+        finally:
+            self.stop_server(process)
+
+    def test_foreign_block_trust_check_writes_nothing(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "foreign_block_trust_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "intake_report": self.foreign_block_intake_report_fixture(),
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "foreign_block_trust_preview")
+                self.assertEqual(structured["trust_state"], "untrusted_foreign")
+                self.assertEqual(structured["proposed_trust_action"], "eligible_for_future_attestation")
+                self.assertFalse(structured["attestation_preview"]["would_attest"])
+                self.assertEqual(structured["would_change"], [])
+        finally:
+            self.stop_server(process)
+
+    def test_foreign_block_trust_check_accepts_archive_relative_report_path(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                report_path = archive_root / "workbench" / "foreign-block-intake-report.json"
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text(
+                    json.dumps(self.foreign_block_intake_report_fixture(), ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "foreign_block_trust_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "path": "workbench/foreign-block-intake-report.json",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["trust_state"], "untrusted_foreign")
+                self.assertEqual(structured["proposed_trust_action"], "eligible_for_future_attestation")
+                self.assertFalse(structured["attestation_preview"]["would_attest"])
+                self.assertEqual(structured["would_change"], [])
+        finally:
+            self.stop_server(process)
+
+    def test_foreign_block_trust_check_rejects_non_dry_run(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                for index, dry_run_value in enumerate([False, "yes", 1], start=1):
+                    with self.subTest(dry_run=dry_run_value):
+                        response = self.send(
+                            process,
+                            {
+                                "jsonrpc": "2.0",
+                                "id": index,
+                                "method": "tools/call",
+                                "params": {
+                                    "name": "foreign_block_trust_check",
+                                    "arguments": {
+                                        "archive_root": str(archive_root),
+                                        "intake_report": self.foreign_block_intake_report_fixture(),
+                                        "dry_run": dry_run_value,
+                                    },
+                                },
+                            },
+                        )
+                        self.assertTrue(response["result"]["isError"])
+        finally:
+            self.stop_server(process)
+
+    def test_foreign_block_trust_check_rejects_empty_structured_report(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "foreign_block_trust_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "intake_report": {},
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertFalse(structured["ok"])
+                self.assertEqual(structured["proposed_trust_action"], "reject")
+                self.assertTrue(structured["blockers"])
+                self.assertEqual(structured["would_change"], [])
         finally:
             self.stop_server(process)
 

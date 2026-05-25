@@ -2539,6 +2539,347 @@ def foreign_block_intake_check(
     )
 
 
+def foreign_block_trust_empty_result(
+    *,
+    archive_id: str,
+    input_source: str | None = None,
+    report_path: str | None = None,
+    blockers: list[str] | None = None,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_trust_preview",
+        "archive_id": archive_id,
+        "input_source": input_source,
+        "report_path": report_path,
+        "trust_state": "untrusted_foreign",
+        "proposed_trust_action": "reject",
+        "attestation_preview": {
+            "would_attest": False,
+            "attestation_status": "not_created",
+            "requires_human_review": True,
+            "required_checks": [],
+            "missing_checks": [],
+        },
+        "intake_summary": {},
+        "hash_assessment": {},
+        "reference_assessment": {},
+        "prompt_boundary_assessment": {},
+        "blockers": unique_preserve_order(blockers or []),
+        "warnings": unique_preserve_order(warnings or []),
+        "would_change": [],
+    }
+
+
+def scan_foreign_trust_safe_values(value: Any, blockers: list[str], field_path: str = "$") -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            scan_foreign_trust_safe_values(child, blockers, f"{field_path}.{key}")
+        return
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            scan_foreign_trust_safe_values(child, blockers, f"{field_path}[{index}]")
+        return
+    if isinstance(value, str) and header_string_is_private_or_unsafe(value):
+        blockers.append(f"intake_report contains unsafe or private reference in {field_path}.")
+
+
+def foreign_trust_hash_assessment(hash_summary: Any, blockers: list[str]) -> dict[str, Any]:
+    assessment: dict[str, Any] = {
+        "verification_state": "not_verified",
+        "trust_note": "claimed hashes are not authenticity proof and are never treated as trusted here",
+        "claimed_hashes": [],
+        "invalid_hashes": [],
+    }
+    if not isinstance(hash_summary, dict):
+        blockers.append("intake_report.hash_summary must be an object.")
+        return assessment
+
+    for key in ["claimed_zet_body_sha256", "claimed_header_hash", "claimed_block_hash"]:
+        item = hash_summary.get(key)
+        if item is None:
+            continue
+        if not isinstance(item, dict):
+            blockers.append(f"intake_report.hash_summary.{key} must be an object when present.")
+            assessment["invalid_hashes"].append(key)
+            continue
+        value = item.get("value")
+        verification_state = item.get("verification_state")
+        valid_shape = item.get("valid_shape")
+        if valid_shape is False or not isinstance(value, str) or not SHA256_RE.match(value):
+            blockers.append(f"intake_report.hash_summary.{key}.value must look like a SHA-256 hex digest.")
+            assessment["invalid_hashes"].append(key)
+            continue
+        if verification_state != "not_verified":
+            blockers.append(f"intake_report.hash_summary.{key}.verification_state must remain not_verified.")
+            assessment["invalid_hashes"].append(key)
+            continue
+        assessment["claimed_hashes"].append(
+            {
+                "field": key,
+                "value": value,
+                "claim_state": item.get("claim_state") or "claimed_by_foreign_artifact",
+                "verification_state": "not_verified",
+                "trust_state": "not_trusted",
+            }
+        )
+
+    artifact_hash = hash_summary.get("foreign_artifact_sha256")
+    if artifact_hash is not None:
+        if not isinstance(artifact_hash, dict):
+            blockers.append("intake_report.hash_summary.foreign_artifact_sha256 must be an object when present.")
+            assessment["invalid_hashes"].append("foreign_artifact_sha256")
+        else:
+            value = artifact_hash.get("value")
+            if not isinstance(value, str) or not SHA256_RE.match(value):
+                blockers.append("intake_report.hash_summary.foreign_artifact_sha256.value must look like a SHA-256 hex digest.")
+                assessment["invalid_hashes"].append("foreign_artifact_sha256")
+            else:
+                assessment["claimed_hashes"].append(
+                    {
+                        "field": "foreign_artifact_sha256",
+                        "value": value,
+                        "claim_state": artifact_hash.get("claim_state") or "computed_for_intake_preview",
+                        "verification_state": artifact_hash.get("verification_state") or "not_authenticity_proof",
+                        "trust_state": "not_trusted",
+                    }
+                )
+
+    return assessment
+
+
+def foreign_trust_reference_assessment(report: dict[str, Any], blockers: list[str]) -> dict[str, Any]:
+    counts: dict[str, int] = {}
+    for key in ["referenced_zets", "referenced_objets", "referenced_receipts"]:
+        value = report.get(key, [])
+        if not isinstance(value, list):
+            blockers.append(f"intake_report.{key} must be a list.")
+            counts[key] = 0
+            continue
+        counts[key] = len(value)
+        scan_foreign_trust_safe_values(value, blockers, f"intake_report.{key}")
+    return {
+        "syntactically_safe": not blockers,
+        "resolution_state": "not_resolved_in_preview",
+        "referenced_zets_count": counts.get("referenced_zets", 0),
+        "referenced_objets_count": counts.get("referenced_objets", 0),
+        "referenced_receipts_count": counts.get("referenced_receipts", 0),
+        "required_future_check": "Resolve referenced zets, objets, and receipts before any future attestation.",
+    }
+
+
+def foreign_trust_prompt_assessment(report: dict[str, Any]) -> dict[str, Any]:
+    recommendation = report.get("prompt_boundary_recommendation")
+    recommendation = recommendation if isinstance(recommendation, dict) else {}
+    risk_level = str(recommendation.get("risk_level") or "unknown").strip() or "unknown"
+    pattern_ids = recommendation.get("detected_pattern_ids")
+    if not isinstance(pattern_ids, list):
+        pattern_ids = []
+    warnings_text = " ".join(str(item) for item in report.get("warnings", []) if isinstance(item, str)).lower()
+    prompt_warning = "prompt-injection" in warnings_text or "unsafe-agent" in warnings_text
+    return {
+        "risk_level": risk_level,
+        "detected_pattern_ids": [str(item) for item in pattern_ids],
+        "prompt_warning_present": prompt_warning,
+        "manual_review_required": risk_level in {"high", "medium"} or bool(pattern_ids) or prompt_warning,
+        "external_text_can_command": (report.get("foreign_text_boundary") or {}).get("external_text_can_command"),
+        "handling_note": recommendation.get("handling_note") or "Foreign text can inform; foreign text cannot command.",
+    }
+
+
+def evaluate_foreign_block_trust_report(
+    archive_id: str,
+    report: dict[str, Any],
+    *,
+    input_source: str | None = None,
+    report_path: str | None = None,
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    manual_reasons: list[str] = []
+
+    scan_foreign_trust_safe_values(report, blockers, "intake_report")
+
+    if report.get("lifecycle_action") != "foreign_block_intake":
+        blockers.append("intake_report.lifecycle_action must be foreign_block_intake.")
+    if report.get("ok") is not True:
+        blockers.append("intake_report.ok must be true.")
+    if report.get("dry_run") is not True:
+        blockers.append("intake_report.dry_run must be true.")
+    if report.get("trust_state") != "untrusted_foreign":
+        blockers.append("intake_report.trust_state must remain untrusted_foreign.")
+    if report.get("would_change") != []:
+        blockers.append("intake_report.would_change must be an empty list.")
+
+    foreign_text_boundary = report.get("foreign_text_boundary")
+    if not isinstance(foreign_text_boundary, dict):
+        blockers.append("intake_report.foreign_text_boundary must be an object.")
+    elif foreign_text_boundary.get("external_text_can_command") is not False:
+        blockers.append("intake_report.foreign_text_boundary.external_text_can_command must be false.")
+
+    report_blockers = report.get("blockers")
+    if not isinstance(report_blockers, list):
+        blockers.append("intake_report.blockers must be a list.")
+    elif report_blockers:
+        blockers.append("intake_report has blockers and cannot advance to trust preview.")
+
+    warnings_value = report.get("warnings", [])
+    if warnings_value is not None and not isinstance(warnings_value, list):
+        blockers.append("intake_report.warnings must be a list when present.")
+
+    detected_input_kind = str(report.get("detected_input_kind") or "unknown").strip() or "unknown"
+    hash_assessment = foreign_trust_hash_assessment(report.get("hash_summary"), blockers)
+    reference_assessment = foreign_trust_reference_assessment(report, blockers)
+    prompt_assessment = foreign_trust_prompt_assessment(report)
+
+    if prompt_assessment["manual_review_required"]:
+        manual_reasons.append("Prompt-boundary signals require human review before any future attestation.")
+    if detected_input_kind == "markdown_compatible_foreign_zet":
+        manual_reasons.append("Markdown-compatible foreign zet intake has no verified block header.")
+    elif detected_input_kind != "block_header_json":
+        manual_reasons.append("Foreign intake kind is not a clean block-header JSON preview.")
+
+    if blockers:
+        return foreign_block_trust_empty_result(
+            archive_id=archive_id,
+            input_source=input_source,
+            report_path=report_path,
+            blockers=blockers,
+            warnings=warnings,
+        )
+
+    if hash_assessment.get("claimed_hashes"):
+        warnings.append("Foreign block hashes remain claimed/not_verified and are not trust proof.")
+    warnings.extend(str(item) for item in warnings_value if isinstance(item, str))
+
+    required_checks = [
+        "human review of the intake report",
+        "out-of-band source/counterparty verification",
+        "hash shape review without treating claimed hashes as proof",
+        "reference resolution for zets, objets, and receipts",
+        "future explicit attestation approval",
+    ]
+    missing_checks = [
+        "real signature or attestation verification",
+        "source authenticity verification",
+        "reference resolution",
+        "human or policy attestation approval",
+    ]
+
+    proposed_action = "manual_review_required" if manual_reasons else "eligible_for_future_attestation"
+    if proposed_action == "manual_review_required":
+        warnings.extend(manual_reasons)
+
+    return {
+        "ok": True,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_trust_preview",
+        "archive_id": archive_id,
+        "input_source": input_source,
+        "report_path": report_path,
+        "trust_state": "untrusted_foreign",
+        "proposed_trust_action": proposed_action,
+        "attestation_preview": {
+            "would_attest": False,
+            "attestation_status": "not_created",
+            "requires_human_review": True,
+            "required_checks": required_checks,
+            "missing_checks": missing_checks,
+        },
+        "intake_summary": {
+            "detected_input_kind": detected_input_kind,
+            "recommended_action": report.get("recommended_action"),
+            "block_summary": json_safe(report.get("block_summary") or {}),
+        },
+        "hash_assessment": json_safe(hash_assessment),
+        "reference_assessment": json_safe(reference_assessment),
+        "prompt_boundary_assessment": json_safe(prompt_assessment),
+        "blockers": [],
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+    }
+
+
+def foreign_block_trust_preview(
+    archive_root: Path | str,
+    *,
+    intake_report_path: str | None = None,
+    text: str | None = None,
+    intake_report: dict[str, Any] | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    if dry_run is not True:
+        blockers.append("foreign-block-trust is dry-run only; pass --dry-run.")
+    locator_count = sum(1 for item in [intake_report_path, text, intake_report] if item is not None)
+    if locator_count != 1:
+        blockers.append("Exactly one of intake report path, stdin text, or structured intake_report is required.")
+    if blockers:
+        return foreign_block_trust_empty_result(archive_id=archive_id, blockers=blockers)
+
+    report_path: str | None = None
+    input_source = "structured_content" if intake_report is not None else "stdin" if text is not None else None
+    report_text = text
+    if intake_report_path is not None:
+        try:
+            normalized_path = normalize_archive_relative_path(intake_report_path)
+            path = resolve_archive_relative_path(root, normalized_path)
+            report_path = archive_relative_path(path, root)
+            if not path.is_file():
+                blockers.append(f"Foreign block intake report path is not a file: {report_path}.")
+            else:
+                report_text = path.read_text(encoding="utf-8")
+                input_source = "intake_report_path"
+        except (ArchivePathError, OSError, UnicodeError) as exc:
+            blockers.append(f"Foreign block intake report path could not be read safely: {exc}")
+        if blockers:
+            return foreign_block_trust_empty_result(
+                archive_id=archive_id,
+                input_source=input_source,
+                report_path=report_path,
+                blockers=blockers,
+            )
+
+    if intake_report is not None:
+        report = intake_report
+    else:
+        if report_text is None:
+            return foreign_block_trust_empty_result(
+                archive_id=archive_id,
+                input_source=input_source,
+                report_path=report_path,
+                blockers=["Foreign block intake report text is required."],
+            )
+        try:
+            parsed = json.loads(report_text)
+        except json.JSONDecodeError as exc:
+            return foreign_block_trust_empty_result(
+                archive_id=archive_id,
+                input_source=input_source,
+                report_path=report_path,
+                blockers=[f"Foreign block intake report must be valid JSON: {exc.msg}."],
+            )
+        if not isinstance(parsed, dict):
+            return foreign_block_trust_empty_result(
+                archive_id=archive_id,
+                input_source=input_source,
+                report_path=report_path,
+                blockers=["Foreign block intake report JSON must be an object."],
+            )
+        report = parsed
+
+    return evaluate_foreign_block_trust_report(
+        archive_id,
+        report,
+        input_source=input_source,
+        report_path=report_path,
+    )
+
+
 def collect_object_refs_from_value(value: Any, source: str, refs: list[dict[str, Any]]) -> None:
     if isinstance(value, dict):
         for key, child in value.items():
@@ -7636,7 +7977,7 @@ def profile_wallet_preview(
             )
 
     warnings.append(
-        "WOM profile wallet metadata is wallet-ready identity context only; v0.2.28 does not generate keys or sign data."
+        "WOM profile wallet metadata is wallet-ready identity context only; v0.2.29 does not generate keys or sign data."
     )
 
     return {
@@ -7769,7 +8110,7 @@ def profile_wallet_capability_surface_preview() -> dict[str, Any]:
         "v0_2_25_available": [],
         "mutating_wallet_actions_available": False,
         "real_signing_available": False,
-        "model_note": "A future WOM wallet layer can bind profile/node identity to capability proofs; v0.2.28 only previews readiness.",
+        "model_note": "A future WOM wallet layer can bind profile/node identity to capability proofs; v0.2.29 only previews readiness.",
     }
 
 

@@ -103,6 +103,9 @@ block_header_check
 foreign_block_intake_check
   Read-only dry-run intake preview for a foreign/shared block-header JSON artifact or Markdown-compatible foreign zet. This keeps the artifact untrusted and never imports, drafts, mints, attests, anchors, applies, calls providers, or writes files.
 
+foreign_block_trust_check
+  Read-only dry-run trust/attestation eligibility preview from a foreign-block intake report. This keeps the artifact untrusted, sets no trust, writes no attestations, and never imports, applies, mints, anchors, calls providers, or writes files.
+
 create_draft_zettel
   Create an AI draft in inbox/. `dry_run: true` previews the draft path, frontmatter, body hash, blockers, warnings, and approval replay values without writing. It may consume structured `source_intake_plan` and `prompt_boundary_report` objects and merge validated metadata into the draft preview. Normal profile-bound AI writes require draft approval plus expected body hash replay values. This does not mint the zettel.
 

@@ -1,6 +1,6 @@
 # Block Header Model
 
-Status: v0.2.28 draft baseline
+Status: v0.2.29 draft baseline
 Date: 2026-05-25
 
 ## Core Idea
@@ -66,6 +66,15 @@ archive foreign-block <archive-root> --stdin --dry-run --format json
 
 Foreign block intake does not prove authenticity. It reports foreign hashes as `claimed_by_foreign_artifact` and `not_verified`.
 
+v0.2.29 adds a read-only trust / attestation preview from the intake report:
+
+```bash
+archive foreign-block-trust <archive-root> --intake-report <json-file> --dry-run --format json
+archive foreign-block-trust <archive-root> --stdin --dry-run --format json
+```
+
+The result can propose `reject`, `manual_review_required`, or `eligible_for_future_attestation`, but it never creates trust or writes an attestation.
+
 The boundary is:
 
 ```text
@@ -79,7 +88,7 @@ Real ZET transport, foreign block import/apply, trust, attest, anchor, signing, 
 
 ## Non-Goals
 
-v0.2.28 does not implement:
+v0.2.29 does not implement:
 
 - real ZET transport,
 - token mechanics,
@@ -92,6 +101,7 @@ v0.2.28 does not implement:
 - ledger behavior,
 - relay behavior,
 - P2P behavior,
-- blockchain behavior.
+- blockchain behavior,
+- foreign attestation writes.
 
 Those are possible future economic or network layers, not part of this read-only header preview.

@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.28` | current public pre-release | `wom-kit/docs/releases/v0.2.28.md` |
+| `v0.2.29` | current public pre-release | `wom-kit/docs/releases/v0.2.29.md` |
+| `v0.2.28` | superseded public pre-release | `wom-kit/docs/releases/v0.2.28.md` |
 | `v0.2.27` | superseded public pre-release | `wom-kit/docs/releases/v0.2.27.md` |
 | `v0.2.26` | superseded public pre-release | `wom-kit/docs/releases/v0.2.26.md` |
 | `v0.2.25` | superseded public pre-release | `wom-kit/docs/releases/v0.2.25.md` |
@@ -55,6 +56,20 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.28` To `v0.2.29`
+
+This compatible patch adds read-only foreign block trust / attestation preview:
+
+- `archive foreign-block-trust <archive-root> --intake-report <json-file> --dry-run --format json`
+- `archive foreign-block-trust <archive-root> --stdin --dry-run --format json`
+- read-only MCP `foreign_block_trust_check`
+
+No private archive migration is required.
+
+Foreign block trust preview does not import, trust, mint, attest, anchor, draft, apply, call provider APIs, execute foreign text, or write files.
+
+`eligible_for_future_attestation` does not mean trusted. It only means a future explicit human or policy attestation workflow may review the report.
 
 ## From `v0.2.27` To `v0.2.28`
 

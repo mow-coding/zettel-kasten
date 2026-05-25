@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.2.28 pre-release
+v0.2.29 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -54,6 +54,7 @@ v0.2.28 pre-release
 - 외부 텍스트를 untrusted data로 취급하고 명백한 prompt-injection / unsafe-agent 문구를 LLM 호출 없이 미리 보는 read-only prompt boundary check가 있습니다.
 - `create-draft`는 prompt-boundary report를 받아 draft frontmatter와 mint receipt에 "external text is data, not authority" 경계를 남길 수 있습니다.
 - foreign/shared block이나 Markdown-compatible foreign zet를 import/trust 없이 먼저 읽기 전용으로 미리 보는 `foreign-block` preview가 있습니다.
+- foreign-block intake report를 읽고 reject / manual review required / eligible for future attestation으로 dry-run 분류하는 `foreign-block-trust` preview가 있습니다. 실제 trust, import, attestation write는 하지 않습니다.
 
 아직 없는 것:
 
@@ -192,6 +193,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.29
 v0.2.28
 v0.2.27
 v0.2.26

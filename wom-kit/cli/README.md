@@ -46,6 +46,9 @@ block-header --dry-run
 foreign-block --dry-run
   Preview a foreign/shared block-header JSON artifact or Markdown-compatible foreign zet before trust/import. This writes nothing and never imports, drafts, mints, attests, anchors, applies, or calls providers.
 
+foreign-block-trust --dry-run
+  Preview whether a foreign-block intake report should be rejected, manually reviewed, or considered eligible for a future explicit attestation workflow. This writes nothing and never creates trust or attestation records.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
@@ -483,6 +486,17 @@ python wom-kit\cli\archive.py foreign-block wom-kit\examples\fake-life-archive `
 ```
 
 The result uses `trust_state: untrusted_foreign`, keeps `would_change: []`, and reports claimed hashes as `not_verified`.
+
+Preview future trust/attestation eligibility from a foreign-block intake report:
+
+```powershell
+python wom-kit\cli\archive.py foreign-block-trust wom-kit\examples\fake-life-archive `
+  --intake-report workbench\foreign-block-intake-report.json `
+  --dry-run `
+  --format json
+```
+
+The result still uses `trust_state: untrusted_foreign`, keeps `would_change: []`, sets `attestation_preview.would_attest` to `false`, and reports only a decision aid such as `reject`, `manual_review_required`, or `eligible_for_future_attestation`.
 
 The preview reads only the target zet file. It derives header metadata from frontmatter, hashes only the zet body text and normalized header preview, and does not hash referenced objet/source files.
 

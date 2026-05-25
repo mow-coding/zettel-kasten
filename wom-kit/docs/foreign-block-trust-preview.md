@@ -1,0 +1,66 @@
+# Foreign Block Trust Preview
+
+Status: v0.2.29 baseline
+
+## Principle
+
+```text
+Foreign blocks can be inspected.
+Foreign blocks cannot become trusted automatically.
+Attestation requires explicit future human or policy approval.
+```
+
+## Purpose
+
+`foreign-block-trust` is a read-only decision aid after `foreign-block` intake.
+
+It consumes a v0.2.28+ `foreign_block_intake` report and answers whether the report should be rejected, manually reviewed, or considered eligible for a future attestation workflow.
+
+It does not trust the foreign block.
+
+## CLI
+
+```bash
+archive foreign-block-trust <archive-root> --intake-report <json-file> --dry-run --format json
+archive foreign-block-trust <archive-root> --stdin --dry-run --format json
+```
+
+The command reads only the intake report. It does not read the original foreign artifact again.
+
+## Output Boundary
+
+The output keeps:
+
+- `trust_state: untrusted_foreign`,
+- `attestation_preview.would_attest: false`,
+- `attestation_preview.attestation_status: not_created`,
+- `would_change: []`.
+
+The `proposed_trust_action` can be:
+
+- `reject`,
+- `manual_review_required`,
+- `eligible_for_future_attestation`.
+
+`eligible_for_future_attestation` is not trust. It means the report shape is clean enough for a future explicit attestation workflow.
+
+## Non-Goals
+
+v0.2.29 does not implement:
+
+- real trust/apply/import,
+- attestation writes,
+- minting,
+- anchoring,
+- delegation,
+- real ZET transport,
+- signing,
+- payment,
+- staking,
+- consensus,
+- blockchain,
+- wallet key management,
+- provider sync,
+- OCR,
+- LLM classification,
+- full-auto execution.

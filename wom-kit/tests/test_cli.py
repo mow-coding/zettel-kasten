@@ -2832,6 +2832,25 @@ class ArchiveCliTests(unittest.TestCase):
         artifact_path.write_text(output, encoding="utf-8")
         return artifact_path
 
+    def write_foreign_block_intake_report(self, archive_root: Path) -> tuple[Path, Path]:
+        artifact_path = self.write_foreign_block_artifact(archive_root)
+        code, output = self.run_cli(
+            [
+                "foreign-block",
+                str(archive_root),
+                "--path",
+                archive_cli.archive_relative_path(artifact_path, archive_root),
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        report_path = archive_root / "workbench" / "foreign-block-intake-report.json"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(output, encoding="utf-8")
+        return report_path, artifact_path
+
     def test_foreign_block_json_artifact_is_untrusted_read_only_preview(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -3128,6 +3147,350 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["blockers"])
             self.assertIn("zet_body_sha256", result["blockers"][0])
             self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_trust_clean_block_header_is_future_attestation_eligible(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            report_path, artifact_path = self.write_foreign_block_intake_report(archive_root)
+            artifact_path.unlink()
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-trust",
+                    str(archive_root),
+                    "--intake-report",
+                    archive_cli.archive_relative_path(report_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(before, after)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "foreign_block_trust_preview")
+            self.assertEqual(result["trust_state"], "untrusted_foreign")
+            self.assertEqual(result["proposed_trust_action"], "eligible_for_future_attestation")
+            self.assertFalse(result["attestation_preview"]["would_attest"])
+            self.assertEqual(result["attestation_preview"]["attestation_status"], "not_created")
+            self.assertEqual(result["would_change"], [])
+            self.assertTrue(result["hash_assessment"]["claimed_hashes"])
+            for item in result["hash_assessment"]["claimed_hashes"]:
+                self.assertEqual(item["trust_state"], "not_trusted")
+                if item["field"] != "foreign_artifact_sha256":
+                    self.assertEqual(item["verification_state"], "not_verified")
+
+    def test_foreign_block_trust_rejects_intake_report_with_blockers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            report_path, _artifact_path = self.write_foreign_block_intake_report(archive_root)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["ok"] = False
+            report["blockers"] = ["Synthetic intake blocker."]
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-trust",
+                    str(archive_root),
+                    "--intake-report",
+                    archive_cli.archive_relative_path(report_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["proposed_trust_action"], "reject")
+            self.assertTrue(result["blockers"])
+            self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_trust_prompt_warning_requires_manual_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            report_path, _artifact_path = self.write_foreign_block_intake_report(archive_root)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["warnings"] = ["Foreign artifact contains high-risk prompt-injection or unsafe-agent wording."]
+            report["prompt_boundary_recommendation"]["risk_level"] = "high"
+            report["prompt_boundary_recommendation"]["detected_pattern_ids"] = ["ignore_previous_instructions"]
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-trust",
+                    str(archive_root),
+                    "--intake-report",
+                    archive_cli.archive_relative_path(report_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["proposed_trust_action"], "manual_review_required")
+            self.assertTrue(result["prompt_boundary_assessment"]["manual_review_required"])
+
+    def test_foreign_block_trust_markdown_intake_requires_manual_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            markdown_text = (
+                "---\n"
+                + archive_cli.dump_yaml(
+                    {
+                        "id": "zet_20260525_foreign_markdown",
+                        "title": "Foreign Markdown note",
+                        "status": "canonical",
+                        "kind": "permanent_note",
+                    }
+                )
+                + "---\n\nForeign note body.\n"
+            )
+            code, intake_output = self.run_cli(
+                [
+                    "foreign-block",
+                    str(archive_root),
+                    "--stdin",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ],
+                stdin_text=markdown_text,
+            )
+            self.assertEqual(code, 0, intake_output)
+            report_path = archive_root / "workbench" / "foreign-markdown-intake.json"
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(intake_output, encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-trust",
+                    str(archive_root),
+                    "--intake-report",
+                    archive_cli.archive_relative_path(report_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["proposed_trust_action"], "manual_review_required")
+            self.assertEqual(result["intake_summary"]["detected_input_kind"], "markdown_compatible_foreign_zet")
+
+    def test_foreign_block_trust_tampered_reports_block_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            report_path, _artifact_path = self.write_foreign_block_intake_report(archive_root)
+            base_report = json.loads(report_path.read_text(encoding="utf-8"))
+            cases = [
+                ("dry_run", False),
+                ("lifecycle_action", "foreign_block_intake_tampered"),
+                ("would_change", ["receipts/example.json"]),
+                ("trust_state", "trusted"),
+                ("foreign_text_boundary.external_text_can_command", True),
+            ]
+            for key, value in cases:
+                with self.subTest(key=key):
+                    report = json.loads(json.dumps(base_report))
+                    if key == "foreign_text_boundary.external_text_can_command":
+                        report["foreign_text_boundary"]["external_text_can_command"] = value
+                    else:
+                        report[key] = value
+                    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+                    code, output = self.run_cli(
+                        [
+                            "foreign-block-trust",
+                            str(archive_root),
+                            "--intake-report",
+                            archive_cli.archive_relative_path(report_path, archive_root),
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["proposed_trust_action"], "reject")
+                    self.assertTrue(result["blockers"])
+                    self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_trust_rejects_verified_hash_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            report_path, _artifact_path = self.write_foreign_block_intake_report(archive_root)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["hash_summary"]["claimed_block_hash"]["verification_state"] = "verified"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-trust",
+                    str(archive_root),
+                    "--intake-report",
+                    archive_cli.archive_relative_path(report_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["trust_state"], "untrusted_foreign")
+            self.assertEqual(result["proposed_trust_action"], "reject")
+            self.assertFalse(result["attestation_preview"]["would_attest"])
+            self.assertTrue(any("verification_state" in blocker for blocker in result["blockers"]))
+            self.assertNotIn('"trust_state": "trusted"', output)
+            self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_trust_rejects_unsafe_report_value_without_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            report_path, _artifact_path = self.write_foreign_block_intake_report(archive_root)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["block_summary"]["foreign_locator"] = "s3" + "://bucket.invalid/UNSAFE_REF_SENTINEL.bin"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-trust",
+                    str(archive_root),
+                    "--intake-report",
+                    archive_cli.archive_relative_path(report_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["proposed_trust_action"], "reject")
+            self.assertTrue(result["blockers"])
+            self.assertNotIn("UNSAFE_REF_SENTINEL", output)
+            self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_trust_bad_hash_shape_blocks_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            report_path, _artifact_path = self.write_foreign_block_intake_report(archive_root)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["hash_summary"]["claimed_header_hash"]["value"] = "deadbeef"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-trust",
+                    str(archive_root),
+                    "--intake-report",
+                    archive_cli.archive_relative_path(report_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["proposed_trust_action"], "reject")
+            self.assertTrue(any("SHA-256" in blocker for blocker in result["blockers"]))
+            self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_trust_invalid_json_missing_and_unsafe_paths_block_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            invalid_path = archive_root / "workbench" / "invalid-intake.json"
+            invalid_path.parent.mkdir(parents=True, exist_ok=True)
+            invalid_path.write_text("{not valid json", encoding="utf-8")
+            cases = [
+                "workbench/invalid-intake.json",
+                "workbench/missing-intake.json",
+                "../outside-intake.json",
+            ]
+            for path_arg in cases:
+                with self.subTest(path_arg=path_arg):
+                    code, output = self.run_cli(
+                        [
+                            "foreign-block-trust",
+                            str(archive_root),
+                            "--intake-report",
+                            path_arg,
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["proposed_trust_action"], "reject")
+                    self.assertTrue(result["blockers"])
+                    self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_trust_stdin_report_works(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            report_path, _artifact_path = self.write_foreign_block_intake_report(archive_root)
+            report_text = report_path.read_text(encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-trust",
+                    str(archive_root),
+                    "--stdin",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ],
+                stdin_text=report_text,
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["input_source"], "stdin")
+            self.assertEqual(result["proposed_trust_action"], "eligible_for_future_attestation")
+
+    def test_foreign_block_trust_empty_stdin_and_empty_json_block_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            for stdin_text in ["", "{}"]:
+                with self.subTest(stdin_text=stdin_text):
+                    code, output = self.run_cli(
+                        [
+                            "foreign-block-trust",
+                            str(archive_root),
+                            "--stdin",
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ],
+                        stdin_text=stdin_text,
+                    )
+
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["proposed_trust_action"], "reject")
+                    self.assertTrue(result["blockers"])
+                    self.assertNotIn("Traceback", output)
 
     def test_runtime_context_no_redact_local_paths_includes_local_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
