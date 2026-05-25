@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Write
 
-Status: v0.2.33 baseline
+Status: v0.2.34 baseline
 
 ## Principle
 
@@ -99,10 +99,21 @@ The index reads only existing quarantine case JSON and matching quarantine write
 
 The review index does not change trust state. A listed case is still untrusted foreign material, not imported archive memory and not an accepted block.
 
+## Decision Preview
+
+v0.2.34 adds a read-only decision preview after the review index:
+
+```bash
+archive quarantine-decision <archive-root> --case-id case-review-001 --dry-run --format json
+```
+
+This is a candidate decision aid only. It does not record approval, write a decision, trust, import, attest, mint, anchor, delegate, sign, execute, accept, or apply the foreign block.
+
 ## Non-Goals
 
-v0.2.33 does not implement:
+v0.2.34 does not implement:
 
+- quarantine decision apply or write,
 - foreign block trust,
 - foreign block import/apply,
 - foreign attestation writes,

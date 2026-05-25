@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Plan
 
-Status: v0.2.33 baseline
+Status: v0.2.34 baseline
 
 ## Principle
 
@@ -92,10 +92,19 @@ archive quarantine-review <archive-root> --format json
 
 It lists existing untrusted quarantine cases and matching receipt consistency without changing the case, the receipt, or the foreign block trust state.
 
+v0.2.34 adds the next read-only step:
+
+```bash
+archive quarantine-decision <archive-root> --case-id case-review-001 --dry-run --format json
+```
+
+It previews a future decision path for one existing quarantine case, but writes no decision.
+
 ## Non-Goals
 
-v0.2.33 does not implement:
+v0.2.34 does not implement:
 
+- quarantine decision apply or write,
 - real trust/apply/import,
 - attestation writes,
 - foreign attestation writes,

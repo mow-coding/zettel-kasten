@@ -496,6 +496,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("foreign_block_quarantine_plan", tool_names)
             self.assertIn("quarantine_foreign_block_check", tool_names)
             self.assertIn("foreign_block_quarantine_review_index", tool_names)
+            self.assertIn("foreign_block_quarantine_decision_check", tool_names)
             self.assertIn("archive_index", tool_names)
             self.assertIn("archive_search", tool_names)
             self.assertIn("promotion_check", tool_names)
@@ -536,6 +537,9 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("foreign_block_quarantine_write", tool_names)
             self.assertNotIn("foreign_block_quarantine_review_apply", tool_names)
             self.assertNotIn("quarantine_review_apply", tool_names)
+            self.assertNotIn("foreign_block_quarantine_decision_apply", tool_names)
+            self.assertNotIn("foreign_block_quarantine_decision_write", tool_names)
+            self.assertNotIn("quarantine_decision_apply", tool_names)
             self.assertNotIn("write_receipt", tool_names)
             self.assertNotIn("import_foreign_block", tool_names)
             self.assertNotIn("trust_foreign_block", tool_names)
@@ -2538,6 +2542,104 @@ class McpServerTests(unittest.TestCase):
                                     "name": "foreign_block_quarantine_review_index",
                                     "arguments": {
                                         "archive_root": str(archive_root),
+                                        "dry_run": dry_run_value,
+                                    },
+                                },
+                            },
+                        )
+                        self.assertTrue(response["result"]["isError"])
+        finally:
+            self.stop_server(process)
+
+    def test_foreign_block_quarantine_decision_check_writes_nothing(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                self.write_mcp_quarantine_case_fixture(archive_root, "mcp-case-001")
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "foreign_block_quarantine_decision_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "case_id": "mcp-case-001",
+                                "decision_intent": "auto",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "foreign_block_quarantine_decision_preview")
+                self.assertEqual(structured["case_id"], "mcp-case-001")
+                self.assertEqual(structured["proposed_decision"], "eligible_for_attestation_review")
+                self.assertEqual(structured["would_change"], [])
+        finally:
+            self.stop_server(process)
+
+    def test_foreign_block_quarantine_decision_check_case_id_and_intent(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                self.write_mcp_quarantine_case_fixture(archive_root, "mcp-case-001")
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "foreign_block_quarantine_decision_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "case_id": "mcp-case-001",
+                                "decision_intent": "keep_quarantined",
+                                "reviewer": "person:mcp-reviewer",
+                                "review_note": "Preview only",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["case_id"], "mcp-case-001")
+                self.assertEqual(structured["proposed_decision"], "keep_quarantined")
+                self.assertEqual(structured["reviewer"], "person:mcp-reviewer")
+                self.assertFalse(structured["review_note_summary"]["content_included"])
+        finally:
+            self.stop_server(process)
+
+    def test_foreign_block_quarantine_decision_check_rejects_non_dry_run(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                for index, dry_run_value in enumerate([False, "yes", 1], start=1):
+                    with self.subTest(dry_run=dry_run_value):
+                        response = self.send(
+                            process,
+                            {
+                                "jsonrpc": "2.0",
+                                "id": index,
+                                "method": "tools/call",
+                                "params": {
+                                    "name": "foreign_block_quarantine_decision_check",
+                                    "arguments": {
+                                        "archive_root": str(archive_root),
+                                        "case_id": "mcp-case-001",
                                         "dry_run": dry_run_value,
                                     },
                                 },

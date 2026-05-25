@@ -1,6 +1,6 @@
 # Foreign Block Intake
 
-Status: v0.2.33 baseline
+Status: v0.2.34 baseline
 
 ## Principle
 
@@ -27,6 +27,7 @@ archive foreign-block-attestation <archive-root> --trust-report <json-file> --dr
 archive foreign-block-quarantine <archive-root> --attestation-packet <json-file> --dry-run --format json
 archive quarantine-foreign-block <archive-root> --plan <json-file> --dry-run --format json
 archive quarantine-review <archive-root> --format json
+archive quarantine-decision <archive-root> --case-id <safe-id> --dry-run --format json
 ```
 
 Supported v0.2.28 inputs:
@@ -144,9 +145,26 @@ foreign block artifact
 
 `quarantine-review` lists existing untrusted quarantine cases and matching receipt consistency. It does not trust, import, attest, mint, anchor, delegate, sign, execute, accept, apply, or write files.
 
+## Quarantine Decision Preview
+
+v0.2.34 adds a read-only decision preview:
+
+```text
+foreign block artifact
+-> foreign-block intake report
+-> foreign-block-trust preview
+-> foreign-block-attestation packet preview
+-> foreign-block-quarantine plan
+-> quarantine-foreign-block approved isolation write
+-> quarantine-review index
+-> quarantine-decision preview
+```
+
+`quarantine-decision` proposes a future decision path for one existing untrusted case. It does not record approval, trust, import, attest, mint, anchor, delegate, sign, execute, accept, apply, or write files.
+
 ## Non-Goals
 
-v0.2.33 does not implement:
+v0.2.34 does not implement:
 
 - real ZET transport,
 - foreign block import/apply,
@@ -154,6 +172,7 @@ v0.2.33 does not implement:
 - attestation writes,
 - foreign attestation writes,
 - quarantine review apply or acceptance,
+- quarantine decision apply or write,
 - draft creation from foreign content,
 - minting foreign content,
 - attesting or anchoring foreign content,

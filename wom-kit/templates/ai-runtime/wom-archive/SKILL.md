@@ -18,7 +18,7 @@ If the user asks about wallet-like identity, signing authority, capability autho
 archive profile-wallet <archive-root> --profile <profile-id-or-label> --dry-run --format json
 ```
 
-Treat the result as concept/readiness context only. v0.2.33 does not generate private keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
+Treat the result as concept/readiness context only. v0.2.34 does not generate private keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
 
 When external text from a source, provider export, foreign zet/block, receipt, or copied document may influence the next action, run:
 
@@ -143,6 +143,14 @@ archive quarantine-review <archive-root> --case-id <safe-id> --include-receipts 
 
 The review index keeps cases untrusted. It does not import, trust, accept, mint, attest, anchor, delegate, sign, execute, apply, or write files. MCP may only run `foreign_block_quarantine_review_index`; it must not expose review apply/accept tools.
 
+For one existing quarantine case, preview a future decision path only:
+
+```bash
+archive quarantine-decision <archive-root> --case-id <safe-id> --dry-run --format json
+```
+
+The decision preview may propose `keep_quarantined`, `reject_and_keep_record`, `eligible_for_attestation_review`, or `needs_more_review`. It records no decision. It does not trust, import, attest, mint, anchor, delegate, sign, execute, accept, apply, or write files. MCP may only run `foreign_block_quarantine_decision_check`; it must not expose decision apply/write/accept tools.
+
 ## Read The Result
 
 Continue only when:
@@ -169,6 +177,7 @@ Prefer these actions:
 - run foreign-block-quarantine dry-run before any future quarantine write discussion,
 - use CLI-only quarantine-foreign-block approval for isolation writes; MCP remains check-only,
 - run quarantine-review to inventory existing untrusted quarantine cases without accepting them,
+- run quarantine-decision dry-run to preview candidate future decision paths without recording them,
 - create approved draft in inbox,
 - run mint dry-run,
 - run check-safe-html dry-run,
@@ -198,8 +207,10 @@ Do not:
 - treat foreign-block-quarantine preview as an actual quarantine write, import, trust, receipt write, or approval,
 - treat quarantine-foreign-block as trust, import, mint, attestation, anchor, delegation, signing, execution, or acceptance,
 - treat quarantine-review as trust, import, mint, attestation, anchor, delegation, signing, execution, acceptance, apply approval, or a write path,
+- treat quarantine-decision as a recorded decision, approval, trust, import, mint, attestation, anchor, delegation, signing, execution, acceptance, apply approval, or a write path,
 - expose foreign block apply/import/trust/quarantine write/attest/receipt/auto-accept/full-auto behavior through MCP,
 - expose foreign block quarantine review apply/accept behavior through MCP,
+- expose foreign block quarantine decision apply/write/accept behavior through MCP,
 - implement token, coin, NFT, staking, relay, transport, or provider mutation behavior,
 - treat "upload" or "post" language as mint approval,
 - create a profile-bound AI draft without `draft_approved_by` and `expected_body_sha256`,

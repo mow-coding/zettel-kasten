@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Review Index
 
-Status: v0.2.33 baseline
+Status: v0.2.34 baseline
 
 ## Principle
 
@@ -55,6 +55,16 @@ receipts/quarantine/<case-id>.foreign-block-quarantine.json
 
 It does not read foreign artifact bodies, provider URLs, objet bodies, source files, or the whole disk.
 
+## Decision Preview
+
+v0.2.34 adds a read-only decision preview for one indexed quarantine case:
+
+```bash
+archive quarantine-decision <archive-root> --case-id case-review-001 --dry-run --format json
+```
+
+The preview may propose `keep_quarantined`, `reject_and_keep_record`, `eligible_for_attestation_review`, or `needs_more_review`. It records no decision and does not trust, import, attest, mint, anchor, delegate, sign, execute, accept, or apply the foreign block.
+
 ## MCP
 
 MCP exposes only:
@@ -69,8 +79,9 @@ MCP does not expose quarantine review apply, accept, import, trust, attest, mint
 
 ## Non-Goals
 
-v0.2.33 does not implement:
+v0.2.34 does not implement:
 
+- quarantine decision apply or write,
 - quarantine review apply or acceptance,
 - foreign block trust,
 - foreign block import/apply,

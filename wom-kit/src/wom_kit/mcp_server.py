@@ -540,6 +540,26 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "foreign_block_quarantine_decision_check",
+        "description": "Read-only decision-path preview for one existing foreign block quarantine case.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "case_id": {"type": "string"},
+                "decision_intent": {
+                    "type": "string",
+                    "enum": sorted(archive_services.FOREIGN_BLOCK_QUARANTINE_DECISION_INTENTS),
+                    "default": "auto",
+                },
+                "reviewer": {"type": "string"},
+                "review_note": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "case_id"],
+        },
+    },
+    {
         "name": "create_draft_zettel",
         "description": "Create an AI draft zettel in inbox/. This does not mint to canonical memory.",
         "inputSchema": {
@@ -868,6 +888,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_quarantine_foreign_block_check(arguments)
     if name == "foreign_block_quarantine_review_index":
         return tool_foreign_block_quarantine_review_index(arguments)
+    if name == "foreign_block_quarantine_decision_check":
+        return tool_foreign_block_quarantine_decision_check(arguments)
     if name == "create_draft_zettel":
         return tool_create_draft_zettel(arguments)
     if name == "list_views":
@@ -1451,6 +1473,27 @@ def tool_foreign_block_quarantine_review_index(arguments: dict[str, Any]) -> dic
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"foreign_block_quarantine_review_index: {state}.", result)
+
+
+def tool_foreign_block_quarantine_decision_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("foreign_block_quarantine_decision_check is dry-run only.")
+    case_id = require_string_arg(arguments, "case_id")
+    decision_intent = optional_string_arg(arguments, "decision_intent") or "auto"
+    reviewer = optional_string_arg(arguments, "reviewer")
+    review_note = optional_string_arg(arguments, "review_note")
+    result = call_service(
+        archive_services.foreign_block_quarantine_decision_preview,
+        archive_root,
+        case_id=case_id,
+        decision_intent=decision_intent,
+        reviewer=reviewer,
+        review_note=review_note,
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"foreign_block_quarantine_decision_check: {state}.", result)
 
 
 def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:

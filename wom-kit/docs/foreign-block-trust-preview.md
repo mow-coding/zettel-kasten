@@ -1,6 +1,6 @@
 # Foreign Block Trust Preview
 
-Status: v0.2.33 baseline
+Status: v0.2.34 baseline
 
 ## Principle
 
@@ -74,6 +74,16 @@ archive quarantine-review <archive-root> --format json
 
 This lists existing untrusted quarantine cases and matching receipt consistency only. It does not trust, import, attest, mint, anchor, delegate, sign, execute, accept, apply, or write files.
 
+## Quarantine Decision Preview
+
+v0.2.34 adds a read-only decision preview:
+
+```bash
+archive quarantine-decision <archive-root> --case-id case-review-001 --dry-run --format json
+```
+
+This proposes a candidate future decision path only. It does not record approval, trust, import, attest, mint, anchor, delegate, sign, execute, accept, apply, or write files.
+
 ## Output Boundary
 
 The output keeps:
@@ -93,12 +103,13 @@ The `proposed_trust_action` can be:
 
 ## Non-Goals
 
-v0.2.33 does not implement:
+v0.2.34 does not implement:
 
 - real trust/apply/import,
 - attestation writes,
 - foreign attestation writes,
 - quarantine review apply or acceptance,
+- quarantine decision apply or write,
 - minting,
 - anchoring,
 - delegation,

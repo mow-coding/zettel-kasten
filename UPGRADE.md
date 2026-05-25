@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.33` | current public pre-release | `wom-kit/docs/releases/v0.2.33.md` |
+| `v0.2.34` | current public pre-release | `wom-kit/docs/releases/v0.2.34.md` |
+| `v0.2.33` | superseded public pre-release | `wom-kit/docs/releases/v0.2.33.md` |
 | `v0.2.32` | superseded public pre-release | `wom-kit/docs/releases/v0.2.32.md` |
 | `v0.2.31` | superseded public pre-release | `wom-kit/docs/releases/v0.2.31.md` |
 | `v0.2.30` | superseded public pre-release | `wom-kit/docs/releases/v0.2.30.md` |
@@ -60,6 +61,30 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.33` To `v0.2.34`
+
+This is a compatible foreign block quarantine decision preview patch.
+
+What changed:
+
+- added `archive quarantine-decision <archive-root> --case-id <safe-id> --dry-run --format json`,
+- added optional `--decision-intent`, `--reviewer`, and `--review-note` preview context,
+- added read-only MCP `foreign_block_quarantine_decision_check`,
+- added a decision aid for existing untrusted quarantine cases.
+
+No private archive migration is required.
+
+Quarantine decision preview reads one existing quarantine case and matching receipt. It does not write a decision, record approval, trust the foreign block, import it, attest it, mint it, anchor it, delegate it, sign it, accept it, apply it, or call providers.
+
+The preview may propose:
+
+- `keep_quarantined`,
+- `reject_and_keep_record`,
+- `eligible_for_attestation_review`,
+- `needs_more_review`.
+
+`eligible_for_attestation_review` is still not trust. It only means a future explicit attestation review path may be appropriate.
 
 ## From `v0.2.32` To `v0.2.33`
 

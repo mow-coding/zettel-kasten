@@ -118,6 +118,9 @@ quarantine_foreign_block_check
 foreign_block_quarantine_review_index
   Read-only review index for existing untrusted foreign block quarantine cases. This lists case summaries and optional sanitized receipt summaries, writes nothing, and never trusts, imports, mints, attests, anchors, delegates, signs, executes, accepts, or applies the foreign block.
 
+foreign_block_quarantine_decision_check
+  Read-only decision-path preview for one existing foreign block quarantine case. This writes no decision and never trusts, imports, mints, attests, anchors, delegates, signs, executes, accepts, or applies the foreign block.
+
 create_draft_zettel
   Create an AI draft in inbox/. `dry_run: true` previews the draft path, frontmatter, body hash, blockers, warnings, and approval replay values without writing. It may consume structured `source_intake_plan` and `prompt_boundary_report` objects and merge validated metadata into the draft preview. Normal profile-bound AI writes require draft approval plus expected body hash replay values. This does not mint the zettel.
 
@@ -202,6 +205,7 @@ ownership_transfer_check
 - `foreign_block_quarantine_plan` is read-only and writes nothing. MCP exposes no foreign block quarantine apply, quarantine write, receipt write, import, trust, attest, auto-accept, auto-import, transport, or full-auto tool.
 - `quarantine_foreign_block_check` is read-only and writes nothing. The approved quarantine write path is CLI-only and requires `--approve --reviewed-by`; MCP exposes no quarantine write/apply/import/trust/attest/full-auto tool.
 - `foreign_block_quarantine_review_index` is read-only and writes nothing. MCP exposes no quarantine review apply, accept, import, trust, attest, receipt write, auto-accept, auto-import, transport, or full-auto tool.
+- `foreign_block_quarantine_decision_check` is read-only and writes nothing. MCP exposes no quarantine decision apply, write, accept, import, trust, attest, receipt write, auto-accept, auto-import, transport, or full-auto tool.
 - `create_draft_zettel` accepts a structured `source_intake_plan` object, not a local plan file path. The plan must be a successful dry-run, blocker-free, metadata-only source intake result before refs are merged.
 - `archive_index` writes only the generated search map at `db/archive-index.sqlite`.
 - `archive_onboarding_plan` previews first setup but does not create archive folders, provider bindings, or `.env` files.
@@ -218,6 +222,6 @@ ownership_transfer_check
 - `delegate_zet_check`, `attest_zet_check`, and `anchor_zet_check` preview the future zet sharing lifecycle, including claimable-once capability binding previews, but do not write receipts, metadata, zettels, workpacks, claim registries, or transport messages.
 - `ownership_transfer_check` previews ownership transfer and external provider changes, but does not write receipts or change `archive-identity.yml`.
 - Ownership transfer receipt examples can be validated by `archive_doctor` when they live under `receipts/lineage/*.ownership-transfer.json`.
-- Real pilot apply, restore drill apply, real onboarding apply, profile registration, token registration, external import apply, source registration apply, source scan apply, minting/promotion into canonical `zettels/`, real archive sharing, real ownership transfer, quarantine write/apply, quarantine review apply/accept, runtime context apply, object storage apply, and external provider account mutation are intentionally not exposed through MCP.
+- Real pilot apply, restore drill apply, real onboarding apply, profile registration, token registration, external import apply, source registration apply, source scan apply, minting/promotion into canonical `zettels/`, real archive sharing, real ownership transfer, quarantine write/apply, quarantine review or decision apply/accept, runtime context apply, object storage apply, and external provider account mutation are intentionally not exposed through MCP.
 - In Docker Compose, MCP paths are allowlisted to `/archives` through `AI_ARCHIVE_MCP_ALLOWED_ROOTS=/archives`.
 - Tool result paths use archive-relative `/` paths so JSON-RPC output is stable across Windows, macOS, and Linux.

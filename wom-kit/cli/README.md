@@ -64,6 +64,9 @@ quarantine-foreign-block --approve --reviewed-by
 quarantine-review --format json
   List and validate existing foreign block quarantine review cases. This is read-only and never trusts, imports, mints, attests, anchors, delegates, signs, executes, accepts, applies, or writes files.
 
+quarantine-decision --dry-run
+  Preview a future decision path for one existing foreign block quarantine case. This writes no decision and never trusts, imports, mints, attests, anchors, delegates, signs, executes, accepts, or applies the foreign block.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
@@ -564,6 +567,17 @@ python wom-kit\cli\archive.py quarantine-review wom-kit\examples\fake-life-archi
 ```
 
 Use `--case-id <safe-id>` for one case and `--include-receipts` when the reviewer needs sanitized receipt summaries. The command reads only quarantine case JSON and matching quarantine receipts, writes nothing, and keeps every foreign block untrusted.
+
+Preview a future decision path for one quarantined foreign block case:
+
+```powershell
+python wom-kit\cli\archive.py quarantine-decision wom-kit\examples\fake-life-archive `
+  --case-id case-review-001 `
+  --dry-run `
+  --format json
+```
+
+`quarantine-decision` can propose `keep_quarantined`, `reject_and_keep_record`, `eligible_for_attestation_review`, or `needs_more_review`. Reviewer and review note fields are preview context only; they are not approval and are not stored.
 
 The block-header preview reads only the target zet file. It derives header metadata from frontmatter, hashes only the zet body text and normalized header preview, and does not hash referenced objet/source files.
 

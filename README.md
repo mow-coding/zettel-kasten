@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.33 pre-release
+v0.2.34 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -61,6 +61,7 @@ What exists today:
 - read-only foreign block quarantine plans that consume attestation packet previews and propose archive-relative future holding paths without creating quarantine files, trust, imports, attestations, or receipts.
 - CLI-only approved foreign block quarantine writes that create a sanitized untrusted review case and quarantine receipt without importing, trusting, minting, attesting, anchoring, delegating, signing, executing, or accepting the foreign block.
 - read-only foreign block quarantine review indexes that list existing untrusted quarantine cases and receipt consistency checks without changing trust state, importing, attesting, minting, anchoring, delegating, signing, or accepting the foreign block.
+- read-only foreign block quarantine decision previews that inspect one untrusted case and propose a future decision path without recording approval, trusting, importing, attesting, minting, anchoring, delegating, signing, accepting, or applying the foreign block.
 
 What does not exist yet:
 
@@ -70,7 +71,7 @@ What does not exist yet:
 - real wallet creation, private key custody, or cryptographic signing,
 - complete prompt-injection prevention or full-auto safety guarantees,
 - LLM-based prompt classification, provider scanning, OCR/import apply, ZET transport, real signing, payments, staking, consensus, or blockchain integration,
-- real foreign block import/trust/apply, real foreign attestation writes, real quarantine review apply/accept, real ZET transport, or automatic acceptance of shared blocks,
+- real foreign block import/trust/apply, real foreign attestation writes, real quarantine review or decision apply/accept, real ZET transport, or automatic acceptance of shared blocks,
 - full Markdown-to-WOM-Safe-HTML conversion or finalized profile validation,
 - stable `v1.0.0` protocol guarantee.
 
@@ -202,6 +203,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.34
 v0.2.33
 v0.2.32
 v0.2.31

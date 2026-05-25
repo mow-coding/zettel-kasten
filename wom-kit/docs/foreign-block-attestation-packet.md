@@ -1,6 +1,6 @@
 # Foreign Block Attestation Packet Preview
 
-Status: v0.2.33 baseline
+Status: v0.2.34 baseline
 
 ## Principle
 
@@ -81,6 +81,14 @@ archive quarantine-review <archive-root> --format json
 
 The index helps a reviewer inventory untrusted quarantine cases and receipt consistency. It does not create trust, import, attestation, receipt writes, mint outputs, anchors, delegation, signatures, or acceptance.
 
+v0.2.34 adds a read-only decision preview for one existing quarantine case:
+
+```bash
+archive quarantine-decision <archive-root> --case-id case-review-001 --dry-run --format json
+```
+
+The preview proposes a candidate future decision path only. It records no decision and still does not create trust, import, attestation, receipt writes, mint outputs, anchors, delegation, signatures, or acceptance.
+
 ## Safety Checks
 
 The command blocks if the trust report:
@@ -102,8 +110,9 @@ The MCP tool is read-only and dry-run only. It accepts a structured trust report
 
 ## Non-Goals
 
-v0.2.33 does not implement:
+v0.2.34 does not implement:
 
+- quarantine decision apply or write,
 - real trust/apply/import,
 - attestation writes,
 - foreign attestation writes,

@@ -1,6 +1,6 @@
 # Block Header Model
 
-Status: v0.2.33 draft baseline
+Status: v0.2.34 draft baseline
 Date: 2026-05-25
 
 ## Core Idea
@@ -110,6 +110,14 @@ archive quarantine-review <archive-root> --format json
 
 The index reads existing untrusted quarantine cases and matching quarantine receipts only. It helps humans review consistency before any future explicit process, but it is not acceptance, import, trust, attestation, minting, anchoring, delegation, signing, transport, or apply approval.
 
+v0.2.34 adds a read-only quarantine decision preview:
+
+```bash
+archive quarantine-decision <archive-root> --case-id case-review-001 --dry-run --format json
+```
+
+The preview may suggest a future decision path, but it writes no decision and does not trust, import, attest, mint, anchor, delegate, sign, transport, accept, or apply the foreign block.
+
 The boundary is:
 
 ```text
@@ -123,7 +131,7 @@ Real ZET transport, foreign block import/apply, trust, attest, anchor, signing, 
 
 ## Non-Goals
 
-v0.2.33 does not implement:
+v0.2.34 does not implement:
 
 - real ZET transport,
 - token mechanics,
@@ -140,5 +148,6 @@ v0.2.33 does not implement:
 - foreign attestation writes,
 - foreign attestation receipt writes.
 - quarantine review apply or acceptance.
+- quarantine decision apply or write.
 
 Those are possible future economic or network layers, not part of this read-only header preview.

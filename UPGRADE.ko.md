@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.33` | current public pre-release | `wom-kit/docs/releases/v0.2.33.md` |
+| `v0.2.34` | current public pre-release | `wom-kit/docs/releases/v0.2.34.md` |
+| `v0.2.33` | superseded public pre-release | `wom-kit/docs/releases/v0.2.33.md` |
 | `v0.2.32` | superseded public pre-release | `wom-kit/docs/releases/v0.2.32.md` |
 | `v0.2.31` | superseded public pre-release | `wom-kit/docs/releases/v0.2.31.md` |
 | `v0.2.30` | superseded public pre-release | `wom-kit/docs/releases/v0.2.30.md` |
@@ -60,6 +61,28 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.33` To `v0.2.34`
+
+This compatible patch adds a foreign block quarantine decision preview:
+
+- `archive quarantine-decision <archive-root> --case-id <safe-id> --dry-run --format json`,
+- optional preview context: `--decision-intent`, `--reviewer`, and `--review-note`,
+- read-only MCP `foreign_block_quarantine_decision_check`,
+- decision-path preview for existing untrusted quarantine cases.
+
+No private archive migration is required.
+
+The preview reads one quarantine case and matching receipt. It does not write a decision, record approval, trust, import, attest, mint, anchor, delegate, sign, accept, apply, or call providers.
+
+Possible preview decisions:
+
+- `keep_quarantined`,
+- `reject_and_keep_record`,
+- `eligible_for_attestation_review`,
+- `needs_more_review`.
+
+`eligible_for_attestation_review` is not trust. It only means a future explicit attestation review path may be appropriate.
 
 ## From `v0.2.32` To `v0.2.33`
 
