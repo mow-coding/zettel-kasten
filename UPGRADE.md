@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.29` | current public pre-release | `wom-kit/docs/releases/v0.2.29.md` |
+| `v0.2.30` | current public pre-release | `wom-kit/docs/releases/v0.2.30.md` |
+| `v0.2.29` | superseded public pre-release | `wom-kit/docs/releases/v0.2.29.md` |
 | `v0.2.28` | superseded public pre-release | `wom-kit/docs/releases/v0.2.28.md` |
 | `v0.2.27` | superseded public pre-release | `wom-kit/docs/releases/v0.2.27.md` |
 | `v0.2.26` | superseded public pre-release | `wom-kit/docs/releases/v0.2.26.md` |
@@ -56,6 +57,23 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.29` To `v0.2.30`
+
+This is a compatible foreign block attestation packet preview patch.
+
+What changed:
+
+- added `archive foreign-block-attestation <archive-root> --trust-report <json-file> --dry-run --format json`,
+- added `archive foreign-block-attestation <archive-root> --stdin --dry-run --format json`,
+- added read-only MCP `foreign_block_attestation_packet_check`,
+- added validation for v0.2.29 `foreign_block_trust_preview` reports before any future human or policy attestation review.
+
+No private archive migration is required.
+
+Foreign block attestation packet preview is read-only. It does not import, trust, mint, attest, anchor, draft, apply, call provider APIs, execute foreign text, write receipts, or write files.
+
+`ready_for_human_attestation_review` does not mean trusted or attested. It means the trust report is clean enough to present as a future explicit human review packet.
 
 ## From `v0.2.28` To `v0.2.29`
 

@@ -2851,6 +2851,25 @@ class ArchiveCliTests(unittest.TestCase):
         report_path.write_text(output, encoding="utf-8")
         return report_path, artifact_path
 
+    def write_foreign_block_trust_report(self, archive_root: Path) -> tuple[Path, Path]:
+        intake_report_path, artifact_path = self.write_foreign_block_intake_report(archive_root)
+        code, output = self.run_cli(
+            [
+                "foreign-block-trust",
+                str(archive_root),
+                "--intake-report",
+                archive_cli.archive_relative_path(intake_report_path, archive_root),
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        trust_report_path = archive_root / "workbench" / "foreign-block-trust-report.json"
+        trust_report_path.parent.mkdir(parents=True, exist_ok=True)
+        trust_report_path.write_text(output, encoding="utf-8")
+        return trust_report_path, artifact_path
+
     def test_foreign_block_json_artifact_is_untrusted_read_only_preview(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -3491,6 +3510,330 @@ class ArchiveCliTests(unittest.TestCase):
                     self.assertEqual(result["proposed_trust_action"], "reject")
                     self.assertTrue(result["blockers"])
                     self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_attestation_packet_valid_trust_report_is_ready_and_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            trust_report_path, artifact_path = self.write_foreign_block_trust_report(archive_root)
+            artifact_path.unlink()
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-attestation",
+                    str(archive_root),
+                    "--trust-report",
+                    archive_cli.archive_relative_path(trust_report_path, archive_root),
+                    "--prospective-attestor",
+                    "person:reviewer",
+                    "--review-scope",
+                    "operator_review",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(before, after)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "foreign_block_attestation_packet_preview")
+            self.assertEqual(result["trust_state"], "untrusted_foreign")
+            self.assertEqual(result["packet_status"], "ready_for_human_attestation_review")
+            self.assertFalse(result["attestation_packet_preview"]["would_attest"])
+            self.assertEqual(result["attestation_packet_preview"]["attestation_status"], "not_created")
+            self.assertEqual(result["attestation_packet_preview"]["prospective_attestor"], "person:reviewer")
+            self.assertEqual(result["attestation_packet_preview"]["review_scope"], "operator_review")
+            self.assertEqual(result["would_change"], [])
+            self.assertTrue(result["claimed_hashes"])
+            self.assertNotIn(str(trust_report_path.resolve()), output)
+
+    def test_foreign_block_attestation_packet_manual_review_trust_report_stays_manual(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            trust_report_path, _artifact_path = self.write_foreign_block_trust_report(archive_root)
+            report = json.loads(trust_report_path.read_text(encoding="utf-8"))
+            report["proposed_trust_action"] = "manual_review_required"
+            report["warnings"] = ["Prompt-injection warning requires manual review."]
+            trust_report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-attestation",
+                    str(archive_root),
+                    "--trust-report",
+                    archive_cli.archive_relative_path(trust_report_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["packet_status"], "manual_review_required")
+            self.assertFalse(result["attestation_packet_preview"]["would_attest"])
+
+    def test_foreign_block_attestation_packet_reject_trust_report_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            trust_report_path, _artifact_path = self.write_foreign_block_trust_report(archive_root)
+            report = json.loads(trust_report_path.read_text(encoding="utf-8"))
+            report["ok"] = False
+            report["proposed_trust_action"] = "reject"
+            report["blockers"] = ["Synthetic trust blocker."]
+            trust_report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-attestation",
+                    str(archive_root),
+                    "--trust-report",
+                    archive_cli.archive_relative_path(trust_report_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["packet_status"], "blocked")
+            self.assertTrue(result["blockers"])
+            self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_attestation_packet_tampered_reports_block_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            trust_report_path, _artifact_path = self.write_foreign_block_trust_report(archive_root)
+            base_report = json.loads(trust_report_path.read_text(encoding="utf-8"))
+            cases = [
+                ("dry_run", False),
+                ("lifecycle_action", "foreign_block_trust_tampered"),
+                ("trust_state", "trusted"),
+                ("would_change", ["receipts/example.json"]),
+                ("attestation_preview.would_attest", True),
+                ("attestation_preview.attestation_status", "created"),
+                ("proposed_trust_action", "trusted"),
+                ("hash_assessment.verification_state", "verified"),
+                ("hash_assessment.claimed_hashes[0].verification_state", "verified"),
+                ("hash_assessment.claimed_hashes[0].trust_state", "trusted"),
+            ]
+            for key, value in cases:
+                with self.subTest(key=key):
+                    report = json.loads(json.dumps(base_report))
+                    if key == "attestation_preview.would_attest":
+                        report["attestation_preview"]["would_attest"] = value
+                    elif key == "attestation_preview.attestation_status":
+                        report["attestation_preview"]["attestation_status"] = value
+                    elif key == "hash_assessment.claimed_hashes[0].verification_state":
+                        report["hash_assessment"]["claimed_hashes"][0]["verification_state"] = value
+                    elif key == "hash_assessment.claimed_hashes[0].trust_state":
+                        report["hash_assessment"]["claimed_hashes"][0]["trust_state"] = value
+                    elif key == "hash_assessment.verification_state":
+                        report["hash_assessment"]["verification_state"] = value
+                    else:
+                        report[key] = value
+                    trust_report_path.write_text(json.dumps(report), encoding="utf-8")
+
+                    code, output = self.run_cli(
+                        [
+                            "foreign-block-attestation",
+                            str(archive_root),
+                            "--trust-report",
+                            archive_cli.archive_relative_path(trust_report_path, archive_root),
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["packet_status"], "blocked")
+                    self.assertTrue(result["blockers"])
+                    self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_attestation_packet_invalid_json_missing_and_unsafe_paths_block_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            invalid_path = archive_root / "workbench" / "invalid-trust.json"
+            invalid_path.parent.mkdir(parents=True, exist_ok=True)
+            invalid_path.write_text("{not valid json", encoding="utf-8")
+            cases = [
+                "workbench/invalid-trust.json",
+                "workbench/missing-trust.json",
+                "../outside-trust.json",
+            ]
+            for path_arg in cases:
+                with self.subTest(path_arg=path_arg):
+                    code, output = self.run_cli(
+                        [
+                            "foreign-block-attestation",
+                            str(archive_root),
+                            "--trust-report",
+                            path_arg,
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["packet_status"], "blocked")
+                    self.assertTrue(result["blockers"])
+                    self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_attestation_packet_stdin_report_works(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            trust_report_path, _artifact_path = self.write_foreign_block_trust_report(archive_root)
+            report_text = trust_report_path.read_text(encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-attestation",
+                    str(archive_root),
+                    "--stdin",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ],
+                stdin_text=report_text,
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["input_source"], "stdin")
+            self.assertEqual(result["packet_status"], "ready_for_human_attestation_review")
+
+    def test_foreign_block_attestation_packet_empty_stdin_blocks_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-attestation",
+                    str(archive_root),
+                    "--stdin",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ],
+                stdin_text="",
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["packet_status"], "blocked")
+            self.assertEqual(result["would_change"], [])
+            self.assertFalse(result["attestation_packet_preview"]["would_attest"])
+            self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_attestation_packet_malformed_hash_assessment_blocks_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            trust_report_path, _artifact_path = self.write_foreign_block_trust_report(archive_root)
+            base_report = json.loads(trust_report_path.read_text(encoding="utf-8"))
+            cases = [
+                ("hash_assessment_not_object", "not-an-object"),
+                ("claimed_hashes_not_list", {"verification_state": "not_verified", "claimed_hashes": "not-a-list"}),
+            ]
+            for case_name, hash_assessment in cases:
+                with self.subTest(case=case_name):
+                    report = json.loads(json.dumps(base_report))
+                    report["hash_assessment"] = hash_assessment
+                    trust_report_path.write_text(json.dumps(report), encoding="utf-8")
+
+                    code, output = self.run_cli(
+                        [
+                            "foreign-block-attestation",
+                            str(archive_root),
+                            "--trust-report",
+                            archive_cli.archive_relative_path(trust_report_path, archive_root),
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["packet_status"], "blocked")
+                    self.assertEqual(result["would_change"], [])
+                    self.assertFalse(result["attestation_packet_preview"]["would_attest"])
+                    self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_attestation_packet_rejects_unsafe_prospective_attestor_without_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            trust_report_path, _artifact_path = self.write_foreign_block_trust_report(archive_root)
+            unsafe_values = [
+                "s3" + "://redacted.example/UNSAFE_CLI_ATTESTOR_PROVIDER",
+                "D:" + "\\private\\UNSAFE_CLI_ATTESTOR_PATH\\key.pem",
+                "se" + "cret=" + "UNSAFE_CLI_ATTESTOR_TOKENVALUE123",
+            ]
+            for unsafe_value in unsafe_values:
+                with self.subTest(unsafe_value=unsafe_value):
+                    code, output = self.run_cli(
+                        [
+                            "foreign-block-attestation",
+                            str(archive_root),
+                            "--trust-report",
+                            archive_cli.archive_relative_path(trust_report_path, archive_root),
+                            "--prospective-attestor",
+                            unsafe_value,
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["packet_status"], "blocked")
+                    self.assertEqual(result["would_change"], [])
+                    self.assertFalse(result["attestation_packet_preview"]["would_attest"])
+                    self.assertIsNone(result["attestation_packet_preview"]["prospective_attestor"])
+                    self.assertNotIn("UNSAFE_CLI_ATTESTOR", output)
+                    self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_attestation_packet_rejects_unsafe_trust_report_without_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            trust_report_path, _artifact_path = self.write_foreign_block_trust_report(archive_root)
+            report = json.loads(trust_report_path.read_text(encoding="utf-8"))
+            report["intake_summary"]["unsafe_locator"] = "s3" + "://bucket.invalid/UNSAFE_PACKET_SENTINEL.bin"
+            trust_report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-attestation",
+                    str(archive_root),
+                    "--trust-report",
+                    archive_cli.archive_relative_path(trust_report_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["packet_status"], "blocked")
+            self.assertNotIn("UNSAFE_PACKET_SENTINEL", output)
+            self.assertNotIn("Traceback", output)
 
     def test_runtime_context_no_redact_local_paths_includes_local_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -2880,6 +2880,356 @@ def foreign_block_trust_preview(
     )
 
 
+def foreign_block_attestation_packet_empty_result(
+    *,
+    archive_id: str,
+    input_source: str | None = None,
+    blockers: list[str] | None = None,
+    warnings: list[str] | None = None,
+    prospective_attestor: str | None = None,
+    review_scope: str = "human_review",
+) -> dict[str, Any]:
+    safe_attestor = None
+    if prospective_attestor and not header_string_is_private_or_unsafe(prospective_attestor):
+        safe_attestor = prospective_attestor
+    safe_review_scope = review_scope if review_scope in {"human_review", "policy_review", "operator_review"} else "human_review"
+    return {
+        "ok": False,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_attestation_packet_preview",
+        "archive_id": archive_id,
+        "input_source": input_source,
+        "trust_state": "untrusted_foreign",
+        "packet_status": "blocked",
+        "source_trust_report_summary": {},
+        "consistency_checks": [],
+        "attestation_packet_preview": {
+            "would_attest": False,
+            "attestation_status": "not_created",
+            "attestation_kind": "future_foreign_block_attestation",
+            "prospective_attestor": safe_attestor,
+            "review_scope": safe_review_scope,
+            "requires_human_review": True,
+            "required_checks": [],
+            "missing_checks": [],
+            "disallowed_actions": [
+                "create_trust",
+                "write_attestation",
+                "write_receipt",
+                "import_foreign_block",
+                "mint",
+                "anchor",
+                "delegate",
+                "sign",
+            ],
+        },
+        "claimed_hashes": [],
+        "reference_summary": {},
+        "prompt_boundary_summary": {},
+        "blockers": unique_preserve_order(blockers or []),
+        "warnings": unique_preserve_order(warnings or []),
+        "would_change": [],
+    }
+
+
+def scan_foreign_packet_safe_values(value: Any, blockers: list[str], field_path: str = "$") -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            scan_foreign_packet_safe_values(child, blockers, f"{field_path}.{key}")
+        return
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            scan_foreign_packet_safe_values(child, blockers, f"{field_path}[{index}]")
+        return
+    if isinstance(value, str) and header_string_is_private_or_unsafe(value):
+        blockers.append(f"trust_report contains unsafe or private reference in {field_path}.")
+
+
+def validate_attestation_packet_hashes(trust_report: dict[str, Any], blockers: list[str]) -> list[dict[str, Any]]:
+    hash_assessment = trust_report.get("hash_assessment")
+    if not isinstance(hash_assessment, dict):
+        blockers.append("trust_report.hash_assessment must be an object.")
+        return []
+    if hash_assessment.get("verification_state") != "not_verified":
+        blockers.append("trust_report.hash_assessment.verification_state must remain not_verified.")
+
+    claimed_hashes = hash_assessment.get("claimed_hashes")
+    if not isinstance(claimed_hashes, list):
+        blockers.append("trust_report.hash_assessment.claimed_hashes must be a list.")
+        return []
+
+    safe_hashes: list[dict[str, Any]] = []
+    for index, item in enumerate(claimed_hashes):
+        if not isinstance(item, dict):
+            blockers.append(f"trust_report.hash_assessment.claimed_hashes[{index}] must be an object.")
+            continue
+        value = item.get("value")
+        if not isinstance(value, str) or not SHA256_RE.match(value):
+            blockers.append(f"trust_report.hash_assessment.claimed_hashes[{index}].value must look like a SHA-256 hex digest.")
+            continue
+        verification_state = item.get("verification_state")
+        trust_state = item.get("trust_state")
+        if verification_state not in {"not_verified", "not_authenticity_proof"}:
+            blockers.append(f"trust_report.hash_assessment.claimed_hashes[{index}].verification_state must not claim verification.")
+            continue
+        if trust_state != "not_trusted":
+            blockers.append(f"trust_report.hash_assessment.claimed_hashes[{index}].trust_state must remain not_trusted.")
+            continue
+        safe_hashes.append(
+            {
+                "field": item.get("field"),
+                "value": value,
+                "claim_state": item.get("claim_state"),
+                "verification_state": verification_state,
+                "trust_state": "not_trusted",
+            }
+        )
+    return safe_hashes
+
+
+def foreign_attestation_packet_status(proposed_action: str, warnings: list[str]) -> tuple[str, list[str]]:
+    manual_reasons: list[str] = []
+    warning_text = " ".join(str(item) for item in warnings if isinstance(item, str)).lower()
+    if proposed_action == "manual_review_required":
+        manual_reasons.append("Trust preview requires manual review.")
+    if any(term in warning_text for term in ["prompt-injection", "unknown refs", "unknown ref", "markdown", "unresolved"]):
+        manual_reasons.append("Trust preview warnings require manual review.")
+    if manual_reasons:
+        return "manual_review_required", manual_reasons
+    return "ready_for_human_attestation_review", []
+
+
+def evaluate_foreign_block_attestation_packet_report(
+    archive_id: str,
+    trust_report: dict[str, Any],
+    *,
+    input_source: str | None = None,
+    prospective_attestor: str | None = None,
+    review_scope: str = "human_review",
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    consistency_checks: list[dict[str, Any]] = []
+
+    scan_foreign_packet_safe_values(trust_report, blockers, "trust_report")
+
+    def check(condition: bool, check_id: str, blocker: str) -> None:
+        consistency_checks.append({"id": check_id, "status": "passed" if condition else "blocked"})
+        if not condition:
+            blockers.append(blocker)
+
+    check(trust_report.get("lifecycle_action") == "foreign_block_trust_preview", "lifecycle_action", "trust_report.lifecycle_action must be foreign_block_trust_preview.")
+    check(trust_report.get("ok") is True, "ok", "trust_report.ok must be true.")
+    check(trust_report.get("dry_run") is True, "dry_run", "trust_report.dry_run must be true.")
+    check(trust_report.get("trust_state") == "untrusted_foreign", "trust_state", "trust_report.trust_state must remain untrusted_foreign.")
+    check(trust_report.get("would_change") == [], "would_change", "trust_report.would_change must be an empty list.")
+
+    attestation_preview = trust_report.get("attestation_preview")
+    if not isinstance(attestation_preview, dict):
+        blockers.append("trust_report.attestation_preview must be an object.")
+        attestation_preview = {}
+        consistency_checks.append({"id": "attestation_preview", "status": "blocked"})
+    else:
+        consistency_checks.append({"id": "attestation_preview", "status": "passed"})
+    check(attestation_preview.get("would_attest") is False, "would_attest", "trust_report.attestation_preview.would_attest must be false.")
+    check(attestation_preview.get("attestation_status") == "not_created", "attestation_status", "trust_report.attestation_preview.attestation_status must be not_created.")
+
+    proposed_action = str(trust_report.get("proposed_trust_action") or "").strip()
+    if proposed_action not in {"reject", "manual_review_required", "eligible_for_future_attestation"}:
+        blockers.append("trust_report.proposed_trust_action must be reject, manual_review_required, or eligible_for_future_attestation.")
+    elif proposed_action == "reject":
+        blockers.append("trust_report.proposed_trust_action is reject.")
+
+    trust_blockers = trust_report.get("blockers")
+    if not isinstance(trust_blockers, list):
+        blockers.append("trust_report.blockers must be a list.")
+    elif trust_blockers:
+        blockers.append("trust_report has blockers and cannot produce an attestation packet preview.")
+
+    trust_warnings = trust_report.get("warnings", [])
+    if trust_warnings is None:
+        trust_warnings = []
+    if not isinstance(trust_warnings, list):
+        blockers.append("trust_report.warnings must be a list when present.")
+        trust_warnings = []
+
+    claimed_hashes = validate_attestation_packet_hashes(trust_report, blockers)
+
+    source_summary = {
+        "proposed_trust_action": proposed_action or None,
+        "input_source": trust_report.get("input_source"),
+        "intake_summary": json_safe(trust_report.get("intake_summary") or {}),
+    }
+    reference_summary = json_safe(trust_report.get("reference_assessment") or {})
+    prompt_summary = json_safe(trust_report.get("prompt_boundary_assessment") or {})
+
+    required_checks = [
+        "human review of this packet",
+        "out-of-band source/counterparty verification",
+        "confirmation that claimed hashes remain not_verified/not_trusted",
+        "reference resolution before any future attestation",
+        "explicit future attestation approval",
+    ]
+    missing_checks = [
+        "real signature or attestation verification",
+        "human or policy attestation approval",
+        "receipt write approval",
+        "anchor/mint/delegate approval if ever needed",
+    ]
+
+    if prospective_attestor and header_string_is_private_or_unsafe(prospective_attestor):
+        blockers.append("prospective_attestor must be a safe non-secret actor id.")
+    if review_scope not in {"human_review", "policy_review", "operator_review"}:
+        blockers.append("review_scope must be human_review, policy_review, or operator_review.")
+
+    if blockers:
+        return foreign_block_attestation_packet_empty_result(
+            archive_id=archive_id,
+            input_source=input_source,
+            blockers=blockers,
+            warnings=warnings,
+            prospective_attestor=prospective_attestor,
+            review_scope=review_scope,
+        )
+
+    packet_status, manual_reasons = foreign_attestation_packet_status(proposed_action, trust_warnings)
+    warnings.extend(str(item) for item in trust_warnings if isinstance(item, str))
+    warnings.extend(manual_reasons)
+    warnings.append("Attestation packet preview is not an attestation and creates no trust.")
+
+    return {
+        "ok": True,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_attestation_packet_preview",
+        "archive_id": archive_id,
+        "input_source": input_source,
+        "trust_state": "untrusted_foreign",
+        "packet_status": packet_status,
+        "source_trust_report_summary": source_summary,
+        "consistency_checks": consistency_checks,
+        "attestation_packet_preview": {
+            "would_attest": False,
+            "attestation_status": "not_created",
+            "attestation_kind": "future_foreign_block_attestation",
+            "prospective_attestor": prospective_attestor,
+            "review_scope": review_scope,
+            "requires_human_review": True,
+            "required_checks": required_checks,
+            "missing_checks": missing_checks,
+            "disallowed_actions": [
+                "create_trust",
+                "write_attestation",
+                "write_receipt",
+                "import_foreign_block",
+                "mint",
+                "anchor",
+                "delegate",
+                "sign",
+                "provider_sync",
+                "execute_foreign_text",
+            ],
+        },
+        "claimed_hashes": json_safe(claimed_hashes),
+        "reference_summary": reference_summary,
+        "prompt_boundary_summary": prompt_summary,
+        "blockers": [],
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+    }
+
+
+def foreign_block_attestation_packet_preview(
+    archive_root: Path | str,
+    *,
+    trust_report_path: str | None = None,
+    text: str | None = None,
+    trust_report: dict[str, Any] | None = None,
+    dry_run: bool = True,
+    prospective_attestor: str | None = None,
+    review_scope: str = "human_review",
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    if dry_run is not True:
+        blockers.append("foreign-block-attestation is dry-run only; pass --dry-run.")
+    locator_count = sum(1 for item in [trust_report_path, text, trust_report] if item is not None)
+    if locator_count != 1:
+        blockers.append("Exactly one of trust report path, stdin text, or structured trust_report is required.")
+    if review_scope not in {"human_review", "policy_review", "operator_review"}:
+        blockers.append("review_scope must be human_review, policy_review, or operator_review.")
+    if blockers:
+        return foreign_block_attestation_packet_empty_result(
+            archive_id=archive_id,
+            blockers=blockers,
+            prospective_attestor=prospective_attestor,
+            review_scope=review_scope,
+        )
+
+    input_source = "structured_content" if trust_report is not None else "stdin" if text is not None else None
+    report_text = text
+    if trust_report_path is not None:
+        try:
+            normalized_path = normalize_archive_relative_path(trust_report_path)
+            path = resolve_archive_relative_path(root, normalized_path)
+            if not path.is_file():
+                blockers.append(f"Foreign block trust report path is not a file: {archive_relative_path(path, root)}.")
+            else:
+                report_text = path.read_text(encoding="utf-8")
+                input_source = "trust_report_path"
+        except ArchivePathError as exc:
+            blockers.append(f"Foreign block trust report path could not be read safely: {exc}")
+        except (OSError, UnicodeError):
+            blockers.append("Foreign block trust report path could not be read safely.")
+        if blockers:
+            return foreign_block_attestation_packet_empty_result(
+                archive_id=archive_id,
+                input_source=input_source,
+                blockers=blockers,
+                prospective_attestor=prospective_attestor,
+                review_scope=review_scope,
+            )
+
+    if trust_report is not None:
+        report = trust_report
+    else:
+        if report_text is None:
+            return foreign_block_attestation_packet_empty_result(
+                archive_id=archive_id,
+                input_source=input_source,
+                blockers=["Foreign block trust report text is required."],
+                prospective_attestor=prospective_attestor,
+                review_scope=review_scope,
+            )
+        try:
+            parsed = json.loads(report_text)
+        except json.JSONDecodeError as exc:
+            return foreign_block_attestation_packet_empty_result(
+                archive_id=archive_id,
+                input_source=input_source,
+                blockers=[f"Foreign block trust report must be valid JSON: {exc.msg}."],
+                prospective_attestor=prospective_attestor,
+                review_scope=review_scope,
+            )
+        if not isinstance(parsed, dict):
+            return foreign_block_attestation_packet_empty_result(
+                archive_id=archive_id,
+                input_source=input_source,
+                blockers=["Foreign block trust report JSON must be an object."],
+                prospective_attestor=prospective_attestor,
+                review_scope=review_scope,
+            )
+        report = parsed
+
+    return evaluate_foreign_block_attestation_packet_report(
+        archive_id,
+        report,
+        input_source=input_source,
+        prospective_attestor=prospective_attestor,
+        review_scope=review_scope,
+    )
+
+
 def collect_object_refs_from_value(value: Any, source: str, refs: list[dict[str, Any]]) -> None:
     if isinstance(value, dict):
         for key, child in value.items():
@@ -7977,7 +8327,7 @@ def profile_wallet_preview(
             )
 
     warnings.append(
-        "WOM profile wallet metadata is wallet-ready identity context only; v0.2.29 does not generate keys or sign data."
+        "WOM profile wallet metadata is wallet-ready identity context only; v0.2.30 does not generate keys or sign data."
     )
 
     return {
@@ -8110,7 +8460,7 @@ def profile_wallet_capability_surface_preview() -> dict[str, Any]:
         "v0_2_25_available": [],
         "mutating_wallet_actions_available": False,
         "real_signing_available": False,
-        "model_note": "A future WOM wallet layer can bind profile/node identity to capability proofs; v0.2.29 only previews readiness.",
+        "model_note": "A future WOM wallet layer can bind profile/node identity to capability proofs; v0.2.30 only previews readiness.",
     }
 
 

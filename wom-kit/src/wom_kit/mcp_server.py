@@ -472,6 +472,22 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "foreign_block_attestation_packet_check",
+        "description": "Read-only dry-run human-review attestation packet preview from a foreign-block trust report.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "path": {"type": "string"},
+                "trust_report": {"type": "object"},
+                "prospective_attestor": {"type": "string"},
+                "review_scope": {"type": "string", "enum": ["human_review", "policy_review", "operator_review"]},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "create_draft_zettel",
         "description": "Create an AI draft zettel in inbox/. This does not mint to canonical memory.",
         "inputSchema": {
@@ -792,6 +808,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_foreign_block_intake_check(arguments)
     if name == "foreign_block_trust_check":
         return tool_foreign_block_trust_check(arguments)
+    if name == "foreign_block_attestation_packet_check":
+        return tool_foreign_block_attestation_packet_check(arguments)
     if name == "create_draft_zettel":
         return tool_create_draft_zettel(arguments)
     if name == "list_views":
@@ -1283,6 +1301,29 @@ def tool_foreign_block_trust_check(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"foreign_block_trust_check: {state}.", result)
+
+
+def tool_foreign_block_attestation_packet_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("foreign_block_attestation_packet_check is dry-run only.")
+    trust_report = arguments.get("trust_report") if isinstance(arguments.get("trust_report"), dict) else None
+    if "trust_report" in arguments and trust_report is None:
+        raise ToolError("foreign_block_attestation_packet_check trust_report must be a structured object.")
+    relative_path = optional_string_arg(arguments, "path")
+    prospective_attestor = optional_string_arg(arguments, "prospective_attestor")
+    review_scope = optional_string_arg(arguments, "review_scope") or "human_review"
+    result = call_service(
+        archive_services.foreign_block_attestation_packet_preview,
+        archive_root,
+        trust_report_path=relative_path,
+        trust_report=trust_report,
+        dry_run=True,
+        prospective_attestor=prospective_attestor,
+        review_scope=review_scope,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"foreign_block_attestation_packet_check: {state}.", result)
 
 
 def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:

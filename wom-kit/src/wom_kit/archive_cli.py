@@ -25,6 +25,8 @@ Commands:
           Preview a foreign/shared block or zet before any trust/import action.
   foreign-block-trust
           Preview future trust/attestation eligibility from a foreign-block intake report.
+  foreign-block-attestation
+          Preview a human-review attestation packet from a foreign-block trust report.
   init    Create a new archive from a built-in template.
   index   Build a generated local SQLite search index.
   parcel Create a portable parcel from a view. Alias: pack.
@@ -1739,6 +1741,38 @@ def command_foreign_block_trust(args: argparse.Namespace) -> int:
             for warning in result["warnings"]:
                 print(f"- {warning}")
         print("Foreign block trust preview passed." if result.get("ok") else "Foreign block trust preview blocked.")
+    return 0 if result.get("ok") else 1
+
+
+def command_foreign_block_attestation(args: argparse.Namespace) -> int:
+    try:
+        stdin_text = sys.stdin.read() if args.stdin else None
+        result = archive_services.foreign_block_attestation_packet_preview(
+            Path(args.archive_root),
+            trust_report_path=args.trust_report,
+            text=stdin_text,
+            dry_run=args.dry_run,
+            prospective_attestor=args.prospective_attestor,
+            review_scope=args.review_scope,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Foreign block attestation packet: {result.get('packet_status') or '-'}")
+        print(f"Trust state: {result.get('trust_state') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        print("Foreign block attestation packet preview passed." if result.get("ok") else "Foreign block attestation packet preview blocked.")
     return 0 if result.get("ok") else 1
 
 
@@ -3634,6 +3668,25 @@ def build_parser() -> argparse.ArgumentParser:
     foreign_block_trust.add_argument("--dry-run", action="store_true", help="Preview trust/attestation eligibility without writing files.")
     foreign_block_trust.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     foreign_block_trust.set_defaults(func=command_foreign_block_trust)
+
+    foreign_block_attestation = subcommands.add_parser(
+        "foreign-block-attestation",
+        help="Preview a human-review attestation packet from a foreign-block trust report.",
+    )
+    foreign_block_attestation.add_argument("archive_root", help="Archive root used for path safety and local context.")
+    attestation_source = foreign_block_attestation.add_mutually_exclusive_group(required=True)
+    attestation_source.add_argument("--trust-report", help="Archive-relative JSON report from foreign-block-trust --dry-run.")
+    attestation_source.add_argument("--stdin", action="store_true", help="Read the foreign-block trust report JSON from stdin.")
+    foreign_block_attestation.add_argument("--prospective-attestor", help="Optional safe actor id for a future attestor. This is not approval.")
+    foreign_block_attestation.add_argument(
+        "--review-scope",
+        choices=["human_review", "policy_review", "operator_review"],
+        default="human_review",
+        help="Review scope for the preview packet. This is not approval.",
+    )
+    foreign_block_attestation.add_argument("--dry-run", action="store_true", help="Preview the attestation review packet without writing files.")
+    foreign_block_attestation.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    foreign_block_attestation.set_defaults(func=command_foreign_block_attestation)
 
     create_draft = subcommands.add_parser("create-draft", help="Create a draft zettel in inbox/.")
     create_draft.add_argument("archive_root", help="Archive root to write to.")

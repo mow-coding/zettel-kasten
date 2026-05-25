@@ -1,6 +1,6 @@
 # Block Header Model
 
-Status: v0.2.29 draft baseline
+Status: v0.2.30 draft baseline
 Date: 2026-05-25
 
 ## Core Idea
@@ -75,6 +75,15 @@ archive foreign-block-trust <archive-root> --stdin --dry-run --format json
 
 The result can propose `reject`, `manual_review_required`, or `eligible_for_future_attestation`, but it never creates trust or writes an attestation.
 
+v0.2.30 adds a read-only attestation packet preview from the trust report:
+
+```bash
+archive foreign-block-attestation <archive-root> --trust-report <json-file> --dry-run --format json
+archive foreign-block-attestation <archive-root> --stdin --dry-run --format json
+```
+
+The result can return `blocked`, `manual_review_required`, or `ready_for_human_attestation_review`, but it never creates trust, writes attestations, writes receipts, imports, mints, anchors, delegates, signs, or reads the original foreign artifact again.
+
 The boundary is:
 
 ```text
@@ -88,7 +97,7 @@ Real ZET transport, foreign block import/apply, trust, attest, anchor, signing, 
 
 ## Non-Goals
 
-v0.2.29 does not implement:
+v0.2.30 does not implement:
 
 - real ZET transport,
 - token mechanics,
@@ -102,6 +111,7 @@ v0.2.29 does not implement:
 - relay behavior,
 - P2P behavior,
 - blockchain behavior,
-- foreign attestation writes.
+- foreign attestation writes,
+- foreign attestation receipt writes.
 
 Those are possible future economic or network layers, not part of this read-only header preview.

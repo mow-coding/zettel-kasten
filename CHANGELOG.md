@@ -4,6 +4,26 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.30 - 2026-05-25
+
+Foreign block attestation packet preview patch.
+
+Added:
+
+- `archive foreign-block-attestation <archive-root> --trust-report <json-file> --dry-run --format json`,
+- `archive foreign-block-attestation <archive-root> --stdin --dry-run --format json`,
+- read-only MCP `foreign_block_attestation_packet_check`,
+- validation for v0.2.29 `foreign_block_trust_preview` reports before any future human or policy attestation review,
+- structured packet status values: `blocked`, `manual_review_required`, and `ready_for_human_attestation_review`,
+- attestation packet previews that keep `would_attest: false`, `attestation_status: not_created`, `trust_state: untrusted_foreign`, and `would_change: []`.
+
+Compatibility:
+
+- no private archive migration is required,
+- attestation packet preview writes nothing and never reads the original foreign artifact,
+- `ready_for_human_attestation_review` is not trust, not an attestation, and not approval; it only means the trust report is clean enough to present for a future explicit human review,
+- no real trust/apply/import, attestation write, receipt write, minting, anchoring, delegation, signing, payment, staking, consensus, blockchain, provider sync, OCR, LLM classification, ZET transport, or full-auto execution is implemented.
+
 ## v0.2.29 - 2026-05-25
 
 Foreign block trust / attestation preview patch.

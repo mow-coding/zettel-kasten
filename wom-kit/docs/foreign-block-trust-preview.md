@@ -1,6 +1,6 @@
 # Foreign Block Trust Preview
 
-Status: v0.2.29 baseline
+Status: v0.2.30 baseline
 
 ## Principle
 
@@ -27,6 +27,19 @@ archive foreign-block-trust <archive-root> --stdin --dry-run --format json
 
 The command reads only the intake report. It does not read the original foreign artifact again.
 
+## Attestation Packet Preview
+
+v0.2.30 adds one more read-only step:
+
+```bash
+archive foreign-block-attestation <archive-root> --trust-report <json-file> --dry-run --format json
+archive foreign-block-attestation <archive-root> --stdin --dry-run --format json
+```
+
+`foreign-block-attestation` consumes the trust preview report. It does not read the original foreign artifact again and does not create trust, write attestations, write receipts, import, mint, anchor, delegate, sign, or call provider APIs.
+
+The output is a human-review packet preview. `ready_for_human_attestation_review` is not trust and not approval.
+
 ## Output Boundary
 
 The output keeps:
@@ -46,10 +59,11 @@ The `proposed_trust_action` can be:
 
 ## Non-Goals
 
-v0.2.29 does not implement:
+v0.2.30 does not implement:
 
 - real trust/apply/import,
 - attestation writes,
+- receipt writes,
 - minting,
 - anchoring,
 - delegation,

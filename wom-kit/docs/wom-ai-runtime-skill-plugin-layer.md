@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.29 planning and implementation baseline
+Status: v0.2.30 planning and implementation baseline
 
 ## Purpose
 
@@ -48,7 +48,7 @@ wom_profile_wallet_check
 
 Profile resolution must happen before runtime context whenever the user names a target profile. This prevents the AI from assuming the current/default archive is correct.
 
-`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.29 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
+`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.30 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
 
 ## Prompt Boundary Check
 
@@ -209,6 +209,25 @@ foreign_block_trust_check
 
 Foreign block trust preview consumes only the intake report. It does not read the original foreign artifact again. It keeps `trust_state: untrusted_foreign`, writes nothing, sets `attestation_preview.would_attest: false`, and never imports, applies, trusts, mints, attests, anchors, transports, calls providers, or executes foreign text.
 
+## Foreign Block Attestation Packet Preview
+
+After foreign block trust preview, an AI runtime may preview a human-review packet for a future attestation workflow:
+
+```bash
+archive foreign-block-attestation <archive-root> --trust-report <json-file> --dry-run --format json
+archive foreign-block-attestation <archive-root> --stdin --dry-run --format json
+```
+
+MCP:
+
+```text
+foreign_block_attestation_packet_check
+```
+
+Foreign block attestation packet preview consumes only the trust report. It does not read the original foreign artifact again. It keeps `trust_state: untrusted_foreign`, writes nothing, sets `attestation_packet_preview.would_attest: false`, and never imports, applies, trusts, mints, attests, writes receipts, anchors, delegates, signs, transports, calls providers, or executes foreign text.
+
+`ready_for_human_attestation_review` is not trust and not approval. It only means the preview can be shown to a human reviewer later.
+
 ## Expected AI Runtime Flow
 
 An AI runtime should start with:
@@ -226,8 +245,9 @@ An AI runtime should start with:
 10. optionally run block-header dry-run for the draft/header preview
 11. run foreign-block dry-run before any future shared/foreign block trust path
 12. run foreign-block-trust dry-run on the intake report before any future attestation discussion
-13. run mint dry-run before asking for mint approval
-14. use CLI approval paths for real minting
+13. run foreign-block-attestation dry-run on the trust report before any future human attestation review
+14. run mint dry-run before asking for mint approval
+15. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -246,6 +266,7 @@ The skill tells the AI to:
 - use create-draft dry-run before any profile-bound draft write,
 - run foreign-block dry-run before trusting or importing any shared/foreign block artifact,
 - run foreign-block-trust dry-run before discussing future attestation eligibility,
+- run foreign-block-attestation dry-run before discussing any future human attestation review packet,
 - keep paths archive-relative,
 - avoid exposing local absolute paths,
 - use dry-run checks before approval requests,
@@ -256,7 +277,7 @@ The skill tells the AI to:
 
 The plugin layer should expose read and preview tools first.
 
-Allowed v0.2.29 direction:
+Allowed v0.2.30 direction:
 
 - profile list and profile resolve,
 - runtime context,
@@ -265,9 +286,10 @@ Allowed v0.2.29 direction:
 - block header preview,
 - foreign block intake preview,
 - foreign block trust preview,
+- foreign block attestation packet preview,
 - doctor,
 - list/read zets,
-- create-draft dry-run, source-intake plan composition, prompt-boundary report composition, foreign block intake/trust previews, and approved inbox draft writes,
+- create-draft dry-run, source-intake plan composition, prompt-boundary report composition, foreign block intake/trust/packet previews, and approved inbox draft writes,
 - dry-run mint checks,
 - safe HTML dry-run through CLI,
 - onboarding and source planning,
