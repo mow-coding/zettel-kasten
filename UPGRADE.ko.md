@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.35` | current public pre-release | `wom-kit/docs/releases/v0.2.35.md` |
+| `v0.2.36` | current public pre-release | `wom-kit/docs/releases/v0.2.36.md` |
+| `v0.2.35` | superseded public pre-release | `wom-kit/docs/releases/v0.2.35.md` |
 | `v0.2.34` | superseded public pre-release | `wom-kit/docs/releases/v0.2.34.md` |
 | `v0.2.33` | superseded public pre-release | `wom-kit/docs/releases/v0.2.33.md` |
 | `v0.2.32` | superseded public pre-release | `wom-kit/docs/releases/v0.2.32.md` |
@@ -62,6 +63,19 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.35` To `v0.2.36`
+
+This compatible patch adds a read-only review index for recorded quarantine decisions:
+
+- `archive quarantine-decision-review <archive-root> --format json`,
+- optional `--case-id`, `--decision`, and `--include-receipts`,
+- read-only MCP `foreign_block_quarantine_decision_review_index`,
+- consistency checks for quarantine decision records and matching decision receipts.
+
+No private archive migration is required.
+
+The command writes nothing. It does not trust, import, attest, mint, anchor, delegate, sign, accept, apply, share, or call providers.
 
 ## From `v0.2.34` To `v0.2.35`
 

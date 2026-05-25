@@ -37,6 +37,8 @@ Commands:
           Preview a future decision path for one foreign block quarantine case.
   record-quarantine-decision
           Preview or approve recording a local quarantine decision without trusting a foreign block.
+  quarantine-decision-review
+          List and validate recorded foreign block quarantine decisions.
   init    Create a new archive from a built-in template.
   index   Build a generated local SQLite search index.
   parcel Create a portable parcel from a view. Alias: pack.
@@ -1950,6 +1952,36 @@ def command_record_quarantine_decision(args: argparse.Namespace) -> int:
             print("Files written:")
             for value in result["files_written"]:
                 print(f"- {value}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok") else 1
+
+
+def command_quarantine_decision_review(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.foreign_block_quarantine_decision_review_index(
+            Path(args.archive_root),
+            case_id=args.case_id,
+            decision=args.decision,
+            include_receipts=args.include_receipts,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Foreign block quarantine decision review index: {result.get('decision_count', 0)} decision(s)")
+        print(f"Trust state: {result.get('trust_state') or '-'}")
+        for item in result.get("decisions", []):
+            print(f"- {item.get('case_id')}: {item.get('decision')} ({item.get('receipt_consistency', {}).get('status')})")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -3962,6 +3994,22 @@ def build_parser() -> argparse.ArgumentParser:
     record_quarantine_decision.add_argument("--review-note", help="Optional short non-secret operator note. Only summary metadata is stored.")
     record_quarantine_decision.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     record_quarantine_decision.set_defaults(func=command_record_quarantine_decision)
+
+    quarantine_decision_review = subcommands.add_parser(
+        "quarantine-decision-review",
+        help="List and validate recorded foreign block quarantine decisions without writing files.",
+    )
+    quarantine_decision_review.add_argument("archive_root", help="Archive root used for path safety and local context.")
+    quarantine_decision_review.add_argument("--case-id", help="Optional safe quarantine case id filter.")
+    quarantine_decision_review.add_argument(
+        "--decision",
+        choices=sorted(archive_services.FOREIGN_BLOCK_QUARANTINE_DECISIONS | {"all"}),
+        default="all",
+        help="Filter by recorded quarantine decision.",
+    )
+    quarantine_decision_review.add_argument("--include-receipts", action="store_true", help="Include sanitized decision receipt summaries.")
+    quarantine_decision_review.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    quarantine_decision_review.set_defaults(func=command_quarantine_decision_review)
 
     create_draft = subcommands.add_parser("create-draft", help="Create a draft zettel in inbox/.")
     create_draft.add_argument("archive_root", help="Archive root to write to.")

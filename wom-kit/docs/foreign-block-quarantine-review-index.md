@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Review Index
 
-Status: v0.2.35 compatible baseline
+Status: v0.2.36 compatible baseline
 
 ## Principle
 
@@ -74,6 +74,15 @@ archive record-quarantine-decision <archive-root> --decision-preview workbench/f
 
 The write is limited to one decision JSON and one decision receipt. It keeps the case untrusted and isolated.
 
+v0.2.36 adds a read-only index over recorded decisions:
+
+```bash
+archive quarantine-decision-review <archive-root> --format json
+archive quarantine-decision-review <archive-root> --decision all --include-receipts --format json
+```
+
+The decision review index does not accept, trust, import, attest, mint, anchor, delegate, sign, execute, apply, share, or call providers.
+
 ## MCP
 
 MCP exposes only:
@@ -88,7 +97,7 @@ MCP does not expose quarantine review apply, accept, import, trust, attest, mint
 
 ## Non-Goals
 
-v0.2.35 does not implement:
+v0.2.36 does not implement:
 
 - quarantine decision acceptance, trust, or apply,
 - quarantine review apply or acceptance,

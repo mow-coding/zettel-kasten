@@ -352,6 +352,84 @@ class McpServerTests(unittest.TestCase):
         receipt_path.write_text(json.dumps(receipt_doc, indent=2), encoding="utf-8")
         return [case_relative, receipt_relative]
 
+    def write_mcp_quarantine_decision_fixture(
+        self,
+        archive_root: Path,
+        case_id: str = "mcp-case-001",
+        decision: str = "keep_quarantined",
+    ) -> list[str]:
+        case_relative, receipt_relative = self.write_mcp_quarantine_case_fixture(archive_root, case_id)
+        decision_relative = f"quarantine/foreign-blocks/{case_id}/quarantine-decision.json"
+        decision_receipt_relative = f"receipts/quarantine/{case_id}.foreign-block-quarantine-decision.json"
+        case_sha = archive_services.sha256_path(archive_root / case_relative)
+        receipt_sha = archive_services.sha256_path(archive_root / receipt_relative)
+        reviewed_at = "2026-05-25T01:02:03Z"
+        decision_doc = {
+            "lifecycle_action": "foreign_block_quarantine_decision_record",
+            "archive_id": "archive:personal:fake-life",
+            "case_id": case_id,
+            "decision": decision,
+            "decision_status": "recorded_untrusted_decision",
+            "trust_state": "untrusted_foreign",
+            "reviewed_by": "person:mcp-reviewer",
+            "reviewed_at": reviewed_at,
+            "source_decision_preview_sha256": "d" * 64,
+            "source_quarantine_case_sha256": case_sha,
+            "source_quarantine_receipt_sha256": receipt_sha,
+            "review_note_summary": {
+                "provided": False,
+                "accepted_as_approval_context": False,
+                "stored": False,
+                "content_included": False,
+                "length": 0,
+            },
+            "case_summary": {},
+            "receipt_summary": {},
+            "approval_scope": "quarantine_decision_record_only",
+            "next_safe_actions": ["keep the foreign block untrusted"],
+            "disallowed_actions": ["mark_foreign_block_trusted", "import_foreign_block", "write_attestation"],
+            "foreign_block_imported": False,
+            "foreign_block_trusted": False,
+            "attestation_created": False,
+            "mint_performed": False,
+            "provider_api_called": False,
+            "zet_created": False,
+            "block_shared": False,
+        }
+        decision_receipt = {
+            "lifecycle_action": "foreign_block_quarantine_decision_write",
+            "receipt_kind": "foreign_block_quarantine_decision",
+            "archive_id": "archive:personal:fake-life",
+            "case_id": case_id,
+            "decision": decision,
+            "decision_status": "recorded_untrusted_decision",
+            "reviewed_by": "person:mcp-reviewer",
+            "reviewed_at": reviewed_at,
+            "trust_state": "untrusted_foreign",
+            "approval_scope": "quarantine_decision_record_only",
+            "files_written": [decision_relative, decision_receipt_relative],
+            "source_decision_preview_sha256": "d" * 64,
+            "source_quarantine_case_sha256": case_sha,
+            "source_quarantine_receipt_sha256": receipt_sha,
+            "decision_recorded": True,
+            "no_original_foreign_body_text_copied": True,
+            "trust_granted": False,
+            "foreign_block_imported": False,
+            "foreign_block_trusted": False,
+            "attestation_created": False,
+            "mint_performed": False,
+            "provider_api_called": False,
+            "zet_created": False,
+            "block_shared": False,
+        }
+        decision_path = archive_root / decision_relative
+        decision_receipt_path = archive_root / decision_receipt_relative
+        decision_path.parent.mkdir(parents=True, exist_ok=True)
+        decision_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        decision_path.write_text(json.dumps(decision_doc, indent=2), encoding="utf-8")
+        decision_receipt_path.write_text(json.dumps(decision_receipt, indent=2), encoding="utf-8")
+        return [case_relative, receipt_relative, decision_relative, decision_receipt_relative]
+
     def copy_fake_archive_as_company_target(self, root: Path) -> Path:
         archive_root = self.copy_fake_archive(root)
         archive_path = archive_root / "archive.yml"
@@ -498,6 +576,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("foreign_block_quarantine_review_index", tool_names)
             self.assertIn("foreign_block_quarantine_decision_check", tool_names)
             self.assertIn("record_quarantine_decision_check", tool_names)
+            self.assertIn("foreign_block_quarantine_decision_review_index", tool_names)
             self.assertIn("archive_index", tool_names)
             self.assertIn("archive_search", tool_names)
             self.assertIn("promotion_check", tool_names)
@@ -542,6 +621,9 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("foreign_block_quarantine_decision_write", tool_names)
             self.assertNotIn("record_quarantine_decision_apply", tool_names)
             self.assertNotIn("record_quarantine_decision_write", tool_names)
+            self.assertNotIn("foreign_block_quarantine_decision_review_apply", tool_names)
+            self.assertNotIn("foreign_block_quarantine_decision_review_write", tool_names)
+            self.assertNotIn("foreign_block_quarantine_decision_review_accept", tool_names)
             self.assertNotIn("quarantine_decision_write", tool_names)
             self.assertNotIn("quarantine_decision_apply", tool_names)
             self.assertNotIn("write_receipt", tool_names)
@@ -2734,6 +2816,81 @@ class McpServerTests(unittest.TestCase):
                                 "params": {
                                     "name": "record_quarantine_decision_check",
                                     "arguments": arguments,
+                                },
+                            },
+                        )
+                        self.assertTrue(response["result"]["isError"])
+        finally:
+            self.stop_server(process)
+
+    def test_foreign_block_quarantine_decision_review_index_writes_nothing(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                self.write_mcp_quarantine_decision_fixture(archive_root, "mcp-case-001")
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "foreign_block_quarantine_decision_review_index",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "case_id": "mcp-case-001",
+                                "decision": "keep_quarantined",
+                                "include_receipts": True,
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "foreign_block_quarantine_decision_review_index")
+                self.assertEqual(structured["decision_count"], 1)
+                self.assertEqual(structured["displayed_decision_count"], 1)
+                self.assertEqual(structured["total_decision_count"], 1)
+                self.assertEqual(structured["decisions"][0]["case_id"], "mcp-case-001")
+                self.assertEqual(structured["decisions"][0]["decision"], "keep_quarantined")
+                self.assertNotEqual(structured["decisions"], structured["cases"])
+                self.assertEqual(structured["cases"][0]["case_id"], "mcp-case-001")
+                self.assertEqual(structured["cases"][0]["decision_count"], 1)
+                self.assertTrue(structured["cases"][0]["quarantine_case_present"])
+                self.assertTrue(structured["cases"][0]["quarantine_receipt_present"])
+                self.assertTrue(structured["cases"][0]["decision_receipt_present"])
+                self.assertIn("receipt_summary", structured["decisions"][0])
+                self.assertFalse(structured["decisions"][0]["receipt_summary"]["trust_granted"])
+                self.assertFalse(structured["decisions"][0]["receipt_summary"]["provider_api_called"])
+                self.assertEqual(structured["would_change"], [])
+        finally:
+            self.stop_server(process)
+
+    def test_foreign_block_quarantine_decision_review_index_rejects_non_dry_run(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                for index, dry_run_value in enumerate([False, "yes", 1], start=1):
+                    with self.subTest(dry_run=dry_run_value):
+                        response = self.send(
+                            process,
+                            {
+                                "jsonrpc": "2.0",
+                                "id": index,
+                                "method": "tools/call",
+                                "params": {
+                                    "name": "foreign_block_quarantine_decision_review_index",
+                                    "arguments": {
+                                        "archive_root": str(archive_root),
+                                        "dry_run": dry_run_value,
+                                    },
                                 },
                             },
                         )

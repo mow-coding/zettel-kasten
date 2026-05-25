@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.35 planning and implementation baseline
+Status: v0.2.36 planning and implementation baseline
 
 ## Purpose
 
@@ -48,7 +48,7 @@ wom_profile_wallet_check
 
 Profile resolution must happen before runtime context whenever the user names a target profile. This prevents the AI from assuming the current/default archive is correct.
 
-`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.35 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
+`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.36 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
 
 ## Prompt Boundary Check
 
@@ -318,6 +318,27 @@ record_quarantine_decision_check
 
 The MCP tool is read-only and writes nothing. The CLI approve path writes exactly one sanitized decision JSON and one receipt after re-validating the current case and receipt. A recorded decision remains `untrusted_foreign`.
 
+## Foreign Block Quarantine Decision Review Index
+
+After quarantine decision records exist, an AI runtime may list and validate them before any later human review path:
+
+```bash
+archive quarantine-decision-review <archive-root> --format json
+archive quarantine-decision-review <archive-root> --case-id <safe-id> --decision all --include-receipts --format json
+```
+
+MCP:
+
+```text
+foreign_block_quarantine_decision_review_index
+```
+
+The decision review index reads existing quarantine decision JSON files, matching decision receipts, and the original quarantine case/receipt. It reports decision count, safe summaries, receipt consistency, case consistency, blockers, warnings, and `review_status: indexed_not_modified`.
+
+`--decision` filters only the displayed decision summaries. It does not relax consistency validation, so a hidden non-matching malformed decision can still make top-level `ok` false. `cases` is a separate case-level projection rather than a duplicate of `decisions`.
+
+It writes nothing and does not import, trust, accept, attest, mint, anchor, delegate, sign, execute, apply, or modify quarantine records.
+
 ## Expected AI Runtime Flow
 
 An AI runtime should start with:
@@ -341,8 +362,9 @@ An AI runtime should start with:
 16. use `quarantine-review` to list existing untrusted quarantine cases for later human review
 17. use `quarantine-decision --dry-run` to preview a future decision path for one case without recording it
 18. use `record-quarantine-decision --dry-run` and then CLI `--approve --reviewed-by` only after human/operator decision-record approval
-19. run mint dry-run before asking for mint approval
-20. use CLI approval paths for real minting
+19. use `quarantine-decision-review` to index recorded decisions and receipts without modifying them
+20. run mint dry-run before asking for mint approval
+21. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -367,6 +389,7 @@ The skill tells the AI to:
 - use quarantine-review to inventory existing untrusted quarantine cases without accepting them,
 - use quarantine-decision dry-run to preview candidate future decision paths without recording them,
 - use CLI-only `record-quarantine-decision` approval for local decision records; MCP remains check-only,
+- use quarantine-decision-review to inventory recorded decisions without accepting or applying them,
 - keep paths archive-relative,
 - avoid exposing local absolute paths,
 - use dry-run checks before approval requests,
@@ -377,7 +400,7 @@ The skill tells the AI to:
 
 The plugin layer should expose read and preview tools first.
 
-Allowed v0.2.35 direction:
+Allowed v0.2.36 direction:
 
 - profile list and profile resolve,
 - runtime context,
@@ -392,9 +415,10 @@ Allowed v0.2.35 direction:
 - foreign block quarantine review index,
 - foreign block quarantine decision preview,
 - foreign block quarantine decision write check,
+- foreign block quarantine decision review index,
 - doctor,
 - list/read zets,
-- create-draft dry-run, source-intake plan composition, prompt-boundary report composition, foreign block intake/trust/packet/quarantine previews, CLI-only quarantine case writes, quarantine review indexes, quarantine decision previews, CLI-only quarantine decision records, and approved inbox draft writes,
+- create-draft dry-run, source-intake plan composition, prompt-boundary report composition, foreign block intake/trust/packet/quarantine previews, CLI-only quarantine case writes, quarantine review indexes, quarantine decision previews, CLI-only quarantine decision records, quarantine decision review indexes, and approved inbox draft writes,
 - dry-run mint checks,
 - safe HTML dry-run through CLI,
 - onboarding and source planning,
@@ -412,6 +436,7 @@ Not allowed in this layer yet:
 - foreign block quarantine write tools through MCP,
 - foreign block quarantine review apply/accept tools through MCP,
 - foreign block quarantine decision apply/write/accept tools through MCP,
+- foreign block quarantine decision review apply/write/accept tools through MCP,
 - prompt boundary apply, auto-approve, or full-auto tools,
 - block header apply or block minting,
 - token, coin, NFT, staking, transport, relay, or provider apply tools,

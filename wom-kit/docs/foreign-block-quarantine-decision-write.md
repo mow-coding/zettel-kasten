@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Decision Write
 
-Status: v0.2.35 baseline
+Status: v0.2.36 compatible baseline
 
 ## Principle
 
@@ -76,9 +76,20 @@ record_quarantine_decision_check
 
 The MCP check mirrors dry-run validation and writes nothing. It does not approve, record, trust, import, attest, mint, anchor, delegate, sign, accept, apply, share, call providers, or create receipts.
 
+## Decision Review Index
+
+v0.2.36 adds a read-only index over recorded decisions:
+
+```bash
+archive quarantine-decision-review <archive-root> --format json
+archive quarantine-decision-review <archive-root> --case-id case-review-001 --include-receipts --format json
+```
+
+The index checks decision records, decision receipts, the original quarantine case, and the original quarantine receipt. It writes nothing and keeps the foreign block untrusted.
+
 ## Non-Goals
 
-v0.2.35 does not implement:
+v0.2.36 does not implement:
 
 - quarantine decision acceptance,
 - quarantine decision trust or apply,

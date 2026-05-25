@@ -73,6 +73,9 @@ record-quarantine-decision --dry-run
 record-quarantine-decision --approve --reviewed-by
   Write only a sanitized quarantine decision JSON and quarantine decision receipt after re-validating the current case and receipt. This never trusts, imports, mints, attests, anchors, delegates, signs, executes, accepts, applies, shares, or calls providers.
 
+quarantine-decision-review --format json
+  List and validate recorded foreign block quarantine decisions. This is read-only and never trusts, imports, mints, attests, anchors, delegates, signs, executes, accepts, applies, shares, calls providers, or writes files.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
@@ -603,6 +606,19 @@ python wom-kit\cli\archive.py record-quarantine-decision wom-kit\examples\fake-l
 ```
 
 Approved mode writes only `quarantine/foreign-blocks/<case-id>/quarantine-decision.json` and `receipts/quarantine/<case-id>.foreign-block-quarantine-decision.json`. It validates the saved decision preview, re-reads the current quarantine case and matching receipt, refuses overwrites, and stores only review-note summary metadata.
+
+Review recorded quarantine decisions:
+
+```powershell
+python wom-kit\cli\archive.py quarantine-decision-review wom-kit\examples\fake-life-archive `
+  --format json
+```
+
+Use `--case-id <safe-id>` for one case, `--decision keep_quarantined|reject_and_keep_record|eligible_for_attestation_review|needs_more_review|all` for a decision filter, and `--include-receipts` for sanitized decision receipt summaries. This command writes nothing and keeps `trust_state: untrusted_foreign`.
+
+`--decision` filters the displayed `decisions` list only. WOM-kit still validates every discovered decision record, decision receipt, current quarantine case, and original quarantine receipt before setting top-level `ok`. The JSON includes `displayed_decision_count`, `total_decision_count`, `filter_applied`, and a separate case-level `cases` projection.
+
+When receipt summaries are included, boolean fields use direct meanings. `trust_granted: false` means trust was not granted, and `provider_api_called: false` means no provider API call was recorded.
 
 The block-header preview reads only the target zet file. It derives header metadata from frontmatter, hashes only the zet body text and normalized header preview, and does not hash referenced objet/source files.
 

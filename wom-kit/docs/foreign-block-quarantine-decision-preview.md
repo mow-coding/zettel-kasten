@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Decision Preview
 
-Status: v0.2.35 compatible baseline
+Status: v0.2.36 compatible baseline
 
 ## Principle
 
@@ -94,9 +94,15 @@ archive record-quarantine-decision <archive-root> --decision-preview workbench/f
 
 This records only the local quarantine decision and a matching receipt. It re-validates the current case and receipt before writing, refuses overwrites, and keeps the foreign block untrusted.
 
+v0.2.36 adds a read-only review index for recorded decisions:
+
+```bash
+archive quarantine-decision-review <archive-root> --format json
+```
+
 ## Non-Goals
 
-v0.2.35 does not implement:
+v0.2.36 does not implement:
 
 - quarantine decision acceptance,
 - quarantine decision trust or apply,

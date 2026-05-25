@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Write
 
-Status: v0.2.35 compatible baseline
+Status: v0.2.36 compatible baseline
 
 ## Principle
 
@@ -120,9 +120,20 @@ archive record-quarantine-decision <archive-root> --decision-preview workbench/f
 
 Approved mode writes only `quarantine/foreign-blocks/<case-id>/quarantine-decision.json` and `receipts/quarantine/<case-id>.foreign-block-quarantine-decision.json`. It does not trust, import, attest, mint, anchor, delegate, sign, execute, accept, apply, share, or call providers.
 
+## Decision Review Index
+
+v0.2.36 adds a read-only index over recorded decisions:
+
+```bash
+archive quarantine-decision-review <archive-root> --format json
+archive quarantine-decision-review <archive-root> --case-id case-review-001 --include-receipts --format json
+```
+
+The index validates decision records, decision receipts, and the original quarantine case/receipt. It writes nothing and keeps every case `untrusted_foreign`.
+
 ## Non-Goals
 
-v0.2.35 does not implement:
+v0.2.36 does not implement:
 
 - quarantine decision acceptance, trust, or apply,
 - foreign block trust,

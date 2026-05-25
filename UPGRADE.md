@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.35` | current public pre-release | `wom-kit/docs/releases/v0.2.35.md` |
+| `v0.2.36` | current public pre-release | `wom-kit/docs/releases/v0.2.36.md` |
+| `v0.2.35` | superseded public pre-release | `wom-kit/docs/releases/v0.2.35.md` |
 | `v0.2.34` | superseded public pre-release | `wom-kit/docs/releases/v0.2.34.md` |
 | `v0.2.33` | superseded public pre-release | `wom-kit/docs/releases/v0.2.33.md` |
 | `v0.2.32` | superseded public pre-release | `wom-kit/docs/releases/v0.2.32.md` |
@@ -62,6 +63,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.35` To `v0.2.36`
+
+This is a compatible foreign block quarantine decision review index patch.
+
+What changed:
+
+- added `archive quarantine-decision-review <archive-root> --format json`,
+- added optional `--case-id`, `--decision`, and `--include-receipts`,
+- added read-only MCP `foreign_block_quarantine_decision_review_index`,
+- added consistency checks for recorded quarantine decision records and matching decision receipts.
+
+No private archive migration is required.
+
+The review index reads only quarantine cases, original quarantine receipts, recorded quarantine decision JSON, and matching decision receipts. It writes nothing and does not trust the foreign block, import it, attest it, mint it, anchor it, delegate it, sign it, accept it, apply it, share it, or call providers.
 
 ## From `v0.2.34` To `v0.2.35`
 
