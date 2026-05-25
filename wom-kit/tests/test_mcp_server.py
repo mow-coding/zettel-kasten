@@ -17,7 +17,7 @@ SRC_ROOT = KIT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from wom_kit import archive_cli
+from wom_kit import archive_cli, archive_services
 
 
 class McpServerTests(unittest.TestCase):
@@ -497,6 +497,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("quarantine_foreign_block_check", tool_names)
             self.assertIn("foreign_block_quarantine_review_index", tool_names)
             self.assertIn("foreign_block_quarantine_decision_check", tool_names)
+            self.assertIn("record_quarantine_decision_check", tool_names)
             self.assertIn("archive_index", tool_names)
             self.assertIn("archive_search", tool_names)
             self.assertIn("promotion_check", tool_names)
@@ -539,6 +540,9 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("quarantine_review_apply", tool_names)
             self.assertNotIn("foreign_block_quarantine_decision_apply", tool_names)
             self.assertNotIn("foreign_block_quarantine_decision_write", tool_names)
+            self.assertNotIn("record_quarantine_decision_apply", tool_names)
+            self.assertNotIn("record_quarantine_decision_write", tool_names)
+            self.assertNotIn("quarantine_decision_write", tool_names)
             self.assertNotIn("quarantine_decision_apply", tool_names)
             self.assertNotIn("write_receipt", tool_names)
             self.assertNotIn("import_foreign_block", tool_names)
@@ -2642,6 +2646,94 @@ class McpServerTests(unittest.TestCase):
                                         "case_id": "mcp-case-001",
                                         "dry_run": dry_run_value,
                                     },
+                                },
+                            },
+                        )
+                        self.assertTrue(response["result"]["isError"])
+        finally:
+            self.stop_server(process)
+
+    def test_record_quarantine_decision_check_writes_nothing(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                self.write_mcp_quarantine_case_fixture(archive_root, "mcp-case-001")
+                preview_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "foreign_block_quarantine_decision_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "case_id": "mcp-case-001",
+                                "decision_intent": "keep_quarantined",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                preview = preview_response["result"]["structuredContent"]
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "record_quarantine_decision_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "decision_preview": preview,
+                                "reviewed_by": "person:mcp-reviewer",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "record_quarantine_decision")
+                self.assertEqual(structured["case_id"], "mcp-case-001")
+                self.assertEqual(structured["decision"], "keep_quarantined")
+                self.assertEqual(structured["decision_status"], "not_recorded")
+                self.assertEqual(len(structured["would_change"]), 2)
+                for flag in archive_services.FOREIGN_BLOCK_QUARANTINE_DECISION_FALSE_FLAGS:
+                    self.assertFalse(structured[flag])
+        finally:
+            self.stop_server(process)
+
+    def test_record_quarantine_decision_check_rejects_non_dry_run_and_approve(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                for index, arguments in enumerate(
+                    [
+                        {"archive_root": str(archive_root), "dry_run": False},
+                        {"archive_root": str(archive_root), "dry_run": "yes"},
+                        {"archive_root": str(archive_root), "dry_run": 1},
+                        {"archive_root": str(archive_root), "dry_run": True, "approve": True},
+                    ],
+                    start=1,
+                ):
+                    with self.subTest(arguments=arguments):
+                        response = self.send(
+                            process,
+                            {
+                                "jsonrpc": "2.0",
+                                "id": index,
+                                "method": "tools/call",
+                                "params": {
+                                    "name": "record_quarantine_decision_check",
+                                    "arguments": arguments,
                                 },
                             },
                         )

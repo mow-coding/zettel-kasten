@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Decision Preview
 
-Status: v0.2.34 baseline
+Status: v0.2.35 compatible baseline
 
 ## Principle
 
@@ -83,12 +83,23 @@ The MCP tool is read-only and has a strict `dry_run is True` guard.
 
 MCP does not expose quarantine decision apply, write, accept, import, trust, attest, mint, anchor, delegate, signing, provider sync, ZET transport, or full-auto tools.
 
+## Decision Record
+
+v0.2.35 adds the next CLI-only approval step:
+
+```bash
+archive record-quarantine-decision <archive-root> --decision-preview workbench/foreign-block-quarantine-decision.json --dry-run --format json
+archive record-quarantine-decision <archive-root> --decision-preview workbench/foreign-block-quarantine-decision.json --approve --reviewed-by person:reviewer --format json
+```
+
+This records only the local quarantine decision and a matching receipt. It re-validates the current case and receipt before writing, refuses overwrites, and keeps the foreign block untrusted.
+
 ## Non-Goals
 
-v0.2.34 does not implement:
+v0.2.35 does not implement:
 
-- quarantine decision apply or write,
 - quarantine decision acceptance,
+- quarantine decision trust or apply,
 - foreign block trust,
 - foreign block import/apply,
 - foreign attestation writes,

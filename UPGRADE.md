@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.34` | current public pre-release | `wom-kit/docs/releases/v0.2.34.md` |
+| `v0.2.35` | current public pre-release | `wom-kit/docs/releases/v0.2.35.md` |
+| `v0.2.34` | superseded public pre-release | `wom-kit/docs/releases/v0.2.34.md` |
 | `v0.2.33` | superseded public pre-release | `wom-kit/docs/releases/v0.2.33.md` |
 | `v0.2.32` | superseded public pre-release | `wom-kit/docs/releases/v0.2.32.md` |
 | `v0.2.31` | superseded public pre-release | `wom-kit/docs/releases/v0.2.31.md` |
@@ -61,6 +62,31 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.34` To `v0.2.35`
+
+This is a compatible foreign block quarantine decision write approval patch.
+
+What changed:
+
+- added `archive record-quarantine-decision <archive-root> --decision-preview <json-file> --dry-run --format json`,
+- added `archive record-quarantine-decision <archive-root> --decision-preview <json-file> --approve --reviewed-by <actor-id> --format json`,
+- added optional `--expected-case-id`, `--expected-decision`, and `--review-note`,
+- added read-only MCP `record_quarantine_decision_check`,
+- added replay validation that re-reads the current quarantine case and matching quarantine write receipt before any approved local decision record write.
+
+No private archive migration is required.
+
+The approved write creates exactly two local files:
+
+```text
+quarantine/foreign-blocks/<case-id>/quarantine-decision.json
+receipts/quarantine/<case-id>.foreign-block-quarantine-decision.json
+```
+
+This records an operator-reviewed quarantine decision only. It does not trust the foreign block, import it, attest it, mint it, anchor it, delegate it, sign it, execute it, accept it, apply it, share it, or call providers.
+
+MCP remains read-only for this workflow. Real quarantine decision recording is CLI-only and requires `--approve --reviewed-by`.
 
 ## From `v0.2.33` To `v0.2.34`
 

@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Review Index
 
-Status: v0.2.34 baseline
+Status: v0.2.35 compatible baseline
 
 ## Principle
 
@@ -65,6 +65,15 @@ archive quarantine-decision <archive-root> --case-id case-review-001 --dry-run -
 
 The preview may propose `keep_quarantined`, `reject_and_keep_record`, `eligible_for_attestation_review`, or `needs_more_review`. It records no decision and does not trust, import, attest, mint, anchor, delegate, sign, execute, accept, or apply the foreign block.
 
+v0.2.35 adds a CLI-only decision record after a saved preview is reviewed:
+
+```bash
+archive record-quarantine-decision <archive-root> --decision-preview workbench/foreign-block-quarantine-decision.json --dry-run --format json
+archive record-quarantine-decision <archive-root> --decision-preview workbench/foreign-block-quarantine-decision.json --approve --reviewed-by person:reviewer --format json
+```
+
+The write is limited to one decision JSON and one decision receipt. It keeps the case untrusted and isolated.
+
 ## MCP
 
 MCP exposes only:
@@ -79,9 +88,9 @@ MCP does not expose quarantine review apply, accept, import, trust, attest, mint
 
 ## Non-Goals
 
-v0.2.34 does not implement:
+v0.2.35 does not implement:
 
-- quarantine decision apply or write,
+- quarantine decision acceptance, trust, or apply,
 - quarantine review apply or acceptance,
 - foreign block trust,
 - foreign block import/apply,

@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.34 planning and implementation baseline
+Status: v0.2.35 planning and implementation baseline
 
 ## Purpose
 
@@ -48,7 +48,7 @@ wom_profile_wallet_check
 
 Profile resolution must happen before runtime context whenever the user names a target profile. This prevents the AI from assuming the current/default archive is correct.
 
-`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.34 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
+`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.35 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
 
 ## Prompt Boundary Check
 
@@ -301,6 +301,23 @@ The decision preview may propose `keep_quarantined`, `reject_and_keep_record`, `
 
 `eligible_for_attestation_review` is not trust. It only means a future explicit attestation review path may be appropriate.
 
+## Foreign Block Quarantine Decision Record
+
+After the human/operator reviews a saved decision preview, CLI can preview or record the local decision:
+
+```bash
+archive record-quarantine-decision <archive-root> --decision-preview <json-file> --dry-run --format json
+archive record-quarantine-decision <archive-root> --decision-preview <json-file> --approve --reviewed-by <actor-id> --format json
+```
+
+MCP:
+
+```text
+record_quarantine_decision_check
+```
+
+The MCP tool is read-only and writes nothing. The CLI approve path writes exactly one sanitized decision JSON and one receipt after re-validating the current case and receipt. A recorded decision remains `untrusted_foreign`.
+
 ## Expected AI Runtime Flow
 
 An AI runtime should start with:
@@ -323,8 +340,9 @@ An AI runtime should start with:
 15. use `quarantine-foreign-block --dry-run` and then CLI `--approve --reviewed-by` only after human/operator isolation approval
 16. use `quarantine-review` to list existing untrusted quarantine cases for later human review
 17. use `quarantine-decision --dry-run` to preview a future decision path for one case without recording it
-18. run mint dry-run before asking for mint approval
-19. use CLI approval paths for real minting
+18. use `record-quarantine-decision --dry-run` and then CLI `--approve --reviewed-by` only after human/operator decision-record approval
+19. run mint dry-run before asking for mint approval
+20. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -348,6 +366,7 @@ The skill tells the AI to:
 - use CLI-only `quarantine-foreign-block` approval for isolation writes; MCP remains check-only,
 - use quarantine-review to inventory existing untrusted quarantine cases without accepting them,
 - use quarantine-decision dry-run to preview candidate future decision paths without recording them,
+- use CLI-only `record-quarantine-decision` approval for local decision records; MCP remains check-only,
 - keep paths archive-relative,
 - avoid exposing local absolute paths,
 - use dry-run checks before approval requests,
@@ -358,7 +377,7 @@ The skill tells the AI to:
 
 The plugin layer should expose read and preview tools first.
 
-Allowed v0.2.34 direction:
+Allowed v0.2.35 direction:
 
 - profile list and profile resolve,
 - runtime context,
@@ -372,9 +391,10 @@ Allowed v0.2.34 direction:
 - foreign block quarantine write check,
 - foreign block quarantine review index,
 - foreign block quarantine decision preview,
+- foreign block quarantine decision write check,
 - doctor,
 - list/read zets,
-- create-draft dry-run, source-intake plan composition, prompt-boundary report composition, foreign block intake/trust/packet/quarantine previews, CLI-only quarantine case writes, quarantine review indexes, quarantine decision previews, and approved inbox draft writes,
+- create-draft dry-run, source-intake plan composition, prompt-boundary report composition, foreign block intake/trust/packet/quarantine previews, CLI-only quarantine case writes, quarantine review indexes, quarantine decision previews, CLI-only quarantine decision records, and approved inbox draft writes,
 - dry-run mint checks,
 - safe HTML dry-run through CLI,
 - onboarding and source planning,

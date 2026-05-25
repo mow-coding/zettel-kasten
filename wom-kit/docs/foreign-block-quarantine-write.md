@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Write
 
-Status: v0.2.34 baseline
+Status: v0.2.35 compatible baseline
 
 ## Principle
 
@@ -109,11 +109,22 @@ archive quarantine-decision <archive-root> --case-id case-review-001 --dry-run -
 
 This is a candidate decision aid only. It does not record approval, write a decision, trust, import, attest, mint, anchor, delegate, sign, execute, accept, or apply the foreign block.
 
+## Decision Write
+
+v0.2.35 adds a CLI-only approved decision record after the preview:
+
+```bash
+archive record-quarantine-decision <archive-root> --decision-preview workbench/foreign-block-quarantine-decision.json --dry-run --format json
+archive record-quarantine-decision <archive-root> --decision-preview workbench/foreign-block-quarantine-decision.json --approve --reviewed-by person:reviewer --format json
+```
+
+Approved mode writes only `quarantine/foreign-blocks/<case-id>/quarantine-decision.json` and `receipts/quarantine/<case-id>.foreign-block-quarantine-decision.json`. It does not trust, import, attest, mint, anchor, delegate, sign, execute, accept, apply, share, or call providers.
+
 ## Non-Goals
 
-v0.2.34 does not implement:
+v0.2.35 does not implement:
 
-- quarantine decision apply or write,
+- quarantine decision acceptance, trust, or apply,
 - foreign block trust,
 - foreign block import/apply,
 - foreign attestation writes,

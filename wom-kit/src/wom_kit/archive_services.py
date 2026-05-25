@@ -212,6 +212,15 @@ FOREIGN_BLOCK_QUARANTINE_DECISION_DISALLOWED_ACTIONS = [
     "accept_foreign_block",
     "apply_foreign_block",
 ]
+FOREIGN_BLOCK_QUARANTINE_DECISION_FALSE_FLAGS = [
+    "foreign_block_imported",
+    "foreign_block_trusted",
+    "attestation_created",
+    "mint_performed",
+    "provider_api_called",
+    "zet_created",
+    "block_shared",
+]
 FOREIGN_BLOCK_QUARANTINE_CASE_ALLOWED_KEYS = {
     "case_id",
     "claimed_hashes",
@@ -3742,6 +3751,13 @@ def foreign_quarantine_write_paths(case_id: str) -> dict[str, str]:
     }
 
 
+def foreign_quarantine_decision_record_paths(case_id: str) -> dict[str, str]:
+    return {
+        "decision_record": f"quarantine/foreign-blocks/{case_id}/quarantine-decision.json",
+        "receipt": f"{FOREIGN_BLOCK_QUARANTINE_RECEIPTS_DIR}/{case_id}.foreign-block-quarantine-decision.json",
+    }
+
+
 def quarantine_foreign_block_empty_result(
     *,
     archive_id: str,
@@ -4686,6 +4702,554 @@ def foreign_block_quarantine_decision_preview(
         "warnings": unique_preserve_order(warnings),
         "would_change": [],
     }
+
+
+def record_quarantine_decision_empty_result(
+    *,
+    archive_id: str,
+    dry_run: bool,
+    blockers: list[str] | None = None,
+    warnings: list[str] | None = None,
+    approved: bool = False,
+    reviewed_by: str | None = None,
+    case_id: str | None = None,
+    decision: str | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": False,
+        "dry_run": dry_run,
+        "lifecycle_action": "record_quarantine_decision",
+        "archive_id": archive_id,
+        "approval_required": True,
+        "approved": approved,
+        "reviewed_by": safe_foreign_quarantine_actor_id(reviewed_by),
+        "trust_state": "untrusted_foreign",
+        "decision_status": "not_recorded",
+        "case_id": safe_foreign_quarantine_case_id(case_id),
+        "decision": decision if decision in FOREIGN_BLOCK_QUARANTINE_DECISIONS else None,
+        "proposed_paths": {},
+        "files_written": [],
+        "blockers": unique_preserve_order(blockers or []),
+        "warnings": unique_preserve_order(warnings or []),
+        "would_change": [],
+    }
+    for flag in FOREIGN_BLOCK_QUARANTINE_DECISION_FALSE_FLAGS:
+        result[flag] = False
+    return result
+
+
+def load_quarantine_decision_preview_from_path(
+    root: Path,
+    preview_path: str,
+    blockers: list[str],
+) -> dict[str, Any] | None:
+    try:
+        candidate = Path(preview_path)
+        if "\x00" in preview_path:
+            blockers.append("decision_preview path could not be read safely.")
+            return None
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+            if not is_path_within_root(resolved, root):
+                blockers.append("decision_preview path must stay inside the archive root.")
+                return None
+        else:
+            normalized = normalize_archive_relative_path(preview_path)
+            resolved = resolve_archive_relative_path(root, normalized)
+        if not resolved.is_file():
+            blockers.append("decision_preview path is not a file.")
+            return None
+        parsed = json.loads(resolved.read_text(encoding="utf-8"))
+    except ArchivePathError as exc:
+        blockers.append(f"decision_preview path could not be read safely: {exc}")
+        return None
+    except json.JSONDecodeError as exc:
+        blockers.append(f"decision_preview JSON is invalid: {exc.msg}.")
+        return None
+    except (OSError, UnicodeError):
+        blockers.append("decision_preview path could not be read safely.")
+        return None
+    if not isinstance(parsed, dict):
+        blockers.append("decision_preview JSON must be an object.")
+        return None
+    return parsed
+
+
+def validate_quarantine_decision_write_preview(
+    archive_id: str,
+    preview: dict[str, Any],
+    *,
+    expected_case_id: str | None = None,
+    expected_decision: str | None = None,
+) -> tuple[list[str], list[str], str | None, str | None, str]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    scan_foreign_quarantine_private_values(preview, blockers, "decision_preview", "decision_preview")
+
+    def require(condition: bool, message: str) -> None:
+        if not condition:
+            blockers.append(message)
+
+    require(preview.get("lifecycle_action") == "foreign_block_quarantine_decision_preview", "decision_preview.lifecycle_action must be foreign_block_quarantine_decision_preview.")
+    require(preview.get("ok") is True, "decision_preview.ok must be true.")
+    require(preview.get("dry_run") is True, "decision_preview.dry_run must be true.")
+    require(preview.get("archive_id") == archive_id, "decision_preview.archive_id must match this archive.")
+    require(preview.get("trust_state") == "untrusted_foreign", "decision_preview.trust_state must remain untrusted_foreign.")
+    require(preview.get("decision_status") == "preview_not_recorded", "decision_preview.decision_status must be preview_not_recorded.")
+    require(preview.get("would_change") == [], "decision_preview.would_change must be empty.")
+
+    preview_blockers = preview.get("blockers")
+    if not isinstance(preview_blockers, list):
+        blockers.append("decision_preview.blockers must be a list.")
+    elif preview_blockers:
+        blockers.append("decision_preview.blockers must be empty.")
+
+    preview_warnings = preview.get("warnings", [])
+    if preview_warnings is None:
+        preview_warnings = []
+    if not isinstance(preview_warnings, list):
+        blockers.append("decision_preview.warnings must be a list when present.")
+    elif preview_warnings:
+        warnings.append("decision_preview included warning metadata; the recorded decision remains untrusted.")
+
+    case_id = preview.get("case_id")
+    safe_case_id = safe_foreign_quarantine_case_id(case_id if isinstance(case_id, str) else None)
+    if safe_case_id is None:
+        blockers.append("decision_preview.case_id must be a safe id.")
+
+    decision = preview.get("proposed_decision")
+    safe_decision = decision if isinstance(decision, str) and decision in FOREIGN_BLOCK_QUARANTINE_DECISIONS else None
+    if safe_decision is None:
+        blockers.append("decision_preview.proposed_decision must be a supported quarantine decision.")
+
+    safe_expected_case_id = safe_foreign_quarantine_case_id(expected_case_id)
+    if expected_case_id and safe_expected_case_id is None:
+        blockers.append("expected_case_id must be a safe id.")
+    if safe_expected_case_id and safe_case_id and safe_expected_case_id != safe_case_id:
+        blockers.append("expected_case_id does not match decision_preview.case_id.")
+
+    if expected_decision and expected_decision not in FOREIGN_BLOCK_QUARANTINE_DECISIONS:
+        blockers.append("expected_decision must be a supported quarantine decision.")
+    if expected_decision in FOREIGN_BLOCK_QUARANTINE_DECISIONS and safe_decision and expected_decision != safe_decision:
+        blockers.append("expected_decision does not match decision_preview.proposed_decision.")
+
+    for flag in FOREIGN_BLOCK_QUARANTINE_DECISION_FALSE_FLAGS:
+        if preview.get(flag) is True:
+            blockers.append(f"decision_preview must not claim {flag}.")
+
+    for key in ["case_summary", "receipt_summary", "consistency_summary", "required_future_approval"]:
+        if key in preview and preview.get(key) is not None and not isinstance(preview.get(key), dict):
+            blockers.append(f"decision_preview.{key} must be an object when present.")
+
+    return blockers, warnings, safe_case_id, safe_decision, sha256_json_hex(preview)
+
+
+def quarantine_decision_note_approval_summary(review_note: str | None, safe_note: str | None) -> dict[str, Any]:
+    provided = review_note is not None and bool(review_note.strip())
+    return {
+        "provided": provided,
+        "accepted_as_approval_context": bool(safe_note),
+        "stored": False,
+        "content_included": False,
+        "length": len(safe_note) if safe_note else 0,
+    }
+
+
+def quarantine_decision_next_safe_actions(decision: str) -> list[str]:
+    if decision == "eligible_for_attestation_review":
+        return [
+            "run a future attestation review dry-run",
+            "require separate human approval before any trust or attestation write",
+        ]
+    if decision == "reject_and_keep_record":
+        return [
+            "keep the quarantine evidence isolated",
+            "do not import or trust the foreign block",
+        ]
+    if decision == "needs_more_review":
+        return [
+            "collect missing review context",
+            "keep the foreign block quarantined",
+        ]
+    return [
+        "keep the foreign block quarantined",
+        "run a new quarantine review before any future decision",
+    ]
+
+
+def revalidate_quarantine_decision_current_state(
+    root: Path,
+    case_id: str,
+    proposed_decision: str,
+    preview: dict[str, Any],
+) -> tuple[list[str], list[str], dict[str, Any], dict[str, Any] | None, str | None, str | None]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    case_path = archive_internal_path(root, f"quarantine/foreign-blocks/{case_id}/quarantine-case.json")
+    receipt_path = archive_internal_path(root, foreign_quarantine_write_paths(case_id)["receipt"])
+    if not case_path.is_file():
+        blockers.append("current quarantine case file is missing.")
+        return blockers, warnings, {}, None, None, None
+
+    summary, case_blockers, case_warnings = validate_quarantine_case_summary(
+        root=root,
+        case_path=case_path,
+        case_id_from_path=case_id,
+        include_receipts=True,
+    )
+    blockers.extend(case_blockers)
+    warnings.extend(case_warnings)
+    if case_warnings:
+        blockers.append("current quarantine case has warnings and must be reviewed before recording a decision.")
+    receipt_status = str(summary.get("receipt_consistency", {}).get("status") or "not_checked")
+    if not summary.get("receipt_present"):
+        blockers.append("current quarantine write receipt is missing.")
+    if receipt_status != "passed":
+        blockers.append("current quarantine receipt consistency must pass before recording a decision.")
+
+    current_preview = foreign_block_quarantine_decision_preview(
+        root,
+        case_id=case_id,
+        decision_intent=proposed_decision,
+        dry_run=True,
+    )
+    if current_preview.get("ok") is not True:
+        blockers.append("current quarantine state no longer supports the supplied decision preview.")
+    if current_preview.get("proposed_decision") != proposed_decision:
+        blockers.append("current proposed decision no longer matches the supplied decision preview.")
+    if sha256_json_hex(preview.get("case_summary") or {}) != sha256_json_hex(current_preview.get("case_summary") or {}):
+        blockers.append("decision_preview case summary no longer matches the current quarantine case.")
+    if sha256_json_hex(preview.get("receipt_summary") or {}) != sha256_json_hex(current_preview.get("receipt_summary") or {}):
+        blockers.append("decision_preview receipt summary no longer matches the current quarantine receipt.")
+
+    case_sha = sha256_path(case_path) if case_path.is_file() else None
+    receipt_sha = sha256_path(receipt_path) if receipt_path.is_file() else None
+    case_summary = sanitize_quarantine_decision_case_summary(summary) if summary else {}
+    receipt_summary = sanitize_quarantine_decision_receipt_summary(summary)
+    return blockers, warnings, case_summary, receipt_summary, case_sha, receipt_sha
+
+
+def build_foreign_quarantine_decision_record(
+    *,
+    archive_id: str,
+    case_id: str,
+    decision: str,
+    reviewed_by: str,
+    reviewed_at: str,
+    preview_sha256: str,
+    case_sha256: str,
+    receipt_sha256: str,
+    review_note_summary: dict[str, Any],
+    case_summary: dict[str, Any],
+    receipt_summary: dict[str, Any] | None,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "lifecycle_action": "foreign_block_quarantine_decision_record",
+        "archive_id": archive_id,
+        "case_id": case_id,
+        "decision": decision,
+        "decision_status": "recorded_untrusted_decision",
+        "trust_state": "untrusted_foreign",
+        "reviewed_by": reviewed_by,
+        "reviewed_at": reviewed_at,
+        "source_decision_preview_sha256": preview_sha256,
+        "source_quarantine_case_sha256": case_sha256,
+        "source_quarantine_receipt_sha256": receipt_sha256,
+        "review_note_summary": json_safe(review_note_summary),
+        "case_summary": json_safe(case_summary),
+        "receipt_summary": json_safe(receipt_summary or {}),
+        "approval_scope": "quarantine_decision_record_only",
+        "next_safe_actions": quarantine_decision_next_safe_actions(decision),
+        "disallowed_actions": [
+            "mark_foreign_block_trusted",
+            "import_foreign_block",
+            "write_attestation",
+            "mint_foreign_block",
+            "anchor_foreign_block",
+            "delegate_foreign_block",
+            "sign_foreign_block",
+            "call_provider_api",
+            "accept_foreign_block",
+            "apply_foreign_block",
+        ],
+    }
+    for flag in FOREIGN_BLOCK_QUARANTINE_DECISION_FALSE_FLAGS:
+        record[flag] = False
+    return json_safe(record)
+
+
+def build_foreign_quarantine_decision_receipt(
+    *,
+    archive_id: str,
+    case_id: str,
+    decision: str,
+    reviewed_by: str,
+    reviewed_at: str,
+    files_written: list[str],
+    preview_sha256: str,
+    case_sha256: str,
+    receipt_sha256: str,
+) -> dict[str, Any]:
+    receipt: dict[str, Any] = {
+        "lifecycle_action": "foreign_block_quarantine_decision_write",
+        "receipt_kind": "foreign_block_quarantine_decision",
+        "archive_id": archive_id,
+        "case_id": case_id,
+        "decision": decision,
+        "decision_status": "recorded_untrusted_decision",
+        "reviewed_by": reviewed_by,
+        "reviewed_at": reviewed_at,
+        "trust_state": "untrusted_foreign",
+        "approval_scope": "quarantine_decision_record_only",
+        "files_written": list(files_written),
+        "source_decision_preview_sha256": preview_sha256,
+        "source_quarantine_case_sha256": case_sha256,
+        "source_quarantine_receipt_sha256": receipt_sha256,
+    }
+    for flag in FOREIGN_BLOCK_QUARANTINE_DECISION_FALSE_FLAGS:
+        receipt[flag] = False
+    return receipt
+
+
+def record_quarantine_decision(
+    archive_root: Path | str,
+    *,
+    decision_preview_path: str | None = None,
+    decision_preview: dict[str, Any] | None = None,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    expected_case_id: str | None = None,
+    expected_decision: str | None = None,
+    review_note: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+    locator_count = sum(1 for item in [decision_preview_path, decision_preview] if item is not None)
+    if locator_count != 1:
+        blockers.append("Exactly one decision preview source is required.")
+
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    if approve and not reviewer:
+        blockers.append("Approved quarantine decision write requires --reviewed-by with a safe actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    safe_note = safe_foreign_quarantine_review_note(review_note)
+    if review_note and safe_note is None:
+        blockers.append("review_note must be short and must not contain local paths, URLs, tokens, or secrets.")
+
+    loaded_preview = decision_preview
+    if decision_preview_path is not None and not blockers:
+        loaded_preview = load_quarantine_decision_preview_from_path(root, decision_preview_path, blockers)
+
+    if blockers:
+        return record_quarantine_decision_empty_result(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            blockers=blockers,
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewed_by,
+            case_id=expected_case_id,
+            decision=expected_decision,
+        )
+
+    if not isinstance(loaded_preview, dict):
+        return record_quarantine_decision_empty_result(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            blockers=["decision_preview JSON must be an object."],
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewed_by,
+            case_id=expected_case_id,
+            decision=expected_decision,
+        )
+
+    preview_blockers, preview_warnings, case_id, decision, preview_sha256 = validate_quarantine_decision_write_preview(
+        archive_id,
+        loaded_preview,
+        expected_case_id=expected_case_id,
+        expected_decision=expected_decision,
+    )
+    blockers.extend(preview_blockers)
+    warnings.extend(preview_warnings)
+
+    case_summary: dict[str, Any] = {}
+    receipt_summary: dict[str, Any] | None = None
+    case_sha256: str | None = None
+    receipt_sha256: str | None = None
+    if case_id and decision:
+        current_blockers, current_warnings, case_summary, receipt_summary, case_sha256, receipt_sha256 = (
+            revalidate_quarantine_decision_current_state(root, case_id, decision, loaded_preview)
+        )
+        blockers.extend(current_blockers)
+        warnings.extend(current_warnings)
+
+    if case_id:
+        proposed_paths = foreign_quarantine_decision_record_paths(case_id)
+        validate_foreign_quarantine_paths(proposed_paths, blockers)
+        decision_path = archive_internal_path(root, proposed_paths["decision_record"])
+        receipt_path = archive_internal_path(root, proposed_paths["receipt"])
+        if decision_path.exists():
+            blockers.append("quarantine decision record already exists.")
+        if receipt_path.exists():
+            blockers.append("quarantine decision receipt already exists.")
+    else:
+        proposed_paths = {}
+
+    if blockers:
+        return record_quarantine_decision_empty_result(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            blockers=blockers,
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewed_by,
+            case_id=case_id or expected_case_id,
+            decision=decision or expected_decision,
+        )
+
+    if case_id is None or decision is None or case_sha256 is None or receipt_sha256 is None:
+        return record_quarantine_decision_empty_result(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            blockers=["Quarantine decision write could not prepare safe replay values."],
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewed_by,
+            case_id=case_id,
+            decision=decision,
+        )
+    files = [proposed_paths["decision_record"], proposed_paths["receipt"]]
+    preview_reviewed_by = reviewer or "required_on_approve"
+    reviewed_at = (
+        "<approval-time>"
+        if dry_run
+        else datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    )
+    review_note_summary = quarantine_decision_note_approval_summary(review_note, safe_note)
+    decision_record = build_foreign_quarantine_decision_record(
+        archive_id=archive_id,
+        case_id=case_id,
+        decision=decision,
+        reviewed_by=preview_reviewed_by,
+        reviewed_at=reviewed_at,
+        preview_sha256=preview_sha256,
+        case_sha256=case_sha256,
+        receipt_sha256=receipt_sha256,
+        review_note_summary=review_note_summary,
+        case_summary=case_summary,
+        receipt_summary=receipt_summary,
+    )
+    decision_receipt = build_foreign_quarantine_decision_receipt(
+        archive_id=archive_id,
+        case_id=case_id,
+        decision=decision,
+        reviewed_by=preview_reviewed_by,
+        reviewed_at=reviewed_at,
+        files_written=files,
+        preview_sha256=preview_sha256,
+        case_sha256=case_sha256,
+        receipt_sha256=receipt_sha256,
+    )
+    post_build_blockers: list[str] = []
+    scan_foreign_quarantine_private_values(decision_record, post_build_blockers, "quarantine_decision_record", "quarantine_decision_record")
+    scan_foreign_quarantine_private_values(decision_receipt, post_build_blockers, "quarantine_decision_receipt", "quarantine_decision_receipt")
+    if post_build_blockers:
+        return record_quarantine_decision_empty_result(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            blockers=post_build_blockers,
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewed_by,
+            case_id=case_id,
+            decision=decision,
+        )
+
+    if dry_run:
+        result = {
+            "ok": True,
+            "dry_run": True,
+            "lifecycle_action": "record_quarantine_decision",
+            "archive_id": archive_id,
+            "approval_required": True,
+            "approved": False,
+            "trust_state": "untrusted_foreign",
+            "decision_status": "not_recorded",
+            "case_id": case_id,
+            "decision": decision,
+            "proposed_paths": proposed_paths,
+            "quarantine_decision_record_preview": decision_record,
+            "quarantine_decision_receipt_preview": decision_receipt,
+            "blockers": [],
+            "warnings": unique_preserve_order(warnings),
+            "would_change": files,
+        }
+        for flag in FOREIGN_BLOCK_QUARANTINE_DECISION_FALSE_FLAGS:
+            result[flag] = False
+        return result
+
+    decision_path = archive_internal_path(root, proposed_paths["decision_record"])
+    receipt_path = archive_internal_path(root, proposed_paths["receipt"])
+    created_paths: list[Path] = []
+    created_dirs = missing_parent_dirs_before_write(root, [decision_path, receipt_path])
+    try:
+        decision_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_new_file(decision_path, decision_record)
+        created_paths.append(decision_path)
+        write_json_new_file(receipt_path, decision_receipt)
+        created_paths.append(receipt_path)
+    except Exception:
+        for created_path in reversed(created_paths):
+            try:
+                if created_path.exists():
+                    created_path.unlink()
+            except OSError:
+                pass
+        cleanup_created_empty_dirs(root, created_dirs)
+        return record_quarantine_decision_empty_result(
+            archive_id=archive_id,
+            dry_run=False,
+            blockers=["Quarantine decision write failed and any partial files were rolled back."],
+            warnings=warnings,
+            approved=True,
+            reviewed_by=reviewed_by,
+            case_id=case_id,
+            decision=decision,
+        )
+
+    result = {
+        "ok": True,
+        "dry_run": False,
+        "lifecycle_action": "record_quarantine_decision",
+        "archive_id": archive_id,
+        "approval_required": False,
+        "approved": True,
+        "reviewed_by": reviewer,
+        "reviewed_at": reviewed_at,
+        "trust_state": "untrusted_foreign",
+        "decision_status": "recorded_untrusted_decision",
+        "case_id": case_id,
+        "decision": decision,
+        "files_written": files,
+        "blockers": [],
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+        "quarantine_decision_record": decision_record,
+        "quarantine_decision_receipt": decision_receipt,
+    }
+    for flag in FOREIGN_BLOCK_QUARANTINE_DECISION_FALSE_FLAGS:
+        result[flag] = False
+    return result
 
 
 def collect_object_refs_from_value(value: Any, source: str, refs: list[dict[str, Any]]) -> None:

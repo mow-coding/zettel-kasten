@@ -12,6 +12,13 @@ KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
 
 
+def read_package_version() -> str:
+    for line in (KIT_ROOT / "pyproject.toml").read_text(encoding="utf-8").splitlines():
+        if line.startswith("version = "):
+            return line.split("=", 1)[1].strip().strip('"')
+    raise AssertionError("pyproject.toml is missing a project version.")
+
+
 class BootstrapTests(unittest.TestCase):
     def run_powershell_script(self, script_name: str, args: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         shell = shutil.which("powershell") or shutil.which("pwsh")
@@ -56,7 +63,8 @@ class BootstrapTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.strip(), "0.2.34")
+        self.assertEqual(result.stdout.strip(), "0.2.35")
+        self.assertEqual(result.stdout.strip(), read_package_version())
 
     def test_windows_setup_dry_run_changes_nothing(self) -> None:
         env_path = KIT_ROOT / ".env"

@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.34` | current public pre-release | `wom-kit/docs/releases/v0.2.34.md` |
+| `v0.2.35` | current public pre-release | `wom-kit/docs/releases/v0.2.35.md` |
+| `v0.2.34` | superseded public pre-release | `wom-kit/docs/releases/v0.2.34.md` |
 | `v0.2.33` | superseded public pre-release | `wom-kit/docs/releases/v0.2.33.md` |
 | `v0.2.32` | superseded public pre-release | `wom-kit/docs/releases/v0.2.32.md` |
 | `v0.2.31` | superseded public pre-release | `wom-kit/docs/releases/v0.2.31.md` |
@@ -61,6 +62,26 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.34` To `v0.2.35`
+
+This compatible patch adds CLI-only approved quarantine decision recording:
+
+- `archive record-quarantine-decision <archive-root> --decision-preview <json-file> --dry-run --format json`,
+- `archive record-quarantine-decision <archive-root> --decision-preview <json-file> --approve --reviewed-by <actor-id> --format json`,
+- optional `--expected-case-id`, `--expected-decision`, and `--review-note`,
+- read-only MCP `record_quarantine_decision_check`.
+
+No private archive migration is required.
+
+Approved mode writes exactly two local files:
+
+```text
+quarantine/foreign-blocks/<case-id>/quarantine-decision.json
+receipts/quarantine/<case-id>.foreign-block-quarantine-decision.json
+```
+
+This records only an operator-reviewed quarantine decision. It does not trust, import, attest, mint, anchor, delegate, sign, accept, apply, share, or call providers.
 
 ## From `v0.2.33` To `v0.2.34`
 

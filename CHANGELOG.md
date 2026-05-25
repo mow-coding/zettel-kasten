@@ -4,6 +4,26 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.35 - 2026-05-25
+
+Foreign block quarantine decision write approval patch.
+
+Added:
+
+- `archive record-quarantine-decision <archive-root> --decision-preview <json-file> --dry-run --format json`,
+- `archive record-quarantine-decision <archive-root> --decision-preview <json-file> --approve --reviewed-by <actor-id> --format json`,
+- CLI-only approval-gated quarantine decision records under `quarantine/foreign-blocks/<case-id>/quarantine-decision.json`,
+- quarantine decision receipts under `receipts/quarantine/<case-id>.foreign-block-quarantine-decision.json`,
+- read-only MCP `record_quarantine_decision_check` for dry-run validation only,
+- replay validation that re-reads the current quarantine case and receipt before any approved local decision record write.
+
+Compatibility:
+
+- no private archive migration is required,
+- decision writes are local review records only; they never trust, import, mint, attest, anchor, delegate, sign, execute, accept, apply, share, or call providers,
+- approved writes are limited to the sanitized quarantine decision JSON and quarantine decision receipt JSON,
+- MCP remains read-only for this workflow and exposes no quarantine decision apply/write/import/trust/attest/accept/full-auto tool.
+
 ## v0.2.34 - 2026-05-25
 
 Foreign block quarantine decision preview patch.

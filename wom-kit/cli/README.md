@@ -67,6 +67,12 @@ quarantine-review --format json
 quarantine-decision --dry-run
   Preview a future decision path for one existing foreign block quarantine case. This writes no decision and never trusts, imports, mints, attests, anchors, delegates, signs, executes, accepts, or applies the foreign block.
 
+record-quarantine-decision --dry-run
+  Preview the two local files that an approved quarantine decision record would create. This writes nothing and keeps the foreign block untrusted.
+
+record-quarantine-decision --approve --reviewed-by
+  Write only a sanitized quarantine decision JSON and quarantine decision receipt after re-validating the current case and receipt. This never trusts, imports, mints, attests, anchors, delegates, signs, executes, accepts, applies, shares, or calls providers.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
@@ -578,6 +584,25 @@ python wom-kit\cli\archive.py quarantine-decision wom-kit\examples\fake-life-arc
 ```
 
 `quarantine-decision` can propose `keep_quarantined`, `reject_and_keep_record`, `eligible_for_attestation_review`, or `needs_more_review`. Reviewer and review note fields are preview context only; they are not approval and are not stored.
+
+Preview or record an approved local quarantine decision:
+
+```powershell
+python wom-kit\cli\archive.py record-quarantine-decision wom-kit\examples\fake-life-archive `
+  --decision-preview workbench\foreign-block-quarantine-decision.json `
+  --dry-run `
+  --format json
+```
+
+```powershell
+python wom-kit\cli\archive.py record-quarantine-decision wom-kit\examples\fake-life-archive `
+  --decision-preview workbench\foreign-block-quarantine-decision.json `
+  --approve `
+  --reviewed-by person:me `
+  --format json
+```
+
+Approved mode writes only `quarantine/foreign-blocks/<case-id>/quarantine-decision.json` and `receipts/quarantine/<case-id>.foreign-block-quarantine-decision.json`. It validates the saved decision preview, re-reads the current quarantine case and matching receipt, refuses overwrites, and stores only review-note summary metadata.
 
 The block-header preview reads only the target zet file. It derives header metadata from frontmatter, hashes only the zet body text and normalized header preview, and does not hash referenced objet/source files.
 
