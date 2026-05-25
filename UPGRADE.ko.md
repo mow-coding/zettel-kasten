@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.32` | current public pre-release | `wom-kit/docs/releases/v0.2.32.md` |
+| `v0.2.33` | current public pre-release | `wom-kit/docs/releases/v0.2.33.md` |
+| `v0.2.32` | superseded public pre-release | `wom-kit/docs/releases/v0.2.32.md` |
 | `v0.2.31` | superseded public pre-release | `wom-kit/docs/releases/v0.2.31.md` |
 | `v0.2.30` | superseded public pre-release | `wom-kit/docs/releases/v0.2.30.md` |
 | `v0.2.29` | superseded public pre-release | `wom-kit/docs/releases/v0.2.29.md` |
@@ -59,6 +60,24 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.32` To `v0.2.33`
+
+This compatible patch adds a foreign block quarantine review index:
+
+- `archive quarantine-review <archive-root> --format json`,
+- optional `--case-id`, `--status`, and `--include-receipts`,
+- read-only MCP `foreign_block_quarantine_review_index`,
+- read-only checks for existing untrusted quarantine cases and matching quarantine write receipts.
+
+No private archive migration is required.
+
+The review index reads only:
+
+- `quarantine/foreign-blocks/<case-id>/quarantine-case.json`,
+- `receipts/quarantine/<case-id>.foreign-block-quarantine.json`.
+
+Indexing does not mean trust, import, acceptance, attestation, minting, anchoring, delegation, signing, or apply approval. It only gives a stable review list for untrusted quarantine cases.
 
 ## From `v0.2.31` To `v0.2.32`
 

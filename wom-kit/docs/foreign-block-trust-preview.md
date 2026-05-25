@@ -1,6 +1,6 @@
 # Foreign Block Trust Preview
 
-Status: v0.2.32 baseline
+Status: v0.2.33 baseline
 
 ## Principle
 
@@ -64,6 +64,16 @@ archive quarantine-foreign-block <archive-root> --plan <json-file> --approve --r
 
 This writes only a sanitized quarantine case and quarantine write receipt. It does not trust, import, mint, attest, anchor, delegate, sign, execute, or accept the foreign block.
 
+## Quarantine Review Index
+
+v0.2.33 adds a read-only review index:
+
+```bash
+archive quarantine-review <archive-root> --format json
+```
+
+This lists existing untrusted quarantine cases and matching receipt consistency only. It does not trust, import, attest, mint, anchor, delegate, sign, execute, accept, apply, or write files.
+
 ## Output Boundary
 
 The output keeps:
@@ -83,11 +93,12 @@ The `proposed_trust_action` can be:
 
 ## Non-Goals
 
-v0.2.32 does not implement:
+v0.2.33 does not implement:
 
 - real trust/apply/import,
 - attestation writes,
 - foreign attestation writes,
+- quarantine review apply or acceptance,
 - minting,
 - anchoring,
 - delegation,

@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.2.32 pre-release
+v0.2.33 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -58,6 +58,7 @@ v0.2.32 pre-release
 - foreign-block trust report를 읽고 미래 human review packet을 dry-run으로 미리 보는 `foreign-block-attestation` preview가 있습니다. 실제 trust, attestation, receipt, import, write는 하지 않습니다.
 - foreign-block attestation packet report를 읽고 미래 quarantine write 위치와 처리 방식을 dry-run으로 미리 보는 `foreign-block-quarantine` plan이 있습니다. 실제 quarantine file, trust, import, attestation, receipt는 만들지 않습니다.
 - `quarantine-foreign-block --approve --reviewed-by`는 sanitized untrusted quarantine case와 quarantine receipt만 씁니다. foreign block을 trust, import, mint, attest, anchor, delegate, sign, execute, accept하지 않습니다.
+- `quarantine-review`는 이미 만들어진 untrusted foreign block quarantine case와 matching receipt를 review index로 읽습니다. foreign block을 trust, import, attest, mint, anchor, delegate, sign, execute, accept, apply하지 않습니다.
 
 아직 없는 것:
 
@@ -196,6 +197,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.33
 v0.2.32
 v0.2.31
 v0.2.30

@@ -2913,6 +2913,25 @@ class ArchiveCliTests(unittest.TestCase):
         plan_path.write_text(output, encoding="utf-8")
         return plan_path, artifact_path
 
+    def write_foreign_block_quarantine_case(self, archive_root: Path) -> tuple[Path, Path, list[str]]:
+        plan_path, artifact_path = self.write_foreign_block_quarantine_plan_report(archive_root)
+        code, output = self.run_cli(
+            [
+                "quarantine-foreign-block",
+                str(archive_root),
+                "--plan",
+                archive_cli.archive_relative_path(plan_path, archive_root),
+                "--approve",
+                "--reviewed-by",
+                "person:reviewer",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        return plan_path, artifact_path, result["files_written"]
+
     def test_foreign_block_json_artifact_is_untrusted_read_only_preview(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -4586,6 +4605,215 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse((archive_root / "quarantine").exists())
             self.assertNotIn("UNSAFE_QUARANTINE_PLAN", output)
             self.assertNotIn("Traceback", output)
+
+    def test_quarantine_review_no_cases_returns_warning_and_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            code, output = self.run_cli(["quarantine-review", str(archive_root), "--format", "json"])
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(before, after)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "foreign_block_quarantine_review_index")
+            self.assertEqual(result["trust_state"], "untrusted_foreign")
+            self.assertEqual(result["case_count"], 0)
+            self.assertEqual(result["would_change"], [])
+            self.assertTrue(result["warnings"])
+
+    def test_quarantine_review_lists_valid_case_and_matching_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            _plan_path, artifact_path, files_written = self.write_foreign_block_quarantine_case(archive_root)
+            artifact_path.unlink()
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            code, output = self.run_cli(
+                ["quarantine-review", str(archive_root), "--include-receipts", "--format", "json"]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(before, after)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["case_count"], 1)
+            case = result["cases"][0]
+            self.assertEqual(case["case_id"], "case-review-001")
+            self.assertEqual(case["quarantine_status"], "written_untrusted")
+            self.assertEqual(case["trust_state"], "untrusted_foreign")
+            self.assertTrue(case["receipt_present"])
+            self.assertEqual(case["case_path"], files_written[0])
+            self.assertEqual(case["receipt_path"], files_written[1])
+            self.assertEqual(case["receipt_consistency"]["status"], "passed")
+            self.assertIn("receipt_summary", case)
+            self.assertNotIn(str(artifact_path.resolve()), output)
+
+    def test_quarantine_review_case_id_filter_and_unsafe_case_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.write_foreign_block_quarantine_case(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "quarantine-review",
+                    str(archive_root),
+                    "--case-id",
+                    "case-review-001",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["case_count"], 1)
+            self.assertEqual(result["cases"][0]["case_id"], "case-review-001")
+
+            bad_code, bad_output = self.run_cli(
+                [
+                    "quarantine-review",
+                    str(archive_root),
+                    "--case-id",
+                    "case/UNSAFE_REVIEW_INDEX",
+                    "--format",
+                    "json",
+                ]
+            )
+            bad = json.loads(bad_output)
+            self.assertEqual(bad_code, 1, bad_output)
+            self.assertFalse(bad["ok"])
+            self.assertEqual(bad["would_change"], [])
+            self.assertNotIn("UNSAFE_REVIEW_INDEX", bad_output)
+            self.assertNotIn("Traceback", bad_output)
+
+    def test_quarantine_review_invalid_json_and_case_id_path_mismatch_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            case_dir = archive_root / "quarantine" / "foreign-blocks" / "case-review-001"
+            case_dir.mkdir(parents=True)
+            case_path = case_dir / "quarantine-case.json"
+            case_path.write_text("{not valid json", encoding="utf-8")
+
+            code, output = self.run_cli(["quarantine-review", str(archive_root), "--format", "json"])
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertIn("invalid", " ".join(result["blockers"]).lower())
+            self.assertNotIn("Traceback", output)
+
+            case_path.write_text(
+                json.dumps(
+                    {
+                        "lifecycle_action": "foreign_block_quarantine_case",
+                        "quarantine_status": "written_untrusted",
+                        "trust_state": "untrusted_foreign",
+                        "case_id": "case-other",
+                        "quarantine_scope": "foreign_block_review_only",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            mismatch_code, mismatch_output = self.run_cli(["quarantine-review", str(archive_root), "--format", "json"])
+            mismatch = json.loads(mismatch_output)
+            self.assertEqual(mismatch_code, 1, mismatch_output)
+            self.assertFalse(mismatch["ok"])
+            self.assertIn("case_id", " ".join(mismatch["blockers"]))
+
+    def test_quarantine_review_blocks_trusted_status_and_changed_quarantine_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            _plan_path, _artifact_path, files_written = self.write_foreign_block_quarantine_case(archive_root)
+            case_path = archive_root / files_written[0]
+            case_doc = json.loads(case_path.read_text(encoding="utf-8"))
+            cases = [
+                ("trust_state", "trusted"),
+                ("quarantine_status", "reviewed"),
+            ]
+            for key, value in cases:
+                with self.subTest(key=key):
+                    mutated = dict(case_doc)
+                    mutated[key] = value
+                    case_path.write_text(json.dumps(mutated), encoding="utf-8")
+                    code, output = self.run_cli(["quarantine-review", str(archive_root), "--format", "json"])
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertIn(key, " ".join(result["blockers"]))
+                    self.assertNotIn("Traceback", output)
+            case_path.write_text(json.dumps(case_doc), encoding="utf-8")
+
+    def test_quarantine_review_missing_receipt_warns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            _plan_path, _artifact_path, files_written = self.write_foreign_block_quarantine_case(archive_root)
+            (archive_root / files_written[1]).unlink()
+
+            code, output = self.run_cli(["quarantine-review", str(archive_root), "--format", "json"])
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["case_count"], 1)
+            self.assertFalse(result["cases"][0]["receipt_present"])
+            self.assertEqual(result["cases"][0]["receipt_consistency"]["status"], "missing")
+            self.assertTrue(result["warnings"])
+
+    def test_quarantine_review_contradictory_receipt_and_true_flags_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            _plan_path, _artifact_path, files_written = self.write_foreign_block_quarantine_case(archive_root)
+            receipt_path = archive_root / files_written[1]
+            receipt_doc = json.loads(receipt_path.read_text(encoding="utf-8"))
+            cases = [
+                ("case_id", "case-other"),
+                ("trust_state", "trusted"),
+                ("foreign_block_imported", True),
+                ("foreign_block_trusted", True),
+                ("attestation_created", True),
+                ("mint_performed", True),
+                ("provider_api_called", True),
+            ]
+            for key, value in cases:
+                with self.subTest(key=key):
+                    mutated = dict(receipt_doc)
+                    mutated[key] = value
+                    receipt_path.write_text(json.dumps(mutated), encoding="utf-8")
+                    code, output = self.run_cli(["quarantine-review", str(archive_root), "--format", "json"])
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertIn(key, " ".join(result["blockers"]))
+                    self.assertNotIn("Traceback", output)
+            receipt_path.write_text(json.dumps(receipt_doc), encoding="utf-8")
+
+    def test_quarantine_review_rejects_unsafe_case_or_receipt_without_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            _plan_path, _artifact_path, files_written = self.write_foreign_block_quarantine_case(archive_root)
+            case_path = archive_root / files_written[0]
+            receipt_path = archive_root / files_written[1]
+            case_doc = json.loads(case_path.read_text(encoding="utf-8"))
+            receipt_doc = json.loads(receipt_path.read_text(encoding="utf-8"))
+            cases = [
+                (case_path, case_doc, "review_note"),
+                (receipt_path, receipt_doc, "unsafe_ref"),
+            ]
+            for path, payload, key in cases:
+                with self.subTest(path=path.name):
+                    mutated = dict(payload)
+                    mutated[key] = "s3" + "://bucket.invalid/UNSAFE_REVIEW_INDEX.bin"
+                    path.write_text(json.dumps(mutated), encoding="utf-8")
+                    code, output = self.run_cli(["quarantine-review", str(archive_root), "--format", "json"])
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertNotIn("UNSAFE_REVIEW_INDEX", output)
+                    self.assertNotIn("Traceback", output)
+                    path.write_text(json.dumps(payload), encoding="utf-8")
 
     def test_runtime_context_no_redact_local_paths_includes_local_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

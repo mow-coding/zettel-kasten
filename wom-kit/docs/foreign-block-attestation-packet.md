@@ -1,6 +1,6 @@
 # Foreign Block Attestation Packet Preview
 
-Status: v0.2.32 baseline
+Status: v0.2.33 baseline
 
 ## Principle
 
@@ -73,6 +73,14 @@ archive quarantine-foreign-block <archive-root> --plan <json-file> --approve --r
 
 Approved mode writes only a sanitized quarantine case and quarantine write receipt. It keeps `trust_state: untrusted_foreign` and still does not trust, import, mint, attest, anchor, delegate, sign, execute, or accept the foreign block.
 
+v0.2.33 adds a read-only review index for those existing quarantine cases:
+
+```bash
+archive quarantine-review <archive-root> --format json
+```
+
+The index helps a reviewer inventory untrusted quarantine cases and receipt consistency. It does not create trust, import, attestation, receipt writes, mint outputs, anchors, delegation, signatures, or acceptance.
+
 ## Safety Checks
 
 The command blocks if the trust report:
@@ -94,11 +102,12 @@ The MCP tool is read-only and dry-run only. It accepts a structured trust report
 
 ## Non-Goals
 
-v0.2.32 does not implement:
+v0.2.33 does not implement:
 
 - real trust/apply/import,
 - attestation writes,
 - foreign attestation writes,
+- quarantine review apply or acceptance,
 - minting,
 - anchoring,
 - delegation,

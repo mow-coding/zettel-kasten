@@ -1,6 +1,6 @@
 # Foreign Block Intake
 
-Status: v0.2.32 baseline
+Status: v0.2.33 baseline
 
 ## Principle
 
@@ -26,6 +26,7 @@ archive foreign-block-trust <archive-root> --intake-report <json-file> --dry-run
 archive foreign-block-attestation <archive-root> --trust-report <json-file> --dry-run --format json
 archive foreign-block-quarantine <archive-root> --attestation-packet <json-file> --dry-run --format json
 archive quarantine-foreign-block <archive-root> --plan <json-file> --dry-run --format json
+archive quarantine-review <archive-root> --format json
 ```
 
 Supported v0.2.28 inputs:
@@ -127,15 +128,32 @@ foreign block artifact
 
 `quarantine-foreign-block --approve --reviewed-by` writes only a sanitized untrusted quarantine case and quarantine receipt. It does not trust, import, mint, attest, anchor, delegate, sign, execute, or accept the foreign block.
 
+## Quarantine Review Index
+
+v0.2.33 adds a read-only review index:
+
+```text
+foreign block artifact
+-> foreign-block intake report
+-> foreign-block-trust preview
+-> foreign-block-attestation packet preview
+-> foreign-block-quarantine plan
+-> quarantine-foreign-block approved isolation write
+-> quarantine-review index
+```
+
+`quarantine-review` lists existing untrusted quarantine cases and matching receipt consistency. It does not trust, import, attest, mint, anchor, delegate, sign, execute, accept, apply, or write files.
+
 ## Non-Goals
 
-v0.2.32 does not implement:
+v0.2.33 does not implement:
 
 - real ZET transport,
 - foreign block import/apply,
 - automatic trust,
 - attestation writes,
 - foreign attestation writes,
+- quarantine review apply or acceptance,
 - draft creation from foreign content,
 - minting foreign content,
 - attesting or anchoring foreign content,

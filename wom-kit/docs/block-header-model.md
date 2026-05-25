@@ -1,6 +1,6 @@
 # Block Header Model
 
-Status: v0.2.32 draft baseline
+Status: v0.2.33 draft baseline
 Date: 2026-05-25
 
 ## Core Idea
@@ -102,6 +102,14 @@ archive quarantine-foreign-block <archive-root> --plan <json-file> --approve --r
 
 This writes an untrusted quarantine review case and quarantine receipt only. It does not trust, import, attest, mint, anchor, delegate, sign, execute, or accept the foreign block.
 
+v0.2.33 adds a read-only quarantine review index:
+
+```bash
+archive quarantine-review <archive-root> --format json
+```
+
+The index reads existing untrusted quarantine cases and matching quarantine receipts only. It helps humans review consistency before any future explicit process, but it is not acceptance, import, trust, attestation, minting, anchoring, delegation, signing, transport, or apply approval.
+
 The boundary is:
 
 ```text
@@ -115,7 +123,7 @@ Real ZET transport, foreign block import/apply, trust, attest, anchor, signing, 
 
 ## Non-Goals
 
-v0.2.32 does not implement:
+v0.2.33 does not implement:
 
 - real ZET transport,
 - token mechanics,
@@ -131,5 +139,6 @@ v0.2.32 does not implement:
 - blockchain behavior,
 - foreign attestation writes,
 - foreign attestation receipt writes.
+- quarantine review apply or acceptance.
 
 Those are possible future economic or network layers, not part of this read-only header preview.

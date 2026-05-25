@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Plan
 
-Status: v0.2.32 baseline
+Status: v0.2.33 baseline
 
 ## Principle
 
@@ -82,13 +82,24 @@ This is an isolation write. It records that an untrusted foreign block review ca
 
 MCP exposes only `quarantine_foreign_block_check`, which is read-only and writes nothing.
 
+## Review Index
+
+v0.2.33 adds a read-only review index after approved quarantine writes:
+
+```bash
+archive quarantine-review <archive-root> --format json
+```
+
+It lists existing untrusted quarantine cases and matching receipt consistency without changing the case, the receipt, or the foreign block trust state.
+
 ## Non-Goals
 
-v0.2.32 does not implement:
+v0.2.33 does not implement:
 
 - real trust/apply/import,
 - attestation writes,
 - foreign attestation writes,
+- quarantine review apply or acceptance,
 - minting,
 - anchoring,
 - delegation,

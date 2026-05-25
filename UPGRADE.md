@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.32` | current public pre-release | `wom-kit/docs/releases/v0.2.32.md` |
+| `v0.2.33` | current public pre-release | `wom-kit/docs/releases/v0.2.33.md` |
+| `v0.2.32` | superseded public pre-release | `wom-kit/docs/releases/v0.2.32.md` |
 | `v0.2.31` | superseded public pre-release | `wom-kit/docs/releases/v0.2.31.md` |
 | `v0.2.30` | superseded public pre-release | `wom-kit/docs/releases/v0.2.30.md` |
 | `v0.2.29` | superseded public pre-release | `wom-kit/docs/releases/v0.2.29.md` |
@@ -59,6 +60,26 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.32` To `v0.2.33`
+
+This is a compatible foreign block quarantine review index patch.
+
+What changed:
+
+- added `archive quarantine-review <archive-root> --format json`,
+- added optional `--case-id`, `--status`, and `--include-receipts`,
+- added read-only MCP `foreign_block_quarantine_review_index`,
+- added read-only inventory and consistency checks for existing untrusted quarantine cases and matching quarantine write receipts.
+
+No private archive migration is required.
+
+Quarantine review index reads existing files only:
+
+- `quarantine/foreign-blocks/<case-id>/quarantine-case.json`,
+- `receipts/quarantine/<case-id>.foreign-block-quarantine.json`.
+
+Indexing a case does not mean the case is trusted, imported, accepted, attested, minted, anchored, delegated, signed, or safe to apply. It only gives a reviewer a stable list of untrusted quarantine cases and obvious consistency blockers/warnings.
 
 ## From `v0.2.31` To `v0.2.32`
 

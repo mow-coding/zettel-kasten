@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Write
 
-Status: v0.2.32 baseline
+Status: v0.2.33 baseline
 
 ## Principle
 
@@ -86,13 +86,27 @@ The MCP tool is read-only and dry-run only. It writes nothing and has a strict `
 
 MCP does not expose quarantine write/apply, import, trust, attest, mint, anchor, delegate, signing, provider sync, ZET transport, or full-auto tools.
 
+## Review Index
+
+v0.2.33 adds a read-only review index for existing quarantine cases:
+
+```bash
+archive quarantine-review <archive-root> --format json
+archive quarantine-review <archive-root> --case-id case-review-001 --include-receipts --format json
+```
+
+The index reads only existing quarantine case JSON and matching quarantine write receipts. It reports case count, case summaries, receipt presence, receipt consistency, blockers, warnings, and next safe review actions.
+
+The review index does not change trust state. A listed case is still untrusted foreign material, not imported archive memory and not an accepted block.
+
 ## Non-Goals
 
-v0.2.32 does not implement:
+v0.2.33 does not implement:
 
 - foreign block trust,
 - foreign block import/apply,
 - foreign attestation writes,
+- quarantine review apply or acceptance,
 - minting from foreign blocks,
 - anchoring,
 - delegation,

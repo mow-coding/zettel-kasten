@@ -525,6 +525,21 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "foreign_block_quarantine_review_index",
+        "description": "Read-only inventory and consistency check for existing foreign block quarantine cases.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "case_id": {"type": "string"},
+                "status": {"type": "string", "enum": ["written_untrusted", "all"], "default": "written_untrusted"},
+                "include_receipts": {"type": "boolean", "default": False},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "create_draft_zettel",
         "description": "Create an AI draft zettel in inbox/. This does not mint to canonical memory.",
         "inputSchema": {
@@ -851,6 +866,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_foreign_block_quarantine_plan(arguments)
     if name == "quarantine_foreign_block_check":
         return tool_quarantine_foreign_block_check(arguments)
+    if name == "foreign_block_quarantine_review_index":
+        return tool_foreign_block_quarantine_review_index(arguments)
     if name == "create_draft_zettel":
         return tool_create_draft_zettel(arguments)
     if name == "list_views":
@@ -1416,6 +1433,24 @@ def tool_quarantine_foreign_block_check(arguments: dict[str, Any]) -> dict[str, 
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"quarantine_foreign_block_check: {state}.", result)
+
+
+def tool_foreign_block_quarantine_review_index(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("foreign_block_quarantine_review_index is dry-run only.")
+    case_id = optional_string_arg(arguments, "case_id")
+    status = optional_string_arg(arguments, "status") or "written_untrusted"
+    include_receipts = bool(arguments.get("include_receipts", False))
+    result = call_service(
+        archive_services.foreign_block_quarantine_review_index,
+        archive_root,
+        case_id=case_id,
+        status=status,
+        include_receipts=include_receipts,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"foreign_block_quarantine_review_index: {state}.", result)
 
 
 def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:

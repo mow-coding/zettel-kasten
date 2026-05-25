@@ -4,6 +4,25 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.33 - 2026-05-25
+
+Foreign block quarantine review index patch.
+
+Added:
+
+- `archive quarantine-review <archive-root> --format json`,
+- optional `--case-id`, `--status`, and `--include-receipts` filters,
+- read-only MCP `foreign_block_quarantine_review_index`,
+- inventory and consistency checks for `quarantine/foreign-blocks/<case-id>/quarantine-case.json`,
+- matching quarantine write receipt checks under `receipts/quarantine/<case-id>.foreign-block-quarantine.json`.
+
+Compatibility:
+
+- no private archive migration is required,
+- quarantine review index writes nothing and never reads the original foreign artifact,
+- indexing does not mean reviewed, trusted, imported, attested, minted, anchored, delegated, signed, or accepted,
+- MCP remains read-only and exposes no quarantine review apply/import/trust/attest/write tool.
+
 ## v0.2.32 - 2026-05-25
 
 Foreign block quarantine write approval patch.

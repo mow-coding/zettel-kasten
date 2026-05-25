@@ -61,6 +61,9 @@ quarantine-foreign-block --dry-run
 quarantine-foreign-block --approve --reviewed-by
   Write only a sanitized quarantine case JSON and quarantine write receipt. This is isolation only; it never trusts, imports, mints, attests, anchors, delegates, signs, executes, or accepts the foreign block.
 
+quarantine-review --format json
+  List and validate existing foreign block quarantine review cases. This is read-only and never trusts, imports, mints, attests, anchors, delegates, signs, executes, accepts, applies, or writes files.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
@@ -552,6 +555,15 @@ python wom-kit\cli\archive.py quarantine-foreign-block wom-kit\examples\fake-lif
 ```
 
 Approved mode writes only `quarantine/foreign-blocks/<case-id>/quarantine-case.json` and `receipts/quarantine/<case-id>.foreign-block-quarantine.json`. It keeps `trust_state: untrusted_foreign` and never imports, trusts, mints, attests, anchors, delegates, signs, executes, or accepts the foreign block.
+
+Review existing untrusted quarantine cases:
+
+```powershell
+python wom-kit\cli\archive.py quarantine-review wom-kit\examples\fake-life-archive `
+  --format json
+```
+
+Use `--case-id <safe-id>` for one case and `--include-receipts` when the reviewer needs sanitized receipt summaries. The command reads only quarantine case JSON and matching quarantine receipts, writes nothing, and keeps every foreign block untrusted.
 
 The block-header preview reads only the target zet file. It derives header metadata from frontmatter, hashes only the zet body text and normalized header preview, and does not hash referenced objet/source files.
 
