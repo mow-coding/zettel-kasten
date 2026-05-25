@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.31` | current public pre-release | `wom-kit/docs/releases/v0.2.31.md` |
+| `v0.2.32` | current public pre-release | `wom-kit/docs/releases/v0.2.32.md` |
+| `v0.2.31` | superseded public pre-release | `wom-kit/docs/releases/v0.2.31.md` |
 | `v0.2.30` | superseded public pre-release | `wom-kit/docs/releases/v0.2.30.md` |
 | `v0.2.29` | superseded public pre-release | `wom-kit/docs/releases/v0.2.29.md` |
 | `v0.2.28` | superseded public pre-release | `wom-kit/docs/releases/v0.2.28.md` |
@@ -58,6 +59,26 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.31` To `v0.2.32`
+
+This is a compatible foreign block quarantine write approval patch.
+
+What changed:
+
+- added `archive quarantine-foreign-block <archive-root> --plan <json-file> --dry-run --format json`,
+- added `archive quarantine-foreign-block <archive-root> --plan <json-file> --approve --reviewed-by <actor-id> --format json`,
+- added read-only MCP `quarantine_foreign_block_check`,
+- added a CLI-only approved local write for sanitized foreign block quarantine cases and quarantine write receipts.
+
+No private archive migration is required.
+
+Approved quarantine writes create only:
+
+- `quarantine/foreign-blocks/<case-id>/quarantine-case.json`,
+- `receipts/quarantine/<case-id>.foreign-block-quarantine.json`.
+
+Quarantine write is an isolation record. It does not make a foreign block canonical, trusted, imported, minted, attested, anchored, delegated, signed, executable, or accepted. MCP remains check-only for this workflow.
 
 ## From `v0.2.30` To `v0.2.31`
 

@@ -56,7 +56,7 @@ class BootstrapTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.strip(), "0.2.31")
+        self.assertEqual(result.stdout.strip(), "0.2.32")
 
     def test_windows_setup_dry_run_changes_nothing(self) -> None:
         env_path = KIT_ROOT / ".env"

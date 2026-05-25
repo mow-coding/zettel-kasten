@@ -1,6 +1,6 @@
 # Foreign Block Intake
 
-Status: v0.2.31 baseline
+Status: v0.2.32 baseline
 
 ## Principle
 
@@ -25,6 +25,7 @@ archive foreign-block <archive-root> --stdin --dry-run --format json
 archive foreign-block-trust <archive-root> --intake-report <json-file> --dry-run --format json
 archive foreign-block-attestation <archive-root> --trust-report <json-file> --dry-run --format json
 archive foreign-block-quarantine <archive-root> --attestation-packet <json-file> --dry-run --format json
+archive quarantine-foreign-block <archive-root> --plan <json-file> --dry-run --format json
 ```
 
 Supported v0.2.28 inputs:
@@ -111,16 +112,30 @@ Its `proposed_quarantine_action` can be:
 
 Even `ready_for_future_quarantine_write` does not mean trusted, imported, quarantined, or approved. It only means a future explicit quarantine-write workflow could be shown to a human/operator.
 
+## Quarantine Write
+
+v0.2.32 adds a CLI-only approved isolation write:
+
+```text
+foreign block artifact
+-> foreign-block intake report
+-> foreign-block-trust preview
+-> foreign-block-attestation packet preview
+-> foreign-block-quarantine plan
+-> quarantine-foreign-block approved isolation write
+```
+
+`quarantine-foreign-block --approve --reviewed-by` writes only a sanitized untrusted quarantine case and quarantine receipt. It does not trust, import, mint, attest, anchor, delegate, sign, execute, or accept the foreign block.
+
 ## Non-Goals
 
-v0.2.31 does not implement:
+v0.2.32 does not implement:
 
 - real ZET transport,
-- quarantine writes,
 - foreign block import/apply,
 - automatic trust,
 - attestation writes,
-- receipt writes,
+- foreign attestation writes,
 - draft creation from foreign content,
 - minting foreign content,
 - attesting or anchoring foreign content,

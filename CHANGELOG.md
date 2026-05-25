@@ -4,6 +4,26 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.32 - 2026-05-25
+
+Foreign block quarantine write approval patch.
+
+Added:
+
+- `archive quarantine-foreign-block <archive-root> --plan <json-file> --dry-run --format json`,
+- `archive quarantine-foreign-block <archive-root> --plan <json-file> --approve --reviewed-by <actor-id> --format json`,
+- CLI-only approval-gated quarantine case writes under `quarantine/foreign-blocks/<case-id>/quarantine-case.json`,
+- quarantine write receipts under `receipts/quarantine/<case-id>.foreign-block-quarantine.json`,
+- read-only MCP `quarantine_foreign_block_check` for dry-run validation only,
+- validation for v0.2.31 `foreign_block_quarantine_plan` reports before any approved local write.
+
+Compatibility:
+
+- no private archive migration is required,
+- quarantine write is an isolation record only; it does not trust, import, mint, attest, anchor, delegate, sign, or execute the foreign block,
+- approved writes are limited to the sanitized quarantine case JSON and quarantine write receipt JSON,
+- MCP remains read-only for this workflow and exposes no quarantine apply/write/import/trust/attest/full-auto tool.
+
 ## v0.2.31 - 2026-05-25
 
 Foreign block quarantine plan patch.

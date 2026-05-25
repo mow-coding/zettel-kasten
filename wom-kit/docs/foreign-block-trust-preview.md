@@ -1,6 +1,6 @@
 # Foreign Block Trust Preview
 
-Status: v0.2.31 baseline
+Status: v0.2.32 baseline
 
 ## Principle
 
@@ -53,6 +53,17 @@ archive foreign-block-quarantine <archive-root> --stdin --dry-run --format json
 
 `ready_for_future_quarantine_write` is not trust, not import, and not approval.
 
+## Quarantine Write
+
+v0.2.32 adds a CLI-only approved isolation write:
+
+```bash
+archive quarantine-foreign-block <archive-root> --plan <json-file> --dry-run --format json
+archive quarantine-foreign-block <archive-root> --plan <json-file> --approve --reviewed-by <actor-id> --format json
+```
+
+This writes only a sanitized quarantine case and quarantine write receipt. It does not trust, import, mint, attest, anchor, delegate, sign, execute, or accept the foreign block.
+
 ## Output Boundary
 
 The output keeps:
@@ -72,12 +83,11 @@ The `proposed_trust_action` can be:
 
 ## Non-Goals
 
-v0.2.31 does not implement:
+v0.2.32 does not implement:
 
 - real trust/apply/import,
-- quarantine writes,
 - attestation writes,
-- receipt writes,
+- foreign attestation writes,
 - minting,
 - anchoring,
 - delegation,

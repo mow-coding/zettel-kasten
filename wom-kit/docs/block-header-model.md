@@ -1,6 +1,6 @@
 # Block Header Model
 
-Status: v0.2.31 draft baseline
+Status: v0.2.32 draft baseline
 Date: 2026-05-25
 
 ## Core Idea
@@ -93,6 +93,15 @@ archive foreign-block-quarantine <archive-root> --stdin --dry-run --format json
 
 The result can return `blocked`, `hold_for_human_review`, or `ready_for_future_quarantine_write`, but it never creates quarantine files, trust, imports, attestations, receipts, mint outputs, or anchors.
 
+v0.2.32 adds a CLI-only quarantine write after that plan:
+
+```bash
+archive quarantine-foreign-block <archive-root> --plan <json-file> --dry-run --format json
+archive quarantine-foreign-block <archive-root> --plan <json-file> --approve --reviewed-by <actor-id> --format json
+```
+
+This writes an untrusted quarantine review case and quarantine receipt only. It does not trust, import, attest, mint, anchor, delegate, sign, execute, or accept the foreign block.
+
 The boundary is:
 
 ```text
@@ -106,7 +115,7 @@ Real ZET transport, foreign block import/apply, trust, attest, anchor, signing, 
 
 ## Non-Goals
 
-v0.2.31 does not implement:
+v0.2.32 does not implement:
 
 - real ZET transport,
 - token mechanics,
@@ -120,7 +129,6 @@ v0.2.31 does not implement:
 - relay behavior,
 - P2P behavior,
 - blockchain behavior,
-- foreign quarantine writes,
 - foreign attestation writes,
 - foreign attestation receipt writes.
 

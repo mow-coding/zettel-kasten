@@ -244,6 +244,61 @@ class McpServerTests(unittest.TestCase):
             "would_change": [],
         }
 
+    def foreign_block_quarantine_plan_fixture(self) -> dict:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "lifecycle_action": "foreign_block_quarantine_plan",
+            "archive_id": "archive:personal:fake-life",
+            "input_source": "structured_content",
+            "trust_state": "untrusted_foreign",
+            "quarantine_status": "planned_not_written",
+            "proposed_quarantine_action": "ready_for_future_quarantine_write",
+            "source_attestation_packet_summary": {
+                "packet_status": "ready_for_human_attestation_review",
+                "input_source": "structured_content",
+                "trust_state": "untrusted_foreign",
+                "claimed_hash_count": 1,
+                "claimed_hashes": [
+                    {
+                        "field": "claimed_block_hash",
+                        "value": "c" * 64,
+                        "claim_state": "claimed_by_foreign_artifact",
+                        "verification_state": "not_verified",
+                        "trust_state": "not_trusted",
+                    }
+                ],
+                "reference_summary": {"syntactically_safe": True, "resolution_state": "not_resolved_in_preview"},
+                "prompt_boundary_summary": {
+                    "risk_level": "low",
+                    "detected_pattern_ids": [],
+                    "manual_review_required": False,
+                },
+            },
+            "quarantine_plan": {
+                "would_quarantine": False,
+                "quarantine_write_status": "not_created",
+                "quarantine_scope": "foreign_block_review_only",
+                "quarantine_policy": "operator_review",
+                "quarantine_case_id": "mcp-case-001",
+                "reviewer": None,
+                "proposed_paths": {
+                    "case_dir": "quarantine/foreign-blocks/mcp-case-001",
+                    "quarantine_plan": "quarantine/foreign-blocks/mcp-case-001/quarantine-plan.json",
+                    "attestation_packet_copy": "quarantine/foreign-blocks/mcp-case-001/attestation-packet-preview.json",
+                    "operator_notes": "quarantine/foreign-blocks/mcp-case-001/review-notes.md",
+                },
+                "retained_material": ["attestation packet summary", "claimed hash metadata"],
+                "excluded_material": ["original foreign artifact body", "raw foreign text"],
+                "required_approval": "future explicit quarantine-write approval only",
+                "disallowed_actions": ["create_trust", "write_attestation", "import_foreign_block"],
+            },
+            "safety_checks": [{"id": "trust_state", "status": "passed"}],
+            "blockers": [],
+            "warnings": ["Quarantine plan is read-only and creates no quarantine, trust, import, attestation, or receipt."],
+            "would_change": [],
+        }
+
     def copy_fake_archive_as_company_target(self, root: Path) -> Path:
         archive_root = self.copy_fake_archive(root)
         archive_path = archive_root / "archive.yml"
@@ -386,6 +441,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("foreign_block_trust_check", tool_names)
             self.assertIn("foreign_block_attestation_packet_check", tool_names)
             self.assertIn("foreign_block_quarantine_plan", tool_names)
+            self.assertIn("quarantine_foreign_block_check", tool_names)
             self.assertIn("archive_index", tool_names)
             self.assertIn("archive_search", tool_names)
             self.assertIn("promotion_check", tool_names)
@@ -421,7 +477,9 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("foreign_block_trust_apply", tool_names)
             self.assertNotIn("foreign_block_attestation_apply", tool_names)
             self.assertNotIn("foreign_block_quarantine_apply", tool_names)
+            self.assertNotIn("quarantine_foreign_block_apply", tool_names)
             self.assertNotIn("quarantine_foreign_block", tool_names)
+            self.assertNotIn("foreign_block_quarantine_write", tool_names)
             self.assertNotIn("write_receipt", tool_names)
             self.assertNotIn("import_foreign_block", tool_names)
             self.assertNotIn("trust_foreign_block", tool_names)
@@ -2200,6 +2258,142 @@ class McpServerTests(unittest.TestCase):
                 self.assertFalse(structured["quarantine_plan"]["would_quarantine"])
                 self.assertIsNone(structured["quarantine_plan"]["reviewer"])
                 self.assertNotIn("UNSAFE_MCP_QUARANTINE", json.dumps(response))
+        finally:
+            self.stop_server(process)
+
+    def test_quarantine_foreign_block_check_writes_nothing(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "quarantine_foreign_block_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "quarantine_plan": self.foreign_block_quarantine_plan_fixture(),
+                                "reviewed_by": "person:mcp-reviewer",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "quarantine_foreign_block")
+                self.assertEqual(structured["trust_state"], "untrusted_foreign")
+                self.assertEqual(structured["quarantine_write_status"], "not_created")
+                self.assertEqual(
+                    structured["would_change"],
+                    [
+                        "quarantine/foreign-blocks/mcp-case-001/quarantine-case.json",
+                        "receipts/quarantine/mcp-case-001.foreign-block-quarantine.json",
+                    ],
+                )
+        finally:
+            self.stop_server(process)
+
+    def test_quarantine_foreign_block_check_accepts_archive_relative_plan_path(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                report_path = archive_root / "workbench" / "foreign-block-quarantine-plan.json"
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text(json.dumps(self.foreign_block_quarantine_plan_fixture()), encoding="utf-8")
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "quarantine_foreign_block_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "path": "workbench/foreign-block-quarantine-plan.json",
+                                "reviewed_by": "person:mcp-reviewer",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["case_id"], "mcp-case-001")
+        finally:
+            self.stop_server(process)
+
+    def test_quarantine_foreign_block_check_rejects_non_dry_run(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                for index, dry_run_value in enumerate([False, "yes", 1], start=1):
+                    with self.subTest(dry_run=dry_run_value):
+                        response = self.send(
+                            process,
+                            {
+                                "jsonrpc": "2.0",
+                                "id": index,
+                                "method": "tools/call",
+                                "params": {
+                                    "name": "quarantine_foreign_block_check",
+                                    "arguments": {
+                                        "archive_root": str(archive_root),
+                                        "quarantine_plan": self.foreign_block_quarantine_plan_fixture(),
+                                        "dry_run": dry_run_value,
+                                    },
+                                },
+                            },
+                        )
+                        self.assertTrue(response["result"]["isError"])
+        finally:
+            self.stop_server(process)
+
+    def test_quarantine_foreign_block_check_rejects_unsafe_plan_without_echo(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                plan = self.foreign_block_quarantine_plan_fixture()
+                plan["source_attestation_packet_summary"]["unsafe_locator"] = "s3" + "://redacted.example/UNSAFE_MCP_QUARANTINE_WRITE"
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "quarantine_foreign_block_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "quarantine_plan": plan,
+                                "reviewed_by": "person:mcp-reviewer",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertFalse(structured["ok"])
+                self.assertEqual(structured["quarantine_write_status"], "not_created")
+                self.assertEqual(structured["would_change"], [])
+                self.assertNotIn("UNSAFE_MCP_QUARANTINE_WRITE", json.dumps(response))
         finally:
             self.stop_server(process)
 

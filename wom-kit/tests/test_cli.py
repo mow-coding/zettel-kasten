@@ -10,6 +10,7 @@ import unittest
 import unicodedata
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
@@ -2889,6 +2890,29 @@ class ArchiveCliTests(unittest.TestCase):
         packet_path.write_text(output, encoding="utf-8")
         return packet_path, artifact_path
 
+    def write_foreign_block_quarantine_plan_report(self, archive_root: Path) -> tuple[Path, Path]:
+        packet_path, artifact_path = self.write_foreign_block_attestation_packet_report(archive_root)
+        code, output = self.run_cli(
+            [
+                "foreign-block-quarantine",
+                str(archive_root),
+                "--attestation-packet",
+                archive_cli.archive_relative_path(packet_path, archive_root),
+                "--quarantine-case-id",
+                "case-review-001",
+                "--quarantine-policy",
+                "operator_review",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        plan_path = archive_root / "workbench" / "foreign-block-quarantine-plan.json"
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_path.write_text(output, encoding="utf-8")
+        return plan_path, artifact_path
+
     def test_foreign_block_json_artifact_is_untrusted_read_only_preview(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -4123,6 +4147,445 @@ class ArchiveCliTests(unittest.TestCase):
                     self.assertFalse(result["quarantine_plan"]["would_quarantine"])
                     self.assertNotIn("UNSAFE_QUARANTINE_OPTION", output)
                     self.assertNotIn("Traceback", output)
+
+    def test_quarantine_foreign_block_dry_run_valid_plan_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _artifact_path = self.write_foreign_block_quarantine_plan_report(archive_root)
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            code, output = self.run_cli(
+                [
+                    "quarantine-foreign-block",
+                    str(archive_root),
+                    "--plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(before, after)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "quarantine_foreign_block")
+            self.assertTrue(result["approval_required"])
+            self.assertEqual(result["trust_state"], "untrusted_foreign")
+            self.assertEqual(result["quarantine_write_status"], "not_created")
+            self.assertEqual(
+                result["would_change"],
+                [
+                    "quarantine/foreign-blocks/case-review-001/quarantine-case.json",
+                    "receipts/quarantine/case-review-001.foreign-block-quarantine.json",
+                ],
+            )
+            for value in result["proposed_paths"].values():
+                self.assertFalse(Path(value).is_absolute())
+                self.assertNotIn("\\", value)
+            self.assertFalse((archive_root / "quarantine").exists())
+            self.assertNotIn(str(plan_path.resolve()), output)
+
+    def test_quarantine_foreign_block_approved_write_requires_approval_and_reviewer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _artifact_path = self.write_foreign_block_quarantine_plan_report(archive_root)
+            cases = [
+                [],
+                ["--approve"],
+                ["--dry-run", "--approve", "--reviewed-by", "person:reviewer"],
+            ]
+            for extra_args in cases:
+                with self.subTest(extra_args=extra_args):
+                    code, output = self.run_cli(
+                        [
+                            "quarantine-foreign-block",
+                            str(archive_root),
+                            "--plan",
+                            archive_cli.archive_relative_path(plan_path, archive_root),
+                            *extra_args,
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["quarantine_write_status"], "not_created")
+                    self.assertEqual(result["would_change"], [])
+                    self.assertFalse((archive_root / "quarantine").exists())
+                    self.assertNotIn("Traceback", output)
+
+    def test_quarantine_foreign_block_neither_mode_blocks_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _artifact_path = self.write_foreign_block_quarantine_plan_report(archive_root)
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            code, output = self.run_cli(
+                [
+                    "quarantine-foreign-block",
+                    str(archive_root),
+                    "--plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(before, after)
+            self.assertEqual(result["quarantine_write_status"], "not_created")
+            self.assertEqual(result["would_change"], [])
+            self.assertIn("exactly one mode", " ".join(result["blockers"]).lower())
+            self.assertFalse((archive_root / "quarantine").exists())
+            self.assertNotIn("Traceback", output)
+
+    def test_quarantine_foreign_block_approved_write_creates_only_case_and_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, artifact_path = self.write_foreign_block_quarantine_plan_report(archive_root)
+            before_files = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+
+            code, output = self.run_cli(
+                [
+                    "quarantine-foreign-block",
+                    str(archive_root),
+                    "--plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--expected-case-id",
+                    "case-review-001",
+                    "--review-note",
+                    "Operator isolated this foreign block for later review.",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertFalse(result["dry_run"])
+            self.assertTrue(result["approved"])
+            self.assertEqual(result["reviewed_by"], "person:reviewer")
+            self.assertEqual(result["trust_state"], "untrusted_foreign")
+            self.assertEqual(result["quarantine_write_status"], "created")
+            self.assertEqual(result["would_change"], [])
+            expected_files = [
+                "quarantine/foreign-blocks/case-review-001/quarantine-case.json",
+                "receipts/quarantine/case-review-001.foreign-block-quarantine.json",
+            ]
+            self.assertEqual(result["files_written"], expected_files)
+            after_files = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+            self.assertEqual(sorted(before_files + expected_files), after_files)
+
+            case_doc = json.loads((archive_root / expected_files[0]).read_text(encoding="utf-8"))
+            receipt_doc = json.loads((archive_root / expected_files[1]).read_text(encoding="utf-8"))
+            self.assertEqual(case_doc["lifecycle_action"], "foreign_block_quarantine_case")
+            self.assertEqual(case_doc["quarantine_status"], "written_untrusted")
+            self.assertEqual(case_doc["trust_state"], "untrusted_foreign")
+            self.assertEqual(receipt_doc["receipt_kind"], "foreign_block_quarantine_write")
+            self.assertFalse(receipt_doc["foreign_block_imported"])
+            self.assertFalse(receipt_doc["foreign_block_trusted"])
+            self.assertFalse(receipt_doc["attestation_created"])
+            self.assertFalse(receipt_doc["mint_performed"])
+            self.assertFalse(receipt_doc["provider_api_called"])
+            combined = json.dumps([case_doc, receipt_doc], ensure_ascii=False)
+            self.assertNotIn(str(artifact_path.resolve()), combined)
+            self.assertNotIn(str(plan_path.resolve()), combined)
+            self.assertNotIn("://", combined)
+            self.assertNotIn("PRIVATE KEY", combined)
+
+    def test_quarantine_foreign_block_default_case_id_approved_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            packet_path, _artifact_path = self.write_foreign_block_attestation_packet_report(archive_root)
+            code, output = self.run_cli(
+                [
+                    "foreign-block-quarantine",
+                    str(archive_root),
+                    "--attestation-packet",
+                    archive_cli.archive_relative_path(packet_path, archive_root),
+                    "--quarantine-policy",
+                    "operator_review",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            plan_path = archive_root / "workbench" / "foreign-block-quarantine-default-case-plan.json"
+            plan_path.write_text(output, encoding="utf-8")
+            before_files = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+
+            write_code, write_output = self.run_cli(
+                [
+                    "quarantine-foreign-block",
+                    str(archive_root),
+                    "--plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(write_output)
+            self.assertEqual(write_code, 0, write_output)
+            self.assertRegex(result["case_id"], r"^case-[0-9a-f]{16}$")
+            expected_files = [
+                f"quarantine/foreign-blocks/{result['case_id']}/quarantine-case.json",
+                f"receipts/quarantine/{result['case_id']}.foreign-block-quarantine.json",
+            ]
+            self.assertEqual(result["files_written"], expected_files)
+            for value in expected_files:
+                self.assertFalse(Path(value).is_absolute())
+                self.assertNotIn("\\", value)
+                self.assertTrue((archive_root / value).is_file())
+            after_files = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+            self.assertEqual(sorted(before_files + expected_files), after_files)
+
+    def test_quarantine_foreign_block_rolls_back_partial_write_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _artifact_path = self.write_foreign_block_quarantine_plan_report(archive_root)
+            real_writer = archive_services.write_json_new_file
+            calls: list[str] = []
+
+            def flaky_writer(path: Path, payload: dict) -> None:
+                calls.append(path.name)
+                if path.name.endswith(".foreign-block-quarantine.json"):
+                    raise OSError("synthetic receipt write failure")
+                real_writer(path, payload)
+
+            with patch.object(archive_services, "write_json_new_file", side_effect=flaky_writer):
+                code, output = self.run_cli(
+                    [
+                        "quarantine-foreign-block",
+                        str(archive_root),
+                        "--plan",
+                        archive_cli.archive_relative_path(plan_path, archive_root),
+                        "--approve",
+                        "--reviewed-by",
+                        "person:reviewer",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            result = json.loads(output)
+            case_file = archive_root / "quarantine" / "foreign-blocks" / "case-review-001" / "quarantine-case.json"
+            receipt_file = archive_root / "receipts" / "quarantine" / "case-review-001.foreign-block-quarantine.json"
+            case_dir = archive_root / "quarantine" / "foreign-blocks" / "case-review-001"
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["quarantine_write_status"], "not_created")
+            self.assertEqual(result["files_written"], [])
+            self.assertIn("rolled back", " ".join(result["blockers"]).lower())
+            self.assertEqual(calls, ["quarantine-case.json", "case-review-001.foreign-block-quarantine.json"])
+            self.assertFalse(case_file.exists())
+            self.assertFalse(receipt_file.exists())
+            self.assertFalse(case_dir.exists())
+            self.assertNotIn("synthetic receipt write failure", output)
+            self.assertNotIn("Traceback", output)
+
+    def test_quarantine_foreign_block_refuses_hold_plan_and_existing_case(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _artifact_path = self.write_foreign_block_quarantine_plan_report(archive_root)
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan["proposed_quarantine_action"] = "hold_for_human_review"
+            plan["warnings"] = ["Manual review is still required."]
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "quarantine-foreign-block",
+                    str(archive_root),
+                    "--plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["quarantine_write_status"], "not_created")
+            self.assertFalse((archive_root / "quarantine").exists())
+
+            plan["proposed_quarantine_action"] = "ready_for_future_quarantine_write"
+            plan["warnings"] = []
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            first_code, first_output = self.run_cli(
+                [
+                    "quarantine-foreign-block",
+                    str(archive_root),
+                    "--plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(first_code, 0, first_output)
+            second_code, second_output = self.run_cli(
+                [
+                    "quarantine-foreign-block",
+                    str(archive_root),
+                    "--plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            second = json.loads(second_output)
+            self.assertEqual(second_code, 1, second_output)
+            self.assertFalse(second["ok"])
+            self.assertIn("already exists", " ".join(second["blockers"]))
+
+    def test_quarantine_foreign_block_plan_archive_id_mismatch_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _artifact_path = self.write_foreign_block_quarantine_plan_report(archive_root)
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan["archive_id"] = "archive:personal:other"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            code, output = self.run_cli(
+                [
+                    "quarantine-foreign-block",
+                    str(archive_root),
+                    "--plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(before, after)
+            self.assertEqual(result["quarantine_write_status"], "not_created")
+            self.assertIn("archive_id", " ".join(result["blockers"]))
+            self.assertNotIn(str(archive_root.resolve()), output)
+            self.assertNotIn("Traceback", output)
+
+    def test_quarantine_foreign_block_rejects_bad_inputs_without_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _artifact_path = self.write_foreign_block_quarantine_plan_report(archive_root)
+            cases = [
+                ["--expected-case-id", "case/UNSAFE_QUARANTINE_WRITE"],
+                ["--reviewed-by", "s3" + "://bucket.invalid/UNSAFE_QUARANTINE_WRITE"],
+                ["--review-note", "s3" + "://bucket.invalid/UNSAFE_QUARANTINE_WRITE"],
+            ]
+            for extra_args in cases:
+                with self.subTest(extra_args=extra_args):
+                    code, output = self.run_cli(
+                        [
+                            "quarantine-foreign-block",
+                            str(archive_root),
+                            "--plan",
+                            archive_cli.archive_relative_path(plan_path, archive_root),
+                            "--approve",
+                            "--reviewed-by",
+                            "person:reviewer",
+                            *extra_args,
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["quarantine_write_status"], "not_created")
+                    self.assertNotIn("UNSAFE_QUARANTINE_WRITE", output)
+                    self.assertNotIn("Traceback", output)
+
+    def test_quarantine_foreign_block_bad_plan_paths_and_json_fail_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            invalid_path = archive_root / "workbench" / "invalid-quarantine-plan.json"
+            invalid_path.parent.mkdir(parents=True, exist_ok=True)
+            invalid_path.write_text("{not valid json", encoding="utf-8")
+            cases = [
+                "workbench/invalid-quarantine-plan.json",
+                "workbench/missing-quarantine-plan.json",
+                "../outside-quarantine-plan.json",
+            ]
+            for path_arg in cases:
+                with self.subTest(path_arg=path_arg):
+                    code, output = self.run_cli(
+                        [
+                            "quarantine-foreign-block",
+                            str(archive_root),
+                            "--plan",
+                            path_arg,
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["quarantine_write_status"], "not_created")
+                    self.assertFalse((archive_root / "quarantine").exists())
+                    self.assertNotIn("Traceback", output)
+
+    def test_quarantine_foreign_block_rejects_unsafe_plan_without_echo_or_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _artifact_path = self.write_foreign_block_quarantine_plan_report(archive_root)
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan["source_attestation_packet_summary"]["unsafe_locator"] = "s3" + "://bucket.invalid/UNSAFE_QUARANTINE_PLAN.bin"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "quarantine-foreign-block",
+                    str(archive_root),
+                    "--plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["would_change"], [])
+            self.assertFalse((archive_root / "quarantine").exists())
+            self.assertNotIn("UNSAFE_QUARANTINE_PLAN", output)
+            self.assertNotIn("Traceback", output)
 
     def test_runtime_context_no_redact_local_paths_includes_local_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

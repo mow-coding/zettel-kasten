@@ -55,6 +55,12 @@ foreign-block-attestation --dry-run
 foreign-block-quarantine --dry-run
   Plan future isolated holding paths from a foreign-block attestation packet preview. This writes nothing, creates no quarantine files, trust, import, attestation, or receipt, and re-reads no original foreign artifact.
 
+quarantine-foreign-block --dry-run
+  Preview the first approved local quarantine case write from a foreign-block quarantine plan. This writes nothing and keeps the foreign block untrusted.
+
+quarantine-foreign-block --approve --reviewed-by
+  Write only a sanitized quarantine case JSON and quarantine write receipt. This is isolation only; it never trusts, imports, mints, attests, anchors, delegates, signs, executes, or accepts the foreign block.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
@@ -525,6 +531,27 @@ python wom-kit\cli\archive.py foreign-block-quarantine wom-kit\examples\fake-lif
 ```
 
 The result still uses `trust_state: untrusted_foreign`, keeps `would_change: []`, sets `quarantine_plan.would_quarantine` to `false`, and never creates quarantine files, trust, attestations, receipts, imports, or mint outputs.
+
+Preview an approved local quarantine case write from a quarantine plan:
+
+```powershell
+python wom-kit\cli\archive.py quarantine-foreign-block wom-kit\examples\fake-life-archive `
+  --plan workbench\foreign-block-quarantine-plan.json `
+  --dry-run `
+  --format json
+```
+
+Approve the isolated quarantine write after human/operator review:
+
+```powershell
+python wom-kit\cli\archive.py quarantine-foreign-block wom-kit\examples\fake-life-archive `
+  --plan workbench\foreign-block-quarantine-plan.json `
+  --approve `
+  --reviewed-by person:me `
+  --format json
+```
+
+Approved mode writes only `quarantine/foreign-blocks/<case-id>/quarantine-case.json` and `receipts/quarantine/<case-id>.foreign-block-quarantine.json`. It keeps `trust_state: untrusted_foreign` and never imports, trusts, mints, attests, anchors, delegates, signs, executes, or accepts the foreign block.
 
 The block-header preview reads only the target zet file. It derives header metadata from frontmatter, hashes only the zet body text and normalized header preview, and does not hash referenced objet/source files.
 

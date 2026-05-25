@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.31 planning and implementation baseline
+Status: v0.2.32 planning and implementation baseline
 
 ## Purpose
 
@@ -48,7 +48,7 @@ wom_profile_wallet_check
 
 Profile resolution must happen before runtime context whenever the user names a target profile. This prevents the AI from assuming the current/default archive is correct.
 
-`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.31 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
+`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.32 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
 
 ## Prompt Boundary Check
 
@@ -247,6 +247,25 @@ Foreign block quarantine plan consumes only the attestation packet preview. It d
 
 `ready_for_future_quarantine_write` is not trust, not import, not quarantine, and not approval. It only means a future explicit quarantine-write workflow could be shown to a human/operator.
 
+## Foreign Block Quarantine Write
+
+After foreign block quarantine plan, a human/operator may approve a CLI-only isolation write:
+
+```bash
+archive quarantine-foreign-block <archive-root> --plan <json-file> --dry-run --format json
+archive quarantine-foreign-block <archive-root> --plan <json-file> --approve --reviewed-by <actor-id> --format json
+```
+
+MCP:
+
+```text
+quarantine_foreign_block_check
+```
+
+The CLI write creates only a sanitized quarantine case and quarantine write receipt. It keeps `trust_state: untrusted_foreign` and does not import, trust, mint, attest, anchor, delegate, sign, execute, or accept the foreign block.
+
+The MCP tool is check-only and writes nothing.
+
 ## Expected AI Runtime Flow
 
 An AI runtime should start with:
@@ -265,9 +284,10 @@ An AI runtime should start with:
 11. run foreign-block dry-run before any future shared/foreign block trust path
 12. run foreign-block-trust dry-run on the intake report before any future attestation discussion
 13. run foreign-block-attestation dry-run on the trust report before any future human attestation review
-14. run foreign-block-quarantine dry-run on the attestation packet before any future quarantine write discussion
-15. run mint dry-run before asking for mint approval
-16. use CLI approval paths for real minting
+14. run foreign-block-quarantine dry-run on the attestation packet before any quarantine write discussion
+15. use `quarantine-foreign-block --dry-run` and then CLI `--approve --reviewed-by` only after human/operator isolation approval
+16. run mint dry-run before asking for mint approval
+17. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -288,6 +308,7 @@ The skill tells the AI to:
 - run foreign-block-trust dry-run before discussing future attestation eligibility,
 - run foreign-block-attestation dry-run before discussing any future human attestation review packet,
 - run foreign-block-quarantine dry-run before discussing any future quarantine write,
+- use CLI-only `quarantine-foreign-block` approval for isolation writes; MCP remains check-only,
 - keep paths archive-relative,
 - avoid exposing local absolute paths,
 - use dry-run checks before approval requests,
@@ -298,7 +319,7 @@ The skill tells the AI to:
 
 The plugin layer should expose read and preview tools first.
 
-Allowed v0.2.31 direction:
+Allowed v0.2.32 direction:
 
 - profile list and profile resolve,
 - runtime context,
@@ -309,9 +330,10 @@ Allowed v0.2.31 direction:
 - foreign block trust preview,
 - foreign block attestation packet preview,
 - foreign block quarantine plan,
+- foreign block quarantine write check,
 - doctor,
 - list/read zets,
-- create-draft dry-run, source-intake plan composition, prompt-boundary report composition, foreign block intake/trust/packet/quarantine previews, and approved inbox draft writes,
+- create-draft dry-run, source-intake plan composition, prompt-boundary report composition, foreign block intake/trust/packet/quarantine previews, CLI-only quarantine case writes, and approved inbox draft writes,
 - dry-run mint checks,
 - safe HTML dry-run through CLI,
 - onboarding and source planning,
@@ -325,7 +347,8 @@ Not allowed in this layer yet:
 - source scan apply,
 - source registration apply,
 - source intake apply/capture/upload/sync,
-- foreign block apply/import/trust/quarantine/attest/auto-accept/full-auto tools,
+- foreign block apply/import/trust/attest/auto-accept/full-auto tools through MCP,
+- foreign block quarantine write tools through MCP,
 - prompt boundary apply, auto-approve, or full-auto tools,
 - block header apply or block minting,
 - token, coin, NFT, staking, transport, relay, or provider apply tools,

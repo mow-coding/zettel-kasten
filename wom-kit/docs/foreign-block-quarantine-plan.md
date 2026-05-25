@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Plan
 
-Status: v0.2.31 baseline
+Status: v0.2.32 baseline
 
 ## Principle
 
@@ -8,6 +8,7 @@ Status: v0.2.31 baseline
 Quarantine is not trust.
 Quarantine is not import.
 A quarantine plan is not a write.
+An approved quarantine write is isolation, not trust.
 ```
 
 ## Purpose
@@ -59,16 +60,35 @@ The plan may preview archive-relative paths such as:
 quarantine/foreign-blocks/<case-id>/quarantine-plan.json
 ```
 
-Those paths are not created in v0.2.31.
+Those paths are not created by `foreign-block-quarantine`.
+
+## Approved Quarantine Write
+
+v0.2.32 adds the next CLI-only step:
+
+```bash
+archive quarantine-foreign-block <archive-root> --plan <json-file> --dry-run --format json
+archive quarantine-foreign-block <archive-root> --plan <json-file> --approve --reviewed-by <actor-id> --format json
+```
+
+Approved mode writes only:
+
+```text
+quarantine/foreign-blocks/<case-id>/quarantine-case.json
+receipts/quarantine/<case-id>.foreign-block-quarantine.json
+```
+
+This is an isolation write. It records that an untrusted foreign block review case exists. It does not import the foreign block, trust it, mint it, attest it, anchor it, delegate it, sign it, execute it, or make it canonical.
+
+MCP exposes only `quarantine_foreign_block_check`, which is read-only and writes nothing.
 
 ## Non-Goals
 
-v0.2.31 does not implement:
+v0.2.32 does not implement:
 
-- real quarantine writes,
 - real trust/apply/import,
 - attestation writes,
-- receipt writes,
+- foreign attestation writes,
 - minting,
 - anchoring,
 - delegation,

@@ -1,6 +1,6 @@
 # Foreign Block Attestation Packet Preview
 
-Status: v0.2.31 baseline
+Status: v0.2.32 baseline
 
 ## Principle
 
@@ -51,7 +51,7 @@ The `packet_status` can be:
 
 `ready_for_human_attestation_review` is not trust, not approval, and not an attestation. It only means the trust report is clean enough to present to a future human or policy review step.
 
-## Quarantine Plan
+## Quarantine Plan And Write
 
 v0.2.31 adds the next read-only step:
 
@@ -63,6 +63,15 @@ archive foreign-block-quarantine <archive-root> --stdin --dry-run --format json
 `foreign-block-quarantine` consumes this packet preview and proposes where a future isolated review copy could live under `quarantine/foreign-blocks/<case-id>/...`. It does not create those paths.
 
 `ready_for_future_quarantine_write` is not trust, not import, not quarantine, and not approval.
+
+v0.2.32 adds the first CLI-only approved isolation write:
+
+```bash
+archive quarantine-foreign-block <archive-root> --plan <json-file> --dry-run --format json
+archive quarantine-foreign-block <archive-root> --plan <json-file> --approve --reviewed-by <actor-id> --format json
+```
+
+Approved mode writes only a sanitized quarantine case and quarantine write receipt. It keeps `trust_state: untrusted_foreign` and still does not trust, import, mint, attest, anchor, delegate, sign, execute, or accept the foreign block.
 
 ## Safety Checks
 
@@ -85,12 +94,11 @@ The MCP tool is read-only and dry-run only. It accepts a structured trust report
 
 ## Non-Goals
 
-v0.2.31 does not implement:
+v0.2.32 does not implement:
 
 - real trust/apply/import,
-- quarantine writes,
 - attestation writes,
-- receipt writes,
+- foreign attestation writes,
 - minting,
 - anchoring,
 - delegation,

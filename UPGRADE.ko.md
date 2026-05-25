@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.31` | current public pre-release | `wom-kit/docs/releases/v0.2.31.md` |
+| `v0.2.32` | current public pre-release | `wom-kit/docs/releases/v0.2.32.md` |
+| `v0.2.31` | superseded public pre-release | `wom-kit/docs/releases/v0.2.31.md` |
 | `v0.2.30` | superseded public pre-release | `wom-kit/docs/releases/v0.2.30.md` |
 | `v0.2.29` | superseded public pre-release | `wom-kit/docs/releases/v0.2.29.md` |
 | `v0.2.28` | superseded public pre-release | `wom-kit/docs/releases/v0.2.28.md` |
@@ -58,6 +59,23 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.31` To `v0.2.32`
+
+This compatible patch adds approved foreign block quarantine writes:
+
+- `archive quarantine-foreign-block <archive-root> --plan <json-file> --dry-run --format json`
+- `archive quarantine-foreign-block <archive-root> --plan <json-file> --approve --reviewed-by <actor-id> --format json`
+- read-only MCP `quarantine_foreign_block_check`
+
+No private archive migration is required.
+
+Approved quarantine write creates only:
+
+- `quarantine/foreign-blocks/<case-id>/quarantine-case.json`
+- `receipts/quarantine/<case-id>.foreign-block-quarantine.json`
+
+This is an isolation record only. It is not trust, import, mint, attestation, anchor, delegation, signing, execution, or acceptance. MCP remains check-only for this workflow.
 
 ## From `v0.2.30` To `v0.2.31`
 

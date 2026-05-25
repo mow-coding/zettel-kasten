@@ -12,7 +12,7 @@ import secrets
 import shutil
 import sqlite3
 import unicodedata
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -136,6 +136,7 @@ MINT_RECEIPTS_DIR = "receipts/mint"
 MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
 DELEGATE_RECEIPTS_DIR = "receipts/delegate"
 ATTESTATION_RECEIPTS_DIR = "receipts/attest"
+FOREIGN_BLOCK_QUARANTINE_RECEIPTS_DIR = "receipts/quarantine"
 ANCHOR_METADATA_DIR = "anchors"
 DELEGATE_TARGET_POLICY_COUNTERPARTY_BOUND = "counterparty_bound"
 DELEGATE_TARGET_POLICY_CLAIMABLE_ONCE = "claimable_once"
@@ -183,6 +184,7 @@ BLOCK_HEADER_VERSION = "wom-block-header/v0.1-draft"
 FOREIGN_BLOCK_QUARANTINE_POLICIES = {"hold_for_human_review", "operator_review", "reject_by_default"}
 FOREIGN_BLOCK_QUARANTINE_DEFAULT_POLICY = "hold_for_human_review"
 FOREIGN_BLOCK_QUARANTINE_CASE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
+FOREIGN_BLOCK_QUARANTINE_ACTOR_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,199}$")
 DRAFT_SECRET_VALUE_RE = re.compile(
     r"(?i)(?:api[_-]?key|secret|token|password|credential|aws_secret_access_key)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{12,}"
     r"|-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----"
@@ -3242,6 +3244,30 @@ def safe_foreign_quarantine_case_id(value: str | None) -> str | None:
     return None
 
 
+def safe_foreign_quarantine_actor_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if FOREIGN_BLOCK_QUARANTINE_ACTOR_ID_RE.match(normalized) and not header_string_is_private_or_unsafe(normalized):
+        return normalized
+    return None
+
+
+def safe_foreign_quarantine_review_note(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = " ".join(value.strip().split())
+    if not normalized:
+        return None
+    if len(normalized) > 240:
+        return None
+    if header_string_is_private_or_unsafe(normalized):
+        return None
+    if any(ord(character) < 32 for character in normalized):
+        return None
+    return normalized
+
+
 def default_foreign_quarantine_case_id(archive_id: str, packet: dict[str, Any]) -> str:
     seed = {
         "archive_id": archive_id,
@@ -3263,9 +3289,7 @@ def foreign_block_quarantine_empty_result(
     quarantine_policy: str = FOREIGN_BLOCK_QUARANTINE_DEFAULT_POLICY,
 ) -> dict[str, Any]:
     safe_case_id = safe_foreign_quarantine_case_id(quarantine_case_id)
-    safe_reviewer = None
-    if reviewer and not header_string_is_private_or_unsafe(reviewer):
-        safe_reviewer = reviewer
+    safe_reviewer = safe_foreign_quarantine_actor_id(reviewer)
     safe_policy = quarantine_policy if quarantine_policy in FOREIGN_BLOCK_QUARANTINE_POLICIES else FOREIGN_BLOCK_QUARANTINE_DEFAULT_POLICY
     return {
         "ok": False,
@@ -3296,9 +3320,9 @@ def foreign_block_quarantine_empty_result(
             "required_approval": "future explicit quarantine-write approval",
             "disallowed_actions": [
                 "create_trust",
-                "write_quarantine",
+                "write_quarantine_without_approval",
                 "write_attestation",
-                "write_receipt",
+                "write_receipt_without_approval",
                 "import_foreign_block",
                 "mint",
                 "anchor",
@@ -3464,10 +3488,9 @@ def evaluate_foreign_block_quarantine_packet(
 
     safe_reviewer = None
     if reviewer:
-        if header_string_is_private_or_unsafe(reviewer):
+        safe_reviewer = safe_foreign_quarantine_actor_id(reviewer)
+        if safe_reviewer is None:
             blockers.append("reviewer must be a safe non-secret actor id.")
-        else:
-            safe_reviewer = reviewer
 
     if quarantine_policy not in FOREIGN_BLOCK_QUARANTINE_POLICIES:
         blockers.append("quarantine_policy must be hold_for_human_review, operator_review, or reject_by_default.")
@@ -3500,6 +3523,7 @@ def evaluate_foreign_block_quarantine_packet(
         "input_source": packet.get("input_source"),
         "trust_state": packet.get("trust_state"),
         "claimed_hash_count": len(claimed_hashes),
+        "claimed_hashes": json_safe(claimed_hashes),
         "reference_summary": json_safe(packet.get("reference_summary") or {}),
         "prompt_boundary_summary": json_safe(packet.get("prompt_boundary_summary") or {}),
     }
@@ -3540,9 +3564,9 @@ def evaluate_foreign_block_quarantine_packet(
             "required_approval": "future explicit quarantine-write approval only",
             "disallowed_actions": [
                 "create_trust",
-                "write_quarantine",
+                "write_quarantine_without_approval",
                 "write_attestation",
-                "write_receipt",
+                "write_receipt_without_approval",
                 "import_foreign_block",
                 "mint",
                 "anchor",
@@ -3582,7 +3606,7 @@ def foreign_block_quarantine_plan(
         blockers.append("quarantine_policy must be hold_for_human_review, operator_review, or reject_by_default.")
     if quarantine_case_id and safe_foreign_quarantine_case_id(quarantine_case_id) is None:
         blockers.append("quarantine_case_id must be a safe id using ASCII letters, numbers, hyphens, or underscores.")
-    if reviewer and header_string_is_private_or_unsafe(reviewer):
+    if reviewer and safe_foreign_quarantine_actor_id(reviewer) is None:
         blockers.append("reviewer must be a safe non-secret actor id.")
     if blockers:
         return foreign_block_quarantine_empty_result(
@@ -3660,6 +3684,469 @@ def foreign_block_quarantine_plan(
         reviewer=reviewer,
         quarantine_policy=quarantine_policy,
     )
+
+
+def foreign_quarantine_write_paths(case_id: str) -> dict[str, str]:
+    return {
+        "quarantine_case": f"quarantine/foreign-blocks/{case_id}/quarantine-case.json",
+        "receipt": f"{FOREIGN_BLOCK_QUARANTINE_RECEIPTS_DIR}/{case_id}.foreign-block-quarantine.json",
+    }
+
+
+def quarantine_foreign_block_empty_result(
+    *,
+    archive_id: str,
+    dry_run: bool,
+    blockers: list[str] | None = None,
+    warnings: list[str] | None = None,
+    approved: bool = False,
+    reviewed_by: str | None = None,
+    case_id: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "dry_run": dry_run,
+        "lifecycle_action": "quarantine_foreign_block",
+        "archive_id": archive_id,
+        "approval_required": True,
+        "approved": approved,
+        "reviewed_by": safe_foreign_quarantine_actor_id(reviewed_by),
+        "trust_state": "untrusted_foreign",
+        "quarantine_write_status": "not_created",
+        "case_id": safe_foreign_quarantine_case_id(case_id),
+        "proposed_paths": {},
+        "files_written": [],
+        "blockers": unique_preserve_order(blockers or []),
+        "warnings": unique_preserve_order(warnings or []),
+        "would_change": [],
+    }
+
+
+def quarantine_plan_claimed_hashes(source_summary: dict[str, Any]) -> Any:
+    claimed_hashes = source_summary.get("claimed_hashes")
+    if isinstance(claimed_hashes, list):
+        return json_safe(claimed_hashes)
+    claimed_hash_count = source_summary.get("claimed_hash_count")
+    return {
+        "claim_count": claimed_hash_count if isinstance(claimed_hash_count, int) else None,
+        "values_retained": False,
+        "note": "The quarantine plan summarized claimed hashes without retaining the full packet hash list.",
+    }
+
+
+def quarantine_source_plan_summary(plan: dict[str, Any], plan_sha256: str) -> dict[str, Any]:
+    qplan = plan.get("quarantine_plan") if isinstance(plan.get("quarantine_plan"), dict) else {}
+    source_summary = (
+        plan.get("source_attestation_packet_summary")
+        if isinstance(plan.get("source_attestation_packet_summary"), dict)
+        else {}
+    )
+    return {
+        "plan_sha256": plan_sha256,
+        "archive_id": plan.get("archive_id"),
+        "input_source": plan.get("input_source"),
+        "lifecycle_action": plan.get("lifecycle_action"),
+        "proposed_quarantine_action": plan.get("proposed_quarantine_action"),
+        "quarantine_status": plan.get("quarantine_status"),
+        "quarantine_policy": qplan.get("quarantine_policy"),
+        "packet_status": source_summary.get("packet_status"),
+        "trust_state": plan.get("trust_state"),
+        "claimed_hash_count": source_summary.get("claimed_hash_count"),
+    }
+
+
+def validate_foreign_quarantine_write_plan(
+    archive_id: str,
+    plan: dict[str, Any],
+    *,
+    expected_case_id: str | None = None,
+) -> tuple[list[str], list[str], str | None, dict[str, str], str]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    scan_foreign_quarantine_safe_values(plan, blockers, "quarantine_plan")
+
+    def require(condition: bool, message: str) -> None:
+        if not condition:
+            blockers.append(message)
+
+    require(plan.get("lifecycle_action") == "foreign_block_quarantine_plan", "plan.lifecycle_action must be foreign_block_quarantine_plan.")
+    require(plan.get("ok") is True, "plan.ok must be true.")
+    require(plan.get("dry_run") is True, "plan.dry_run must be true.")
+    require(plan.get("archive_id") == archive_id, "plan.archive_id must match this archive.")
+    require(plan.get("trust_state") == "untrusted_foreign", "plan.trust_state must remain untrusted_foreign.")
+    require(plan.get("quarantine_status") == "planned_not_written", "plan.quarantine_status must be planned_not_written.")
+    require(plan.get("proposed_quarantine_action") == "ready_for_future_quarantine_write", "plan.proposed_quarantine_action must be ready_for_future_quarantine_write.")
+    require(plan.get("would_change") == [], "plan.would_change must be empty.")
+
+    plan_blockers = plan.get("blockers")
+    if not isinstance(plan_blockers, list):
+        blockers.append("plan.blockers must be a list.")
+    elif plan_blockers:
+        blockers.append("plan.blockers must be empty.")
+
+    plan_warnings = plan.get("warnings", [])
+    if plan_warnings is None:
+        plan_warnings = []
+    if not isinstance(plan_warnings, list):
+        blockers.append("plan.warnings must be a list when present.")
+        plan_warnings = []
+    warnings.extend(str(item) for item in plan_warnings if isinstance(item, str))
+    if foreign_quarantine_warning_requires_hold(plan_warnings):
+        blockers.append("plan.warnings still require human hold before quarantine write.")
+
+    qplan = plan.get("quarantine_plan")
+    if not isinstance(qplan, dict):
+        blockers.append("plan.quarantine_plan must be an object.")
+        return blockers, warnings, None, {}, sha256_json_hex(plan)
+
+    require(qplan.get("would_quarantine") is False, "plan.quarantine_plan.would_quarantine must be false.")
+    require(qplan.get("quarantine_write_status") == "not_created", "plan.quarantine_plan.quarantine_write_status must be not_created.")
+    require(qplan.get("quarantine_scope") == "foreign_block_review_only", "plan.quarantine_plan.quarantine_scope must be foreign_block_review_only.")
+
+    case_id = qplan.get("quarantine_case_id")
+    safe_case_id = safe_foreign_quarantine_case_id(case_id if isinstance(case_id, str) else None)
+    if safe_case_id is None:
+        blockers.append("plan.quarantine_plan.quarantine_case_id must be a safe id.")
+    safe_expected = safe_foreign_quarantine_case_id(expected_case_id)
+    if expected_case_id and safe_expected is None:
+        blockers.append("expected_case_id must be a safe id.")
+    if safe_expected and safe_case_id and safe_expected != safe_case_id:
+        blockers.append("expected_case_id does not match plan quarantine case id.")
+
+    proposed_paths = foreign_quarantine_write_paths(safe_case_id or "blocked")
+    validate_foreign_quarantine_paths(proposed_paths, blockers)
+
+    return blockers, warnings, safe_case_id, proposed_paths, sha256_json_hex(plan)
+
+
+def build_foreign_quarantine_case(
+    plan: dict[str, Any],
+    *,
+    plan_sha256: str,
+    case_id: str,
+    reviewed_by: str,
+    reviewed_at: str,
+    review_note: str | None,
+) -> dict[str, Any]:
+    qplan = plan.get("quarantine_plan") if isinstance(plan.get("quarantine_plan"), dict) else {}
+    source_summary = (
+        plan.get("source_attestation_packet_summary")
+        if isinstance(plan.get("source_attestation_packet_summary"), dict)
+        else {}
+    )
+    case: dict[str, Any] = {
+        "lifecycle_action": "foreign_block_quarantine_case",
+        "quarantine_status": "written_untrusted",
+        "trust_state": "untrusted_foreign",
+        "case_id": case_id,
+        "reviewed_by": reviewed_by,
+        "reviewed_at": reviewed_at,
+        "source_plan_summary": quarantine_source_plan_summary(plan, plan_sha256),
+        "quarantine_scope": "foreign_block_review_only",
+        "disallowed_actions": [
+            "mark_foreign_block_trusted",
+            "import_foreign_block",
+            "write_attestation",
+            "mint",
+            "anchor",
+            "delegate",
+            "sign",
+            "provider_sync",
+            "execute_foreign_text",
+        ],
+        "retained_material": json_safe(qplan.get("retained_material") if isinstance(qplan.get("retained_material"), list) else []),
+        "excluded_material": json_safe(qplan.get("excluded_material") if isinstance(qplan.get("excluded_material"), list) else []),
+        "claimed_hashes": quarantine_plan_claimed_hashes(source_summary),
+        "prompt_boundary_summary": json_safe(source_summary.get("prompt_boundary_summary") or {}),
+        "reference_summary": json_safe(source_summary.get("reference_summary") or {}),
+        "created_by": "cli:archive",
+    }
+    if review_note:
+        case["review_note"] = review_note
+    return json_safe(case)
+
+
+def build_foreign_quarantine_receipt(
+    *,
+    case_id: str,
+    reviewed_by: str,
+    reviewed_at: str,
+    files_written: list[str],
+    plan_sha256: str,
+) -> dict[str, Any]:
+    return {
+        "lifecycle_action": "foreign_block_quarantine_write",
+        "receipt_kind": "foreign_block_quarantine_write",
+        "case_id": case_id,
+        "reviewed_by": reviewed_by,
+        "reviewed_at": reviewed_at,
+        "trust_state": "untrusted_foreign",
+        "quarantine_write_status": "created",
+        "files_written": list(files_written),
+        "foreign_block_imported": False,
+        "foreign_block_trusted": False,
+        "attestation_created": False,
+        "mint_performed": False,
+        "provider_api_called": False,
+        "source_plan_hash": plan_sha256,
+        "plan_sha256": plan_sha256,
+    }
+
+
+def write_json_new_file(path: Path, payload: dict[str, Any]) -> None:
+    with path.open("x", encoding="utf-8") as handle:
+        handle.write(json.dumps(json_safe(payload), indent=2, ensure_ascii=False, default=str) + "\n")
+
+
+def cleanup_empty_archive_dirs(root: Path, paths: list[Path]) -> None:
+    for path in sorted({item.parent for item in paths}, key=lambda item: len(item.parts), reverse=True):
+        current = path
+        while current != root and is_path_within_root(current, root):
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            current = current.parent
+
+
+def missing_parent_dirs_before_write(root: Path, paths: list[Path]) -> list[Path]:
+    missing: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        current = path.parent
+        while current != root and is_path_within_root(current, root):
+            resolved = current.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                if not current.exists():
+                    missing.append(current)
+            current = current.parent
+    return missing
+
+
+def cleanup_created_empty_dirs(root: Path, dirs: list[Path]) -> None:
+    for path in sorted(dirs, key=lambda item: len(item.parts), reverse=True):
+        if path == root or not is_path_within_root(path, root):
+            continue
+        try:
+            path.rmdir()
+        except OSError:
+            pass
+
+
+def quarantine_foreign_block(
+    archive_root: Path | str,
+    *,
+    plan_path: str | None = None,
+    plan: dict[str, Any] | None = None,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    expected_case_id: str | None = None,
+    review_note: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+    locator_count = sum(1 for item in [plan_path, plan] if item is not None)
+    if locator_count != 1:
+        blockers.append("Exactly one quarantine plan source is required.")
+
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    if approve and not reviewer:
+        blockers.append("Approved quarantine write requires --reviewed-by with a safe actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    safe_expected_case_id = safe_foreign_quarantine_case_id(expected_case_id)
+    if expected_case_id and safe_expected_case_id is None:
+        blockers.append("expected_case_id must be a safe id.")
+
+    safe_note = safe_foreign_quarantine_review_note(review_note)
+    if review_note and safe_note is None:
+        blockers.append("review_note must be short and must not contain local paths, URLs, tokens, or secrets.")
+
+    loaded_plan = plan
+    if plan_path is not None:
+        try:
+            normalized_plan_path = normalize_archive_relative_path(plan_path)
+            resolved_plan_path = resolve_archive_relative_path(root, normalized_plan_path)
+            if not resolved_plan_path.is_file():
+                blockers.append(f"Quarantine plan path is not a file: {archive_relative_path(resolved_plan_path, root)}.")
+            else:
+                plan_text = resolved_plan_path.read_text(encoding="utf-8")
+                parsed_plan = json.loads(plan_text)
+                if isinstance(parsed_plan, dict):
+                    loaded_plan = parsed_plan
+                else:
+                    blockers.append("Quarantine plan JSON must be an object.")
+        except ArchivePathError as exc:
+            blockers.append(f"Quarantine plan path could not be read safely: {exc}")
+        except json.JSONDecodeError as exc:
+            blockers.append(f"Quarantine plan must be valid JSON: {exc.msg}.")
+        except (OSError, UnicodeError):
+            blockers.append("Quarantine plan path could not be read safely.")
+
+    if blockers:
+        return quarantine_foreign_block_empty_result(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            blockers=blockers,
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewed_by,
+            case_id=expected_case_id,
+        )
+
+    if not isinstance(loaded_plan, dict):
+        return quarantine_foreign_block_empty_result(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            blockers=["Quarantine plan JSON must be an object."],
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewed_by,
+            case_id=expected_case_id,
+        )
+
+    plan_blockers, plan_warnings, case_id, proposed_paths, plan_sha256 = validate_foreign_quarantine_write_plan(
+        archive_id,
+        loaded_plan,
+        expected_case_id=expected_case_id,
+    )
+    warnings.extend(plan_warnings)
+    blockers.extend(plan_blockers)
+    if case_id:
+        case_dir = archive_internal_path(root, f"quarantine/foreign-blocks/{case_id}")
+        case_path = archive_internal_path(root, proposed_paths["quarantine_case"])
+        receipt_path = archive_internal_path(root, proposed_paths["receipt"])
+        if case_dir.exists():
+            blockers.append(f"Quarantine case directory already exists: quarantine/foreign-blocks/{case_id}.")
+        if case_path.exists():
+            blockers.append(f"Quarantine case file already exists: {proposed_paths['quarantine_case']}.")
+        if receipt_path.exists():
+            blockers.append(f"Quarantine write receipt already exists: {proposed_paths['receipt']}.")
+
+    if blockers:
+        return quarantine_foreign_block_empty_result(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            blockers=blockers,
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewed_by,
+            case_id=case_id or expected_case_id,
+        )
+
+    assert case_id is not None
+    assert reviewer is not None or dry_run
+    files = [proposed_paths["quarantine_case"], proposed_paths["receipt"]]
+    preview_reviewed_by = reviewer or "<required-on-approve>"
+    reviewed_at = (
+        "<approval-time>"
+        if dry_run
+        else datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    )
+    case_preview = build_foreign_quarantine_case(
+        loaded_plan,
+        plan_sha256=plan_sha256,
+        case_id=case_id,
+        reviewed_by=preview_reviewed_by,
+        reviewed_at=reviewed_at,
+        review_note=safe_note,
+    )
+    receipt_preview = build_foreign_quarantine_receipt(
+        case_id=case_id,
+        reviewed_by=preview_reviewed_by,
+        reviewed_at=reviewed_at,
+        files_written=files,
+        plan_sha256=plan_sha256,
+    )
+    post_build_blockers: list[str] = []
+    scan_foreign_quarantine_safe_values(case_preview, post_build_blockers, "quarantine_case")
+    scan_foreign_quarantine_safe_values(receipt_preview, post_build_blockers, "quarantine_receipt")
+    if post_build_blockers:
+        return quarantine_foreign_block_empty_result(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            blockers=post_build_blockers,
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewed_by,
+            case_id=case_id,
+        )
+
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "lifecycle_action": "quarantine_foreign_block",
+            "archive_id": archive_id,
+            "approval_required": True,
+            "approved": False,
+            "trust_state": "untrusted_foreign",
+            "quarantine_write_status": "not_created",
+            "case_id": case_id,
+            "proposed_paths": proposed_paths,
+            "quarantine_case_preview": case_preview,
+            "quarantine_write_receipt_preview": receipt_preview,
+            "blockers": [],
+            "warnings": unique_preserve_order(warnings),
+            "would_change": files,
+        }
+
+    case_path = archive_internal_path(root, proposed_paths["quarantine_case"])
+    receipt_path = archive_internal_path(root, proposed_paths["receipt"])
+    created_paths: list[Path] = []
+    created_dirs = missing_parent_dirs_before_write(root, [case_path, receipt_path])
+    try:
+        case_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_new_file(case_path, case_preview)
+        created_paths.append(case_path)
+        write_json_new_file(receipt_path, receipt_preview)
+        created_paths.append(receipt_path)
+    except Exception:
+        for created_path in reversed(created_paths):
+            try:
+                if created_path.exists():
+                    created_path.unlink()
+            except OSError:
+                pass
+        cleanup_created_empty_dirs(root, created_dirs)
+        return quarantine_foreign_block_empty_result(
+            archive_id=archive_id,
+            dry_run=False,
+            blockers=["Quarantine write failed and any partial files were rolled back."],
+            warnings=warnings,
+            approved=True,
+            reviewed_by=reviewed_by,
+            case_id=case_id,
+        )
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "lifecycle_action": "quarantine_foreign_block",
+        "archive_id": archive_id,
+        "approval_required": False,
+        "approved": True,
+        "reviewed_by": reviewer,
+        "reviewed_at": reviewed_at,
+        "trust_state": "untrusted_foreign",
+        "quarantine_write_status": "created",
+        "case_id": case_id,
+        "files_written": files,
+        "blockers": [],
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+        "quarantine_case": case_preview,
+        "quarantine_write_receipt": receipt_preview,
+    }
 
 
 def collect_object_refs_from_value(value: Any, source: str, refs: list[dict[str, Any]]) -> None:
@@ -8759,7 +9246,7 @@ def profile_wallet_preview(
             )
 
     warnings.append(
-        "WOM profile wallet metadata is wallet-ready identity context only; v0.2.31 does not generate keys or sign data."
+        "WOM profile wallet metadata is wallet-ready identity context only; v0.2.32 does not generate keys or sign data."
     )
 
     return {
@@ -8892,7 +9379,7 @@ def profile_wallet_capability_surface_preview() -> dict[str, Any]:
         "v0_2_25_available": [],
         "mutating_wallet_actions_available": False,
         "real_signing_available": False,
-        "model_note": "A future WOM wallet layer can bind profile/node identity to capability proofs; v0.2.31 only previews readiness.",
+        "model_note": "A future WOM wallet layer can bind profile/node identity to capability proofs; v0.2.32 only previews readiness.",
     }
 
 
