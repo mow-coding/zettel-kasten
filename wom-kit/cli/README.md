@@ -52,6 +52,9 @@ foreign-block-trust --dry-run
 foreign-block-attestation --dry-run
   Preview a human-review attestation packet from a foreign-block trust report. This writes nothing, creates no trust, writes no attestation or receipt, and re-reads no original foreign artifact.
 
+foreign-block-quarantine --dry-run
+  Plan future isolated holding paths from a foreign-block attestation packet preview. This writes nothing, creates no quarantine files, trust, import, attestation, or receipt, and re-reads no original foreign artifact.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
@@ -512,7 +515,18 @@ python wom-kit\cli\archive.py foreign-block-attestation wom-kit\examples\fake-li
 
 The result still uses `trust_state: untrusted_foreign`, keeps `would_change: []`, sets `attestation_packet_preview.would_attest` to `false`, and never writes trust, attestations, receipts, imports, or mint outputs.
 
-The preview reads only the target zet file. It derives header metadata from frontmatter, hashes only the zet body text and normalized header preview, and does not hash referenced objet/source files.
+Preview a future quarantine placement plan from a foreign-block attestation packet:
+
+```powershell
+python wom-kit\cli\archive.py foreign-block-quarantine wom-kit\examples\fake-life-archive `
+  --attestation-packet workbench\foreign-block-attestation-packet.json `
+  --dry-run `
+  --format json
+```
+
+The result still uses `trust_state: untrusted_foreign`, keeps `would_change: []`, sets `quarantine_plan.would_quarantine` to `false`, and never creates quarantine files, trust, attestations, receipts, imports, or mint outputs.
+
+The block-header preview reads only the target zet file. It derives header metadata from frontmatter, hashes only the zet body text and normalized header preview, and does not hash referenced objet/source files.
 
 ## Tests
 

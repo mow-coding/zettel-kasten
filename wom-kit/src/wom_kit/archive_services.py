@@ -180,6 +180,9 @@ SOURCE_INTAKE_OBJECT_STORAGE_PROVIDERS = {
     "generic-s3",
 }
 BLOCK_HEADER_VERSION = "wom-block-header/v0.1-draft"
+FOREIGN_BLOCK_QUARANTINE_POLICIES = {"hold_for_human_review", "operator_review", "reject_by_default"}
+FOREIGN_BLOCK_QUARANTINE_DEFAULT_POLICY = "hold_for_human_review"
+FOREIGN_BLOCK_QUARANTINE_CASE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
 DRAFT_SECRET_VALUE_RE = re.compile(
     r"(?i)(?:api[_-]?key|secret|token|password|credential|aws_secret_access_key)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{12,}"
     r"|-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----"
@@ -3227,6 +3230,435 @@ def foreign_block_attestation_packet_preview(
         input_source=input_source,
         prospective_attestor=prospective_attestor,
         review_scope=review_scope,
+    )
+
+
+def safe_foreign_quarantine_case_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if FOREIGN_BLOCK_QUARANTINE_CASE_ID_RE.match(normalized) and not header_string_is_private_or_unsafe(normalized):
+        return normalized
+    return None
+
+
+def default_foreign_quarantine_case_id(archive_id: str, packet: dict[str, Any]) -> str:
+    seed = {
+        "archive_id": archive_id,
+        "packet_status": packet.get("packet_status"),
+        "claimed_hashes": packet.get("claimed_hashes"),
+        "source": packet.get("source_attestation_packet_summary") or packet.get("source_trust_report_summary"),
+    }
+    return f"case-{sha256_json_hex(seed)[:16]}"
+
+
+def foreign_block_quarantine_empty_result(
+    *,
+    archive_id: str,
+    input_source: str | None = None,
+    blockers: list[str] | None = None,
+    warnings: list[str] | None = None,
+    quarantine_case_id: str | None = None,
+    reviewer: str | None = None,
+    quarantine_policy: str = FOREIGN_BLOCK_QUARANTINE_DEFAULT_POLICY,
+) -> dict[str, Any]:
+    safe_case_id = safe_foreign_quarantine_case_id(quarantine_case_id)
+    safe_reviewer = None
+    if reviewer and not header_string_is_private_or_unsafe(reviewer):
+        safe_reviewer = reviewer
+    safe_policy = quarantine_policy if quarantine_policy in FOREIGN_BLOCK_QUARANTINE_POLICIES else FOREIGN_BLOCK_QUARANTINE_DEFAULT_POLICY
+    return {
+        "ok": False,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_quarantine_plan",
+        "archive_id": archive_id,
+        "input_source": input_source,
+        "trust_state": "untrusted_foreign",
+        "quarantine_status": "planned_not_written",
+        "proposed_quarantine_action": "blocked",
+        "source_attestation_packet_summary": {},
+        "quarantine_plan": {
+            "would_quarantine": False,
+            "quarantine_write_status": "not_created",
+            "quarantine_scope": "foreign_block_review_only",
+            "quarantine_policy": safe_policy,
+            "quarantine_case_id": safe_case_id,
+            "reviewer": safe_reviewer,
+            "proposed_paths": {},
+            "retained_material": [],
+            "excluded_material": [
+                "original foreign artifact body",
+                "raw foreign text",
+                "provider URLs",
+                "local absolute paths",
+                "trust/import/apply outputs",
+            ],
+            "required_approval": "future explicit quarantine-write approval",
+            "disallowed_actions": [
+                "create_trust",
+                "write_quarantine",
+                "write_attestation",
+                "write_receipt",
+                "import_foreign_block",
+                "mint",
+                "anchor",
+                "delegate",
+                "sign",
+                "provider_sync",
+                "execute_foreign_text",
+            ],
+        },
+        "safety_checks": [],
+        "blockers": unique_preserve_order(blockers or []),
+        "warnings": unique_preserve_order(warnings or []),
+        "would_change": [],
+    }
+
+
+def scan_foreign_quarantine_safe_values(value: Any, blockers: list[str], field_path: str = "$") -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            scan_foreign_quarantine_safe_values(child, blockers, f"{field_path}.{key}")
+        return
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            scan_foreign_quarantine_safe_values(child, blockers, f"{field_path}[{index}]")
+        return
+    if isinstance(value, str) and header_string_is_private_or_unsafe(value):
+        blockers.append(f"attestation_packet contains unsafe or private reference in {field_path}.")
+
+
+def validate_quarantine_packet_hashes(packet: dict[str, Any], blockers: list[str]) -> list[dict[str, Any]]:
+    claimed_hashes = packet.get("claimed_hashes")
+    if not isinstance(claimed_hashes, list):
+        blockers.append("attestation_packet.claimed_hashes must be a list.")
+        return []
+    safe_hashes: list[dict[str, Any]] = []
+    for index, item in enumerate(claimed_hashes):
+        if not isinstance(item, dict):
+            blockers.append(f"attestation_packet.claimed_hashes[{index}] must be an object.")
+            continue
+        value = item.get("value")
+        if not isinstance(value, str) or not SHA256_RE.match(value):
+            blockers.append(f"attestation_packet.claimed_hashes[{index}].value must look like a SHA-256 hex digest.")
+            continue
+        verification_state = item.get("verification_state")
+        trust_state = item.get("trust_state")
+        if verification_state not in {"not_verified", "not_authenticity_proof"}:
+            blockers.append(f"attestation_packet.claimed_hashes[{index}].verification_state must not claim verification.")
+            continue
+        if trust_state != "not_trusted":
+            blockers.append(f"attestation_packet.claimed_hashes[{index}].trust_state must remain not_trusted.")
+            continue
+        safe_hashes.append(
+            {
+                "field": item.get("field"),
+                "value": value,
+                "claim_state": item.get("claim_state"),
+                "verification_state": verification_state,
+                "trust_state": "not_trusted",
+            }
+        )
+    return safe_hashes
+
+
+def foreign_quarantine_warning_requires_hold(warnings: list[Any]) -> bool:
+    warning_text = " ".join(str(item) for item in warnings if isinstance(item, str)).lower()
+    return any(
+        term in warning_text
+        for term in [
+            "prompt-injection",
+            "unknown refs",
+            "unknown ref",
+            "unresolved",
+            "markdown foreign zet",
+            "markdown-compatible",
+            "manual review",
+        ]
+    )
+
+
+def foreign_quarantine_proposed_paths(case_id: str) -> dict[str, str]:
+    base = f"quarantine/foreign-blocks/{case_id}"
+    return {
+        "case_dir": base,
+        "quarantine_plan": f"{base}/quarantine-plan.json",
+        "attestation_packet_copy": f"{base}/attestation-packet-preview.json",
+        "operator_notes": f"{base}/review-notes.md",
+    }
+
+
+def validate_foreign_quarantine_paths(paths: dict[str, str], blockers: list[str]) -> None:
+    for key, value in paths.items():
+        try:
+            normalized = normalize_archive_relative_path(value)
+        except ArchivePathError:
+            blockers.append(f"quarantine_plan.proposed_paths.{key} must be archive-relative and safe.")
+            continue
+        if normalized != value or header_string_is_private_or_unsafe(value):
+            blockers.append(f"quarantine_plan.proposed_paths.{key} must be archive-relative and safe.")
+
+
+def evaluate_foreign_block_quarantine_packet(
+    archive_id: str,
+    packet: dict[str, Any],
+    *,
+    input_source: str | None = None,
+    quarantine_case_id: str | None = None,
+    reviewer: str | None = None,
+    quarantine_policy: str = FOREIGN_BLOCK_QUARANTINE_DEFAULT_POLICY,
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    safety_checks: list[dict[str, Any]] = []
+
+    scan_foreign_quarantine_safe_values(packet, blockers, "attestation_packet")
+
+    def check(condition: bool, check_id: str, blocker: str) -> None:
+        safety_checks.append({"id": check_id, "status": "passed" if condition else "blocked"})
+        if not condition:
+            blockers.append(blocker)
+
+    check(packet.get("lifecycle_action") == "foreign_block_attestation_packet_preview", "lifecycle_action", "attestation_packet.lifecycle_action must be foreign_block_attestation_packet_preview.")
+    check(packet.get("ok") is True, "ok", "attestation_packet.ok must be true.")
+    check(packet.get("dry_run") is True, "dry_run", "attestation_packet.dry_run must be true.")
+    check(packet.get("trust_state") == "untrusted_foreign", "trust_state", "attestation_packet.trust_state must remain untrusted_foreign.")
+    check(packet.get("would_change") == [], "would_change", "attestation_packet.would_change must be an empty list.")
+
+    attestation_preview = packet.get("attestation_packet_preview")
+    if not isinstance(attestation_preview, dict):
+        blockers.append("attestation_packet.attestation_packet_preview must be an object.")
+        attestation_preview = {}
+        safety_checks.append({"id": "attestation_packet_preview", "status": "blocked"})
+    else:
+        safety_checks.append({"id": "attestation_packet_preview", "status": "passed"})
+    check(attestation_preview.get("would_attest") is False, "would_attest", "attestation_packet.attestation_packet_preview.would_attest must be false.")
+    check(attestation_preview.get("attestation_status") == "not_created", "attestation_status", "attestation_packet.attestation_packet_preview.attestation_status must be not_created.")
+
+    packet_status = str(packet.get("packet_status") or "").strip()
+    if packet_status not in {"blocked", "manual_review_required", "ready_for_human_attestation_review"}:
+        blockers.append("attestation_packet.packet_status must be blocked, manual_review_required, or ready_for_human_attestation_review.")
+    elif packet_status == "blocked":
+        blockers.append("attestation_packet.packet_status is blocked.")
+
+    packet_blockers = packet.get("blockers")
+    if not isinstance(packet_blockers, list):
+        blockers.append("attestation_packet.blockers must be a list.")
+    elif packet_blockers:
+        blockers.append("attestation_packet has blockers and cannot produce a quarantine plan.")
+
+    packet_warnings = packet.get("warnings", [])
+    if packet_warnings is None:
+        packet_warnings = []
+    if not isinstance(packet_warnings, list):
+        blockers.append("attestation_packet.warnings must be a list when present.")
+        packet_warnings = []
+
+    claimed_hashes = validate_quarantine_packet_hashes(packet, blockers)
+
+    safe_case_id = safe_foreign_quarantine_case_id(quarantine_case_id)
+    if quarantine_case_id and safe_case_id is None:
+        blockers.append("quarantine_case_id must be a safe id using ASCII letters, numbers, hyphens, or underscores.")
+    if safe_case_id is None:
+        safe_case_id = default_foreign_quarantine_case_id(archive_id, packet)
+
+    safe_reviewer = None
+    if reviewer:
+        if header_string_is_private_or_unsafe(reviewer):
+            blockers.append("reviewer must be a safe non-secret actor id.")
+        else:
+            safe_reviewer = reviewer
+
+    if quarantine_policy not in FOREIGN_BLOCK_QUARANTINE_POLICIES:
+        blockers.append("quarantine_policy must be hold_for_human_review, operator_review, or reject_by_default.")
+    safe_policy = quarantine_policy if quarantine_policy in FOREIGN_BLOCK_QUARANTINE_POLICIES else FOREIGN_BLOCK_QUARANTINE_DEFAULT_POLICY
+
+    proposed_paths = foreign_quarantine_proposed_paths(safe_case_id)
+    validate_foreign_quarantine_paths(proposed_paths, blockers)
+
+    if blockers:
+        return foreign_block_quarantine_empty_result(
+            archive_id=archive_id,
+            input_source=input_source,
+            blockers=blockers,
+            warnings=warnings,
+            quarantine_case_id=quarantine_case_id,
+            reviewer=reviewer,
+            quarantine_policy=quarantine_policy,
+        )
+
+    warnings.extend(str(item) for item in packet_warnings if isinstance(item, str))
+    proposed_action = "ready_for_future_quarantine_write"
+    if packet_status == "manual_review_required" or safe_policy == "reject_by_default" or foreign_quarantine_warning_requires_hold(packet_warnings):
+        proposed_action = "hold_for_human_review"
+    if safe_policy == "reject_by_default":
+        warnings.append("Quarantine policy is reject_by_default, so the plan is hold_for_human_review and not ready for future write.")
+    warnings.append("Quarantine plan is read-only and creates no quarantine, trust, import, attestation, or receipt.")
+
+    source_summary = {
+        "packet_status": packet_status,
+        "input_source": packet.get("input_source"),
+        "trust_state": packet.get("trust_state"),
+        "claimed_hash_count": len(claimed_hashes),
+        "reference_summary": json_safe(packet.get("reference_summary") or {}),
+        "prompt_boundary_summary": json_safe(packet.get("prompt_boundary_summary") or {}),
+    }
+
+    return {
+        "ok": True,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_quarantine_plan",
+        "archive_id": archive_id,
+        "input_source": input_source,
+        "trust_state": "untrusted_foreign",
+        "quarantine_status": "planned_not_written",
+        "proposed_quarantine_action": proposed_action,
+        "source_attestation_packet_summary": source_summary,
+        "quarantine_plan": {
+            "would_quarantine": False,
+            "quarantine_write_status": "not_created",
+            "quarantine_scope": "foreign_block_review_only",
+            "quarantine_policy": safe_policy,
+            "quarantine_case_id": safe_case_id,
+            "reviewer": safe_reviewer,
+            "proposed_paths": proposed_paths,
+            "retained_material": [
+                "attestation packet summary",
+                "claimed hash metadata",
+                "reference summary",
+                "prompt boundary summary",
+                "operator review metadata",
+            ],
+            "excluded_material": [
+                "original foreign artifact body",
+                "raw foreign text",
+                "provider URLs",
+                "local absolute paths",
+                "trust/import/apply outputs",
+                "attestation or receipt writes",
+            ],
+            "required_approval": "future explicit quarantine-write approval only",
+            "disallowed_actions": [
+                "create_trust",
+                "write_quarantine",
+                "write_attestation",
+                "write_receipt",
+                "import_foreign_block",
+                "mint",
+                "anchor",
+                "delegate",
+                "sign",
+                "provider_sync",
+                "execute_foreign_text",
+            ],
+        },
+        "safety_checks": safety_checks,
+        "blockers": [],
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+    }
+
+
+def foreign_block_quarantine_plan(
+    archive_root: Path | str,
+    *,
+    attestation_packet_path: str | None = None,
+    text: str | None = None,
+    attestation_packet: dict[str, Any] | None = None,
+    dry_run: bool = True,
+    quarantine_case_id: str | None = None,
+    reviewer: str | None = None,
+    quarantine_policy: str = FOREIGN_BLOCK_QUARANTINE_DEFAULT_POLICY,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    if dry_run is not True:
+        blockers.append("foreign-block-quarantine is dry-run only; pass --dry-run.")
+    locator_count = sum(1 for item in [attestation_packet_path, text, attestation_packet] if item is not None)
+    if locator_count != 1:
+        blockers.append("Exactly one of attestation packet path, stdin text, or structured attestation_packet is required.")
+    if quarantine_policy not in FOREIGN_BLOCK_QUARANTINE_POLICIES:
+        blockers.append("quarantine_policy must be hold_for_human_review, operator_review, or reject_by_default.")
+    if quarantine_case_id and safe_foreign_quarantine_case_id(quarantine_case_id) is None:
+        blockers.append("quarantine_case_id must be a safe id using ASCII letters, numbers, hyphens, or underscores.")
+    if reviewer and header_string_is_private_or_unsafe(reviewer):
+        blockers.append("reviewer must be a safe non-secret actor id.")
+    if blockers:
+        return foreign_block_quarantine_empty_result(
+            archive_id=archive_id,
+            blockers=blockers,
+            quarantine_case_id=quarantine_case_id,
+            reviewer=reviewer,
+            quarantine_policy=quarantine_policy,
+        )
+
+    input_source = "structured_content" if attestation_packet is not None else "stdin" if text is not None else None
+    packet_text = text
+    if attestation_packet_path is not None:
+        try:
+            normalized_path = normalize_archive_relative_path(attestation_packet_path)
+            path = resolve_archive_relative_path(root, normalized_path)
+            if not path.is_file():
+                blockers.append(f"Foreign block attestation packet path is not a file: {archive_relative_path(path, root)}.")
+            else:
+                packet_text = path.read_text(encoding="utf-8")
+                input_source = "attestation_packet_path"
+        except ArchivePathError as exc:
+            blockers.append(f"Foreign block attestation packet path could not be read safely: {exc}")
+        except (OSError, UnicodeError):
+            blockers.append("Foreign block attestation packet path could not be read safely.")
+        if blockers:
+            return foreign_block_quarantine_empty_result(
+                archive_id=archive_id,
+                input_source=input_source,
+                blockers=blockers,
+                quarantine_case_id=quarantine_case_id,
+                reviewer=reviewer,
+                quarantine_policy=quarantine_policy,
+            )
+
+    if attestation_packet is not None:
+        packet = attestation_packet
+    else:
+        if packet_text is None:
+            return foreign_block_quarantine_empty_result(
+                archive_id=archive_id,
+                input_source=input_source,
+                blockers=["Foreign block attestation packet text is required."],
+                quarantine_case_id=quarantine_case_id,
+                reviewer=reviewer,
+                quarantine_policy=quarantine_policy,
+            )
+        try:
+            parsed = json.loads(packet_text)
+        except json.JSONDecodeError as exc:
+            return foreign_block_quarantine_empty_result(
+                archive_id=archive_id,
+                input_source=input_source,
+                blockers=[f"Foreign block attestation packet must be valid JSON: {exc.msg}."],
+                quarantine_case_id=quarantine_case_id,
+                reviewer=reviewer,
+                quarantine_policy=quarantine_policy,
+            )
+        if not isinstance(parsed, dict):
+            return foreign_block_quarantine_empty_result(
+                archive_id=archive_id,
+                input_source=input_source,
+                blockers=["Foreign block attestation packet JSON must be an object."],
+                quarantine_case_id=quarantine_case_id,
+                reviewer=reviewer,
+                quarantine_policy=quarantine_policy,
+            )
+        packet = parsed
+
+    return evaluate_foreign_block_quarantine_packet(
+        archive_id,
+        packet,
+        input_source=input_source,
+        quarantine_case_id=quarantine_case_id,
+        reviewer=reviewer,
+        quarantine_policy=quarantine_policy,
     )
 
 
@@ -8327,7 +8759,7 @@ def profile_wallet_preview(
             )
 
     warnings.append(
-        "WOM profile wallet metadata is wallet-ready identity context only; v0.2.30 does not generate keys or sign data."
+        "WOM profile wallet metadata is wallet-ready identity context only; v0.2.31 does not generate keys or sign data."
     )
 
     return {
@@ -8460,7 +8892,7 @@ def profile_wallet_capability_surface_preview() -> dict[str, Any]:
         "v0_2_25_available": [],
         "mutating_wallet_actions_available": False,
         "real_signing_available": False,
-        "model_note": "A future WOM wallet layer can bind profile/node identity to capability proofs; v0.2.30 only previews readiness.",
+        "model_note": "A future WOM wallet layer can bind profile/node identity to capability proofs; v0.2.31 only previews readiness.",
     }
 
 

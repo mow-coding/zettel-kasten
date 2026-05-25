@@ -2870,6 +2870,25 @@ class ArchiveCliTests(unittest.TestCase):
         trust_report_path.write_text(output, encoding="utf-8")
         return trust_report_path, artifact_path
 
+    def write_foreign_block_attestation_packet_report(self, archive_root: Path) -> tuple[Path, Path]:
+        trust_report_path, artifact_path = self.write_foreign_block_trust_report(archive_root)
+        code, output = self.run_cli(
+            [
+                "foreign-block-attestation",
+                str(archive_root),
+                "--trust-report",
+                archive_cli.archive_relative_path(trust_report_path, archive_root),
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        packet_path = archive_root / "workbench" / "foreign-block-attestation-packet.json"
+        packet_path.parent.mkdir(parents=True, exist_ok=True)
+        packet_path.write_text(output, encoding="utf-8")
+        return packet_path, artifact_path
+
     def test_foreign_block_json_artifact_is_untrusted_read_only_preview(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -3834,6 +3853,276 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["packet_status"], "blocked")
             self.assertNotIn("UNSAFE_PACKET_SENTINEL", output)
             self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_quarantine_valid_packet_is_ready_and_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            packet_path, artifact_path = self.write_foreign_block_attestation_packet_report(archive_root)
+            artifact_path.unlink()
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-quarantine",
+                    str(archive_root),
+                    "--attestation-packet",
+                    archive_cli.archive_relative_path(packet_path, archive_root),
+                    "--quarantine-case-id",
+                    "case-review-001",
+                    "--reviewer",
+                    "person:reviewer",
+                    "--quarantine-policy",
+                    "operator_review",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(before, after)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "foreign_block_quarantine_plan")
+            self.assertEqual(result["trust_state"], "untrusted_foreign")
+            self.assertEqual(result["quarantine_status"], "planned_not_written")
+            self.assertEqual(result["proposed_quarantine_action"], "ready_for_future_quarantine_write")
+            self.assertFalse(result["quarantine_plan"]["would_quarantine"])
+            self.assertEqual(result["quarantine_plan"]["quarantine_write_status"], "not_created")
+            self.assertEqual(result["quarantine_plan"]["quarantine_case_id"], "case-review-001")
+            self.assertEqual(result["quarantine_plan"]["reviewer"], "person:reviewer")
+            self.assertEqual(result["would_change"], [])
+            proposed_paths = result["quarantine_plan"]["proposed_paths"]
+            self.assertEqual(proposed_paths["case_dir"], "quarantine/foreign-blocks/case-review-001")
+            for value in proposed_paths.values():
+                self.assertFalse(Path(value).is_absolute())
+                self.assertNotIn("\\", value)
+            self.assertFalse((archive_root / "quarantine").exists())
+            self.assertNotIn(str(packet_path.resolve()), output)
+
+    def test_foreign_block_quarantine_manual_review_packet_holds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            packet_path, _artifact_path = self.write_foreign_block_attestation_packet_report(archive_root)
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+            packet["packet_status"] = "manual_review_required"
+            packet["warnings"] = ["Manual review is still required."]
+            packet_path.write_text(json.dumps(packet), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-quarantine",
+                    str(archive_root),
+                    "--attestation-packet",
+                    archive_cli.archive_relative_path(packet_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["proposed_quarantine_action"], "hold_for_human_review")
+            self.assertFalse(result["quarantine_plan"]["would_quarantine"])
+
+    def test_foreign_block_quarantine_blocked_packet_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            packet_path, _artifact_path = self.write_foreign_block_attestation_packet_report(archive_root)
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+            packet["ok"] = False
+            packet["packet_status"] = "blocked"
+            packet["blockers"] = ["Synthetic packet blocker."]
+            packet_path.write_text(json.dumps(packet), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-quarantine",
+                    str(archive_root),
+                    "--attestation-packet",
+                    archive_cli.archive_relative_path(packet_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["proposed_quarantine_action"], "blocked")
+            self.assertEqual(result["would_change"], [])
+            self.assertFalse(result["quarantine_plan"]["would_quarantine"])
+            self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_quarantine_tampered_packets_block_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            packet_path, _artifact_path = self.write_foreign_block_attestation_packet_report(archive_root)
+            base_packet = json.loads(packet_path.read_text(encoding="utf-8"))
+            cases = [
+                ("dry_run", False),
+                ("lifecycle_action", "foreign_block_attestation_packet_tampered"),
+                ("trust_state", "trusted"),
+                ("would_change", ["quarantine/foreign-blocks/case/quarantine-plan.json"]),
+                ("attestation_packet_preview.would_attest", True),
+                ("attestation_packet_preview.attestation_status", "created"),
+                ("packet_status", "trusted"),
+                ("claimed_hashes[0].verification_state", "verified"),
+                ("claimed_hashes[0].trust_state", "trusted"),
+            ]
+            for key, value in cases:
+                with self.subTest(key=key):
+                    packet = json.loads(json.dumps(base_packet))
+                    if key == "attestation_packet_preview.would_attest":
+                        packet["attestation_packet_preview"]["would_attest"] = value
+                    elif key == "attestation_packet_preview.attestation_status":
+                        packet["attestation_packet_preview"]["attestation_status"] = value
+                    elif key == "claimed_hashes[0].verification_state":
+                        packet["claimed_hashes"][0]["verification_state"] = value
+                    elif key == "claimed_hashes[0].trust_state":
+                        packet["claimed_hashes"][0]["trust_state"] = value
+                    else:
+                        packet[key] = value
+                    packet_path.write_text(json.dumps(packet), encoding="utf-8")
+
+                    code, output = self.run_cli(
+                        [
+                            "foreign-block-quarantine",
+                            str(archive_root),
+                            "--attestation-packet",
+                            archive_cli.archive_relative_path(packet_path, archive_root),
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["proposed_quarantine_action"], "blocked")
+                    self.assertEqual(result["would_change"], [])
+                    self.assertFalse(result["quarantine_plan"]["would_quarantine"])
+                    self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_quarantine_invalid_json_missing_and_unsafe_paths_block_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            invalid_path = archive_root / "workbench" / "invalid-attestation-packet.json"
+            invalid_path.parent.mkdir(parents=True, exist_ok=True)
+            invalid_path.write_text("{not valid json", encoding="utf-8")
+            cases = [
+                "workbench/invalid-attestation-packet.json",
+                "workbench/missing-attestation-packet.json",
+                "../outside-attestation-packet.json",
+            ]
+            for path_arg in cases:
+                with self.subTest(path_arg=path_arg):
+                    code, output = self.run_cli(
+                        [
+                            "foreign-block-quarantine",
+                            str(archive_root),
+                            "--attestation-packet",
+                            path_arg,
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["proposed_quarantine_action"], "blocked")
+                    self.assertTrue(result["blockers"])
+                    self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_quarantine_stdin_packet_works(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            packet_path, _artifact_path = self.write_foreign_block_attestation_packet_report(archive_root)
+            packet_text = packet_path.read_text(encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-quarantine",
+                    str(archive_root),
+                    "--stdin",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ],
+                stdin_text=packet_text,
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["input_source"], "stdin")
+            self.assertEqual(result["proposed_quarantine_action"], "ready_for_future_quarantine_write")
+
+    def test_foreign_block_quarantine_rejects_unsafe_packet_without_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            packet_path, _artifact_path = self.write_foreign_block_attestation_packet_report(archive_root)
+            packet = json.loads(packet_path.read_text(encoding="utf-8"))
+            packet["source_trust_report_summary"]["unsafe_locator"] = "s3" + "://bucket.invalid/UNSAFE_QUARANTINE_PACKET.bin"
+            packet_path.write_text(json.dumps(packet), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "foreign-block-quarantine",
+                    str(archive_root),
+                    "--attestation-packet",
+                    archive_cli.archive_relative_path(packet_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["proposed_quarantine_action"], "blocked")
+            self.assertNotIn("UNSAFE_QUARANTINE_PACKET", output)
+            self.assertNotIn("Traceback", output)
+
+    def test_foreign_block_quarantine_rejects_unsafe_options_without_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            packet_path, _artifact_path = self.write_foreign_block_attestation_packet_report(archive_root)
+            cases = [
+                ("--quarantine-case-id", "case/UNSAFE_QUARANTINE_OPTION"),
+                ("--reviewer", "s3" + "://bucket.invalid/UNSAFE_QUARANTINE_OPTION"),
+            ]
+            for flag, value in cases:
+                with self.subTest(flag=flag):
+                    code, output = self.run_cli(
+                        [
+                            "foreign-block-quarantine",
+                            str(archive_root),
+                            "--attestation-packet",
+                            archive_cli.archive_relative_path(packet_path, archive_root),
+                            flag,
+                            value,
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["proposed_quarantine_action"], "blocked")
+                    self.assertEqual(result["would_change"], [])
+                    self.assertFalse(result["quarantine_plan"]["would_quarantine"])
+                    self.assertNotIn("UNSAFE_QUARANTINE_OPTION", output)
+                    self.assertNotIn("Traceback", output)
 
     def test_runtime_context_no_redact_local_paths_includes_local_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -109,6 +109,9 @@ foreign_block_trust_check
 foreign_block_attestation_packet_check
   Read-only dry-run human-review packet preview from a foreign-block trust report. This keeps `trust_state: untrusted_foreign`, sets no trust, writes no attestation or receipt, re-reads no original foreign artifact, and never imports, applies, mints, anchors, calls providers, or writes files.
 
+foreign_block_quarantine_plan
+  Read-only dry-run quarantine placement plan from a foreign-block attestation packet preview. This keeps `trust_state: untrusted_foreign`, writes no quarantine files, sets no trust, writes no attestation or receipt, re-reads no original foreign artifact, and never imports, applies, mints, anchors, calls providers, or writes files.
+
 create_draft_zettel
   Create an AI draft in inbox/. `dry_run: true` previews the draft path, frontmatter, body hash, blockers, warnings, and approval replay values without writing. It may consume structured `source_intake_plan` and `prompt_boundary_report` objects and merge validated metadata into the draft preview. Normal profile-bound AI writes require draft approval plus expected body hash replay values. This does not mint the zettel.
 
@@ -190,6 +193,7 @@ ownership_transfer_check
 - `block_header_check` is read-only and writes nothing. MCP exposes no block header apply, block mint, token, coin, NFT, staking, transport, relay, or provider apply tool.
 - `foreign_block_intake_check` is read-only and writes nothing. MCP exposes no foreign block apply, import, trust, attest, auto-accept, auto-import, transport, or full-auto tool.
 - `foreign_block_attestation_packet_check` is read-only and writes nothing. MCP exposes no foreign block attestation apply, receipt write, import, trust, attest, auto-accept, auto-import, transport, or full-auto tool.
+- `foreign_block_quarantine_plan` is read-only and writes nothing. MCP exposes no foreign block quarantine apply, quarantine write, receipt write, import, trust, attest, auto-accept, auto-import, transport, or full-auto tool.
 - `create_draft_zettel` accepts a structured `source_intake_plan` object, not a local plan file path. The plan must be a successful dry-run, blocker-free, metadata-only source intake result before refs are merged.
 - `archive_index` writes only the generated search map at `db/archive-index.sqlite`.
 - `archive_onboarding_plan` previews first setup but does not create archive folders, provider bindings, or `.env` files.

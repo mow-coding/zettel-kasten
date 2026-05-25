@@ -1,6 +1,6 @@
 # Foreign Block Attestation Packet Preview
 
-Status: v0.2.30 baseline
+Status: v0.2.31 baseline
 
 ## Principle
 
@@ -51,6 +51,19 @@ The `packet_status` can be:
 
 `ready_for_human_attestation_review` is not trust, not approval, and not an attestation. It only means the trust report is clean enough to present to a future human or policy review step.
 
+## Quarantine Plan
+
+v0.2.31 adds the next read-only step:
+
+```bash
+archive foreign-block-quarantine <archive-root> --attestation-packet <json-file> --dry-run --format json
+archive foreign-block-quarantine <archive-root> --stdin --dry-run --format json
+```
+
+`foreign-block-quarantine` consumes this packet preview and proposes where a future isolated review copy could live under `quarantine/foreign-blocks/<case-id>/...`. It does not create those paths.
+
+`ready_for_future_quarantine_write` is not trust, not import, not quarantine, and not approval.
+
 ## Safety Checks
 
 The command blocks if the trust report:
@@ -72,9 +85,10 @@ The MCP tool is read-only and dry-run only. It accepts a structured trust report
 
 ## Non-Goals
 
-v0.2.30 does not implement:
+v0.2.31 does not implement:
 
 - real trust/apply/import,
+- quarantine writes,
 - attestation writes,
 - receipt writes,
 - minting,

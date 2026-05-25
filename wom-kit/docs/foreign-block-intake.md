@@ -1,6 +1,6 @@
 # Foreign Block Intake
 
-Status: v0.2.30 baseline
+Status: v0.2.31 baseline
 
 ## Principle
 
@@ -24,6 +24,7 @@ archive foreign-block <archive-root> --path <artifact-path> --dry-run --format j
 archive foreign-block <archive-root> --stdin --dry-run --format json
 archive foreign-block-trust <archive-root> --intake-report <json-file> --dry-run --format json
 archive foreign-block-attestation <archive-root> --trust-report <json-file> --dry-run --format json
+archive foreign-block-quarantine <archive-root> --attestation-packet <json-file> --dry-run --format json
 ```
 
 Supported v0.2.28 inputs:
@@ -87,11 +88,35 @@ Its `packet_status` can be:
 
 Even `ready_for_human_attestation_review` does not mean trusted or attested. It only means the trust report can be shown to a human reviewer later.
 
+## Quarantine Plan
+
+v0.2.31 adds a fourth read-only step:
+
+```text
+foreign block artifact
+-> foreign-block intake report
+-> foreign-block-trust preview
+-> foreign-block-attestation packet preview
+-> foreign-block-quarantine plan
+-> future explicit quarantine-write approval
+```
+
+`foreign-block-quarantine` consumes the attestation packet preview. It does not read the original foreign artifact again.
+
+Its `proposed_quarantine_action` can be:
+
+- `blocked`,
+- `hold_for_human_review`,
+- `ready_for_future_quarantine_write`.
+
+Even `ready_for_future_quarantine_write` does not mean trusted, imported, quarantined, or approved. It only means a future explicit quarantine-write workflow could be shown to a human/operator.
+
 ## Non-Goals
 
-v0.2.30 does not implement:
+v0.2.31 does not implement:
 
 - real ZET transport,
+- quarantine writes,
 - foreign block import/apply,
 - automatic trust,
 - attestation writes,

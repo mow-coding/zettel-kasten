@@ -488,6 +488,26 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "foreign_block_quarantine_plan",
+        "description": "Read-only dry-run quarantine placement plan from a foreign-block attestation packet preview.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "path": {"type": "string"},
+                "attestation_packet": {"type": "object"},
+                "quarantine_case_id": {"type": "string"},
+                "reviewer": {"type": "string"},
+                "quarantine_policy": {
+                    "type": "string",
+                    "enum": sorted(archive_services.FOREIGN_BLOCK_QUARANTINE_POLICIES),
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "create_draft_zettel",
         "description": "Create an AI draft zettel in inbox/. This does not mint to canonical memory.",
         "inputSchema": {
@@ -810,6 +830,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_foreign_block_trust_check(arguments)
     if name == "foreign_block_attestation_packet_check":
         return tool_foreign_block_attestation_packet_check(arguments)
+    if name == "foreign_block_quarantine_plan":
+        return tool_foreign_block_quarantine_plan(arguments)
     if name == "create_draft_zettel":
         return tool_create_draft_zettel(arguments)
     if name == "list_views":
@@ -1324,6 +1346,31 @@ def tool_foreign_block_attestation_packet_check(arguments: dict[str, Any]) -> di
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"foreign_block_attestation_packet_check: {state}.", result)
+
+
+def tool_foreign_block_quarantine_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("foreign_block_quarantine_plan is dry-run only.")
+    attestation_packet = arguments.get("attestation_packet") if isinstance(arguments.get("attestation_packet"), dict) else None
+    if "attestation_packet" in arguments and attestation_packet is None:
+        raise ToolError("foreign_block_quarantine_plan attestation_packet must be a structured object.")
+    relative_path = optional_string_arg(arguments, "path")
+    quarantine_case_id = optional_string_arg(arguments, "quarantine_case_id")
+    reviewer = optional_string_arg(arguments, "reviewer")
+    quarantine_policy = optional_string_arg(arguments, "quarantine_policy") or archive_services.FOREIGN_BLOCK_QUARANTINE_DEFAULT_POLICY
+    result = call_service(
+        archive_services.foreign_block_quarantine_plan,
+        archive_root,
+        attestation_packet_path=relative_path,
+        attestation_packet=attestation_packet,
+        dry_run=True,
+        quarantine_case_id=quarantine_case_id,
+        reviewer=reviewer,
+        quarantine_policy=quarantine_policy,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"foreign_block_quarantine_plan: {state}.", result)
 
 
 def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:

@@ -1,6 +1,6 @@
 # WOM
 
-> Widesider of Modernity: 인간의 기억 지평을 넓히기 위한 local-first, AI-native, Web3 지향 archive/communication system.
+> Widesider of Modernity: 인간 인식의 지평을 넓히기 위한 local-first, AI-native, Web3 지향 archive/communication system.
 
 [English README](README.md) · [공개 문서 지도](wom-kit/docs/public-documentation-map.ko.md) · [업그레이드 가이드](UPGRADE.ko.md) · [변경 기록](CHANGELOG.md) · [릴리스 노트](wom-kit/docs/releases/) · [보안 정책](SECURITY.md)
 
@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.2.30 pre-release
+v0.2.31 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -56,6 +56,7 @@ v0.2.30 pre-release
 - foreign/shared block이나 Markdown-compatible foreign zet를 import/trust 없이 먼저 읽기 전용으로 미리 보는 `foreign-block` preview가 있습니다.
 - foreign-block intake report를 읽고 reject / manual review required / eligible for future attestation으로 dry-run 분류하는 `foreign-block-trust` preview가 있습니다. 실제 trust, import, attestation write는 하지 않습니다.
 - foreign-block trust report를 읽고 미래 human review packet을 dry-run으로 미리 보는 `foreign-block-attestation` preview가 있습니다. 실제 trust, attestation, receipt, import, write는 하지 않습니다.
+- foreign-block attestation packet report를 읽고 미래 quarantine write 위치와 처리 방식을 dry-run으로 미리 보는 `foreign-block-quarantine` plan이 있습니다. 실제 quarantine file, trust, import, attestation, receipt는 만들지 않습니다.
 
 아직 없는 것:
 
@@ -194,6 +195,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.31
 v0.2.30
 v0.2.29
 v0.2.28

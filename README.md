@@ -1,6 +1,6 @@
 # WOM
 
-> Widesider of Modernity: a local-first, AI-native, Web3-oriented archive and communication system for widening the horizon of human memory.
+> Widesider of Modernity: a local-first, AI-native, Web3-oriented archive and communication system for widening the horizon of human perception.
 
 [한국어 README](README.ko.md) · [Documentation Map](wom-kit/docs/public-documentation-map.md) · [Upgrade Guide](UPGRADE.md) · [Changelog](CHANGELOG.md) · [Release Notes](wom-kit/docs/releases/) · [Security](SECURITY.md) · [Disclaimer](DISCLAIMER.md)
 
@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.30 pre-release
+v0.2.31 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -58,6 +58,7 @@ What exists today:
 - read-only foreign block intake previews that inspect shared block/header JSON or Markdown-compatible foreign zets without importing, trusting, drafting, minting, attesting, anchoring, or applying them.
 - read-only foreign block trust previews that consume intake reports and classify them as reject, manual review required, or eligible for future attestation without creating trust or attestations.
 - read-only foreign block attestation packet previews that consume trust reports and prepare a human-review packet without creating trust, writing attestations, writing receipts, or re-reading the foreign artifact.
+- read-only foreign block quarantine plans that consume attestation packet previews and propose archive-relative future holding paths without creating quarantine files, trust, imports, attestations, or receipts.
 
 What does not exist yet:
 
@@ -67,7 +68,7 @@ What does not exist yet:
 - real wallet creation, private key custody, or cryptographic signing,
 - complete prompt-injection prevention or full-auto safety guarantees,
 - LLM-based prompt classification, provider scanning, OCR/import apply, ZET transport, real signing, payments, staking, consensus, or blockchain integration,
-- real foreign block import/trust/apply, real foreign attestation writes or receipts, real ZET transport, or automatic acceptance of shared blocks,
+- real foreign block quarantine writes, import/trust/apply, real foreign attestation writes or receipts, real ZET transport, or automatic acceptance of shared blocks,
 - full Markdown-to-WOM-Safe-HTML conversion or finalized profile validation,
 - stable `v1.0.0` protocol guarantee.
 
@@ -199,6 +200,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.31
 v0.2.30
 v0.2.29
 v0.2.28

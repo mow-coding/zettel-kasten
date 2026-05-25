@@ -4,6 +4,26 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.31 - 2026-05-25
+
+Foreign block quarantine plan patch.
+
+Added:
+
+- `archive foreign-block-quarantine <archive-root> --attestation-packet <json-file> --dry-run --format json`,
+- `archive foreign-block-quarantine <archive-root> --stdin --dry-run --format json`,
+- read-only MCP `foreign_block_quarantine_plan`,
+- validation for v0.2.30 `foreign_block_attestation_packet_preview` reports before any future quarantine write,
+- structured quarantine actions: `blocked`, `hold_for_human_review`, and `ready_for_future_quarantine_write`,
+- preview-only archive-relative quarantine paths under `quarantine/foreign-blocks/<case-id>/...` that are not created.
+
+Compatibility:
+
+- no private archive migration is required,
+- quarantine plan writes nothing and never reads the original foreign artifact,
+- `ready_for_future_quarantine_write` is not trust, not import, not approval, and not a quarantine write; it only means a future explicit quarantine-write workflow could be presented to a human/operator,
+- no real quarantine write, trust/apply/import, attestation write, receipt write, minting, anchoring, delegation, signing, payment, staking, consensus, blockchain, provider sync, OCR, LLM classification, ZET transport, or full-auto execution is implemented.
+
 ## v0.2.30 - 2026-05-25
 
 Foreign block attestation packet preview patch.

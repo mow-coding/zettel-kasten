@@ -1,6 +1,6 @@
 # Block Header Model
 
-Status: v0.2.30 draft baseline
+Status: v0.2.31 draft baseline
 Date: 2026-05-25
 
 ## Core Idea
@@ -84,6 +84,15 @@ archive foreign-block-attestation <archive-root> --stdin --dry-run --format json
 
 The result can return `blocked`, `manual_review_required`, or `ready_for_human_attestation_review`, but it never creates trust, writes attestations, writes receipts, imports, mints, anchors, delegates, signs, or reads the original foreign artifact again.
 
+v0.2.31 adds a read-only quarantine plan from the attestation packet preview:
+
+```bash
+archive foreign-block-quarantine <archive-root> --attestation-packet <json-file> --dry-run --format json
+archive foreign-block-quarantine <archive-root> --stdin --dry-run --format json
+```
+
+The result can return `blocked`, `hold_for_human_review`, or `ready_for_future_quarantine_write`, but it never creates quarantine files, trust, imports, attestations, receipts, mint outputs, or anchors.
+
 The boundary is:
 
 ```text
@@ -97,7 +106,7 @@ Real ZET transport, foreign block import/apply, trust, attest, anchor, signing, 
 
 ## Non-Goals
 
-v0.2.30 does not implement:
+v0.2.31 does not implement:
 
 - real ZET transport,
 - token mechanics,
@@ -111,6 +120,7 @@ v0.2.30 does not implement:
 - relay behavior,
 - P2P behavior,
 - blockchain behavior,
+- foreign quarantine writes,
 - foreign attestation writes,
 - foreign attestation receipt writes.
 

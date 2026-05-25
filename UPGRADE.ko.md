@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.30` | current public pre-release | `wom-kit/docs/releases/v0.2.30.md` |
+| `v0.2.31` | current public pre-release | `wom-kit/docs/releases/v0.2.31.md` |
+| `v0.2.30` | superseded public pre-release | `wom-kit/docs/releases/v0.2.30.md` |
 | `v0.2.29` | superseded public pre-release | `wom-kit/docs/releases/v0.2.29.md` |
 | `v0.2.28` | superseded public pre-release | `wom-kit/docs/releases/v0.2.28.md` |
 | `v0.2.27` | superseded public pre-release | `wom-kit/docs/releases/v0.2.27.md` |
@@ -57,6 +58,20 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.30` To `v0.2.31`
+
+This compatible patch adds read-only foreign block quarantine plan:
+
+- `archive foreign-block-quarantine <archive-root> --attestation-packet <json-file> --dry-run --format json`
+- `archive foreign-block-quarantine <archive-root> --stdin --dry-run --format json`
+- read-only MCP `foreign_block_quarantine_plan`
+
+No private archive migration is required.
+
+Foreign block quarantine plan does not write quarantine files, import, trust, mint, attest, anchor, draft, apply, call provider APIs, execute foreign text, write receipts, or write files.
+
+`ready_for_future_quarantine_write` means a future explicit quarantine-write workflow could be shown to a human/operator. It is not trust, import, quarantine, or approval.
 
 ## From `v0.2.29` To `v0.2.30`
 

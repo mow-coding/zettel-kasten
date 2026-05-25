@@ -27,6 +27,8 @@ Commands:
           Preview future trust/attestation eligibility from a foreign-block intake report.
   foreign-block-attestation
           Preview a human-review attestation packet from a foreign-block trust report.
+  foreign-block-quarantine
+          Plan future isolated holding for a foreign block without writing quarantine files.
   init    Create a new archive from a built-in template.
   index   Build a generated local SQLite search index.
   parcel Create a portable parcel from a view. Alias: pack.
@@ -1773,6 +1775,39 @@ def command_foreign_block_attestation(args: argparse.Namespace) -> int:
             for warning in result["warnings"]:
                 print(f"- {warning}")
         print("Foreign block attestation packet preview passed." if result.get("ok") else "Foreign block attestation packet preview blocked.")
+    return 0 if result.get("ok") else 1
+
+
+def command_foreign_block_quarantine(args: argparse.Namespace) -> int:
+    try:
+        stdin_text = sys.stdin.read() if args.stdin else None
+        result = archive_services.foreign_block_quarantine_plan(
+            Path(args.archive_root),
+            attestation_packet_path=args.attestation_packet,
+            text=stdin_text,
+            dry_run=args.dry_run,
+            quarantine_case_id=args.quarantine_case_id,
+            reviewer=args.reviewer,
+            quarantine_policy=args.quarantine_policy,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Foreign block quarantine plan: {result.get('proposed_quarantine_action') or '-'}")
+        print(f"Trust state: {result.get('trust_state') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        print("Foreign block quarantine plan passed." if result.get("ok") else "Foreign block quarantine plan blocked.")
     return 0 if result.get("ok") else 1
 
 
@@ -3687,6 +3722,26 @@ def build_parser() -> argparse.ArgumentParser:
     foreign_block_attestation.add_argument("--dry-run", action="store_true", help="Preview the attestation review packet without writing files.")
     foreign_block_attestation.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     foreign_block_attestation.set_defaults(func=command_foreign_block_attestation)
+
+    foreign_block_quarantine = subcommands.add_parser(
+        "foreign-block-quarantine",
+        help="Plan future isolated holding for a foreign block without writing quarantine files.",
+    )
+    foreign_block_quarantine.add_argument("archive_root", help="Archive root used for path safety and local context.")
+    quarantine_source = foreign_block_quarantine.add_mutually_exclusive_group(required=True)
+    quarantine_source.add_argument("--attestation-packet", help="Archive-relative JSON report from foreign-block-attestation --dry-run.")
+    quarantine_source.add_argument("--stdin", action="store_true", help="Read the foreign-block attestation packet JSON from stdin.")
+    foreign_block_quarantine.add_argument("--quarantine-case-id", help="Optional safe case id for preview paths. This is not approval.")
+    foreign_block_quarantine.add_argument("--reviewer", help="Optional safe actor id for a future reviewer. This is not approval.")
+    foreign_block_quarantine.add_argument(
+        "--quarantine-policy",
+        choices=sorted(archive_services.FOREIGN_BLOCK_QUARANTINE_POLICIES),
+        default=archive_services.FOREIGN_BLOCK_QUARANTINE_DEFAULT_POLICY,
+        help="Quarantine planning policy. This is not approval.",
+    )
+    foreign_block_quarantine.add_argument("--dry-run", action="store_true", help="Preview the quarantine plan without writing files.")
+    foreign_block_quarantine.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    foreign_block_quarantine.set_defaults(func=command_foreign_block_quarantine)
 
     create_draft = subcommands.add_parser("create-draft", help="Create a draft zettel in inbox/.")
     create_draft.add_argument("archive_root", help="Archive root to write to.")

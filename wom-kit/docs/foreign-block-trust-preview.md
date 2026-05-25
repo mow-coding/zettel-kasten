@@ -1,6 +1,6 @@
 # Foreign Block Trust Preview
 
-Status: v0.2.30 baseline
+Status: v0.2.31 baseline
 
 ## Principle
 
@@ -40,6 +40,19 @@ archive foreign-block-attestation <archive-root> --stdin --dry-run --format json
 
 The output is a human-review packet preview. `ready_for_human_attestation_review` is not trust and not approval.
 
+## Quarantine Plan
+
+v0.2.31 adds the next read-only step:
+
+```bash
+archive foreign-block-quarantine <archive-root> --attestation-packet <json-file> --dry-run --format json
+archive foreign-block-quarantine <archive-root> --stdin --dry-run --format json
+```
+
+`foreign-block-quarantine` consumes the attestation packet preview. It plans future archive-relative holding paths but does not create quarantine files, trust, imports, attestations, receipts, or mint outputs.
+
+`ready_for_future_quarantine_write` is not trust, not import, and not approval.
+
 ## Output Boundary
 
 The output keeps:
@@ -59,9 +72,10 @@ The `proposed_trust_action` can be:
 
 ## Non-Goals
 
-v0.2.30 does not implement:
+v0.2.31 does not implement:
 
 - real trust/apply/import,
+- quarantine writes,
 - attestation writes,
 - receipt writes,
 - minting,
