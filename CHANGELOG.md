@@ -4,6 +4,25 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.37 - 2026-05-25
+
+Foreign block decision outcome plan patch.
+
+Added:
+
+- `archive quarantine-decision-outcome <archive-root> --case-id <safe-case-id> --dry-run --format json`,
+- optional `--expected-decision`, `--reviewer`, and `--review-note`,
+- read-only MCP `foreign_block_decision_outcome_plan`,
+- conservative outcome routing for recorded quarantine decisions.
+
+Compatibility:
+
+- no private archive migration is required,
+- outcome planning writes nothing and never reads the original foreign artifact,
+- all outcomes remain `untrusted_foreign` and `planned_not_applied`,
+- `eligible_for_attestation_review` only becomes `prepare_attestation_review_candidate`; it does not create trust or an attestation,
+- MCP remains read-only and exposes no outcome apply/write/accept/trust/import/attest/mint/full-auto tool.
+
 ## v0.2.36 - 2026-05-25
 
 Foreign block quarantine decision review index patch.

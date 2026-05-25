@@ -198,6 +198,12 @@ FOREIGN_BLOCK_QUARANTINE_DECISIONS = {
     "eligible_for_attestation_review",
     "needs_more_review",
 }
+FOREIGN_BLOCK_DECISION_OUTCOMES = {
+    "keep_quarantined": "keep_quarantined",
+    "reject_and_keep_record": "reject_and_keep_record",
+    "needs_more_review": "needs_more_review",
+    "eligible_for_attestation_review": "prepare_attestation_review_candidate",
+}
 FOREIGN_BLOCK_QUARANTINE_DECISION_DISALLOWED_ACTIONS = [
     "write_quarantine_decision",
     "mark_foreign_block_trusted",
@@ -4642,6 +4648,17 @@ def quarantine_decision_review_note_summary(review_note: str | None, safe_note: 
     }
 
 
+def quarantine_decision_outcome_review_note_summary(review_note: str | None, safe_note: str | None) -> dict[str, Any]:
+    summary = quarantine_decision_review_note_summary(review_note, safe_note)
+    return {
+        "provided": summary["provided"],
+        "accepted_as_context": summary["accepted_as_preview_context"],
+        "stored": summary["stored"],
+        "content_included": summary["content_included"],
+        "length": summary["length"],
+    }
+
+
 def quarantine_decision_required_future_approval(proposed_decision: str | None) -> dict[str, Any]:
     return {
         "required": True,
@@ -5779,6 +5796,197 @@ def foreign_block_quarantine_decision_review_index(
         "warnings": unique_preserve_order(warnings),
         "would_change": [],
     }
+
+
+def foreign_block_decision_outcome_next_safe_actions(decision: str | None) -> list[str]:
+    if decision == "reject_and_keep_record":
+        return [
+            "preserve the quarantine and decision records",
+            "do not trust or import",
+            "future cleanup/export remains separate and approval-gated",
+        ]
+    if decision == "needs_more_review":
+        return [
+            "gather more human review context",
+            "rerun prompt-boundary / foreign-block review tools as needed",
+            "do not trust or import",
+        ]
+    if decision == "eligible_for_attestation_review":
+        return [
+            "prepare a future attestation review candidate",
+            "keep the block untrusted until a separate explicit attestation workflow exists",
+            "do not create an attestation in v0.2.37",
+        ]
+    return [
+        "keep the foreign block isolated",
+        "periodically run quarantine-decision-review",
+        "do not trust or import",
+    ]
+
+
+def foreign_block_decision_outcome_empty_result(
+    *,
+    archive_id: str,
+    dry_run: bool,
+    case_id: str | None = None,
+    expected_decision: str | None = None,
+    reviewer: str | None = None,
+    review_note_summary: dict[str, Any] | None = None,
+    blockers: list[str] | None = None,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": False,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_decision_outcome_plan",
+        "archive_id": archive_id,
+        "case_id": safe_foreign_quarantine_case_id(case_id),
+        "expected_decision": expected_decision if expected_decision in FOREIGN_BLOCK_QUARANTINE_DECISIONS else None,
+        "reviewer": safe_foreign_quarantine_actor_id(reviewer),
+        "review_note_summary": json_safe(review_note_summary or quarantine_decision_outcome_review_note_summary(None, None)),
+        "trust_state": "untrusted_foreign",
+        "outcome_status": "planned_not_applied",
+        "recorded_decision": None,
+        "proposed_outcome": None,
+        "decision_summary": {},
+        "case_summary": {},
+        "receipt_summary": {},
+        "next_safe_actions": ["fix blockers before planning any next step"],
+        "blockers": unique_preserve_order(blockers or []),
+        "warnings": unique_preserve_order(warnings or []),
+        "would_change": [],
+    }
+    for flag in FOREIGN_BLOCK_QUARANTINE_DECISION_FALSE_FLAGS:
+        result[flag] = False
+    return result
+
+
+def foreign_block_decision_outcome_plan(
+    archive_root: Path | str,
+    *,
+    case_id: str | None,
+    dry_run: bool,
+    expected_decision: str | None = None,
+    reviewer: str | None = None,
+    review_note: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    safe_case_id = safe_foreign_quarantine_case_id(case_id)
+    safe_reviewer = safe_foreign_quarantine_actor_id(reviewer) if reviewer else None
+    safe_note = safe_foreign_quarantine_review_note(review_note)
+    review_note_summary = quarantine_decision_outcome_review_note_summary(review_note, safe_note)
+
+    if dry_run is not True:
+        blockers.append("quarantine-decision-outcome is dry-run only; pass --dry-run.")
+    if case_id and safe_case_id is None:
+        blockers.append("case_id must be a safe id using ASCII letters, numbers, hyphens, or underscores.")
+    if not case_id:
+        blockers.append("case_id is required.")
+    if expected_decision and expected_decision not in FOREIGN_BLOCK_QUARANTINE_DECISIONS:
+        blockers.append("expected_decision must be a supported quarantine decision.")
+    if reviewer and safe_reviewer is None:
+        blockers.append("reviewer must be a safe actor id.")
+    if review_note and safe_note is None:
+        blockers.append("review_note must be short and must not contain local paths, URLs, tokens, or secrets.")
+    if blockers:
+        return foreign_block_decision_outcome_empty_result(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            case_id=safe_case_id,
+            expected_decision=expected_decision,
+            reviewer=safe_reviewer,
+            review_note_summary=review_note_summary,
+            blockers=blockers,
+            warnings=warnings,
+        )
+
+    assert safe_case_id is not None
+    review = foreign_block_quarantine_decision_review_index(
+        root,
+        case_id=safe_case_id,
+        decision="all",
+        include_receipts=True,
+    )
+    warnings.extend(str(item) for item in review.get("warnings", []) if isinstance(item, str))
+    review_blockers = [str(item) for item in review.get("blockers", []) if isinstance(item, str)]
+    blockers.extend(review_blockers)
+    decisions = review.get("decisions")
+    if not isinstance(decisions, list) or not decisions:
+        blockers.append("recorded quarantine decision was not found.")
+        decision_summary: dict[str, Any] = {}
+    else:
+        decision_summary = decisions[0] if isinstance(decisions[0], dict) else {}
+
+    recorded_decision = decision_summary.get("decision") if isinstance(decision_summary.get("decision"), str) else None
+    if expected_decision and recorded_decision and expected_decision != recorded_decision:
+        blockers.append("expected_decision does not match the recorded quarantine decision.")
+    if recorded_decision not in FOREIGN_BLOCK_QUARANTINE_DECISIONS:
+        blockers.append("recorded quarantine decision must be supported.")
+
+    if decision_summary:
+        if decision_summary.get("case_present") is not True:
+            blockers.append("current quarantine case is missing.")
+        if decision_summary.get("original_quarantine_receipt_present") is not True:
+            blockers.append("current original quarantine receipt is missing.")
+        original_receipt_status = (
+            decision_summary.get("original_quarantine_receipt_consistency", {}).get("status")
+            if isinstance(decision_summary.get("original_quarantine_receipt_consistency"), dict)
+            else None
+        )
+        if original_receipt_status != "passed":
+            blockers.append("current original quarantine receipt consistency must pass.")
+        if decision_summary.get("receipt_present") is not True:
+            blockers.append("quarantine decision receipt is missing.")
+        decision_receipt_status = (
+            decision_summary.get("receipt_consistency", {}).get("status")
+            if isinstance(decision_summary.get("receipt_consistency"), dict)
+            else None
+        )
+        if decision_receipt_status != "passed":
+            blockers.append("quarantine decision receipt consistency must pass.")
+        if decision_summary.get("trust_state") != "untrusted_foreign":
+            blockers.append("recorded quarantine decision trust_state must remain untrusted_foreign.")
+
+    case_summary = {}
+    cases = review.get("cases")
+    if isinstance(cases, list) and cases and isinstance(cases[0], dict):
+        case_summary = cases[0]
+
+    proposed_outcome = FOREIGN_BLOCK_DECISION_OUTCOMES.get(recorded_decision)
+    result: dict[str, Any] = {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_decision_outcome_plan",
+        "archive_id": archive_id,
+        "case_id": safe_case_id,
+        "expected_decision": expected_decision if expected_decision in FOREIGN_BLOCK_QUARANTINE_DECISIONS else None,
+        "reviewer": safe_reviewer,
+        "review_note_summary": json_safe(review_note_summary),
+        "trust_state": "untrusted_foreign",
+        "outcome_status": "planned_not_applied",
+        "recorded_decision": recorded_decision,
+        "proposed_outcome": proposed_outcome,
+        "decision_summary": json_safe(decision_summary),
+        "case_summary": json_safe(case_summary),
+        "receipt_summary": json_safe(decision_summary.get("receipt_summary") if isinstance(decision_summary.get("receipt_summary"), dict) else {}),
+        "required_future_approval": {
+            "trust_or_import": True,
+            "attestation": True,
+            "mint": True,
+            "acceptance": True,
+            "provider_sync": True,
+        },
+        "next_safe_actions": foreign_block_decision_outcome_next_safe_actions(recorded_decision),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+    }
+    for flag in FOREIGN_BLOCK_QUARANTINE_DECISION_FALSE_FLAGS:
+        result[flag] = False
+    return json_safe(result)
 
 
 def collect_object_refs_from_value(value: Any, source: str, refs: list[dict[str, Any]]) -> None:

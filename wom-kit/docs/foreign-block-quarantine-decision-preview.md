@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Decision Preview
 
-Status: v0.2.36 compatible baseline
+Status: v0.2.37 compatible baseline
 
 ## Principle
 
@@ -100,9 +100,17 @@ v0.2.36 adds a read-only review index for recorded decisions:
 archive quarantine-decision-review <archive-root> --format json
 ```
 
+v0.2.37 adds a read-only outcome planner for one recorded decision:
+
+```bash
+archive quarantine-decision-outcome <archive-root> --case-id case-review-001 --dry-run --format json
+```
+
+The outcome planner routes the recorded decision to the next safe non-mutating path. It does not trust, import, attest, mint, anchor, delegate, sign, accept, apply, share, call providers, or run ZET transport.
+
 ## Non-Goals
 
-v0.2.36 does not implement:
+v0.2.37 does not implement:
 
 - quarantine decision acceptance,
 - quarantine decision trust or apply,

@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.36` | current public pre-release | `wom-kit/docs/releases/v0.2.36.md` |
+| `v0.2.37` | current public pre-release | `wom-kit/docs/releases/v0.2.37.md` |
+| `v0.2.36` | superseded public pre-release | `wom-kit/docs/releases/v0.2.36.md` |
 | `v0.2.35` | superseded public pre-release | `wom-kit/docs/releases/v0.2.35.md` |
 | `v0.2.34` | superseded public pre-release | `wom-kit/docs/releases/v0.2.34.md` |
 | `v0.2.33` | superseded public pre-release | `wom-kit/docs/releases/v0.2.33.md` |
@@ -63,6 +64,23 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.36` To `v0.2.37`
+
+This is a compatible foreign block decision outcome planning patch.
+
+What changed:
+
+- added `archive quarantine-decision-outcome <archive-root> --case-id <safe-case-id> --dry-run --format json`,
+- added optional `--expected-decision`, `--reviewer`, and `--review-note`,
+- added read-only MCP `foreign_block_decision_outcome_plan`,
+- added conservative next-step routing for recorded decisions.
+
+No private archive migration is required.
+
+The outcome planner reads only the current quarantine case, original quarantine receipt, recorded quarantine decision, and decision receipt. It writes nothing and does not trust the foreign block, import it, attest it, mint it, anchor it, delegate it, sign it, accept it, apply it, share it, or call providers.
+
+`eligible_for_attestation_review` is still not trust. It only maps to `prepare_attestation_review_candidate` for a future explicit workflow.
 
 ## From `v0.2.35` To `v0.2.36`
 

@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.36` | current public pre-release | `wom-kit/docs/releases/v0.2.36.md` |
+| `v0.2.37` | current public pre-release | `wom-kit/docs/releases/v0.2.37.md` |
+| `v0.2.36` | superseded public pre-release | `wom-kit/docs/releases/v0.2.36.md` |
 | `v0.2.35` | superseded public pre-release | `wom-kit/docs/releases/v0.2.35.md` |
 | `v0.2.34` | superseded public pre-release | `wom-kit/docs/releases/v0.2.34.md` |
 | `v0.2.33` | superseded public pre-release | `wom-kit/docs/releases/v0.2.33.md` |
@@ -63,6 +64,19 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.36` To `v0.2.37`
+
+This compatible patch adds a read-only outcome planner for one recorded quarantine decision:
+
+- `archive quarantine-decision-outcome <archive-root> --case-id <safe-case-id> --dry-run --format json`,
+- optional `--expected-decision`, `--reviewer`, and `--review-note`,
+- read-only MCP `foreign_block_decision_outcome_plan`,
+- conservative next-step routing for recorded decisions.
+
+No private archive migration is required.
+
+The planner writes nothing. It does not trust, import, attest, mint, anchor, delegate, sign, accept, apply, share, or call providers. `eligible_for_attestation_review` only becomes `prepare_attestation_review_candidate` for a future explicit workflow.
 
 ## From `v0.2.35` To `v0.2.36`
 

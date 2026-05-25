@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Decision Review Index
 
-Status: v0.2.36 baseline
+Status: v0.2.37 compatible baseline
 
 ## Principle
 
@@ -78,6 +78,16 @@ Contradictions, trust-boundary violations, unsafe private values, non-UTC decisi
 
 When `--include-receipts` is used, `receipt_summary` uses direct boolean semantics. For example, `trust_granted: false` means trust was not granted, and `provider_api_called: false` means no provider API call was recorded.
 
+## Decision Outcome Plan
+
+v0.2.37 adds a single-case planner after this review index:
+
+```bash
+archive quarantine-decision-outcome <archive-root> --case-id case-review-001 --dry-run --format json
+```
+
+The planner validates the same current state more strictly for one case. Missing decision receipts or original quarantine receipts block the plan. The output stays `planned_not_applied` and `untrusted_foreign`.
+
 ## MCP
 
 MCP exposes only:
@@ -92,9 +102,10 @@ MCP does not expose quarantine decision review apply, write, accept, import, tru
 
 ## Non-Goals
 
-v0.2.36 does not implement:
+v0.2.37 does not implement:
 
 - quarantine decision acceptance,
+- quarantine decision outcome acceptance or apply,
 - quarantine decision trust or apply,
 - foreign block import,
 - foreign block trust,

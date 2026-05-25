@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Decision Write
 
-Status: v0.2.36 compatible baseline
+Status: v0.2.37 compatible baseline
 
 ## Principle
 
@@ -87,9 +87,19 @@ archive quarantine-decision-review <archive-root> --case-id case-review-001 --in
 
 The index checks decision records, decision receipts, the original quarantine case, and the original quarantine receipt. It writes nothing and keeps the foreign block untrusted.
 
+## Decision Outcome Plan
+
+v0.2.37 adds a read-only planner after a recorded decision passes review:
+
+```bash
+archive quarantine-decision-outcome <archive-root> --case-id case-review-001 --dry-run --format json
+```
+
+The planner returns `planned_not_applied` and never creates trust, imports, attestations, mint receipts, anchors, delegation, signing, acceptance, provider sync, or ZET transport.
+
 ## Non-Goals
 
-v0.2.36 does not implement:
+v0.2.37 does not implement:
 
 - quarantine decision acceptance,
 - quarantine decision trust or apply,

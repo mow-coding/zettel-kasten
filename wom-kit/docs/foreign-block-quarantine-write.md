@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Write
 
-Status: v0.2.36 compatible baseline
+Status: v0.2.37 compatible baseline
 
 ## Principle
 
@@ -133,7 +133,7 @@ The index validates decision records, decision receipts, and the original quaran
 
 ## Non-Goals
 
-v0.2.36 does not implement:
+v0.2.37 does not implement:
 
 - quarantine decision acceptance, trust, or apply,
 - foreign block trust,

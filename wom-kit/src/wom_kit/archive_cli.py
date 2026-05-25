@@ -39,6 +39,8 @@ Commands:
           Preview or approve recording a local quarantine decision without trusting a foreign block.
   quarantine-decision-review
           List and validate recorded foreign block quarantine decisions.
+  quarantine-decision-outcome
+          Plan the next safe non-mutating path for one recorded quarantine decision.
   init    Create a new archive from a built-in template.
   index   Build a generated local SQLite search index.
   parcel Create a portable parcel from a view. Alias: pack.
@@ -1982,6 +1984,41 @@ def command_quarantine_decision_review(args: argparse.Namespace) -> int:
         print(f"Trust state: {result.get('trust_state') or '-'}")
         for item in result.get("decisions", []):
             print(f"- {item.get('case_id')}: {item.get('decision')} ({item.get('receipt_consistency', {}).get('status')})")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok") else 1
+
+
+def command_quarantine_decision_outcome(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.foreign_block_decision_outcome_plan(
+            Path(args.archive_root),
+            case_id=args.case_id,
+            dry_run=args.dry_run,
+            expected_decision=args.expected_decision,
+            reviewer=args.reviewer,
+            review_note=args.review_note,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Foreign block decision outcome plan: {result.get('proposed_outcome') or '-'}")
+        print(f"Trust state: {result.get('trust_state') or '-'}")
+        print(f"Outcome status: {result.get('outcome_status') or '-'}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -4010,6 +4047,23 @@ def build_parser() -> argparse.ArgumentParser:
     quarantine_decision_review.add_argument("--include-receipts", action="store_true", help="Include sanitized decision receipt summaries.")
     quarantine_decision_review.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     quarantine_decision_review.set_defaults(func=command_quarantine_decision_review)
+
+    quarantine_decision_outcome = subcommands.add_parser(
+        "quarantine-decision-outcome",
+        help="Plan the next safe non-mutating path for one recorded foreign block quarantine decision.",
+    )
+    quarantine_decision_outcome.add_argument("archive_root", help="Archive root used for path safety and local context.")
+    quarantine_decision_outcome.add_argument("--case-id", required=True, help="Safe quarantine case id with a recorded decision.")
+    quarantine_decision_outcome.add_argument("--dry-run", action="store_true", help="Required. Preview the outcome plan without writing files.")
+    quarantine_decision_outcome.add_argument(
+        "--expected-decision",
+        choices=sorted(archive_services.FOREIGN_BLOCK_QUARANTINE_DECISIONS),
+        help="Optional recorded decision expected for replay safety.",
+    )
+    quarantine_decision_outcome.add_argument("--reviewer", help="Optional safe actor id for local operator preview context.")
+    quarantine_decision_outcome.add_argument("--review-note", help="Optional short non-secret operator note. Only summary metadata is returned.")
+    quarantine_decision_outcome.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    quarantine_decision_outcome.set_defaults(func=command_quarantine_decision_outcome)
 
     create_draft = subcommands.add_parser("create-draft", help="Create a draft zettel in inbox/.")
     create_draft.add_argument("archive_root", help="Archive root to write to.")

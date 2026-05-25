@@ -1,6 +1,6 @@
 # Foreign Block Quarantine Review Index
 
-Status: v0.2.36 compatible baseline
+Status: v0.2.37 compatible baseline
 
 ## Principle
 
@@ -97,7 +97,7 @@ MCP does not expose quarantine review apply, accept, import, trust, attest, mint
 
 ## Non-Goals
 
-v0.2.36 does not implement:
+v0.2.37 does not implement:
 
 - quarantine decision acceptance, trust, or apply,
 - quarantine review apply or acceptance,

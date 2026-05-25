@@ -577,6 +577,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("foreign_block_quarantine_decision_check", tool_names)
             self.assertIn("record_quarantine_decision_check", tool_names)
             self.assertIn("foreign_block_quarantine_decision_review_index", tool_names)
+            self.assertIn("foreign_block_decision_outcome_plan", tool_names)
             self.assertIn("archive_index", tool_names)
             self.assertIn("archive_search", tool_names)
             self.assertIn("promotion_check", tool_names)
@@ -624,6 +625,10 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("foreign_block_quarantine_decision_review_apply", tool_names)
             self.assertNotIn("foreign_block_quarantine_decision_review_write", tool_names)
             self.assertNotIn("foreign_block_quarantine_decision_review_accept", tool_names)
+            self.assertNotIn("foreign_block_decision_outcome_apply", tool_names)
+            self.assertNotIn("foreign_block_decision_outcome_write", tool_names)
+            self.assertNotIn("foreign_block_decision_outcome_accept", tool_names)
+            self.assertNotIn("full_auto", tool_names)
             self.assertNotIn("quarantine_decision_write", tool_names)
             self.assertNotIn("quarantine_decision_apply", tool_names)
             self.assertNotIn("write_receipt", tool_names)
@@ -2889,6 +2894,82 @@ class McpServerTests(unittest.TestCase):
                                     "name": "foreign_block_quarantine_decision_review_index",
                                     "arguments": {
                                         "archive_root": str(archive_root),
+                                        "dry_run": dry_run_value,
+                                    },
+                                },
+                            },
+                        )
+                        self.assertTrue(response["result"]["isError"])
+        finally:
+            self.stop_server(process)
+
+    def test_foreign_block_decision_outcome_plan_writes_nothing(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                self.write_mcp_quarantine_decision_fixture(
+                    archive_root,
+                    "mcp-case-001",
+                    "eligible_for_attestation_review",
+                )
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "foreign_block_decision_outcome_plan",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "case_id": "mcp-case-001",
+                                "expected_decision": "eligible_for_attestation_review",
+                                "reviewer": "person:mcp-reviewer",
+                                "review_note": "safe operator note",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "foreign_block_decision_outcome_plan")
+                self.assertEqual(structured["trust_state"], "untrusted_foreign")
+                self.assertEqual(structured["outcome_status"], "planned_not_applied")
+                self.assertEqual(structured["recorded_decision"], "eligible_for_attestation_review")
+                self.assertEqual(structured["proposed_outcome"], "prepare_attestation_review_candidate")
+                self.assertFalse(structured["attestation_created"])
+                self.assertFalse(structured["foreign_block_trusted"])
+                self.assertFalse(structured["provider_api_called"])
+                self.assertEqual(structured["would_change"], [])
+                self.assertNotIn("safe operator note", json.dumps(structured))
+        finally:
+            self.stop_server(process)
+
+    def test_foreign_block_decision_outcome_plan_rejects_non_dry_run(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                self.write_mcp_quarantine_decision_fixture(archive_root, "mcp-case-001")
+                for index, dry_run_value in enumerate([False, "yes", 1], start=1):
+                    with self.subTest(dry_run=dry_run_value):
+                        response = self.send(
+                            process,
+                            {
+                                "jsonrpc": "2.0",
+                                "id": index,
+                                "method": "tools/call",
+                                "params": {
+                                    "name": "foreign_block_decision_outcome_plan",
+                                    "arguments": {
+                                        "archive_root": str(archive_root),
+                                        "case_id": "mcp-case-001",
                                         "dry_run": dry_run_value,
                                     },
                                 },
