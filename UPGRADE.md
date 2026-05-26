@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.44` | current public pre-release | `wom-kit/docs/releases/v0.2.44.md` |
+| `v0.2.45` | current public pre-release | `wom-kit/docs/releases/v0.2.45.md` |
+| `v0.2.44` | superseded public pre-release | `wom-kit/docs/releases/v0.2.44.md` |
 | `v0.2.43` | superseded public pre-release | `wom-kit/docs/releases/v0.2.43.md` |
 | `v0.2.42` | superseded public pre-release | `wom-kit/docs/releases/v0.2.42.md` |
 | `v0.2.41` | superseded public pre-release | `wom-kit/docs/releases/v0.2.41.md` |
@@ -71,6 +72,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.44` To `v0.2.45`
+
+This is a compatible ZET publication surface baseline patch.
+
+What changed:
+
+- added documentation for the no-UI WOM core and user-selected publication/projection surfaces,
+- added sanitized example files for a future projection envelope, WordPress-like title, and WOM Safe HTML-compatible post body,
+- clarified that posting is not minting,
+- clarified that a surface locator is not the canonical zet identity.
+
+No private archive migration is required.
+
+This release adds no CLI or MCP behavior. It does not call providers, publish to WordPress, implement projection-plan CLI/MCP, create projection receipts, trust, import, accept, attest, sign, mint, anchor, run ZET transport, add payments, staking, consensus, blockchain, Redis, model training, backpropagation, or full-auto behavior.
 
 ## From `v0.2.43` To `v0.2.44`
 

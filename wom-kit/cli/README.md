@@ -796,6 +796,12 @@ keyrings/*.local.yml
 
 `doctor` also checks for common accidental secret files and values, such as `.env`, private keys, credential exports, `api_key: ...`, `token: ...`, and `password: ...`.
 
+## Publication Surface Boundary
+
+v0.2.45 documents ZET publication surfaces and adds sanitized examples only.
+
+WOM-kit does not currently include a projection-plan CLI command, projection receipt write, WordPress publisher, provider publisher, ZET transport sender, or automatic posting path. Posting is not minting, and a surface locator is not canonical zet identity.
+
 ## Schema Validation
 
 `doctor` validates the main archive files against JSON Schema documents in `schemas/`.

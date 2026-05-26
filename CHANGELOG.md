@@ -4,6 +4,25 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.45 - 2026-05-26
+
+ZET publication surface baseline patch.
+
+Added:
+
+- documentation for the no-UI WOM core and user-selected publication/projection surfaces,
+- sanitized example files for a future projection envelope, WordPress-like title, and WOM Safe HTML-compatible post body,
+- release notes and work log for the ZET publication surface baseline.
+
+Compatibility:
+
+- no private archive migration is required,
+- no CLI or MCP behavior changed,
+- posting is documented as separate from minting,
+- a surface locator is documented as separate from canonical zet identity,
+- the examples use placeholder identifiers and `https://example.invalid/...` only,
+- this release does not call providers, publish to WordPress, implement projection-plan CLI/MCP, create projection receipts, trust, import, accept, attest, sign, mint, anchor, run ZET transport, add payments, staking, consensus, blockchain, Redis, model training, backpropagation, or full-auto behavior.
+
 ## v0.2.44 - 2026-05-26
 
 Foreign block attestation statement draft decision preview patch.

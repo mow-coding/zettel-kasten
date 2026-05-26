@@ -1,0 +1,48 @@
+{
+  "version": "wom-zet-publication-surface/v0.1-example",
+  "lifecycle_action": "zet_publication_surface_baseline_example",
+  "dry_run": true,
+  "canonical_archive_ref": {
+    "archive_id": "archive:example:public-demo",
+    "zettel_id": "zet_20260526_publication_surface_example",
+    "block_header_ref": "wom-block-header:v0.1-draft:example"
+  },
+  "surface_selection": {
+    "surface_kind": "wordpress_example",
+    "surface_label": "Example public notes site",
+    "surface_locator": "https://example.invalid/wom-surface/posts/zet_20260526_publication_surface_example",
+    "locator_status": "placeholder_not_published"
+  },
+  "projection_scope": {
+    "visibility": "public_projection_example",
+    "includes_body": true,
+    "includes_source_refs": false,
+    "includes_private_receipts": false,
+    "includes_local_paths": false,
+    "includes_provider_urls": false
+  },
+  "example_files": {
+    "title": "wordpress-title.example.txt",
+    "safe_html_body": "wordpress-post.safe-html.example.html"
+  },
+  "safety_flags": {
+    "provider_api_called": false,
+    "wordpress_published": false,
+    "projection_write_performed": false,
+    "projection_receipt_created": false,
+    "trust_created": false,
+    "imported": false,
+    "accepted": false,
+    "attestation_created": false,
+    "signature_created": false,
+    "minted": false,
+    "zet_transport_used": false,
+    "payment_or_token_layer_used": false,
+    "full_auto_used": false
+  },
+  "notes": [
+    "This is a sanitized publication surface example only.",
+    "Posting is not minting.",
+    "The surface locator is not the canonical zet identity."
+  ]
+}

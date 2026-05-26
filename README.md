@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.44 pre-release
+v0.2.45 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -72,12 +72,14 @@ What exists today:
 - CLI-only approved foreign block attestation statement draft records that write exactly one untrusted statement draft JSON and one receipt after replay-validating the current preview, candidate, receipts, quarantine case, and decision records, without creating trust, import, attestation, signatures, minting, sharing, provider calls, or ZET transport.
 - read-only foreign block attestation statement draft review indexes that list recorded untrusted statement drafts, validate their receipts and upstream review chain, and still do not create trust, import, attestation, signatures, minting, sharing, provider calls, or ZET transport.
 - read-only foreign block attestation statement draft decision previews that propose one safe next human-review route without recording a decision, accepting a draft, trusting, importing, attesting, signing, minting, publishing, or running ZET transport.
+- ZET publication surface baseline docs and sanitized examples that separate canonical archive memory from user-selected projection surfaces such as a future WordPress post.
 
 What does not exist yet:
 
 - production-grade installation flow,
 - live provider integrations,
 - production `ZET` sharing service,
+- real projection-plan CLI/MCP, projection receipt writes, or provider-specific publishing,
 - real wallet creation, private key custody, or cryptographic signing,
 - complete prompt-injection prevention or full-auto safety guarantees,
 - LLM-based prompt classification, provider scanning, OCR/import apply, ZET transport, real signing, payments, staking, consensus, or blockchain integration,
@@ -213,6 +215,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.45
 v0.2.44
 v0.2.43
 v0.2.42

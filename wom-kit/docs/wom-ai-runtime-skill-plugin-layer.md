@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.44 planning and implementation baseline
+Status: v0.2.45 planning and implementation baseline
 
 ## Purpose
 
@@ -48,7 +48,7 @@ wom_profile_wallet_check
 
 Profile resolution must happen before runtime context whenever the user names a target profile. This prevents the AI from assuming the current/default archive is correct.
 
-`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.44 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
+`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.45 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
 
 ## Prompt Boundary Check
 
@@ -524,6 +524,12 @@ Review notes are preview context only. The raw note body is not echoed or stored
 
 This is still not acceptance, trust, import, attestation, signing, minting, WordPress publishing, provider sync, apply behavior, or ZET transport.
 
+## Publication Surface Discussion Boundary
+
+An AI runtime may discuss a user-selected publication surface after archive context, source refs, draft preview, human approval, minting, and block/header context are understood.
+
+In v0.2.45 this is documentation/examples only. There is no projection-plan CLI/MCP command, no projection receipt, no WordPress publishing, no provider API call, no ZET transport, and no automatic posting. Posting is not minting, and a surface locator is not canonical zet identity.
+
 ## Expected AI Runtime Flow
 
 An AI runtime should start with:
@@ -601,7 +607,7 @@ The skill tells the AI to:
 
 The plugin layer should expose read and preview tools first.
 
-Allowed v0.2.44 direction:
+Allowed v0.2.45 direction:
 
 - profile list and profile resolve,
 - runtime context,
