@@ -613,6 +613,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("foreign_block_attestation_review_candidate_index", tool_names)
             self.assertIn("foreign_block_attestation_statement_draft_preview", tool_names)
             self.assertIn("record_attestation_statement_draft_check", tool_names)
+            self.assertIn("foreign_block_attestation_statement_draft_review_index", tool_names)
             self.assertIn("archive_index", tool_names)
             self.assertIn("archive_search", tool_names)
             self.assertIn("promotion_check", tool_names)
@@ -672,6 +673,10 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("record_attestation_statement_draft_write", tool_names)
             self.assertNotIn("record_attestation_statement_draft_approve", tool_names)
             self.assertNotIn("write_attestation_statement_draft", tool_names)
+            self.assertNotIn("attestation_statement_draft_review_apply", tool_names)
+            self.assertNotIn("write_attestation_statement_review", tool_names)
+            self.assertNotIn("foreign_block_attestation_statement_draft_review_apply", tool_names)
+            self.assertNotIn("foreign_block_attestation_statement_draft_review_write", tool_names)
             self.assertNotIn("record_attestation_review_candidate_apply", tool_names)
             self.assertNotIn("record_attestation_review_candidate_write", tool_names)
             self.assertNotIn("record_attestation_review_candidate_approve", tool_names)
@@ -3486,6 +3491,139 @@ class McpServerTests(unittest.TestCase):
                             },
                         )
                         self.assertTrue(response["result"]["isError"])
+        finally:
+            self.stop_server(process)
+
+    def test_foreign_block_attestation_statement_draft_review_index_writes_nothing_and_honors_filters(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                self.write_mcp_attestation_candidate_fixture(archive_root, "mcp-case-001", "identity")
+                preview = archive_services.foreign_block_attestation_statement_draft_preview(
+                    archive_root,
+                    case_id="mcp-case-001",
+                    dry_run=True,
+                    expected_review_scope="identity",
+                    prospective_attestor="person:mcp-attestor",
+                    statement_style="review_checklist",
+                )
+                self.assertTrue(preview["ok"], preview)
+                record = archive_services.record_attestation_statement_draft(
+                    archive_root,
+                    draft_preview=preview,
+                    approve=True,
+                    reviewed_by="person:mcp-reviewer",
+                )
+                self.assertTrue(record["ok"], record)
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "foreign_block_attestation_statement_draft_review_index",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "case_id": "mcp-case-001",
+                                "statement_style": "review_checklist",
+                                "review_scope": "identity",
+                                "include_receipts": True,
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "foreign_block_attestation_statement_draft_review_index")
+                self.assertEqual(structured["displayed_draft_count"], 1)
+                self.assertEqual(structured["total_draft_count"], 1)
+                self.assertEqual(structured["filters"]["case_id"], "mcp-case-001")
+                self.assertEqual(structured["filters"]["statement_style"], "review_checklist")
+                self.assertEqual(structured["filters"]["review_scope"], "identity")
+                self.assertEqual(structured["statement_drafts"][0]["case_id"], "mcp-case-001")
+                self.assertIn("receipt_summary", structured["statement_drafts"][0])
+                self.assertEqual(structured["would_change"], [])
+                self.assertFalse(structured["attestation_created"])
+                self.assertFalse(structured["signature_created"])
+                self.assertFalse(structured["foreign_block_trusted"])
+                self.assertFalse(structured["foreign_block_imported"])
+        finally:
+            self.stop_server(process)
+
+    def test_foreign_block_attestation_statement_draft_review_index_rejects_non_dry_run_and_blocks_unsafe_values(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                self.write_mcp_attestation_candidate_fixture(archive_root, "mcp-case-001")
+                preview = archive_services.foreign_block_attestation_statement_draft_preview(
+                    archive_root,
+                    case_id="mcp-case-001",
+                    dry_run=True,
+                    statement_style="minimal",
+                )
+                self.assertTrue(preview["ok"], preview)
+                record = archive_services.record_attestation_statement_draft(
+                    archive_root,
+                    draft_preview=preview,
+                    approve=True,
+                    reviewed_by="person:mcp-reviewer",
+                )
+                self.assertTrue(record["ok"], record)
+                for index, dry_run_value in enumerate([False, "yes", 1], start=1):
+                    with self.subTest(dry_run=dry_run_value):
+                        response = self.send(
+                            process,
+                            {
+                                "jsonrpc": "2.0",
+                                "id": index,
+                                "method": "tools/call",
+                                "params": {
+                                    "name": "foreign_block_attestation_statement_draft_review_index",
+                                    "arguments": {
+                                        "archive_root": str(archive_root),
+                                        "dry_run": dry_run_value,
+                                    },
+                                },
+                            },
+                        )
+                        self.assertTrue(response["result"]["isError"])
+
+                unsafe_ref = "s3" + "://bucket.invalid/private-statement"
+                record_path = archive_root / "quarantine/foreign-blocks/mcp-case-001/attestation-statement-draft.json"
+                payload = json.loads(record_path.read_text(encoding="utf-8"))
+                payload["unsafe_optional"] = unsafe_ref
+                record_path.write_text(json.dumps(payload), encoding="utf-8")
+                unsafe_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 100,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "foreign_block_attestation_statement_draft_review_index",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "case_id": "mcp-case-001",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(unsafe_response["result"]["isError"])
+                structured = unsafe_response["result"]["structuredContent"]
+                self.assertFalse(structured["ok"])
+                dumped = json.dumps(structured)
+                self.assertIn("unsafe or private", dumped)
+                self.assertNotIn("bucket.invalid", dumped)
+                self.assertNotIn("private-statement", dumped)
         finally:
             self.stop_server(process)
 

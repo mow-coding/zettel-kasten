@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.42` | current public pre-release | `wom-kit/docs/releases/v0.2.42.md` |
+| `v0.2.43` | current public pre-release | `wom-kit/docs/releases/v0.2.43.md` |
+| `v0.2.42` | superseded public pre-release | `wom-kit/docs/releases/v0.2.42.md` |
 | `v0.2.41` | superseded public pre-release | `wom-kit/docs/releases/v0.2.41.md` |
 | `v0.2.40` | superseded public pre-release | `wom-kit/docs/releases/v0.2.40.md` |
 | `v0.2.39` | superseded public pre-release | `wom-kit/docs/releases/v0.2.39.md` |
@@ -69,6 +70,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.42` To `v0.2.43`
+
+This is a compatible foreign block attestation statement draft review index patch.
+
+What changed:
+
+- added `archive attestation-statement-draft-review <archive-root> --format json`,
+- added optional `--case-id`, `--statement-style`, `--review-scope`, and `--include-receipts` filters,
+- added read-only MCP `foreign_block_attestation_statement_draft_review_index`,
+- added consistency checks for recorded statement draft records, statement draft receipts, current candidate records/receipts, quarantine cases/receipts, and decision records/receipts.
+
+No private archive migration is required.
+
+The review index writes nothing, keeps `dry_run: true`, and returns `would_change: []`. `--statement-style` and `--review-scope` filter displayed records only; they do not hide blockers from other discovered records. `--case-id` intentionally scopes the verdict to that one case. Indexed statement drafts remain untrusted and do not create trust, import, attestation, signature, mint, acceptance, sharing, provider calls, or ZET transport.
 
 ## From `v0.2.41` To `v0.2.42`
 

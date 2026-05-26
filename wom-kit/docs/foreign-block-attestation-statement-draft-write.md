@@ -1,6 +1,6 @@
 # Foreign Block Attestation Statement Draft Write
 
-Status: v0.2.42 baseline
+Status: v0.2.42 baseline, with v0.2.43 review index
 
 ## Principle
 
@@ -97,9 +97,13 @@ The MCP tool is read-only, hardcodes dry-run behavior, rejects `approve`, and wr
 
 MCP does not expose statement draft approve/write/apply, foreign block attest, sign, trust, import, accept, mint, anchor, provider sync, or full-auto tools.
 
+## Review Index
+
+v0.2.43 adds a separate read-only `attestation-statement-draft-review` index for recorded statement drafts and receipts. The index validates the current upstream candidate/quarantine/decision chain, writes nothing, and keeps the foreign block untrusted.
+
 ## Non-Goals
 
-v0.2.42 does not implement:
+v0.2.43 still does not implement:
 
 - attestation creation,
 - signature creation,

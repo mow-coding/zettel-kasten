@@ -100,6 +100,9 @@ record-attestation-statement-draft --dry-run
 record-attestation-statement-draft --approve --reviewed-by
   Write only a sanitized untrusted statement draft JSON and a matching receipt after re-validating the draft preview, current candidate, receipts, quarantine case, and recorded decision. This never trusts, imports, mints, attests, signs, accepts, shares, calls providers, or runs ZET transport.
 
+attestation-statement-draft-review --format json
+  List and validate recorded foreign block attestation statement drafts. This is read-only and never trusts, imports, mints, attests, signs, accepts, applies, shares, calls providers, runs ZET transport, or writes files.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
@@ -691,6 +694,22 @@ python wom-kit\cli\archive.py attestation-statement-draft wom-kit\examples\fake-
 ```
 
 The preview re-reads current candidate, candidate receipt, quarantine case/receipt, and decision record/receipt state. The statement draft is not an attestation, not trust, not signing, not import, not minting, not a receipt write, and not ZET transport.
+
+Review recorded untrusted statement drafts and matching receipts:
+
+```powershell
+python wom-kit\cli\archive.py attestation-statement-draft-review wom-kit\examples\fake-life-archive `
+  --statement-style all `
+  --review-scope all `
+  --include-receipts `
+  --format json
+```
+
+Use `--case-id <safe-id>` to scope the consistency verdict to one case. Without `--case-id`, WOM-kit validates every discovered statement draft record and receipt before setting top-level `ok`.
+
+`--statement-style minimal|review_checklist|human_readable|all` and `--review-scope identity|source_refs|header_hashes|prompt_boundary|full_human_review|all` filter displayed records only. They do not hide blockers from other discovered records.
+
+The index writes nothing, returns `dry_run: true`, `index_status: indexed_not_modified`, `would_change: []`, `trust_state: untrusted_foreign`, `attestation_status: not_created`, and `signature_status: not_created`. It never creates trust, import, attestation, signature, mint, acceptance, sharing, provider calls, or ZET transport.
 
 ## Tests
 

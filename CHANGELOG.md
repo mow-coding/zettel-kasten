@@ -4,6 +4,28 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.43 - 2026-05-26
+
+Foreign block attestation statement draft review index patch.
+
+Added:
+
+- `archive attestation-statement-draft-review <archive-root> --format json`,
+- optional `--case-id`, `--statement-style`, `--review-scope`, and `--include-receipts` filters,
+- read-only MCP `foreign_block_attestation_statement_draft_review_index`,
+- index validation for recorded untrusted attestation statement drafts and matching draft receipts,
+- current candidate, candidate receipt, quarantine case/receipt, and decision record/receipt consistency checks.
+
+Compatibility:
+
+- no private archive migration is required,
+- the index writes nothing, keeps `dry_run: true`, and always returns `would_change: []`,
+- displayed style/scope filters do not hide blockers from other discovered statement draft records,
+- `--case-id` scopes the consistency verdict to one case,
+- indexed records remain `untrusted_foreign`, with `attestation_status: not_created` and `signature_status: not_created`,
+- indexing a statement draft does not create trust, import, attestation, signatures, minting, sharing, provider calls, ZET transport, acceptance, or apply behavior,
+- MCP remains read-only and exposes no statement draft review apply/write/approve, foreign block attest/sign/trust/import/accept, mint, anchor, provider sync, or full-auto tool.
+
 ## v0.2.42 - 2026-05-26
 
 Foreign block attestation statement draft write approval patch.

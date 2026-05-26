@@ -322,6 +322,87 @@ FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_RECEIPT_ALLOWED_KEYS = {
     "trust_state",
     "zet_created",
 }
+FOREIGN_BLOCK_ATTESTATION_STATEMENT_DRAFT_RECORD_ALLOWED_KEYS = {
+    "archive_id",
+    "attestation_created",
+    "attestation_status",
+    "block_shared",
+    "block_shared_through_ZET",
+    "case_id",
+    "disallowed_actions",
+    "draft_record_status",
+    "evidence_references",
+    "explicit_non_claims",
+    "foreign_block_imported",
+    "foreign_block_trusted",
+    "lifecycle_action",
+    "mint_performed",
+    "next_safe_actions",
+    "no_attestation_created",
+    "no_original_foreign_body_text_copied",
+    "no_provider_api_called",
+    "no_signature_created",
+    "no_trust_granted",
+    "prospective_attestor",
+    "provider_api_called",
+    "required_human_checks",
+    "review_scope",
+    "reviewed_at",
+    "reviewed_by",
+    "signature_created",
+    "signature_status",
+    "source_attestation_review_candidate_receipt_sha256",
+    "source_attestation_review_candidate_sha256",
+    "source_decision_receipt_sha256",
+    "source_draft_preview_sha256",
+    "source_quarantine_case_sha256",
+    "source_quarantine_decision_sha256",
+    "source_quarantine_receipt_sha256",
+    "source_review_note_summary",
+    "statement_lines",
+    "statement_style",
+    "statement_title",
+    "trust_state",
+    "zet_created",
+}
+FOREIGN_BLOCK_ATTESTATION_STATEMENT_DRAFT_RECEIPT_ALLOWED_KEYS = {
+    "archive_id",
+    "attestation_created",
+    "attestation_status",
+    "block_shared",
+    "block_shared_through_ZET",
+    "case_id",
+    "draft_record_status",
+    "files_written",
+    "foreign_block_imported",
+    "foreign_block_trusted",
+    "lifecycle_action",
+    "mint_performed",
+    "no_attestation_created",
+    "no_original_foreign_body_text_copied",
+    "no_provider_api_called",
+    "no_signature_created",
+    "no_trust_granted",
+    "provider_api_called",
+    "receipt_kind",
+    "review_scope",
+    "reviewed_at",
+    "reviewed_by",
+    "signature_created",
+    "signature_status",
+    "source_attestation_review_candidate_receipt_sha256",
+    "source_attestation_review_candidate_sha256",
+    "source_decision_receipt_sha256",
+    "source_draft_preview_sha256",
+    "source_quarantine_case_sha256",
+    "source_quarantine_decision_sha256",
+    "source_quarantine_receipt_sha256",
+    "statement_draft_recorded",
+    "statement_style",
+    "trust_granted",
+    "trust_state",
+    "zet_created",
+}
 FOREIGN_BLOCK_QUARANTINE_DECISION_RECORD_ALLOWED_KEYS = {
     "archive_id",
     "approval_scope",
@@ -8554,6 +8635,532 @@ def record_attestation_statement_draft(
         "would_change": [],
         "attestation_statement_draft_record": draft_record,
         "attestation_statement_draft_receipt": draft_receipt,
+    }
+    for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
+        result[flag] = False
+    return json_safe(result)
+
+
+def attestation_statement_draft_review_empty_result(
+    *,
+    archive_id: str,
+    blockers: list[str] | None = None,
+    warnings: list[str] | None = None,
+    case_id: str | None = None,
+    statement_style: str = "all",
+    review_scope: str = "all",
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": False,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_attestation_statement_draft_review_index",
+        "archive_id": archive_id,
+        "trust_state": "untrusted_foreign",
+        "attestation_status": "not_created",
+        "signature_status": "not_created",
+        "index_status": "indexed_not_modified",
+        "displayed_draft_count": 0,
+        "total_draft_count": 0,
+        "filter_applied": bool(case_id) or statement_style != "all" or review_scope != "all",
+        "filters": {
+            "case_id": safe_foreign_quarantine_case_id(case_id),
+            "statement_style": statement_style,
+            "review_scope": review_scope,
+        },
+        "statement_drafts": [],
+        "cases": [],
+        "blockers": unique_preserve_order(blockers or []),
+        "warnings": unique_preserve_order(warnings or []),
+        "next_safe_actions": ["fix blockers before any later human review"],
+        "would_change": [],
+    }
+    for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
+        result[flag] = False
+    return json_safe(result)
+
+
+def attestation_statement_draft_files_are_exact(files_written: Any, case_id: str) -> bool:
+    expected = [
+        foreign_attestation_statement_draft_record_paths(case_id)["statement_draft_record"],
+        foreign_attestation_statement_draft_record_paths(case_id)["receipt"],
+    ]
+    return isinstance(files_written, list) and files_written == expected
+
+
+def validate_statement_draft_source_hashes(
+    root: Path,
+    case_id: str,
+    record_doc: dict[str, Any],
+    blockers: list[str],
+) -> None:
+    source_paths = {
+        "source_attestation_review_candidate_sha256": archive_internal_path(root, foreign_attestation_review_candidate_record_paths(case_id)["candidate_record"]),
+        "source_attestation_review_candidate_receipt_sha256": archive_internal_path(root, foreign_attestation_review_candidate_record_paths(case_id)["receipt"]),
+        "source_quarantine_case_sha256": archive_internal_path(root, f"quarantine/foreign-blocks/{case_id}/quarantine-case.json"),
+        "source_quarantine_receipt_sha256": archive_internal_path(root, foreign_quarantine_write_paths(case_id)["receipt"]),
+        "source_quarantine_decision_sha256": archive_internal_path(root, foreign_quarantine_decision_record_paths(case_id)["decision_record"]),
+        "source_decision_receipt_sha256": archive_internal_path(root, foreign_quarantine_decision_record_paths(case_id)["receipt"]),
+    }
+    for field, path in source_paths.items():
+        value = record_doc.get(field)
+        if not isinstance(value, str) or SHA256_RE.match(value) is None:
+            blockers.append(f"attestation statement draft record {field} must be a SHA-256 digest.")
+            continue
+        if path.is_file() and sha256_path(path) != value:
+            blockers.append(f"current archive file hash no longer matches statement draft record {field}.")
+
+
+def summarize_attestation_statement_draft_receipt(
+    root: Path,
+    case_id: str,
+    record_doc: dict[str, Any],
+    *,
+    include_receipts: bool,
+) -> tuple[dict[str, Any], list[str], list[str]]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    paths = foreign_attestation_statement_draft_record_paths(case_id)
+    receipt_path = archive_internal_path(root, paths["receipt"])
+    summary: dict[str, Any] = {
+        "receipt_present": receipt_path.is_file(),
+        "receipt_path": paths["receipt"],
+        "receipt_consistency": {"status": "missing", "checks": []},
+    }
+    if not receipt_path.is_file():
+        blockers.append(f"matching attestation statement draft receipt is missing for case {case_id}.")
+        return summary, blockers, warnings
+
+    receipt_doc = load_json_object_for_review(receipt_path, f"attestation statement draft receipt {case_id}", blockers)
+    if receipt_doc is None:
+        summary["receipt_consistency"] = {"status": "blocked", "checks": []}
+        return summary, blockers, warnings
+    scan_foreign_quarantine_private_values(receipt_doc, blockers, "statement_draft_receipt", "attestation_statement_draft_receipt")
+    if value_contains_raw_review_note(receipt_doc):
+        blockers.append("attestation statement draft receipt must not include raw review note body.")
+
+    checks: list[dict[str, Any]] = []
+    status = "passed"
+
+    def receipt_check(condition: bool, check_id: str, blocker: str) -> None:
+        nonlocal status
+        checks.append({"id": check_id, "status": "passed" if condition else "blocked"})
+        if not condition:
+            status = "blocked"
+            blockers.append(blocker)
+
+    receipt_check(receipt_doc.get("lifecycle_action") == "foreign_block_attestation_statement_draft_write", "lifecycle_action", "statement draft receipt lifecycle_action must be foreign_block_attestation_statement_draft_write.")
+    receipt_check(receipt_doc.get("receipt_kind") == "foreign_block_attestation_statement_draft", "receipt_kind", "statement draft receipt_kind must be foreign_block_attestation_statement_draft.")
+    receipt_check(receipt_doc.get("case_id") == case_id, "case_id", "statement draft receipt case_id must match the draft record.")
+    receipt_check(receipt_doc.get("review_scope") == record_doc.get("review_scope"), "review_scope", "statement draft receipt review_scope must match the draft record.")
+    receipt_check(receipt_doc.get("statement_style") == record_doc.get("statement_style"), "statement_style", "statement draft receipt statement_style must match the draft record.")
+    receipt_check(attestation_statement_draft_files_are_exact(receipt_doc.get("files_written"), case_id), "files_written", "statement draft receipt files_written must exactly match the statement draft record and receipt paths.")
+    receipt_check(receipt_doc.get("statement_draft_recorded") is True, "statement_draft_recorded", "statement draft receipt statement_draft_recorded must be true.")
+    receipt_check(receipt_doc.get("draft_record_status") == "recorded_untrusted_statement_draft", "draft_record_status", "statement draft receipt draft_record_status must be recorded_untrusted_statement_draft.")
+    receipt_check(receipt_doc.get("attestation_status") == "not_created", "attestation_status", "statement draft receipt attestation_status must be not_created.")
+    receipt_check(receipt_doc.get("signature_status") == "not_created", "signature_status", "statement draft receipt signature_status must be not_created.")
+    receipt_check(receipt_doc.get("trust_state") == "untrusted_foreign", "trust_state", "statement draft receipt trust_state must remain untrusted_foreign.")
+    receipt_check(receipt_doc.get("trust_granted") is False, "trust_granted", "statement draft receipt trust_granted must be false.")
+    receipt_check(receipt_doc.get("no_trust_granted") is True, "no_trust_granted", "statement draft receipt must confirm no trust was granted.")
+    receipt_check(receipt_doc.get("no_attestation_created") is True, "no_attestation_created", "statement draft receipt must confirm no attestation was created.")
+    receipt_check(receipt_doc.get("no_signature_created") is True, "no_signature_created", "statement draft receipt must confirm no signature was created.")
+    receipt_check(receipt_doc.get("no_original_foreign_body_text_copied") is True, "no_original_foreign_body_text_copied", "statement draft receipt must confirm no original foreign body text was copied.")
+    receipt_check(receipt_doc.get("no_provider_api_called") is True, "no_provider_api_called", "statement draft receipt must confirm no provider API was called.")
+    if not is_utc_z_timestamp(receipt_doc.get("reviewed_at")):
+        receipt_check(False, "reviewed_at", "statement draft receipt reviewed_at must be a UTC Z timestamp.")
+    if receipt_doc.get("reviewed_by") != record_doc.get("reviewed_by"):
+        receipt_check(False, "reviewed_by", "statement draft receipt reviewed_by must match the draft record.")
+    for hash_key in [
+        "source_draft_preview_sha256",
+        "source_attestation_review_candidate_sha256",
+        "source_attestation_review_candidate_receipt_sha256",
+        "source_quarantine_case_sha256",
+        "source_quarantine_receipt_sha256",
+        "source_quarantine_decision_sha256",
+        "source_decision_receipt_sha256",
+    ]:
+        receipt_hash = receipt_doc.get(hash_key)
+        record_hash = record_doc.get(hash_key)
+        receipt_check(
+            isinstance(receipt_hash, str) and SHA256_RE.match(receipt_hash) is not None and receipt_hash == record_hash,
+            hash_key,
+            f"statement draft receipt {hash_key} must be a SHA-256 digest matching the draft record.",
+        )
+    for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
+        receipt_check(receipt_doc.get(flag) is False, flag, f"statement draft receipt {flag} must be false.")
+
+    unknown_keys = sorted(str(key) for key in receipt_doc.keys() if str(key) not in FOREIGN_BLOCK_ATTESTATION_STATEMENT_DRAFT_RECEIPT_ALLOWED_KEYS)
+    if unknown_keys:
+        warnings.append("attestation statement draft receipt has unknown optional fields.")
+
+    summary.update(
+        {
+            "receipt_present": True,
+            "receipt_path": paths["receipt"],
+            "receipt_consistency": {"status": status, "checks": checks},
+            "receipt_kind": receipt_doc.get("receipt_kind"),
+            "case_id": receipt_doc.get("case_id") if isinstance(receipt_doc.get("case_id"), str) else None,
+            "review_scope": receipt_doc.get("review_scope") if isinstance(receipt_doc.get("review_scope"), str) else None,
+            "statement_style": receipt_doc.get("statement_style") if isinstance(receipt_doc.get("statement_style"), str) else None,
+            "reviewed_by": receipt_doc.get("reviewed_by") if isinstance(receipt_doc.get("reviewed_by"), str) else None,
+            "reviewed_at": receipt_doc.get("reviewed_at") if isinstance(receipt_doc.get("reviewed_at"), str) else None,
+            "statement_draft_recorded": receipt_doc.get("statement_draft_recorded") is True,
+        }
+    )
+    if include_receipts:
+        summary["receipt_summary"] = {
+            "lifecycle_action": receipt_doc.get("lifecycle_action"),
+            "receipt_kind": receipt_doc.get("receipt_kind"),
+            "case_id": receipt_doc.get("case_id"),
+            "review_scope": receipt_doc.get("review_scope"),
+            "statement_style": receipt_doc.get("statement_style"),
+            "reviewed_by": receipt_doc.get("reviewed_by"),
+            "reviewed_at": receipt_doc.get("reviewed_at"),
+            "trust_state": receipt_doc.get("trust_state"),
+            "draft_record_status": receipt_doc.get("draft_record_status"),
+            "attestation_status": receipt_doc.get("attestation_status"),
+            "signature_status": receipt_doc.get("signature_status"),
+            "files_written": json_safe(receipt_doc.get("files_written") if isinstance(receipt_doc.get("files_written"), list) else []),
+            "statement_draft_recorded": receipt_doc.get("statement_draft_recorded") is True,
+            "no_original_foreign_body_text_copied": receipt_doc.get("no_original_foreign_body_text_copied") is True,
+            "no_provider_api_called": receipt_doc.get("no_provider_api_called") is True,
+            "no_trust_granted": receipt_doc.get("no_trust_granted") is True,
+            "no_attestation_created": receipt_doc.get("no_attestation_created") is True,
+            "no_signature_created": receipt_doc.get("no_signature_created") is True,
+        }
+        for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
+            summary["receipt_summary"][flag] = receipt_doc.get(flag) if isinstance(receipt_doc.get(flag), bool) else None
+    return summary, blockers, warnings
+
+
+def contextualize_statement_draft_messages(relative_path: str, messages: list[str]) -> list[str]:
+    return [f"attestation statement draft record {relative_path}: {message}" for message in messages]
+
+
+def validate_attestation_statement_draft_record_summary(
+    *,
+    root: Path,
+    draft_path: Path,
+    case_id_from_path: str,
+    include_receipts: bool,
+) -> tuple[dict[str, Any], list[str], list[str]]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    relative_draft_path = archive_relative_path(draft_path, root)
+    expected_paths = foreign_attestation_statement_draft_record_paths(case_id_from_path)
+    if relative_draft_path != expected_paths["statement_draft_record"]:
+        blockers.append("attestation statement draft record path has an unexpected shape.")
+
+    record_doc = load_json_object_for_review(draft_path, f"attestation statement draft record {case_id_from_path}", blockers)
+    if record_doc is None:
+        return (
+            {
+                "case_id": case_id_from_path,
+                "statement_draft_record_path": relative_draft_path,
+                "draft_record_status": None,
+                "trust_state": "untrusted_foreign",
+                "attestation_status": None,
+                "signature_status": None,
+                "receipt_present": False,
+                "receipt_path": expected_paths["receipt"],
+                "receipt_consistency": {"status": "not_checked", "checks": []},
+            },
+            blockers,
+            warnings,
+        )
+
+    scan_foreign_quarantine_private_values(record_doc, blockers, "statement_draft_record", "attestation_statement_draft_record")
+    if value_contains_raw_review_note(record_doc):
+        blockers.append("attestation statement draft record must not include raw review note body.")
+
+    def require(condition: bool, message: str) -> None:
+        if not condition:
+            blockers.append(message)
+
+    case_id = record_doc.get("case_id")
+    safe_case_id = safe_foreign_quarantine_case_id(case_id if isinstance(case_id, str) else None)
+    if safe_case_id is None:
+        blockers.append("attestation statement draft record case_id must be a safe id.")
+        safe_case_id = case_id_from_path
+    if safe_case_id != case_id_from_path:
+        blockers.append("attestation statement draft record case_id must match its archive-relative path.")
+
+    review_scope = record_doc.get("review_scope")
+    if review_scope not in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES:
+        blockers.append("attestation statement draft record review_scope must be supported.")
+        review_scope = None
+    statement_style = record_doc.get("statement_style")
+    if statement_style not in FOREIGN_BLOCK_ATTESTATION_STATEMENT_STYLES:
+        blockers.append("attestation statement draft record statement_style must be supported.")
+        statement_style = None
+
+    require(record_doc.get("lifecycle_action") == "foreign_block_attestation_statement_draft_record", "attestation statement draft record lifecycle_action must be foreign_block_attestation_statement_draft_record.")
+    require(record_doc.get("draft_record_status") == "recorded_untrusted_statement_draft", "attestation statement draft record draft_record_status must be recorded_untrusted_statement_draft.")
+    require(record_doc.get("trust_state") == "untrusted_foreign", "attestation statement draft record trust_state must remain untrusted_foreign.")
+    require(record_doc.get("attestation_status") == "not_created", "attestation statement draft record attestation_status must be not_created.")
+    require(record_doc.get("signature_status") == "not_created", "attestation statement draft record signature_status must be not_created.")
+    prospective_attestor = record_doc.get("prospective_attestor")
+    if prospective_attestor is not None and safe_foreign_quarantine_actor_id(prospective_attestor if isinstance(prospective_attestor, str) else None) is None:
+        blockers.append("attestation statement draft record prospective_attestor must be a safe actor id when present.")
+    if safe_foreign_quarantine_actor_id(record_doc.get("reviewed_by") if isinstance(record_doc.get("reviewed_by"), str) else None) is None:
+        blockers.append("attestation statement draft record reviewed_by must be a safe actor id.")
+    if not is_utc_z_timestamp(record_doc.get("reviewed_at")):
+        blockers.append("attestation statement draft record reviewed_at must be a UTC Z timestamp.")
+    for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
+        if record_doc.get(flag) is not False:
+            blockers.append(f"attestation statement draft record {flag} must be false.")
+    if record_doc.get("trust_granted") is True or record_doc.get("accepted") is True:
+        blockers.append("attestation statement draft record must not claim trust or acceptance.")
+    if record_doc.get("no_original_foreign_body_text_copied") is not True:
+        blockers.append("attestation statement draft record must confirm no original foreign body text was copied.")
+    if record_doc.get("no_provider_api_called") is not True:
+        blockers.append("attestation statement draft record must confirm no provider API was called.")
+    if record_doc.get("no_trust_granted") is not True:
+        blockers.append("attestation statement draft record must confirm no trust was granted.")
+    if record_doc.get("no_attestation_created") is not True:
+        blockers.append("attestation statement draft record must confirm no attestation was created.")
+    if record_doc.get("no_signature_created") is not True:
+        blockers.append("attestation statement draft record must confirm no signature was created.")
+    validate_attestation_statement_boundary_text(record_doc, blockers)
+
+    source_review_note_summary = record_doc.get("source_review_note_summary")
+    if not isinstance(source_review_note_summary, dict):
+        blockers.append("attestation statement draft record source_review_note_summary must be an object.")
+        source_review_note_summary = {}
+    else:
+        scan_foreign_quarantine_private_values(source_review_note_summary, blockers, "statement_draft_record.source_review_note_summary", "attestation_statement_draft_record")
+        if source_review_note_summary.get("content_included") is not False:
+            blockers.append("attestation statement draft record source_review_note_summary must not include note content.")
+        if source_review_note_summary.get("stored") is not False:
+            blockers.append("attestation statement draft record source_review_note_summary must not store raw note content.")
+
+    for hash_key in [
+        "source_draft_preview_sha256",
+        "source_attestation_review_candidate_sha256",
+        "source_attestation_review_candidate_receipt_sha256",
+        "source_quarantine_case_sha256",
+        "source_quarantine_receipt_sha256",
+        "source_quarantine_decision_sha256",
+        "source_decision_receipt_sha256",
+    ]:
+        if not isinstance(record_doc.get(hash_key), str) or SHA256_RE.match(record_doc.get(hash_key)) is None:
+            blockers.append(f"attestation statement draft record {hash_key} must be a SHA-256 digest.")
+
+    unknown_keys = sorted(str(key) for key in record_doc.keys() if str(key) not in FOREIGN_BLOCK_ATTESTATION_STATEMENT_DRAFT_RECORD_ALLOWED_KEYS)
+    if unknown_keys:
+        warnings.append("attestation statement draft record has unknown optional fields.")
+
+    candidate_index = foreign_block_attestation_review_candidate_index(
+        root,
+        case_id=case_id_from_path,
+        review_scope="all",
+        include_receipts=True,
+    )
+    blockers.extend(str(item) for item in candidate_index.get("blockers", []) if isinstance(item, str))
+    warnings.extend(str(item) for item in candidate_index.get("warnings", []) if isinstance(item, str))
+    if candidate_index.get("ok") is not True:
+        blockers.append("current attestation review candidate state no longer supports the statement draft record.")
+    if candidate_index.get("candidate_count") != 1:
+        blockers.append("exactly one recorded attestation review candidate is required for the statement draft record.")
+
+    validate_statement_draft_source_hashes(root, case_id_from_path, record_doc, blockers)
+    receipt_summary, receipt_blockers, receipt_warnings = summarize_attestation_statement_draft_receipt(
+        root,
+        case_id_from_path,
+        record_doc,
+        include_receipts=include_receipts,
+    )
+    blockers.extend(receipt_blockers)
+    warnings.extend(receipt_warnings)
+
+    summary = {
+        "case_id": case_id_from_path,
+        "statement_draft_record_path": relative_draft_path,
+        "draft_record_status": record_doc.get("draft_record_status"),
+        "trust_state": record_doc.get("trust_state"),
+        "attestation_status": record_doc.get("attestation_status"),
+        "signature_status": record_doc.get("signature_status"),
+        "review_scope": review_scope,
+        "statement_style": statement_style,
+        "prospective_attestor": record_doc.get("prospective_attestor") if isinstance(record_doc.get("prospective_attestor"), str) else None,
+        "reviewed_by": record_doc.get("reviewed_by") if isinstance(record_doc.get("reviewed_by"), str) else None,
+        "reviewed_at": record_doc.get("reviewed_at") if isinstance(record_doc.get("reviewed_at"), str) else None,
+        "statement_title": record_doc.get("statement_title") if isinstance(record_doc.get("statement_title"), str) else None,
+        "statement_line_count": len(record_doc.get("statement_lines")) if isinstance(record_doc.get("statement_lines"), list) else 0,
+        "explicit_non_claim_count": len(record_doc.get("explicit_non_claims")) if isinstance(record_doc.get("explicit_non_claims"), list) else 0,
+        "evidence_reference_count": len(record_doc.get("evidence_references")) if isinstance(record_doc.get("evidence_references"), list) else 0,
+        "required_human_check_count": len(record_doc.get("required_human_checks")) if isinstance(record_doc.get("required_human_checks"), list) else 0,
+        "receipt_present": receipt_summary.get("receipt_present") is True,
+        "receipt_path": receipt_summary.get("receipt_path"),
+        "receipt_consistency": receipt_summary.get("receipt_consistency"),
+        "candidate_index_ok": candidate_index.get("ok") is True,
+    }
+    if include_receipts and isinstance(receipt_summary.get("receipt_summary"), dict):
+        summary["receipt_summary"] = receipt_summary["receipt_summary"]
+    return json_safe(summary), blockers, warnings
+
+
+def build_statement_draft_case_projection(all_summaries: list[dict[str, Any]], displayed_summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    displayed_counts: dict[str, int] = {}
+    for summary in displayed_summaries:
+        case_id = summary.get("case_id")
+        if isinstance(case_id, str):
+            displayed_counts[case_id] = displayed_counts.get(case_id, 0) + 1
+    cases: dict[str, dict[str, Any]] = {}
+    for summary in all_summaries:
+        case_id = summary.get("case_id")
+        if not isinstance(case_id, str):
+            continue
+        case = cases.setdefault(
+            case_id,
+            {
+                "case_id": case_id,
+                "statement_draft_count": 0,
+                "displayed_statement_draft_count": 0,
+                "review_scopes": [],
+                "statement_styles": [],
+                "statement_draft_record_present": False,
+                "statement_draft_receipt_present": False,
+                "receipt_consistency": {"status": "not_checked"},
+                "latest_reviewed_at": None,
+                "blocker_count": 0,
+                "warning_count": 0,
+            },
+        )
+        case["statement_draft_count"] += 1
+        case["displayed_statement_draft_count"] = displayed_counts.get(case_id, 0)
+        case["statement_draft_record_present"] = True
+        if summary.get("receipt_present") is True:
+            case["statement_draft_receipt_present"] = True
+        review_scope = summary.get("review_scope")
+        if isinstance(review_scope, str):
+            case["review_scopes"].append(review_scope)
+        statement_style = summary.get("statement_style")
+        if isinstance(statement_style, str):
+            case["statement_styles"].append(statement_style)
+        receipt_status = (
+            summary.get("receipt_consistency", {}).get("status")
+            if isinstance(summary.get("receipt_consistency"), dict)
+            else "not_checked"
+        )
+        case["receipt_consistency"] = {"status": combine_review_status([case["receipt_consistency"].get("status"), receipt_status])}
+        reviewed_at = summary.get("reviewed_at")
+        if isinstance(reviewed_at, str) and is_utc_z_timestamp(reviewed_at):
+            latest = case.get("latest_reviewed_at")
+            if not isinstance(latest, str) or reviewed_at > latest:
+                case["latest_reviewed_at"] = reviewed_at
+        case["blocker_count"] += int(summary.get("blocker_count") or 0)
+        case["warning_count"] += int(summary.get("warning_count") or 0)
+    for case in cases.values():
+        case["review_scopes"] = sorted(set(case["review_scopes"]))
+        case["statement_styles"] = sorted(set(case["statement_styles"]))
+    return [cases[key] for key in sorted(cases)]
+
+
+def foreign_block_attestation_statement_draft_review_index(
+    archive_root: Path | str,
+    *,
+    case_id: str | None = None,
+    statement_style: str = "all",
+    review_scope: str = "all",
+    include_receipts: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    statement_style = (statement_style or "all").strip()
+    review_scope = (review_scope or "all").strip()
+    if statement_style != "all" and statement_style not in FOREIGN_BLOCK_ATTESTATION_STATEMENT_STYLES:
+        blockers.append("statement_style must be all, minimal, review_checklist, or human_readable.")
+    if review_scope != "all" and review_scope not in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES:
+        blockers.append("review_scope must be all or a supported attestation review candidate scope.")
+    safe_case_id = safe_foreign_quarantine_case_id(case_id)
+    if case_id and safe_case_id is None:
+        blockers.append("case_id must be a safe id using ASCII letters, numbers, hyphens, or underscores.")
+    if blockers:
+        return attestation_statement_draft_review_empty_result(
+            archive_id=archive_id,
+            blockers=blockers,
+            warnings=[],
+            case_id=case_id,
+            statement_style=statement_style,
+            review_scope=review_scope,
+        )
+
+    drafts_root = archive_internal_path(root, "quarantine/foreign-blocks")
+    draft_paths: list[Path] = []
+    if safe_case_id:
+        draft = archive_internal_path(root, f"quarantine/foreign-blocks/{safe_case_id}/attestation-statement-draft.json")
+        if draft.is_file():
+            draft_paths = [draft]
+        else:
+            warnings.append(f"no attestation statement draft record found for case_id {safe_case_id}.")
+    elif drafts_root.is_dir():
+        draft_paths = sorted(drafts_root.glob("*/attestation-statement-draft.json"))
+    else:
+        warnings.append("no attestation statement draft records exist.")
+
+    all_summaries: list[dict[str, Any]] = []
+    displayed_summaries: list[dict[str, Any]] = []
+    for path in draft_paths:
+        try:
+            relative = archive_relative_path(path, root)
+            normalized = normalize_archive_relative_path(relative)
+        except ArchivePathError:
+            blockers.append("attestation statement draft record path must be archive-relative and safe.")
+            continue
+        parts = PurePosixPath(normalized).parts
+        if len(parts) != 4 or parts[0] != "quarantine" or parts[1] != "foreign-blocks" or parts[3] != "attestation-statement-draft.json":
+            blockers.append("attestation statement draft record path has an unexpected shape.")
+            continue
+        path_case_id = parts[2]
+        if safe_foreign_quarantine_case_id(path_case_id) is None:
+            blockers.append("attestation statement draft record path contains an unsafe case id.")
+            continue
+        summary, draft_blockers, draft_warnings = validate_attestation_statement_draft_record_summary(
+            root=root,
+            draft_path=path,
+            case_id_from_path=path_case_id,
+            include_receipts=include_receipts,
+        )
+        summary["blocker_count"] = len(draft_blockers)
+        summary["warning_count"] = len(draft_warnings)
+        all_summaries.append(summary)
+        blockers.extend(contextualize_statement_draft_messages(relative, draft_blockers))
+        warnings.extend(contextualize_statement_draft_messages(relative, draft_warnings))
+        matches_style = statement_style == "all" or summary.get("statement_style") == statement_style
+        matches_scope = review_scope == "all" or summary.get("review_scope") == review_scope
+        if matches_style and matches_scope:
+            displayed_summaries.append(summary)
+
+    if not all_summaries and not warnings:
+        warnings.append("no attestation statement draft records exist.")
+    elif not displayed_summaries and (statement_style != "all" or review_scope != "all"):
+        warnings.append("no attestation statement draft records match the selected display filters.")
+
+    result: dict[str, Any] = {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_attestation_statement_draft_review_index",
+        "archive_id": archive_id,
+        "trust_state": "untrusted_foreign",
+        "attestation_status": "not_created",
+        "signature_status": "not_created",
+        "index_status": "indexed_not_modified",
+        "displayed_draft_count": len(displayed_summaries),
+        "total_draft_count": len(all_summaries),
+        "filter_applied": statement_style != "all" or review_scope != "all" or bool(safe_case_id),
+        "filters": {"case_id": safe_case_id, "statement_style": statement_style, "review_scope": review_scope},
+        "statement_drafts": json_safe(displayed_summaries),
+        "cases": json_safe(build_statement_draft_case_projection(all_summaries, displayed_summaries)),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "next_safe_actions": [
+            "review indexed statement draft records without changing trust",
+            "keep foreign blocks quarantined and untrusted",
+            "use a future explicit attestation workflow only after separate human approval exists",
+        ],
+        "would_change": [],
     }
     for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
         result[flag] = False
