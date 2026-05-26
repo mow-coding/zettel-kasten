@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.46 planning and implementation baseline
+Status: v0.2.47 planning and implementation baseline
 
 ## Purpose
 
@@ -48,7 +48,7 @@ wom_profile_wallet_check
 
 Profile resolution must happen before runtime context whenever the user names a target profile. This prevents the AI from assuming the current/default archive is correct.
 
-`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.46 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
+`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.47 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
 
 ## Prompt Boundary Check
 
@@ -532,6 +532,8 @@ In v0.2.46, `archive projection-plan` and MCP `zet_projection_plan_check` can pr
 
 There is still no projection apply/write command, no projection receipt, no WordPress publishing, no provider API call, no ZET transport, and no automatic posting. Posting is not minting, and a surface locator is not canonical zet identity.
 
+v0.2.47 adds a documentation baseline for the future ZET closed sharing/SNS layer. An AI runtime may explain that GitHub/object storage/DB are base-system substrates and that ZET sharing sits above them, but it must not imply that GitHub is the whole ZET transport or that WordPress is the WOM/ZET UI.
+
 ## Expected AI Runtime Flow
 
 An AI runtime should start with:
@@ -609,7 +611,7 @@ The skill tells the AI to:
 
 The plugin layer should expose read and preview tools first.
 
-Allowed v0.2.46 direction:
+Allowed v0.2.47 direction:
 
 - profile list and profile resolve,
 - runtime context,

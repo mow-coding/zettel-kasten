@@ -4,6 +4,27 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.47 - 2026-05-26
+
+ZET closed sharing model baseline patch.
+
+Added:
+
+- documentation for the base zettel-kasten layer as GitHub-tracked records, object storage, and DB relationships,
+- documentation for the unit layer distinction between `zet` and `objet`,
+- documentation for the future ZET closed sharing/SNS layer above the base system,
+- documentation for pluggable user-selected surfaces such as custom SaaS, open-source ZET UI, static site, private archive UI, feed/RSS-like app, team workspace, WordPress, or future dedicated ZET client,
+- sanitized non-executable example shape for a future closed sharing update.
+
+Compatibility:
+
+- no private archive migration is required,
+- no CLI or MCP behavior changed,
+- GitHub is clarified as base infrastructure or possible substrate, not the whole ZET sharing architecture,
+- WordPress is clarified as one possible projection surface, not the WOM/ZET UI,
+- attestation is described as receiver-side verification/review before any future neighbor feed update, mirror, or re-projection,
+- this release does not call providers, publish to WordPress, write projection records or receipts, implement real ZET transport, automatically update neighbor feeds, mint, trust, import, accept, attest, sign, anchor, apply, add Redis, queues, background workers, payments, staking, consensus, blockchain, model training, backpropagation, or full-auto behavior.
+
 ## v0.2.46 - 2026-05-26
 
 ZET projection plan dry-run preview patch.

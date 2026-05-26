@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.46 pre-release
+v0.2.47 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -74,6 +74,7 @@ What exists today:
 - read-only foreign block attestation statement draft decision previews that propose one safe next human-review route without recording a decision, accepting a draft, trusting, importing, attesting, signing, minting, publishing, or running ZET transport.
 - ZET publication surface baseline docs and sanitized examples that separate canonical archive memory from user-selected projection surfaces such as a future WordPress post.
 - read-only `projection-plan` previews that consider one local zet and one operator-declared surface kind before any rendering, provider call, projection write, receipt write, publication, minting, trust, attestation, signature, or ZET transport.
+- ZET closed sharing model baseline docs and sanitized examples that clarify the future closed sharing/SNS layer above GitHub/object-storage/DB base infrastructure.
 
 What does not exist yet:
 
@@ -216,6 +217,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.47
 v0.2.46
 v0.2.45
 v0.2.44

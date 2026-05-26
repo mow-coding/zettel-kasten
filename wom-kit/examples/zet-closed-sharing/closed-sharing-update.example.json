@@ -1,0 +1,40 @@
+{
+  "version": "wom-zet-closed-sharing/v0.1-example",
+  "lifecycle_action": "zet_closed_sharing_shape_example",
+  "example_only": true,
+  "transport_performed": false,
+  "acceptance_performed": false,
+  "attestation_created": false,
+  "signature_created": false,
+  "projection_write_performed": false,
+  "projection_receipt_created": false,
+  "provider_api_called": false,
+  "publisher_called": false,
+  "source_archive": "archive:example:alice",
+  "receiving_archive": "archive:example:neighbor",
+  "shared_zet": {
+    "zettel_id": "zet_20260526_closed_sharing_example",
+    "canonical_identity_status": "archive_local_identity_not_replaced",
+    "body_included": false,
+    "body_hash_claim_status": "placeholder_not_verified"
+  },
+  "closed_relationship_context": {
+    "relationship_ref": "relationship:example:neighbor",
+    "permission_scope": "review_only",
+    "surface_hint": "surface:example:private-archive"
+  },
+  "receiver_review_intent": {
+    "attestation_style_review_required": true,
+    "automatic_neighbor_feed_update": false,
+    "possible_next_routes": [
+      "keep_under_review",
+      "mirror_or_reproject_later_after_approval",
+      "reject",
+      "route_to_more_review"
+    ]
+  },
+  "notes": [
+    "This is a future-shape placeholder only.",
+    "It is not proof, trust, acceptance, transport, publication, or an attestation."
+  ]
+}

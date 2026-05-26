@@ -11,6 +11,8 @@ It does not implement sharing, P2P transport, social feeds, or collaboration yet
 
 For the broader WOM naming baseline, including `zet`, `node`, `parcel`, `admit`, `proof`, and `credential`, see [Naming And Terminology](naming-and-terminology.md).
 
+For the v0.2.47 closed sharing architecture baseline, see [ZET Closed Sharing Model Baseline](../zet-closed-sharing-model-baseline.md). That baseline clarifies that GitHub/object storage/DB are base-system substrates, while ZET is the future closed sharing/SNS layer above the base zettel-kasten system.
+
 ## 1. Why New Verbs Matter
 
 The project should not inherit ordinary SaaS verbs as its primary worldview.

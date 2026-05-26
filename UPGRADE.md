@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.46` | current public pre-release | `wom-kit/docs/releases/v0.2.46.md` |
+| `v0.2.47` | current public pre-release | `wom-kit/docs/releases/v0.2.47.md` |
+| `v0.2.46` | superseded public pre-release | `wom-kit/docs/releases/v0.2.46.md` |
 | `v0.2.45` | superseded public pre-release | `wom-kit/docs/releases/v0.2.45.md` |
 | `v0.2.44` | superseded public pre-release | `wom-kit/docs/releases/v0.2.44.md` |
 | `v0.2.43` | superseded public pre-release | `wom-kit/docs/releases/v0.2.43.md` |
@@ -73,6 +74,23 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.46` To `v0.2.47`
+
+This is a compatible ZET closed sharing model baseline patch.
+
+What changed:
+
+- documented the base zettel-kasten layer as GitHub-tracked records, object storage, and DB relationships,
+- documented the unit layer distinction between `zet` and `objet`,
+- documented the future ZET closed sharing/SNS layer above the base system,
+- clarified that GitHub is not the whole ZET sharing architecture,
+- clarified that WordPress is one possible user-selected projection surface, not the WOM/ZET UI,
+- added sanitized non-executable closed sharing examples.
+
+No private archive migration is required.
+
+This release adds no CLI or MCP behavior. It does not call providers, publish to WordPress, write projection records or projection receipts, implement real ZET transport, automatically update neighbor feeds, mint, trust, import, accept, attest, sign, anchor, apply, introduce Redis, queues, background workers, payments, staking, consensus, blockchain, model training, backpropagation, or full-auto behavior.
 
 ## From `v0.2.45` To `v0.2.46`
 

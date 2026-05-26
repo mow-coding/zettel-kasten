@@ -12,6 +12,8 @@ WordPress is documented here as one possible user-selected surface because many 
 
 v0.2.46 adds a dry-run `projection-plan` preview for one local zet and one operator-declared surface kind. It still does not publish, render the full body, write projection records, write projection receipts, call providers, or run ZET transport.
 
+v0.2.47 clarifies that publication surfaces are separate from the future ZET closed sharing/SNS layer. WordPress is one possible projection surface, not the WOM/ZET UI and not the ZET transport.
+
 ## Model
 
 ```text
