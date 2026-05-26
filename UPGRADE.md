@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.40` | current public pre-release | `wom-kit/docs/releases/v0.2.40.md` |
+| `v0.2.41` | current public pre-release | `wom-kit/docs/releases/v0.2.41.md` |
+| `v0.2.40` | superseded public pre-release | `wom-kit/docs/releases/v0.2.40.md` |
 | `v0.2.39` | superseded public pre-release | `wom-kit/docs/releases/v0.2.39.md` |
 | `v0.2.38` | superseded public pre-release | `wom-kit/docs/releases/v0.2.38.md` |
 | `v0.2.37` | superseded public pre-release | `wom-kit/docs/releases/v0.2.37.md` |
@@ -67,6 +68,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.40` To `v0.2.41`
+
+This is a compatible foreign block attestation statement draft preview patch.
+
+What changed:
+
+- added `archive attestation-statement-draft <archive-root> --case-id <safe-case-id> --dry-run --format json`,
+- added optional `--expected-review-scope`, `--prospective-attestor`, `--statement-style`, and `--review-note`,
+- added read-only MCP `foreign_block_attestation_statement_draft_preview`,
+- added non-binding statement draft output for one recorded attestation review candidate.
+
+No private archive migration is required.
+
+The preview re-reads current candidate, candidate receipt, quarantine case/receipt, and decision record/receipt state before returning a draft. It writes nothing and does not create trust, import, attestation, signature, mint, receipt, sharing, provider calls, or ZET transport.
 
 ## From `v0.2.39` To `v0.2.40`
 

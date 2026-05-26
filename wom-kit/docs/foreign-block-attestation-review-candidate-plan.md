@@ -1,6 +1,6 @@
 # Foreign Block Attestation Review Candidate Plan
 
-Status: v0.2.40 compatible baseline
+Status: v0.2.41 compatible baseline
 
 ## Principle
 
@@ -22,7 +22,7 @@ what safe candidate packet could a human review next?
 
 The command re-reads the current quarantine case, original quarantine receipt, recorded quarantine decision, and decision receipt before returning a plan.
 
-v0.2.39 adds a separate CLI-only record step after this planner. v0.2.40 adds a read-only index for those recorded candidates. The plan remains read-only; recording or indexing a candidate is still not trust and still not an attestation.
+v0.2.39 adds a separate CLI-only record step after this planner. v0.2.40 adds a read-only index for those recorded candidates. v0.2.41 adds a non-binding statement draft preview for one recorded candidate. The plan remains read-only; recording, indexing, or drafting a statement is still not trust and still not an attestation.
 
 ## CLI
 
@@ -71,13 +71,14 @@ The MCP tool is read-only and has a strict `dry_run is True` guard.
 
 MCP does not expose candidate apply, write, accept, import, trust, attest, sign, mint, auto-accept, full-auto, provider sync, ZET transport, or receipt-write tools.
 
-v0.2.39 adds MCP `record_attestation_review_candidate_check` as a read-only dry-run check for the CLI-only record step. v0.2.40 adds MCP `foreign_block_attestation_review_candidate_index` for read-only review of recorded candidates. MCP still cannot approve, write, accept, apply, trust, import, attest, or sign the candidate.
+v0.2.39 adds MCP `record_attestation_review_candidate_check` as a read-only dry-run check for the CLI-only record step. v0.2.40 adds MCP `foreign_block_attestation_review_candidate_index` for read-only review of recorded candidates. v0.2.41 adds MCP `foreign_block_attestation_statement_draft_preview` for a non-binding statement draft. MCP still cannot approve, write, accept, apply, trust, import, attest, or sign the candidate.
 
 ## Non-Goals
 
-v0.2.40 does not implement:
+v0.2.41 does not implement:
 
 - attestation review candidate acceptance,
+- attestation statement writes,
 - real trust/apply/import,
 - attestation writes,
 - signature creation,

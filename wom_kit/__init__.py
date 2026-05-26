@@ -17,4 +17,4 @@ _SOURCE_PACKAGE = Path(__file__).resolve().parents[1] / "wom-kit" / "src" / "wom
 if _SOURCE_PACKAGE.is_dir():
     __path__.append(str(_SOURCE_PACKAGE))
 
-__version__ = "0.2.40"
+__version__ = "0.2.41"

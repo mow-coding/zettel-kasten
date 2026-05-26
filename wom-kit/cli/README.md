@@ -91,6 +91,9 @@ record-attestation-review-candidate --approve --reviewed-by
 attestation-candidate-review --format json
   List and validate recorded foreign block attestation review candidates. This is read-only and never trusts, imports, mints, attests, signs, accepts, applies, shares, calls providers, runs ZET transport, or writes files.
 
+attestation-statement-draft --dry-run
+  Preview a non-binding attestation statement draft for one recorded candidate. This writes nothing and never trusts, imports, mints, attests, signs, writes receipts, accepts, applies, shares, calls providers, or runs ZET transport.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
@@ -670,6 +673,18 @@ python wom-kit\cli\archive.py attestation-candidate-review wom-kit\examples\fake
 ```
 
 Use `--case-id <safe-id>` to display one case, `--review-scope identity|source_refs|header_hashes|prompt_boundary|full_human_review|all` to filter displayed candidates, and `--include-receipts` to include sanitized candidate receipt summaries. Filters never hide blockers from other discovered candidate records.
+
+Preview a non-binding statement draft for one recorded candidate:
+
+```powershell
+python wom-kit\cli\archive.py attestation-statement-draft wom-kit\examples\fake-life-archive `
+  --case-id case-review-001 `
+  --dry-run `
+  --statement-style human_readable `
+  --format json
+```
+
+The preview re-reads current candidate, candidate receipt, quarantine case/receipt, and decision record/receipt state. The statement draft is not an attestation, not trust, not signing, not import, not minting, not a receipt write, and not ZET transport.
 
 ## Tests
 

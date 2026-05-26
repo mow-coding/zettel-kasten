@@ -213,6 +213,11 @@ FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES = {
     "prompt_boundary",
     "full_human_review",
 }
+FOREIGN_BLOCK_ATTESTATION_STATEMENT_STYLES = {
+    "minimal",
+    "review_checklist",
+    "human_readable",
+}
 FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_DISALLOWED_ACTIONS = [
     "trust_foreign_block",
     "accept_foreign_block",
@@ -7554,6 +7559,255 @@ def foreign_block_attestation_review_candidate_index(
         "warnings": unique_preserve_order(warnings),
         "would_change": [],
     }
+
+
+def attestation_statement_review_note_summary(review_note: str | None, safe_note: str | None) -> dict[str, Any]:
+    summary = quarantine_decision_review_note_summary(review_note, safe_note)
+    return {
+        "provided": summary["provided"],
+        "accepted_as_preview_context": summary["accepted_as_preview_context"],
+        "stored": False,
+        "content_included": False,
+        "length": summary["length"],
+    }
+
+
+def attestation_statement_lines(statement_style: str, review_scope: str) -> list[str]:
+    if statement_style == "minimal":
+        return [
+            "Non-binding draft for future human review.",
+            "Reviewed metadata records are listed as evidence references.",
+            "Foreign block remains untrusted_foreign.",
+            "No attestation has been created.",
+            "No signature has been created.",
+            "Hash commitments are not_verified, not_trusted, and not proof of authenticity.",
+        ]
+    if statement_style == "review_checklist":
+        return [
+            f"Review scope to check: {review_scope}.",
+            "Confirm identity metadata against independent human context.",
+            "Confirm source refs and header hash commitments without treating them as authenticity proof.",
+            "Confirm prompt-boundary risks before relying on any foreign text.",
+            "Foreign block remains untrusted_foreign during this review.",
+            "No attestation or signature has been created by this draft.",
+        ]
+    return [
+        "This is a plain-language draft for a future human reviewer.",
+        "The reviewer has not created an attestation by reading this draft.",
+        "The listed records may help a person decide what to review next.",
+        "The foreign block remains untrusted_foreign and has not been imported.",
+        "No signature has been created and no provider data has been checked.",
+        "Hash commitments remain not_verified, not_trusted, and not proof of authenticity.",
+    ]
+
+
+def attestation_statement_evidence_references(
+    case_id: str,
+    candidate_summary: dict[str, Any],
+    candidate_doc: dict[str, Any],
+) -> list[dict[str, Any]]:
+    references: list[dict[str, Any]] = [
+        {
+            "kind": "quarantine_case",
+            "path": f"quarantine/foreign-blocks/{case_id}/quarantine-case.json",
+            "trust_state": "untrusted_foreign",
+        },
+        {
+            "kind": "original_quarantine_receipt",
+            "path": foreign_quarantine_write_paths(case_id)["receipt"],
+            "trust_state": "untrusted_foreign",
+        },
+        {
+            "kind": "quarantine_decision_record",
+            "path": foreign_quarantine_decision_record_paths(case_id)["decision_record"],
+            "trust_state": "untrusted_foreign",
+        },
+        {
+            "kind": "quarantine_decision_receipt",
+            "path": foreign_quarantine_decision_record_paths(case_id)["receipt"],
+            "trust_state": "untrusted_foreign",
+        },
+        {
+            "kind": "attestation_review_candidate_record",
+            "path": candidate_summary.get("candidate_record_path"),
+            "trust_state": "untrusted_foreign",
+        },
+        {
+            "kind": "attestation_review_candidate_receipt",
+            "path": candidate_summary.get("candidate_receipt_path"),
+            "trust_state": "untrusted_foreign",
+        },
+    ]
+    for field in [
+        "source_candidate_plan_sha256",
+        "source_quarantine_case_sha256",
+        "source_quarantine_receipt_sha256",
+        "source_quarantine_decision_sha256",
+        "source_decision_receipt_sha256",
+    ]:
+        digest = candidate_doc.get(field)
+        if isinstance(digest, str) and SHA256_RE.match(digest):
+            references.append(
+                {
+                    "kind": "hash_commitment",
+                    "field": field,
+                    "sha256": digest,
+                    "verification_state": "not_verified",
+                    "trust_state": "not_trusted",
+                    "note": "hash commitments are not proof of authenticity",
+                }
+            )
+    return json_safe(references)
+
+
+def foreign_block_attestation_statement_draft_preview(
+    archive_root: Path | str,
+    *,
+    case_id: str | None,
+    dry_run: bool,
+    expected_review_scope: str | None = None,
+    prospective_attestor: str | None = None,
+    statement_style: str = "minimal",
+    review_note: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    safe_case_id = safe_foreign_quarantine_case_id(case_id)
+    safe_attestor = safe_foreign_quarantine_actor_id(prospective_attestor) if prospective_attestor else None
+    safe_note = safe_foreign_quarantine_review_note(review_note)
+    review_note_summary = attestation_statement_review_note_summary(review_note, safe_note)
+    statement_style = (statement_style or "minimal").strip()
+
+    if dry_run is not True:
+        blockers.append("attestation-statement-draft is dry-run only; pass --dry-run.")
+    if not case_id:
+        blockers.append("case_id is required.")
+    if case_id and safe_case_id is None:
+        blockers.append("case_id must be a safe id using ASCII letters, numbers, hyphens, or underscores.")
+    if expected_review_scope and expected_review_scope not in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES:
+        blockers.append("expected_review_scope must be a supported attestation review candidate scope.")
+    if prospective_attestor and safe_attestor is None:
+        blockers.append("prospective_attestor must be a safe actor id.")
+    if statement_style not in FOREIGN_BLOCK_ATTESTATION_STATEMENT_STYLES:
+        blockers.append("statement_style must be minimal, review_checklist, or human_readable.")
+    if review_note and safe_note is None:
+        blockers.append("review_note must be short and must not contain local paths, URLs, tokens, or secrets.")
+
+    candidate_summary: dict[str, Any] | None = None
+    candidate_doc: dict[str, Any] = {}
+    if safe_case_id:
+        index = foreign_block_attestation_review_candidate_index(
+            root,
+            case_id=safe_case_id,
+            review_scope="all",
+            include_receipts=True,
+        )
+        blockers.extend(str(item) for item in index.get("blockers", []) if isinstance(item, str))
+        warnings.extend(str(item) for item in index.get("warnings", []) if isinstance(item, str))
+        candidates = index.get("candidates") if isinstance(index.get("candidates"), list) else []
+        if len(candidates) != 1:
+            blockers.append("exactly one recorded attestation review candidate is required for the requested case.")
+        else:
+            maybe_summary = candidates[0]
+            if isinstance(maybe_summary, dict):
+                candidate_summary = maybe_summary
+                recorded_scope = candidate_summary.get("review_scope")
+                if expected_review_scope and recorded_scope != expected_review_scope:
+                    blockers.append("expected_review_scope does not match the recorded candidate review_scope.")
+                recorded_attestor = candidate_summary.get("prospective_attestor")
+                if safe_attestor and isinstance(recorded_attestor, str) and recorded_attestor != safe_attestor:
+                    blockers.append("prospective_attestor does not match the recorded candidate prospective_attestor.")
+                if candidate_summary.get("candidate_status") != "recorded_untrusted_candidate":
+                    blockers.append("recorded candidate status must be recorded_untrusted_candidate.")
+                if candidate_summary.get("trust_state") != "untrusted_foreign":
+                    blockers.append("recorded candidate trust_state must remain untrusted_foreign.")
+                if candidate_summary.get("attestation_status") != "not_created":
+                    blockers.append("recorded candidate attestation_status must be not_created.")
+            else:
+                blockers.append("recorded candidate summary could not be read safely.")
+        add_signature_flag_blockers(root, safe_case_id, blockers)
+        candidate_path = archive_internal_path(root, f"quarantine/foreign-blocks/{safe_case_id}/attestation-review-candidate.json")
+        if candidate_path.is_file():
+            loaded = load_json_object_for_review(candidate_path, f"attestation review candidate record {safe_case_id}", blockers)
+            if isinstance(loaded, dict):
+                candidate_doc = loaded
+                scan_foreign_quarantine_private_values(candidate_doc, blockers, "attestation_statement_candidate_record", "attestation_statement_candidate_record")
+                for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
+                    if candidate_doc.get(flag) is not False:
+                        blockers.append(f"attestation review candidate record {flag} must be false.")
+
+    ok = not blockers and candidate_summary is not None
+    recorded_review_scope = (
+        candidate_summary.get("review_scope")
+        if isinstance(candidate_summary, dict) and isinstance(candidate_summary.get("review_scope"), str)
+        else None
+    )
+    effective_scope = recorded_review_scope if recorded_review_scope in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES else expected_review_scope
+    recorded_attestor = (
+        candidate_summary.get("prospective_attestor")
+        if isinstance(candidate_summary, dict) and isinstance(candidate_summary.get("prospective_attestor"), str)
+        else None
+    )
+    effective_attestor = recorded_attestor or safe_attestor
+    statement = None
+    if ok and safe_case_id and effective_scope:
+        statement = {
+            "case_id": safe_case_id,
+            "draft_status": "preview_not_recorded",
+            "trust_state": "untrusted_foreign",
+            "attestation_status": "not_created",
+            "signature_status": "not_created",
+            "review_scope": effective_scope,
+            "prospective_attestor": effective_attestor,
+            "statement_style": statement_style,
+            "statement_title": "Non-binding foreign block attestation statement draft",
+            "statement_lines": attestation_statement_lines(statement_style, effective_scope),
+            "explicit_non_claims": [
+                "not an attestation",
+                "not trust",
+                "not import",
+                "not acceptance",
+                "not signing",
+                "not minting",
+                "not ZET transport",
+                "not provider verification",
+                "hash commitments are not proof of authenticity",
+            ],
+            "evidence_references": attestation_statement_evidence_references(safe_case_id, candidate_summary, candidate_doc),
+            "required_human_checks": json_safe(candidate_summary.get("missing_human_checks") if isinstance(candidate_summary.get("missing_human_checks"), list) else []),
+            "disallowed_actions": json_safe(candidate_summary.get("disallowed_actions") if isinstance(candidate_summary.get("disallowed_actions"), list) else list(FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_DISALLOWED_ACTIONS)),
+            "next_safe_actions": [
+                "present this non-binding draft to a human reviewer",
+                "keep the foreign block quarantined and untrusted",
+                "run a future explicit attestation workflow only after separate human approval exists",
+            ],
+        }
+
+    result: dict[str, Any] = {
+        "ok": ok,
+        "dry_run": True,
+        "lifecycle_action": "foreign_block_attestation_statement_draft_preview",
+        "archive_id": archive_id,
+        "case_id": safe_case_id,
+        "expected_review_scope": expected_review_scope if expected_review_scope in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES else None,
+        "prospective_attestor": effective_attestor,
+        "statement_style": statement_style if statement_style in FOREIGN_BLOCK_ATTESTATION_STATEMENT_STYLES else None,
+        "review_note_summary": json_safe(review_note_summary),
+        "trust_state": "untrusted_foreign",
+        "draft_status": "preview_not_recorded" if ok else "blocked_not_previewed",
+        "attestation_status": "not_created",
+        "signature_status": "not_created",
+        "candidate_summary": json_safe(candidate_summary or {}),
+        "attestation_statement_draft": json_safe(statement),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+    }
+    for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
+        result[flag] = False
+    return json_safe(result)
 
 
 def collect_object_refs_from_value(value: Any, source: str, refs: list[dict[str, Any]]) -> None:

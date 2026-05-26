@@ -1,6 +1,6 @@
 # Foreign Block Attestation Review Candidate Write
 
-Status: v0.2.40 compatible baseline
+Status: v0.2.41 compatible baseline
 
 ## Principle
 
@@ -99,3 +99,5 @@ The MCP tool is read-only and mirrors the dry-run preview. It rejects approve ar
 MCP does not expose candidate approve, write, apply, accept, trust, import, attest, sign, mint, provider, or full-auto tools.
 
 v0.2.40 also exposes read-only MCP `foreign_block_attestation_review_candidate_index`. It has the same dry-run boundary and no apply/write/accept/trust/import/attest/sign sibling tool.
+
+v0.2.41 adds read-only MCP `foreign_block_attestation_statement_draft_preview`. It previews a non-binding statement draft only and has no statement write/apply, attest, sign, trust, import, accept, receipt-write, or full-auto sibling tool.

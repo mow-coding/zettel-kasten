@@ -1,6 +1,6 @@
 # Foreign Block Attestation Packet Preview
 
-Status: v0.2.40 compatible baseline
+Status: v0.2.41 compatible baseline
 
 ## Principle
 
@@ -113,6 +113,14 @@ archive attestation-candidate-review <archive-root> --format json
 
 The index validates recorded candidates, candidate receipts, and upstream quarantine/decision state. It writes nothing and still creates no trust, import, attestation, signature, mint, sharing, provider call, acceptance, apply behavior, or ZET transport.
 
+v0.2.41 adds a read-only non-binding statement draft preview for one recorded candidate:
+
+```bash
+archive attestation-statement-draft <archive-root> --case-id case-review-001 --dry-run --format json
+```
+
+The draft preview is not an attestation and creates no trust, import, signature, mint, receipt, sharing, provider call, acceptance, apply behavior, or ZET transport.
+
 ## Safety Checks
 
 The command blocks if the trust report:
@@ -134,10 +142,11 @@ The MCP tool is read-only and dry-run only. It accepts a structured trust report
 
 ## Non-Goals
 
-v0.2.40 does not implement:
+v0.2.41 does not implement:
 
 - quarantine decision apply,
 - attestation review candidate apply or acceptance,
+- attestation statement writes,
 - real trust/apply/import,
 - attestation writes,
 - foreign attestation writes,

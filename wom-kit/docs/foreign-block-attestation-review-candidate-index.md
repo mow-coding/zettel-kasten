@@ -1,6 +1,6 @@
 # Foreign Block Attestation Review Candidate Index
 
-Status: v0.2.40 baseline
+Status: v0.2.41 compatible baseline
 
 ## Principle
 
@@ -21,6 +21,8 @@ and do their candidate records, receipts, quarantine cases, and decisions still 
 ```
 
 This command is the read-only index after v0.2.39 candidate recording.
+
+v0.2.41 adds the next read-only step after the index: a non-binding statement draft preview for one recorded candidate.
 
 ## CLI
 
@@ -92,12 +94,23 @@ The MCP tool is read-only and rejects any `dry_run` value other than boolean `tr
 
 MCP does not expose candidate review apply, approve, write, accept, import, trust, attest, sign, mint, receipt-write, auto-accept, full-auto, provider, or ZET transport tools.
 
+## Statement Draft Preview
+
+After a recorded candidate passes index checks, a reviewer may preview a non-binding statement draft:
+
+```bash
+archive attestation-statement-draft <archive-root> --case-id <case-id> --dry-run --format json
+```
+
+The statement draft re-reads the current candidate, candidate receipt, quarantine case/receipt, and decision record/receipt. It is not an attestation, not trust, not signing, not import, not minting, not a receipt write, and not ZET transport.
+
 ## Non-Goals
 
-v0.2.40 does not implement:
+v0.2.41 does not implement:
 
 - attestation review candidate acceptance,
 - candidate apply,
+- attestation statement writes,
 - real trust/apply/import,
 - attestation writes,
 - signature creation,
