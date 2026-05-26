@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.43 planning and implementation baseline
+Status: v0.2.44 planning and implementation baseline
 
 ## Purpose
 
@@ -48,7 +48,7 @@ wom_profile_wallet_check
 
 Profile resolution must happen before runtime context whenever the user names a target profile. This prevents the AI from assuming the current/default archive is correct.
 
-`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.43 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
+`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.44 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
 
 ## Prompt Boundary Check
 
@@ -360,7 +360,7 @@ The planner maps the recorded decision to a conservative outcome:
 - `needs_more_review` asks for more human context,
 - `eligible_for_attestation_review` becomes `prepare_attestation_review_candidate`.
 
-`eligible_for_attestation_review` is still not trust. It does not create an attestation in v0.2.43.
+`eligible_for_attestation_review` is still not trust. It does not create an attestation in v0.2.44.
 
 The planner writes nothing and does not import, trust, accept, attest, mint, anchor, delegate, sign, execute, apply, call providers, or run ZET transport.
 
@@ -496,6 +496,34 @@ The index writes nothing. It keeps `trust_state: untrusted_foreign`, `attestatio
 
 This is still not trust, import, acceptance, attestation, signing, minting, sharing, provider sync, apply behavior, or ZET transport.
 
+## Foreign Block Attestation Statement Draft Decision Preview
+
+After v0.2.43 indexes a recorded statement draft, an AI runtime may preview one safe next human-review route:
+
+```bash
+archive attestation-statement-draft-decision <archive-root> --case-id <safe-id> --dry-run --format json
+```
+
+Optional context:
+
+```bash
+archive attestation-statement-draft-decision <archive-root> --case-id <safe-id> --dry-run --decision-intent needs_more_review --format json
+```
+
+MCP:
+
+```text
+foreign_block_attestation_statement_draft_decision_preview
+```
+
+Supported route intents are `keep_under_review`, `revise_statement_draft`, `reject_statement_draft`, `prepare_future_attestation_statement_review`, and `needs_more_review`. The default is `needs_more_review`.
+
+The preview revalidates the current statement draft review index, statement draft record/receipt, candidate record/receipt, quarantine case/receipt, and decision record/receipt. It records no decision, accepts no statement draft, writes no receipt, and keeps `trust_state: untrusted_foreign`, `decision_status: preview_not_recorded`, `attestation_status: not_created`, and `signature_status: not_created`.
+
+Review notes are preview context only. The raw note body is not echoed or stored.
+
+This is still not acceptance, trust, import, attestation, signing, minting, WordPress publishing, provider sync, apply behavior, or ZET transport.
+
 ## Expected AI Runtime Flow
 
 An AI runtime should start with:
@@ -527,8 +555,9 @@ An AI runtime should start with:
 24. use `attestation-statement-draft --dry-run` to preview a non-binding statement draft without creating attestations
 25. use `record-attestation-statement-draft --dry-run` and then CLI `--approve --reviewed-by` only after human/operator statement-draft-record approval
 26. use `attestation-statement-draft-review` to index recorded statement drafts without accepting or applying them
-27. run mint dry-run before asking for mint approval
-28. use CLI approval paths for real minting
+27. use `attestation-statement-draft-decision --dry-run` to preview one safe next review route without recording a decision
+28. run mint dry-run before asking for mint approval
+29. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -561,6 +590,7 @@ The skill tells the AI to:
 - use attestation-statement-draft dry-run only as a non-binding statement preview,
 - use CLI-only `record-attestation-statement-draft` approval only to record an untrusted statement draft; MCP remains check-only,
 - use attestation-statement-draft-review to index recorded statement drafts without accepting or applying them,
+- use attestation-statement-draft-decision dry-run to preview one safe next review route without recording a decision,
 - keep paths archive-relative,
 - avoid exposing local absolute paths,
 - use dry-run checks before approval requests,
@@ -571,7 +601,7 @@ The skill tells the AI to:
 
 The plugin layer should expose read and preview tools first.
 
-Allowed v0.2.43 direction:
+Allowed v0.2.44 direction:
 
 - profile list and profile resolve,
 - runtime context,
@@ -594,9 +624,10 @@ Allowed v0.2.43 direction:
 - foreign block attestation statement draft preview,
 - foreign block attestation statement draft write check,
 - foreign block attestation statement draft review index,
+- foreign block attestation statement draft decision preview,
 - doctor,
 - list/read zets,
-- create-draft dry-run, source-intake plan composition, prompt-boundary report composition, foreign block intake/trust/packet/quarantine previews, CLI-only quarantine case writes, quarantine review indexes, quarantine decision previews, CLI-only quarantine decision records, quarantine decision review indexes, decision outcome plans, attestation review candidate plans, attestation review candidate indexes, attestation statement draft previews, CLI-only attestation statement draft records, attestation statement draft review indexes, and approved inbox draft writes,
+- create-draft dry-run, source-intake plan composition, prompt-boundary report composition, foreign block intake/trust/packet/quarantine previews, CLI-only quarantine case writes, quarantine review indexes, quarantine decision previews, CLI-only quarantine decision records, quarantine decision review indexes, decision outcome plans, attestation review candidate plans, attestation review candidate indexes, attestation statement draft previews, CLI-only attestation statement draft records, attestation statement draft review indexes, attestation statement draft decision previews, and approved inbox draft writes,
 - dry-run mint checks,
 - safe HTML dry-run through CLI,
 - onboarding and source planning,
@@ -620,6 +651,8 @@ Not allowed in this layer yet:
 - foreign block attestation review candidate index apply/write/accept/trust/import/attest/sign tools through MCP,
 - foreign block attestation statement draft apply/accept/trust/import/attest/sign/write-through-MCP tools,
 - foreign block attestation statement draft review apply/write/accept/trust/import/attest/sign tools through MCP,
+- foreign block attestation statement draft decision apply/write/accept/trust/import/attest/sign tools through MCP,
+- WordPress publishing or projection publish tools,
 - prompt boundary apply, auto-approve, or full-auto tools,
 - block header apply or block minting,
 - token, coin, NFT, staking, transport, relay, or provider apply tools,

@@ -103,6 +103,9 @@ record-attestation-statement-draft --approve --reviewed-by
 attestation-statement-draft-review --format json
   List and validate recorded foreign block attestation statement drafts. This is read-only and never trusts, imports, mints, attests, signs, accepts, applies, shares, calls providers, runs ZET transport, or writes files.
 
+attestation-statement-draft-decision --dry-run
+  Preview one safe next human-review route for a recorded statement draft. This writes nothing and never records acceptance, trusts, imports, mints, attests, signs, accepts, applies, publishes, shares, calls providers, runs ZET transport, or writes files.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
@@ -710,6 +713,22 @@ Use `--case-id <safe-id>` to scope the consistency verdict to one case. Without 
 `--statement-style minimal|review_checklist|human_readable|all` and `--review-scope identity|source_refs|header_hashes|prompt_boundary|full_human_review|all` filter displayed records only. They do not hide blockers from other discovered records.
 
 The index writes nothing, returns `dry_run: true`, `index_status: indexed_not_modified`, `would_change: []`, `trust_state: untrusted_foreign`, `attestation_status: not_created`, and `signature_status: not_created`. It never creates trust, import, attestation, signature, mint, acceptance, sharing, provider calls, or ZET transport.
+
+Preview a non-binding decision route for one recorded statement draft:
+
+```powershell
+python wom-kit\cli\archive.py attestation-statement-draft-decision wom-kit\examples\fake-life-archive `
+  --case-id case-review-001 `
+  --dry-run `
+  --decision-intent needs_more_review `
+  --format json
+```
+
+Supported `--decision-intent` values are `keep_under_review`, `revise_statement_draft`, `reject_statement_draft`, `prepare_future_attestation_statement_review`, and `needs_more_review`. The default is `needs_more_review`.
+
+Optional `--review-note` is local preview context only. WOM-kit returns summary metadata such as whether a note was provided and its accepted length, but never echoes or stores the raw note body.
+
+The decision preview revalidates the current statement draft review index and upstream metadata chain, writes nothing, records no decision, accepts no draft, and keeps `trust_state: untrusted_foreign`, `decision_status: preview_not_recorded`, `attestation_status: not_created`, and `signature_status: not_created`.
 
 ## Tests
 

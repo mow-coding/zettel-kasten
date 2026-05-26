@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.43` | current public pre-release | `wom-kit/docs/releases/v0.2.43.md` |
+| `v0.2.44` | current public pre-release | `wom-kit/docs/releases/v0.2.44.md` |
+| `v0.2.43` | superseded public pre-release | `wom-kit/docs/releases/v0.2.43.md` |
 | `v0.2.42` | superseded public pre-release | `wom-kit/docs/releases/v0.2.42.md` |
 | `v0.2.41` | superseded public pre-release | `wom-kit/docs/releases/v0.2.41.md` |
 | `v0.2.40` | superseded public pre-release | `wom-kit/docs/releases/v0.2.40.md` |
@@ -70,6 +71,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.43` To `v0.2.44`
+
+This is a compatible foreign block attestation statement draft decision preview patch.
+
+What changed:
+
+- added `archive attestation-statement-draft-decision <archive-root> --case-id <safe-case-id> --dry-run --format json`,
+- added optional `--decision-intent`, `--reviewer`, `--expected-review-scope`, `--expected-statement-style`, and `--review-note`,
+- added read-only MCP `foreign_block_attestation_statement_draft_decision_preview`,
+- added route previews for keeping a draft under review, revising it, rejecting it later, preparing a future explicit attestation statement review, or requesting more review.
+
+No private archive migration is required.
+
+The preview revalidates the current statement draft review index, statement draft record/receipt, candidate record/receipt, quarantine case/receipt, and decision record/receipt. It writes nothing and records no decision. Review notes are local preview context only; raw note bodies are not echoed or stored. Statement drafts remain untrusted and do not create trust, import, acceptance, attestation, signature, mint, receipt write, WordPress publishing, provider calls, sharing, or ZET transport.
 
 ## From `v0.2.42` To `v0.2.43`
 

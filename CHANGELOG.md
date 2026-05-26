@@ -4,6 +4,28 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.44 - 2026-05-26
+
+Foreign block attestation statement draft decision preview patch.
+
+Added:
+
+- `archive attestation-statement-draft-decision <archive-root> --case-id <safe-case-id> --dry-run --format json`,
+- optional `--decision-intent`, `--reviewer`, `--expected-review-scope`, `--expected-statement-style`, and `--review-note`,
+- read-only MCP `foreign_block_attestation_statement_draft_decision_preview`,
+- non-binding route previews for `keep_under_review`, `revise_statement_draft`, `reject_statement_draft`, `prepare_future_attestation_statement_review`, and `needs_more_review`,
+- current statement draft record/receipt, candidate record/receipt, quarantine case/receipt, and decision record/receipt consistency checks before any route preview.
+
+Compatibility:
+
+- no private archive migration is required,
+- the preview writes nothing, keeps `dry_run: true`, and always returns `would_change: []`,
+- the default route intent is `needs_more_review`,
+- review notes are preview context only; raw note bodies are not echoed or stored,
+- previewed statement drafts remain `untrusted_foreign`, with `decision_status: preview_not_recorded`, `attestation_status: not_created`, and `signature_status: not_created`,
+- the decision preview does not create trust, import, acceptance, attestation, signatures, minting, sharing, WordPress publishing, provider calls, ZET transport, receipts, or apply behavior,
+- MCP remains read-only and exposes no statement draft decision write/apply/accept, foreign block attest/sign/trust/import, provider sync, WordPress publishing, mint, anchor, or full-auto tool.
+
 ## v0.2.43 - 2026-05-26
 
 Foreign block attestation statement draft review index patch.

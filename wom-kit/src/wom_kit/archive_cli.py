@@ -53,6 +53,8 @@ Commands:
           Preview or approve recording that statement draft without attesting or signing.
   attestation-statement-draft-review
           List and validate recorded foreign block attestation statement drafts.
+  attestation-statement-draft-decision
+          Preview a safe next review route for one recorded statement draft.
   init    Create a new archive from a built-in template.
   index   Build a generated local SQLite search index.
   parcel Create a portable parcel from a view. Alias: pack.
@@ -2260,6 +2262,41 @@ def command_attestation_statement_draft_review(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_attestation_statement_draft_decision(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.foreign_block_attestation_statement_draft_decision_preview(
+            Path(args.archive_root),
+            case_id=args.case_id,
+            dry_run=args.dry_run,
+            decision_intent=args.decision_intent,
+            reviewer=args.reviewer,
+            expected_review_scope=args.expected_review_scope,
+            expected_statement_style=args.expected_statement_style,
+            review_note=args.review_note,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Foreign block attestation statement draft decision preview: {result.get('proposed_route') or '-'}")
+        print(f"Trust state: {result.get('trust_state') or '-'}")
+        print(f"Decision status: {result.get('decision_status') or '-'}")
+        print(f"Attestation status: {result.get('attestation_status') or '-'}")
+        print(f"Signature status: {result.get('signature_status') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok") else 1
+
+
 def command_promote(args: argparse.Namespace) -> int:
     if args.dry_run:
         try:
@@ -4420,6 +4457,31 @@ def build_parser() -> argparse.ArgumentParser:
     attestation_statement_draft_review.add_argument("--include-receipts", action="store_true", help="Include sanitized statement draft receipt summaries.")
     attestation_statement_draft_review.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     attestation_statement_draft_review.set_defaults(func=command_attestation_statement_draft_review)
+
+    attestation_statement_draft_decision = subcommands.add_parser(
+        "attestation-statement-draft-decision",
+        help="Preview a safe next review route for one recorded attestation statement draft.",
+    )
+    attestation_statement_draft_decision.add_argument("archive_root", help="Archive root used for path safety and local context.")
+    attestation_statement_draft_decision.add_argument("--case-id", required=True, help="Safe quarantine case id with a recorded statement draft.")
+    attestation_statement_draft_decision.add_argument("--dry-run", action="store_true", help="Required. Preview the decision route without writing files.")
+    attestation_statement_draft_decision.add_argument(
+        "--decision-intent",
+        default="needs_more_review",
+        help="keep_under_review, revise_statement_draft, reject_statement_draft, prepare_future_attestation_statement_review, or needs_more_review.",
+    )
+    attestation_statement_draft_decision.add_argument("--reviewer", help="Optional safe actor id for preview context only.")
+    attestation_statement_draft_decision.add_argument(
+        "--expected-review-scope",
+        help="Optional review scope expected from the recorded statement draft.",
+    )
+    attestation_statement_draft_decision.add_argument(
+        "--expected-statement-style",
+        help="Optional statement style expected from the recorded statement draft.",
+    )
+    attestation_statement_draft_decision.add_argument("--review-note", help="Optional short non-secret operator note. Only summary metadata is returned.")
+    attestation_statement_draft_decision.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    attestation_statement_draft_decision.set_defaults(func=command_attestation_statement_draft_decision)
 
     create_draft = subcommands.add_parser("create-draft", help="Create a draft zettel in inbox/.")
     create_draft.add_argument("archive_root", help="Archive root to write to.")

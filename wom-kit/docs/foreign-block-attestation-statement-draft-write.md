@@ -1,6 +1,6 @@
 # Foreign Block Attestation Statement Draft Write
 
-Status: v0.2.42 baseline, with v0.2.43 review index
+Status: v0.2.42 baseline, with v0.2.43 review index and v0.2.44 decision preview
 
 ## Principle
 
@@ -100,6 +100,8 @@ MCP does not expose statement draft approve/write/apply, foreign block attest, s
 ## Review Index
 
 v0.2.43 adds a separate read-only `attestation-statement-draft-review` index for recorded statement drafts and receipts. The index validates the current upstream candidate/quarantine/decision chain, writes nothing, and keeps the foreign block untrusted.
+
+v0.2.44 adds a separate read-only `attestation-statement-draft-decision` preview for one recorded statement draft. It records no decision and still creates no trust, import, acceptance, attestation, signature, mint, publishing, provider call, or ZET transport.
 
 ## Non-Goals
 

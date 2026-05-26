@@ -1,6 +1,6 @@
 # Foreign Block Attestation Statement Draft Preview
 
-Status: v0.2.41 baseline, with v0.2.42 record path
+Status: v0.2.41 baseline, with v0.2.42 record path and v0.2.44 decision preview
 
 ## Principle
 
@@ -137,7 +137,11 @@ v0.2.41 does not implement:
 
 v0.2.42 adds a separate CLI-only `record-attestation-statement-draft` approval path that records only the local untrusted statement draft JSON and matching receipt. That record path still does not create attestation, signature, trust, import, minting, sharing, provider calls, or ZET transport.
 
-v0.2.42 still does not implement:
+v0.2.43 adds a read-only review index for recorded statement drafts.
+
+v0.2.44 adds a read-only decision preview for one recorded statement draft. It records no decision, accepts no draft, and creates no trust, import, attestation, signature, minting, publishing, provider calls, or ZET transport.
+
+v0.2.44 still does not implement:
 
 - attestation creation,
 - signature creation,

@@ -1,6 +1,6 @@
 # Foreign Block Attestation Statement Draft Review Index
 
-Status: v0.2.43 baseline
+Status: v0.2.43 baseline, with v0.2.44 decision preview
 
 ## Principle
 
@@ -113,11 +113,18 @@ foreign_block_attestation_statement_draft_review_index
 
 MCP is read-only. `dry_run` must be boolean `true`. It writes nothing and does not expose statement draft review apply/write/approve, foreign block attest/sign/trust/import/accept, mint, anchor, provider sync, or full-auto tools.
 
+## Decision Preview
+
+v0.2.44 adds a separate read-only `attestation-statement-draft-decision` preview for one indexed statement draft.
+
+The decision preview reuses the v0.2.43 review index for the requested case, revalidates the current statement draft record and receipt plus upstream candidate/quarantine/decision metadata, and returns one non-binding next review route. It records no decision and does not accept, trust, import, attest, sign, mint, publish, call providers, or run ZET transport.
+
 ## Non-Goals
 
-v0.2.43 does not implement:
+v0.2.44 still does not implement:
 
 - statement draft acceptance,
+- statement draft decision writes,
 - attestation creation,
 - signature creation,
 - real trust/apply/import,
