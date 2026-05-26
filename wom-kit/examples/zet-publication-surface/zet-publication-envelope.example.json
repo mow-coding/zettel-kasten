@@ -1,0 +1,75 @@
+{
+  "projection_id": "projection_20260526_example_wordpress_archive",
+  "schema_hint": "wom.projection.surface.v0.draft",
+  "created_at": "2026-05-26T16:00:00+09:00",
+  "source": {
+    "kind": "ai_assisted_archive_summary",
+    "source_zet_id": "zet_20260526_example_ai_archive_summary",
+    "source_zet_hash": "sha256:example-source-zet-hash",
+    "source_session_ref": "local-ai-session:example-redacted",
+    "raw_conversation_policy": "not_included"
+  },
+  "surface": {
+    "kind": "wordpress_private_blog",
+    "provider": "wordpress.com",
+    "site_ref": "provider_site:example_private_archive",
+    "provider_api": "wordpress.com/rest/v1.1"
+  },
+  "projection": {
+    "title": "260526_ AI 대화 아카이브 발행 흐름",
+    "body_format": "safe_html_subset",
+    "body_file": "wordpress-post.safe-html.example.html",
+    "category": "example_owner",
+    "status": "publish",
+    "comments_open": false,
+    "pings_open": false
+  },
+  "style_template": {
+    "kind": "live_surface_post",
+    "template_ref": "provider_post:example_template",
+    "template_url": "https://example.invalid/2026/05/26/example-template-post/",
+    "fetched_at": "2026-05-26T16:40:00+09:00",
+    "template_content_sha256": "sha256:example-template-style-source-hash",
+    "style_profile": {
+      "body_width": "from_template",
+      "body_font_size": "from_template",
+      "body_line_height": "from_template",
+      "heading_tag": "h4",
+      "heading_style": "from_template",
+      "paragraph_spacing": "from_template",
+      "diagram_box_style": "from_template",
+      "thumbnail_aspect_ratio": "1:1"
+    }
+  },
+  "visibility": {
+    "archive_scope": "private",
+    "surface_scope": "private_site",
+    "public_link_default": false
+  },
+  "review": {
+    "reviewed_by": "person:example_owner",
+    "reviewed_at": "2026-05-26T16:05:00+09:00",
+    "approval_mode": "explicit_human_approval"
+  },
+  "redactions": {
+    "private_paths": "excluded",
+    "credentials": "excluded",
+    "raw_ai_conversation": "summarized",
+    "sensitive_names": "example_only"
+  },
+  "provider_result_preview": {
+    "external_post_id": "123",
+    "external_url": "https://example.invalid/2026/05/26/260526-ai-archive-flow/",
+    "provider_status": "publish"
+  },
+  "integrity": {
+    "projected_body_sha256": "sha256:example-projected-body-hash",
+    "projection_envelope_sha256": "sha256:example-envelope-hash"
+  },
+  "notes": [
+    "The external URL is a surface locator, not the canonical zet identity.",
+    "Provider tokens and local paths must stay outside this envelope.",
+    "A live style template can guide the surface projection without becoming canonical archive memory.",
+    "A real implementation should dry-run the projection and receipt before provider calls."
+  ]
+}
