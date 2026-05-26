@@ -45,6 +45,8 @@ Commands:
           Plan a human attestation review candidate from an eligible quarantine decision.
   record-attestation-review-candidate
           Preview or approve recording an untrusted attestation review candidate.
+  attestation-candidate-review
+          List and validate recorded foreign block attestation review candidates.
   init    Create a new archive from a built-in template.
   index   Build a generated local SQLite search index.
   parcel Create a portable parcel from a view. Alias: pack.
@@ -2103,6 +2105,36 @@ def command_record_attestation_review_candidate(args: argparse.Namespace) -> int
             print("Files written:")
             for value in result["files_written"]:
                 print(f"- {value}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok") else 1
+
+
+def command_attestation_candidate_review(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.foreign_block_attestation_review_candidate_index(
+            Path(args.archive_root),
+            case_id=args.case_id,
+            review_scope=args.review_scope,
+            include_receipts=args.include_receipts,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Foreign block attestation review candidate index: {result.get('candidate_count', 0)} candidate(s)")
+        print(f"Trust state: {result.get('trust_state') or '-'}")
+        for item in result.get("candidates", []):
+            print(f"- {item.get('case_id')}: {item.get('review_scope')} ({item.get('candidate_receipt_consistency', {}).get('status')})")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -4198,6 +4230,22 @@ def build_parser() -> argparse.ArgumentParser:
     record_attestation_review_candidate.add_argument("--review-note", help="Optional short non-secret operator note. Only summary metadata is stored.")
     record_attestation_review_candidate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     record_attestation_review_candidate.set_defaults(func=command_record_attestation_review_candidate)
+
+    attestation_candidate_review = subcommands.add_parser(
+        "attestation-candidate-review",
+        help="List and validate recorded foreign block attestation review candidates without writing files.",
+    )
+    attestation_candidate_review.add_argument("archive_root", help="Archive root used for path safety and local context.")
+    attestation_candidate_review.add_argument("--case-id", help="Optional safe quarantine case id filter.")
+    attestation_candidate_review.add_argument(
+        "--review-scope",
+        choices=sorted(archive_services.FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES | {"all"}),
+        default="all",
+        help="Filter displayed candidates by review scope.",
+    )
+    attestation_candidate_review.add_argument("--include-receipts", action="store_true", help="Include sanitized candidate receipt summaries.")
+    attestation_candidate_review.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    attestation_candidate_review.set_defaults(func=command_attestation_candidate_review)
 
     create_draft = subcommands.add_parser("create-draft", help="Create a draft zettel in inbox/.")
     create_draft.add_argument("archive_root", help="Archive root to write to.")

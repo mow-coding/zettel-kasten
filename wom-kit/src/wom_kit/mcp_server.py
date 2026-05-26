@@ -668,6 +668,25 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "foreign_block_attestation_review_candidate_index",
+        "description": "Read-only index and consistency check for recorded foreign block attestation review candidates.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "case_id": {"type": "string"},
+                "review_scope": {
+                    "type": "string",
+                    "enum": sorted(archive_services.FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES | {"all"}),
+                    "default": "all",
+                },
+                "include_receipts": {"type": "boolean", "default": False},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "create_draft_zettel",
         "description": "Create an AI draft zettel in inbox/. This does not mint to canonical memory.",
         "inputSchema": {
@@ -1008,6 +1027,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_foreign_block_attestation_review_candidate_plan(arguments)
     if name == "record_attestation_review_candidate_check":
         return tool_record_attestation_review_candidate_check(arguments)
+    if name == "foreign_block_attestation_review_candidate_index":
+        return tool_foreign_block_attestation_review_candidate_index(arguments)
     if name == "create_draft_zettel":
         return tool_create_draft_zettel(arguments)
     if name == "list_views":
@@ -1737,6 +1758,24 @@ def tool_record_attestation_review_candidate_check(arguments: dict[str, Any]) ->
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"record_attestation_review_candidate_check: {state}.", result)
+
+
+def tool_foreign_block_attestation_review_candidate_index(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("foreign_block_attestation_review_candidate_index is dry-run only.")
+    case_id = optional_string_arg(arguments, "case_id")
+    review_scope = optional_string_arg(arguments, "review_scope") or "all"
+    include_receipts = bool(arguments.get("include_receipts", False))
+    result = call_service(
+        archive_services.foreign_block_attestation_review_candidate_index,
+        archive_root,
+        case_id=case_id,
+        review_scope=review_scope,
+        include_receipts=include_receipts,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"foreign_block_attestation_review_candidate_index: {state}.", result)
 
 
 def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:

@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.39` | current public pre-release | `wom-kit/docs/releases/v0.2.39.md` |
+| `v0.2.40` | current public pre-release | `wom-kit/docs/releases/v0.2.40.md` |
+| `v0.2.39` | superseded public pre-release | `wom-kit/docs/releases/v0.2.39.md` |
 | `v0.2.38` | superseded public pre-release | `wom-kit/docs/releases/v0.2.38.md` |
 | `v0.2.37` | superseded public pre-release | `wom-kit/docs/releases/v0.2.37.md` |
 | `v0.2.36` | superseded public pre-release | `wom-kit/docs/releases/v0.2.36.md` |
@@ -66,6 +67,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.39` To `v0.2.40`
+
+This is a compatible foreign block attestation review candidate index patch.
+
+What changed:
+
+- added `archive attestation-candidate-review <archive-root> --format json`,
+- added optional `--case-id`, `--review-scope`, and `--include-receipts` filters,
+- added read-only MCP `foreign_block_attestation_review_candidate_index`,
+- added consistency checks for recorded candidate records, candidate receipts, current quarantine cases, original quarantine receipts, recorded decisions, and decision receipts.
+
+No private archive migration is required.
+
+The review index writes nothing, keeps `dry_run: true`, and returns `would_change: []`. Filters only affect displayed candidates; all discovered records are still validated before top-level `ok` is set. Indexed candidates remain untrusted and do not create trust, import, attestation, signature, mint, acceptance, sharing, provider calls, or ZET transport.
 
 ## From `v0.2.38` To `v0.2.39`
 

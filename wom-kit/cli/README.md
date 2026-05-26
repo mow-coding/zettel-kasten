@@ -88,6 +88,9 @@ record-attestation-review-candidate --dry-run
 record-attestation-review-candidate --approve --reviewed-by
   Write only a sanitized untrusted attestation review candidate JSON and a matching receipt after re-validating the candidate plan, current case, receipts, and recorded decision. This never trusts, imports, mints, attests, signs, accepts, shares, calls providers, or runs ZET transport.
 
+attestation-candidate-review --format json
+  List and validate recorded foreign block attestation review candidates. This is read-only and never trusts, imports, mints, attests, signs, accepts, applies, shares, calls providers, runs ZET transport, or writes files.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
@@ -658,6 +661,15 @@ python wom-kit\cli\archive.py attestation-review-candidate wom-kit\examples\fake
 `review-note` is local operator context only. The command returns summary metadata and never echoes the raw note body. Hash commitments in existing sanitized records are claims, not proof of authenticity.
 
 The block-header preview reads only the target zet file. It derives header metadata from frontmatter, hashes only the zet body text and normalized header preview, and does not hash referenced objet/source files.
+
+Review recorded attestation review candidates:
+
+```powershell
+python wom-kit\cli\archive.py attestation-candidate-review wom-kit\examples\fake-life-archive `
+  --format json
+```
+
+Use `--case-id <safe-id>` to display one case, `--review-scope identity|source_refs|header_hashes|prompt_boundary|full_human_review|all` to filter displayed candidates, and `--include-receipts` to include sanitized candidate receipt summaries. Filters never hide blockers from other discovered candidate records.
 
 ## Tests
 

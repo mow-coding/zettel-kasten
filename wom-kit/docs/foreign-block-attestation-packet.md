@@ -1,6 +1,6 @@
 # Foreign Block Attestation Packet Preview
 
-Status: v0.2.39 compatible baseline
+Status: v0.2.40 compatible baseline
 
 ## Principle
 
@@ -105,6 +105,14 @@ archive record-attestation-review-candidate <archive-root> --candidate-plan <jso
 
 Approved mode writes only an untrusted candidate record and matching receipt. It still creates no trust, import, attestation, signature, mint, sharing, provider call, or ZET transport.
 
+v0.2.40 adds a read-only index for recorded candidate records:
+
+```bash
+archive attestation-candidate-review <archive-root> --format json
+```
+
+The index validates recorded candidates, candidate receipts, and upstream quarantine/decision state. It writes nothing and still creates no trust, import, attestation, signature, mint, sharing, provider call, acceptance, apply behavior, or ZET transport.
+
 ## Safety Checks
 
 The command blocks if the trust report:
@@ -126,7 +134,7 @@ The MCP tool is read-only and dry-run only. It accepts a structured trust report
 
 ## Non-Goals
 
-v0.2.39 does not implement:
+v0.2.40 does not implement:
 
 - quarantine decision apply,
 - attestation review candidate apply or acceptance,

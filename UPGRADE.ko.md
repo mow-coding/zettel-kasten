@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.39` | current public pre-release | `wom-kit/docs/releases/v0.2.39.md` |
+| `v0.2.40` | current public pre-release | `wom-kit/docs/releases/v0.2.40.md` |
+| `v0.2.39` | superseded public pre-release | `wom-kit/docs/releases/v0.2.39.md` |
 | `v0.2.38` | superseded public pre-release | `wom-kit/docs/releases/v0.2.38.md` |
 | `v0.2.37` | superseded public pre-release | `wom-kit/docs/releases/v0.2.37.md` |
 | `v0.2.36` | superseded public pre-release | `wom-kit/docs/releases/v0.2.36.md` |
@@ -66,6 +67,21 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.39` To `v0.2.40`
+
+This is a compatible foreign block attestation review candidate index patch.
+
+Changed:
+
+- added `archive attestation-candidate-review <archive-root> --format json`,
+- added optional `--case-id`, `--review-scope`, and `--include-receipts`,
+- added read-only MCP `foreign_block_attestation_review_candidate_index`,
+- added consistency checks for candidate records, candidate receipts, quarantine cases/receipts, and decision records/receipts.
+
+No private archive migration is required.
+
+The command writes nothing, keeps `dry_run: true`, and returns `would_change: []`. Filters only change displayed candidates; all discovered candidate records are still validated before top-level `ok` is set. Indexed candidates remain untrusted and do not create trust, import, attestation, signature, mint, acceptance, sharing, provider calls, or ZET transport.
 
 ## From `v0.2.38` To `v0.2.39`
 

@@ -137,6 +137,9 @@ foreign_block_attestation_review_candidate_plan
 record_attestation_review_candidate_check
   Read-only dry-run check for the CLI-only attestation review candidate record write. It validates a candidate plan and current quarantine/decision state, returns the two paths an approved CLI command would write, and writes nothing.
 
+foreign_block_attestation_review_candidate_index
+  Read-only review index for recorded foreign block attestation review candidates. It lists safe summaries, validates matching candidate receipts plus upstream quarantine/decision records, writes nothing, and never trusts, imports, mints, attests, signs, accepts, applies, shares, calls providers, or runs ZET transport.
+
 create_draft_zettel
   Create an AI draft in inbox/. `dry_run: true` previews the draft path, frontmatter, body hash, blockers, warnings, and approval replay values without writing. It may consume structured `source_intake_plan` and `prompt_boundary_report` objects and merge validated metadata into the draft preview. Normal profile-bound AI writes require draft approval plus expected body hash replay values. This does not mint the zettel.
 
@@ -227,6 +230,7 @@ ownership_transfer_check
 - `foreign_block_decision_outcome_plan` is read-only and writes nothing. MCP rejects any `dry_run` value other than boolean `true` and exposes no decision outcome apply, write, accept, import, trust, attest, receipt write, auto-accept, auto-import, transport, or full-auto tool.
 - `foreign_block_attestation_review_candidate_plan` is read-only and writes nothing. MCP rejects any `dry_run` value other than boolean `true` and exposes no candidate apply, write, accept, import, trust, attest, sign, receipt write, auto-accept, auto-import, transport, or full-auto tool.
 - `record_attestation_review_candidate_check` is read-only and writes nothing. Approved attestation review candidate recording is CLI-only and requires `--approve --reviewed-by`; MCP exposes no candidate approve/write/apply/accept/import/trust/attest/sign/receipt-write/full-auto tool.
+- `foreign_block_attestation_review_candidate_index` is read-only and writes nothing. Its filters do not relax consistency validation, and included receipt summaries are sanitized. MCP rejects any `dry_run` value other than boolean `true` and exposes no candidate review apply, write, approve, accept, import, trust, attest, sign, receipt write, auto-accept, auto-import, transport, or full-auto tool.
 - `create_draft_zettel` accepts a structured `source_intake_plan` object, not a local plan file path. The plan must be a successful dry-run, blocker-free, metadata-only source intake result before refs are merged.
 - `archive_index` writes only the generated search map at `db/archive-index.sqlite`.
 - `archive_onboarding_plan` previews first setup but does not create archive folders, provider bindings, or `.env` files.
@@ -243,6 +247,6 @@ ownership_transfer_check
 - `delegate_zet_check`, `attest_zet_check`, and `anchor_zet_check` preview the future zet sharing lifecycle, including claimable-once capability binding previews, but do not write receipts, metadata, zettels, workpacks, claim registries, or transport messages.
 - `ownership_transfer_check` previews ownership transfer and external provider changes, but does not write receipts or change `archive-identity.yml`.
 - Ownership transfer receipt examples can be validated by `archive_doctor` when they live under `receipts/lineage/*.ownership-transfer.json`.
-- Real pilot apply, restore drill apply, real onboarding apply, profile registration, token registration, external import apply, source registration apply, source scan apply, minting/promotion into canonical `zettels/`, real archive sharing, real ownership transfer, quarantine write/apply, quarantine review apply/accept, quarantine decision write/apply/accept, quarantine decision review write/apply/accept, decision outcome write/apply/accept, attestation review candidate approve/write/apply, runtime context apply, object storage apply, and external provider account mutation are intentionally not exposed through MCP.
+- Real pilot apply, restore drill apply, real onboarding apply, profile registration, token registration, external import apply, source registration apply, source scan apply, minting/promotion into canonical `zettels/`, real archive sharing, real ownership transfer, quarantine write/apply, quarantine review apply/accept, quarantine decision write/apply/accept, quarantine decision review write/apply/accept, decision outcome write/apply/accept, attestation review candidate approve/write/apply, attestation review candidate index apply/accept, runtime context apply, object storage apply, and external provider account mutation are intentionally not exposed through MCP.
 - In Docker Compose, MCP paths are allowlisted to `/archives` through `AI_ARCHIVE_MCP_ALLOWED_ROOTS=/archives`.
 - Tool result paths use archive-relative `/` paths so JSON-RPC output is stable across Windows, macOS, and Linux.

@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.39 pre-release
+v0.2.40 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -67,6 +67,7 @@ What exists today:
 - read-only foreign block decision outcome plans that route one recorded decision into the next safe non-mutating path without trust, import, attestation, minting, acceptance, sharing, signing, provider calls, or ZET transport.
 - read-only foreign block attestation review candidate plans that prepare a safe human-review candidate from an eligible recorded decision without creating trust, import, attestation, signatures, minting, sharing, provider calls, or ZET transport.
 - CLI-only approved foreign block attestation review candidate records that write exactly one untrusted candidate JSON and one receipt after replay-validating the current case, receipts, and supplied candidate plan, without creating trust, import, attestation, signatures, minting, sharing, provider calls, or ZET transport.
+- read-only foreign block attestation review candidate indexes that list recorded untrusted candidates and validate their candidate records, candidate receipts, original quarantine cases/receipts, and decision records/receipts without changing trust state.
 
 What does not exist yet:
 
@@ -76,7 +77,7 @@ What does not exist yet:
 - real wallet creation, private key custody, or cryptographic signing,
 - complete prompt-injection prevention or full-auto safety guarantees,
 - LLM-based prompt classification, provider scanning, OCR/import apply, ZET transport, real signing, payments, staking, consensus, or blockchain integration,
-- real foreign block import/trust/apply, real foreign attestation writes, real quarantine review apply/accept, real quarantine decision accept/apply/trust, real ZET transport, or automatic acceptance of shared blocks,
+- real foreign block import/trust/apply, real foreign attestation writes, real quarantine review apply/accept, real quarantine decision accept/apply/trust, real attestation review candidate accept/apply/trust, real ZET transport, or automatic acceptance of shared blocks,
 - full Markdown-to-WOM-Safe-HTML conversion or finalized profile validation,
 - stable `v1.0.0` protocol guarantee.
 
@@ -208,6 +209,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.40
 v0.2.39
 v0.2.38
 v0.2.37

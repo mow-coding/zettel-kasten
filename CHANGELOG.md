@@ -4,6 +4,27 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.40 - 2026-05-26
+
+Foreign block attestation review candidate index patch.
+
+Added:
+
+- `archive attestation-candidate-review <archive-root> --format json`,
+- optional `--case-id`, `--review-scope`, and `--include-receipts` filters,
+- read-only MCP `foreign_block_attestation_review_candidate_index`,
+- index validation for recorded untrusted attestation review candidates and matching candidate receipts,
+- current quarantine case, original quarantine receipt, recorded decision, and decision receipt consistency checks.
+
+Compatibility:
+
+- no private archive migration is required,
+- the index writes nothing, keeps `dry_run: true`, and always returns `would_change: []`,
+- displayed filters do not hide blockers from other discovered candidate records,
+- indexed candidates remain `untrusted_foreign`, `recorded_untrusted_candidate`, and `not_created`,
+- indexing a candidate does not create trust, import, attestation, signatures, minting, sharing, provider calls, ZET transport, acceptance, or apply behavior,
+- MCP remains read-only and exposes no candidate review approve/write/apply/trust/import/attest/sign/mint/full-auto tool.
+
 ## v0.2.39 - 2026-05-25
 
 Foreign block attestation review candidate write approval patch.
