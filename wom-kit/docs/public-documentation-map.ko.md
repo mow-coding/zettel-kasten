@@ -169,6 +169,7 @@ local archive
 - [Foreign Block Decision Outcome Plan Work Log](../plans/work-log-2026-05-25-foreign-block-decision-outcome-plan.md)
 - [Foreign Block Attestation Review Candidate Plan Work Log](../plans/work-log-2026-05-25-foreign-block-attestation-review-candidate-plan.md)
 - [ZET Publication Surface Prototype Work Log](../plans/work-log-2026-05-26-zet-publication-surface-prototype.md)
+- [Live Publication Template Source Work Log](../plans/work-log-2026-05-26-live-publication-template-source.md)
 - [Draft Provenance Work Log](../plans/work-log-2026-05-24-draft-provenance.md)
 - [WOM-kit Naming Cleanup Work Log](../plans/work-log-2026-05-25-wom-kit-naming-cleanup.md)
 - [Delegate Capability Binding Work Log](../plans/work-log-2026-05-23-delegate-capability-binding.md)

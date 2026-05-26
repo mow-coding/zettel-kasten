@@ -23,6 +23,23 @@ wordpress-publish.example.ps1
 
 이 예시는 실제 사용자의 개인 아카이브, 실제 WordPress 사이트, 실제 토큰, 실제 AI 대화 원문, 로컬 파일 경로를 포함하지 않는다.
 
+## Live Template Source
+
+이 예시는 `style_template` 개념도 포함한다.
+
+사용자가 외부 surface에 여러 글을 게시할 때, 매번 글자 크기와 줄간격, 소제목 여백, 썸네일 규격을 다시 지정하는 것은 부담이다. 대신 이미 마음에 드는 게시글 하나를 template post로 지정하고, 새 projection을 만들 때 그 게시글의 현재 스타일을 먼저 읽어올 수 있다.
+
+```text
+template post
+-> current style profile
+-> new projection body
+-> provider publish
+```
+
+이 template post는 canonical archive memory가 아니다. 특정 surface에서 읽기 좋게 보이기 위한 visual reference다.
+
+실제 구현에서는 template post를 다시 읽은 시각과 template content hash를 projection envelope 또는 receipt에 남겨야 한다.
+
 ## UX 의도
 
 사용자는 "AI와 대화한 내용을 보기 좋게 정리해서 내 아카이브 블로그에 올린다"고 느낀다.

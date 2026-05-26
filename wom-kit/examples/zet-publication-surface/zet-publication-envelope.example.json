@@ -24,6 +24,23 @@
     "comments_open": false,
     "pings_open": false
   },
+  "style_template": {
+    "kind": "live_surface_post",
+    "template_ref": "provider_post:example_template",
+    "template_url": "https://example.invalid/2026/05/26/example-template-post/",
+    "fetched_at": "2026-05-26T16:40:00+09:00",
+    "template_content_sha256": "sha256:example-template-style-source-hash",
+    "style_profile": {
+      "body_width": "from_template",
+      "body_font_size": "from_template",
+      "body_line_height": "from_template",
+      "heading_tag": "h4",
+      "heading_style": "from_template",
+      "paragraph_spacing": "from_template",
+      "diagram_box_style": "from_template",
+      "thumbnail_aspect_ratio": "1:1"
+    }
+  },
   "visibility": {
     "archive_scope": "private",
     "surface_scope": "private_site",
@@ -52,6 +69,7 @@
   "notes": [
     "The external URL is a surface locator, not the canonical zet identity.",
     "Provider tokens and local paths must stay outside this envelope.",
+    "A live style template can guide the surface projection without becoming canonical archive memory.",
     "A real implementation should dry-run the projection and receipt before provider calls."
   ]
 }

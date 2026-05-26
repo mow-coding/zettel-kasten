@@ -298,3 +298,75 @@ approve explicitly
 provider call is separate
 receipt is durable
 ```
+
+## 9. Live Template Source 인사이트
+
+WordPress 아카이브 운영 중 추가로 확인된 중요한 UX 인사이트는 "스타일 규칙을 매번 다시 말하지 않기"다.
+
+사용자는 다음과 같은 세부 스타일을 매번 설명하고 싶어 하지 않는다.
+
+- 본문 폭
+- 본문 글자 크기
+- 줄간격
+- 소제목 크기와 여백
+- 문단 간격
+- 다이어그램 박스 스타일
+- 대표 이미지 비율과 크기
+
+대신 사용자는 이미 마음에 드는 게시글 하나를 기준본으로 지정하고 싶어 한다.
+
+```text
+template post
+-> fetch current style
+-> generate new projection with that style
+-> publish new post
+```
+
+중요한 점은 이 템플릿이 정적인 복사본이 아니라 live source라는 것이다. 사용자가 나중에 기준 게시글의 스타일을 고치면, 다음 projection은 그 기준 게시글을 다시 읽어서 바뀐 스타일을 따라야 한다.
+
+이 흐름은 ZET UI에도 그대로 적용할 수 있다.
+
+```text
+canonical zet
+  내용과 provenance의 기준
+
+projection template
+  surface-specific visual style의 기준
+
+projection renderer
+  현재 template을 읽어 새 surface body를 생성
+
+projection receipt
+  어떤 template version/hash를 참고했는지 기록
+```
+
+즉, projection template은 canonical memory가 아니다. 그것은 특정 surface에서 "어떻게 보일지"를 정하는 style reference다. 이 분리는 사용자의 편의와 archive integrity를 동시에 지킨다.
+
+권장 UX 언어는 다음처럼 단순해야 한다.
+
+```text
+이 글과 같은 모양으로 새 글 만들기
+```
+
+내부적으로는 다음 정보를 남길 수 있다.
+
+```yaml
+template_ref:
+  surface: wordpress_private_blog
+  external_post_ref: provider_post:example_template
+  fetched_at: 2026-05-26T16:40:00+09:00
+  content_hash: sha256:example-template-style-source
+style_profile:
+  body_width: from_template
+  heading_style: from_template
+  paragraph_spacing: from_template
+  thumbnail_ratio: 1:1
+```
+
+이 모델은 나중에 WOM/ZET의 custom UI에서 다음 기능으로 발전할 수 있다.
+
+- surface별 템플릿 갤러리
+- "이전 글 스타일로 작성" 버튼
+- template version/hash 기반 재현성 확인
+- canonical zet와 visual projection template의 분리
+- 사용자가 CSS나 HTML을 몰라도 스타일을 관리할 수 있는 인터페이스
