@@ -443,6 +443,30 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "zet_projection_plan_check",
+        "description": "Read-only dry-run ZET publication/projection plan preview for one local zet. Never publishes, writes receipts, calls providers, or transports.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "zet": {"type": "string"},
+                "surface": {"type": "string", "enum": sorted(archive_services.ZET_PROJECTION_SURFACE_KINDS)},
+                "visibility": {
+                    "type": "string",
+                    "enum": sorted(archive_services.ZET_PROJECTION_VISIBILITIES),
+                    "default": "unknown",
+                },
+                "projection_format": {
+                    "type": "string",
+                    "enum": sorted(archive_services.ZET_PROJECTION_FORMATS),
+                    "default": "metadata_only",
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "zet", "surface"],
+        },
+    },
+    {
         "name": "foreign_block_intake_check",
         "description": "Read-only dry-run intake preview for a foreign/shared block or Markdown-compatible zet before any trust/import action.",
         "inputSchema": {
@@ -1093,6 +1117,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_read_zettel(arguments)
     if name == "block_header_check":
         return tool_block_header_check(arguments)
+    if name == "zet_projection_plan_check":
+        return tool_zet_projection_plan_check(arguments)
     if name == "foreign_block_intake_check":
         return tool_foreign_block_intake_check(arguments)
     if name == "foreign_block_trust_check":
@@ -1578,6 +1604,23 @@ def tool_block_header_check(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"block_header_check: {state}.", result)
+
+
+def tool_zet_projection_plan_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("zet_projection_plan_check is dry-run only.")
+    result = call_service(
+        archive_services.zet_projection_plan_preview,
+        archive_root,
+        zet_ref=require_string_arg(arguments, "zet"),
+        surface=require_string_arg(arguments, "surface"),
+        dry_run=True,
+        visibility=optional_string_arg(arguments, "visibility") or "unknown",
+        projection_format=optional_string_arg(arguments, "projection_format") or "metadata_only",
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"zet_projection_plan_check: {state}.", result)
 
 
 def tool_foreign_block_intake_check(arguments: dict[str, Any]) -> dict[str, Any]:

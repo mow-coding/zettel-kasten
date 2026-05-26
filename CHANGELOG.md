@@ -4,6 +4,27 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.46 - 2026-05-26
+
+ZET projection plan dry-run preview patch.
+
+Added:
+
+- `archive projection-plan <archive-root> --zet <zet-id-or-path> --surface <surface-kind> --dry-run --format json`,
+- read-only MCP `zet_projection_plan_check`,
+- metadata-only projection plan output for one local zet and one operator-declared surface kind,
+- closed safety flags for provider, WordPress, projection-write, receipt-write, trust, import, acceptance, attestation, signature, mint, ZET transport, and full-auto behavior.
+
+Compatibility:
+
+- no private archive migration is required,
+- the preview writes nothing and returns `would_change: []`,
+- it does not output the full zet body,
+- it uses archive-relative paths only,
+- visibility is operator-declared intent, not verified provider state,
+- projection format is future intent, not rendered body output,
+- this release does not call providers, publish to WordPress, write projection records or receipts, mint, trust, import, accept, attest, sign, anchor, apply, run ZET transport, add Redis, queues, background workers, payments, staking, consensus, blockchain, model training, backpropagation, or full-auto behavior.
+
 ## v0.2.45 - 2026-05-26
 
 ZET publication surface baseline patch.

@@ -43,6 +43,9 @@ prompt-boundary --dry-run
 block-header --dry-run
   Preview the derived header for one draft or canonical zet. This returns `block = zet + header` metadata and hashes without writing, minting, reading objet bodies, or calling providers.
 
+projection-plan --dry-run
+  Preview a metadata-only ZET projection plan for one local zet and one operator-declared surface kind. This writes nothing, emits no full body text, creates no projection receipt, calls no provider, publishes nothing, and runs no ZET transport.
+
 foreign-block --dry-run
   Preview a foreign/shared block-header JSON artifact or Markdown-compatible foreign zet before trust/import. This writes nothing and never imports, drafts, mints, attests, anchors, applies, or calls providers.
 
@@ -798,9 +801,19 @@ keyrings/*.local.yml
 
 ## Publication Surface Boundary
 
-v0.2.45 documents ZET publication surfaces and adds sanitized examples only.
+v0.2.46 adds a dry-run `projection-plan` preview for one local zet and one operator-declared surface kind:
 
-WOM-kit does not currently include a projection-plan CLI command, projection receipt write, WordPress publisher, provider publisher, ZET transport sender, or automatic posting path. Posting is not minting, and a surface locator is not canonical zet identity.
+```powershell
+python wom-kit\cli\archive.py projection-plan .\some-archive `
+  --zet zet_20240504_example `
+  --surface static_site `
+  --dry-run `
+  --format json
+```
+
+The preview writes nothing, emits no full body text, uses archive-relative paths, and keeps provider/publishing/projection-write/receipt/trust/signature/ZET transport flags false.
+
+WOM-kit does not currently include a projection-plan apply/write command, projection receipt write, WordPress publisher, provider publisher, ZET transport sender, or automatic posting path. Posting is not minting, and a surface locator is not canonical zet identity.
 
 ## Schema Validation
 

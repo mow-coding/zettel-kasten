@@ -598,6 +598,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("source_intake_plan", tool_names)
             self.assertIn("create_draft_zettel", tool_names)
             self.assertIn("block_header_check", tool_names)
+            self.assertIn("zet_projection_plan_check", tool_names)
             self.assertIn("foreign_block_intake_check", tool_names)
             self.assertIn("foreign_block_trust_check", tool_names)
             self.assertIn("foreign_block_attestation_packet_check", tool_names)
@@ -693,6 +694,12 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("import_foreign_block", tool_names)
             self.assertNotIn("publish_to_wordpress", tool_names)
             self.assertNotIn("projection_publish", tool_names)
+            self.assertNotIn("zet_projection_plan_apply", tool_names)
+            self.assertNotIn("zet_projection_plan_write", tool_names)
+            self.assertNotIn("projection_plan_apply", tool_names)
+            self.assertNotIn("projection_plan_write", tool_names)
+            self.assertNotIn("projection_receipt_write", tool_names)
+            self.assertNotIn("wordpress_publish", tool_names)
             self.assertNotIn("provider_sync", tool_names)
             self.assertNotIn("write_receipt", tool_names)
             self.assertNotIn("auto_accept", tool_names)
@@ -1936,6 +1943,71 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(structured["block_model"]["block_formula"], "zet + header")
                 self.assertRegex(structured["header_sha256"], r"^[0-9a-f]{64}$")
                 self.assertNotIn(str(archive_root.resolve()), json.dumps(structured))
+        finally:
+            self.stop_server(process)
+
+    def test_zet_projection_plan_check_writes_nothing_and_requires_dry_run(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "zet_projection_plan_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "zet": "zet_20240504_fake_lunch_thought",
+                                "surface": "wordpress_private_blog",
+                                "visibility": "public",
+                                "projection_format": "metadata_only",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                serialized = json.dumps(structured, ensure_ascii=False)
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "zet_projection_plan_preview")
+                self.assertEqual(structured["projection_status"], "planned_not_recorded")
+                self.assertEqual(structured["would_change"], [])
+                self.assertFalse(structured["provider_api_called"])
+                self.assertFalse(structured["wordpress_published"])
+                self.assertFalse(structured["projection_write_performed"])
+                self.assertFalse(structured["projection_receipt_created"])
+                self.assertFalse(structured["zet_transport_used"])
+                self.assertFalse(structured["body_included"])
+                self.assertNotIn("This zettel represents a private personal reflection.", serialized)
+                self.assertNotIn(str(archive_root.resolve()), serialized)
+
+                blocked = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "zet_projection_plan_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "zet": "zet_20240504_fake_lunch_thought",
+                                "surface": "static_site",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                self.assertTrue(blocked["result"]["isError"])
+                self.assertIn("dry-run only", blocked["result"]["content"][0]["text"])
         finally:
             self.stop_server(process)
 

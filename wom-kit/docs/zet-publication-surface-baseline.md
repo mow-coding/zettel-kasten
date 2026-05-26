@@ -10,6 +10,8 @@ The core WOM archive remains no-UI and local-first. A zet is still canonical arc
 
 WordPress is documented here as one possible user-selected surface because many people already understand posting there. v0.2.45 does not publish to WordPress, call provider APIs, create projection receipts, or add a projection-plan CLI/MCP command.
 
+v0.2.46 adds a dry-run `projection-plan` preview for one local zet and one operator-declared surface kind. It still does not publish, render the full body, write projection records, write projection receipts, call providers, or run ZET transport.
+
 ## Model
 
 ```text
@@ -66,7 +68,7 @@ minted zet
 -> provider-specific publisher in a later release
 ```
 
-v0.2.45 stops at documentation and sanitized examples.
+v0.2.45 stops at documentation and sanitized examples. v0.2.46 adds only the read-only dry-run plan preview.
 
 ## Non-Goals
 

@@ -97,6 +97,15 @@ PROFILE_WALLET_SECRET_KEYS = {
     "token",
     "wallet_secret",
 }
+ZET_PROJECTION_SURFACE_KINDS = {
+    "wordpress_private_blog",
+    "static_site",
+    "private_workspace",
+    "rss_feed",
+    "generic_surface",
+}
+ZET_PROJECTION_VISIBILITIES = {"private", "team", "public", "unknown"}
+ZET_PROJECTION_FORMATS = {"metadata_only", "safe_html_summary", "plain_text_summary"}
 PROFILE_WALLET_REGISTRY_CANDIDATES = [
     "profiles/wom-profiles.yml",
     "profiles/wom-profiles.yaml",
@@ -9578,6 +9587,177 @@ def block_header_preview(
         "warnings": unique_preserve_order(warnings),
         "would_change": [],
     }
+
+
+def zet_projection_plan_preview(
+    archive_root: Path | str,
+    *,
+    zet_ref: str | None,
+    surface: str | None,
+    dry_run: bool = True,
+    visibility: str = "unknown",
+    projection_format: str = "metadata_only",
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("projection-plan is dry-run only; pass --dry-run.")
+    surface_kind = str(surface or "").strip()
+    if surface_kind not in ZET_PROJECTION_SURFACE_KINDS:
+        blockers.append("surface must be one of the supported projection surface kinds.")
+        surface_kind = None
+    visibility_value = str(visibility or "unknown").strip()
+    if visibility_value not in ZET_PROJECTION_VISIBILITIES:
+        blockers.append("visibility must be one of: private, team, public, unknown.")
+        visibility_value = "unknown"
+    projection_format_value = str(projection_format or "metadata_only").strip()
+    if projection_format_value not in ZET_PROJECTION_FORMATS:
+        blockers.append("projection_format must be one of: metadata_only, safe_html_summary, plain_text_summary.")
+        projection_format_value = "metadata_only"
+
+    path: Path | None = None
+    source_path: str | None = None
+    frontmatter: dict[str, Any] = {}
+    body = ""
+    resolved_zettel_id: str | None = None
+    raw_ref = str(zet_ref or "").strip()
+    if not raw_ref:
+        blockers.append("zet reference is required.")
+    elif not safe_projection_zet_ref(raw_ref):
+        blockers.append("zet reference must be a safe zet id or archive-relative path under inbox/ or zettels/.")
+    elif not blockers:
+        try:
+            path = resolve_projection_zet_ref(root, raw_ref)
+            source_path = archive_relative_path(path, root)
+            raw_text = path.read_text(encoding="utf-8")
+            frontmatter, body = split_zettel_text(raw_text)
+            frontmatter = json_safe(frontmatter)
+            resolved_zettel_id = safe_projection_scalar(frontmatter.get("id")) or (
+                raw_ref if valid_draft_zettel_id(raw_ref) else None
+            )
+        except (ArchiveServiceError, OSError, UnicodeError):
+            blockers.append("Referenced zet could not be resolved inside the archive.")
+
+    title = safe_projection_scalar(frontmatter.get("title"))
+    status = safe_projection_scalar(frontmatter.get("status"))
+    kind = safe_projection_scalar(frontmatter.get("kind"))
+    frontmatter_archive_id = safe_projection_scalar(frontmatter.get("archive_id")) or archive_id
+    normalized_body = normalize_text_for_block_hash(body)
+    body_hash = hashlib.sha256(normalized_body.encode("utf-8")).hexdigest() if path is not None else None
+    line_count = normalized_body.count("\n") + 1 if normalized_body and path is not None else 0
+    word_count = len(normalized_body.split()) if path is not None else 0
+    char_count = len(normalized_body) if path is not None else 0
+    if projection_format_value != "metadata_only":
+        warnings.append("projection_format is operator-declared future intent; v0.2.46 renders no body output.")
+    if visibility_value != "unknown":
+        warnings.append("visibility is operator-declared intent, not verified provider state.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "zet_projection_plan_preview",
+        "projection_status": "planned_not_recorded",
+        "archive_id": archive_id,
+        "zet": {
+            "zettel_id": resolved_zettel_id,
+            "archive_id": frontmatter_archive_id,
+            "source_path": source_path,
+            "status": status,
+            "kind": kind,
+            "title": title,
+            "body_sha256": body_hash,
+            "line_count": line_count,
+            "word_count": word_count,
+            "character_count": char_count,
+            "body_included": False,
+        },
+        "surface": {
+            "surface_kind": surface_kind,
+            "visibility": visibility_value,
+            "visibility_status": "operator_declared_not_verified",
+            "projection_format": projection_format_value,
+            "format_status": "planned_not_rendered",
+            "locator_status": "not_created",
+        },
+        "future_projection_steps": [
+            "review selected zet scope",
+            "choose surface deliberately",
+            "run a future scope gate",
+            "get explicit human approval",
+            "preview future projection receipt",
+            "only then consider a later provider-specific publisher",
+        ],
+        "closed_scope_gates": [
+            "body rendering",
+            "projection write",
+            "projection receipt write",
+            "provider API call",
+            "WordPress publishing",
+            "ZET transport",
+        ],
+        "would_change": [],
+        "provider_api_called": False,
+        "wordpress_published": False,
+        "projection_write_performed": False,
+        "projection_receipt_created": False,
+        "zet_transport_used": False,
+        "trust_created": False,
+        "imported": False,
+        "accepted": False,
+        "attestation_created": False,
+        "signature_created": False,
+        "minted": False,
+        "full_auto_used": False,
+        "body_included": False,
+        "local_absolute_paths_included": False,
+        "credentials_included": False,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def safe_projection_zet_ref(value: str) -> bool:
+    text = value.strip()
+    if not text or "\x00" in text or "\n" in text or "\r" in text:
+        return False
+    if "://" in text or contains_forbidden_location_reference(text) or DRAFT_SECRET_VALUE_RE.search(text):
+        return False
+    if "\\" in text or "/" in text or text.lower().endswith(".md"):
+        try:
+            normalized = normalize_archive_relative_path(text)
+        except ArchivePathError:
+            return False
+        return normalized.startswith(VALID_ZETTEL_FOLDERS) and normalized.lower().endswith(".md")
+    return valid_draft_zettel_id(text)
+
+
+def resolve_projection_zet_ref(archive_root: Path, value: str) -> Path:
+    text = value.strip()
+    if "\\" in text or "/" in text or text.lower().endswith(".md"):
+        try:
+            normalized = normalize_archive_relative_path(text)
+            path = resolve_archive_relative_path(archive_root, normalized)
+        except ArchivePathError as exc:
+            raise ArchiveServiceError("zet reference path is unsafe.") from exc
+        relative = archive_relative_path(path, archive_root)
+        if not relative.startswith(VALID_ZETTEL_FOLDERS) or path.suffix.lower() != ".md":
+            raise ArchiveServiceError("zet reference path must point under inbox/ or zettels/.")
+        if not path.is_file():
+            raise ArchiveServiceError("zet reference path was not found.")
+        return path
+    return resolve_zettel_path(archive_root, zettel_id=text, relative_path=None)
+
+
+def safe_projection_scalar(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.strip().split())
+    if not text or contains_forbidden_location_reference(text) or DRAFT_SECRET_VALUE_RE.search(text):
+        return None
+    return text[:200]
 
 
 def list_views(archive_root: Path | str) -> dict[str, Any]:

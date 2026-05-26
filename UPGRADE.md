@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.45` | current public pre-release | `wom-kit/docs/releases/v0.2.45.md` |
+| `v0.2.46` | current public pre-release | `wom-kit/docs/releases/v0.2.46.md` |
+| `v0.2.45` | superseded public pre-release | `wom-kit/docs/releases/v0.2.45.md` |
 | `v0.2.44` | superseded public pre-release | `wom-kit/docs/releases/v0.2.44.md` |
 | `v0.2.43` | superseded public pre-release | `wom-kit/docs/releases/v0.2.43.md` |
 | `v0.2.42` | superseded public pre-release | `wom-kit/docs/releases/v0.2.42.md` |
@@ -72,6 +73,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.45` To `v0.2.46`
+
+This is a compatible ZET projection plan dry-run preview patch.
+
+What changed:
+
+- added `archive projection-plan <archive-root> --zet <zet-id-or-path> --surface <surface-kind> --dry-run --format json`,
+- added read-only MCP `zet_projection_plan_check`,
+- added metadata-only planning output for one local zet and one operator-declared surface kind,
+- added closed safety flags for provider calls, WordPress publishing, projection writes, projection receipts, trust/import/acceptance, attestation, signature, minting, ZET transport, and full-auto behavior.
+
+No private archive migration is required.
+
+The preview reads one local archive zet only enough to confirm existence and extract safe metadata. It does not output the full zet body, write files, create receipts, call providers, publish to WordPress, mint, trust, import, accept, attest, sign, anchor, apply, or run ZET transport.
 
 ## From `v0.2.44` To `v0.2.45`
 

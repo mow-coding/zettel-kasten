@@ -21,6 +21,8 @@ Commands:
           Plan safe source/objet refs before draft creation.
   block-header
           Preview the derived block header for one draft or canonical zet.
+  projection-plan
+          Preview a dry-run ZET publication/projection plan for one local zet.
   foreign-block
           Preview a foreign/shared block or zet before any trust/import action.
   foreign-block-trust
@@ -1710,6 +1712,44 @@ def command_block_header(args: argparse.Namespace) -> int:
                 print(f"- {warning}")
         print("Block header dry-run passed." if result["ok"] else "Block header dry-run blocked.")
     return 0 if result.get("ok") else 1
+
+
+def command_projection_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("Projection plan is dry-run only in v0.2.46. Use --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.zet_projection_plan_preview(
+            Path(args.archive_root),
+            zet_ref=args.zet,
+            surface=args.surface,
+            dry_run=args.dry_run,
+            visibility=args.visibility,
+            projection_format=args.projection_format,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        zet = result.get("zet") if isinstance(result.get("zet"), dict) else {}
+        surface = result.get("surface") if isinstance(result.get("surface"), dict) else {}
+        print(f"Projection plan dry-run {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"zet: {zet.get('zettel_id') or zet.get('source_path') or '-'}")
+        print(f"Surface: {surface.get('surface_kind') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
 
 
 def command_foreign_block(args: argparse.Namespace) -> int:
@@ -4168,6 +4208,31 @@ def build_parser() -> argparse.ArgumentParser:
     block_header.add_argument("--dry-run", action="store_true", help="Preview the block header without writing files.")
     block_header.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     block_header.set_defaults(func=command_block_header)
+
+    projection_plan = subcommands.add_parser(
+        "projection-plan",
+        help="Preview a dry-run publication/projection plan for one local zet.",
+    )
+    projection_plan.add_argument("archive_root", help="Archive root to inspect.")
+    projection_plan.add_argument("--zet", required=True, help="zet id or archive-relative path under inbox/ or zettels/.")
+    projection_plan.add_argument(
+        "--surface",
+        required=True,
+        help="Operator-declared target surface kind.",
+    )
+    projection_plan.add_argument(
+        "--visibility",
+        default="unknown",
+        help="Operator-declared visibility intent; not verified provider state.",
+    )
+    projection_plan.add_argument(
+        "--projection-format",
+        default="metadata_only",
+        help="Future projection format intent; v0.2.46 renders no body output.",
+    )
+    projection_plan.add_argument("--dry-run", action="store_true", help="Preview only; write nothing.")
+    projection_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    projection_plan.set_defaults(func=command_projection_plan)
 
     foreign_block = subcommands.add_parser("foreign-block", help="Preview a foreign/shared block or zet before trust/import.")
     foreign_block.add_argument("archive_root", help="Archive root used for path safety and local context.")

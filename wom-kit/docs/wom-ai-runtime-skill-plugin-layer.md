@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.45 planning and implementation baseline
+Status: v0.2.46 planning and implementation baseline
 
 ## Purpose
 
@@ -48,7 +48,7 @@ wom_profile_wallet_check
 
 Profile resolution must happen before runtime context whenever the user names a target profile. This prevents the AI from assuming the current/default archive is correct.
 
-`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.45 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
+`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.46 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
 
 ## Prompt Boundary Check
 
@@ -528,7 +528,9 @@ This is still not acceptance, trust, import, attestation, signing, minting, Word
 
 An AI runtime may discuss a user-selected publication surface after archive context, source refs, draft preview, human approval, minting, and block/header context are understood.
 
-In v0.2.45 this is documentation/examples only. There is no projection-plan CLI/MCP command, no projection receipt, no WordPress publishing, no provider API call, no ZET transport, and no automatic posting. Posting is not minting, and a surface locator is not canonical zet identity.
+In v0.2.46, `archive projection-plan` and MCP `zet_projection_plan_check` can preview one local zet plus one operator-declared surface kind. They are dry-run/read-only and emit metadata only.
+
+There is still no projection apply/write command, no projection receipt, no WordPress publishing, no provider API call, no ZET transport, and no automatic posting. Posting is not minting, and a surface locator is not canonical zet identity.
 
 ## Expected AI Runtime Flow
 
@@ -607,7 +609,7 @@ The skill tells the AI to:
 
 The plugin layer should expose read and preview tools first.
 
-Allowed v0.2.45 direction:
+Allowed v0.2.46 direction:
 
 - profile list and profile resolve,
 - runtime context,

@@ -2718,6 +2718,126 @@ class ArchiveCliTests(unittest.TestCase):
                     self.assertFalse(result["ok"])
                     self.assertTrue(result["blockers"])
 
+    def test_projection_plan_dry_run_returns_safe_plan_and_writes_no_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+            code, output = self.run_cli(
+                [
+                    "projection-plan",
+                    str(archive_root),
+                    "--zet",
+                    "zet_20240504_fake_lunch_thought",
+                    "--surface",
+                    "static_site",
+                    "--visibility",
+                    "public",
+                    "--projection-format",
+                    "safe_html_summary",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(before, after)
+            self.assertEqual(result["lifecycle_action"], "zet_projection_plan_preview")
+            self.assertEqual(result["projection_status"], "planned_not_recorded")
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(result["zet"]["zettel_id"], "zet_20240504_fake_lunch_thought")
+            self.assertEqual(result["zet"]["source_path"], "zettels/zet_20240504_fake_lunch_thought.md")
+            self.assertRegex(result["zet"]["body_sha256"], r"^[0-9a-f]{64}$")
+            self.assertFalse(result["body_included"])
+            self.assertFalse(result["provider_api_called"])
+            self.assertFalse(result["wordpress_published"])
+            self.assertFalse(result["projection_write_performed"])
+            self.assertFalse(result["projection_receipt_created"])
+            self.assertFalse(result["zet_transport_used"])
+            self.assertFalse(result["trust_created"])
+            self.assertFalse(result["imported"])
+            self.assertFalse(result["accepted"])
+            self.assertFalse(result["attestation_created"])
+            self.assertFalse(result["signature_created"])
+            self.assertFalse(result["minted"])
+            self.assertFalse(result["full_auto_used"])
+            self.assertFalse(result["local_absolute_paths_included"])
+            self.assertFalse(result["credentials_included"])
+            self.assertNotIn("This zettel represents a private personal reflection.", serialized)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+
+    def test_projection_plan_requires_dry_run_and_rejects_invalid_surface(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            missing_dry_run_code, missing_dry_run_output = self.run_cli(
+                [
+                    "projection-plan",
+                    str(archive_root),
+                    "--zet",
+                    "zet_20240504_fake_lunch_thought",
+                    "--surface",
+                    "static_site",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(missing_dry_run_code, 1)
+            self.assertIn("dry-run only", missing_dry_run_output)
+
+            invalid_surface_code, invalid_surface_output = self.run_cli(
+                [
+                    "projection-plan",
+                    str(archive_root),
+                    "--zet",
+                    "zet_20240504_fake_lunch_thought",
+                    "--surface",
+                    "publish_now",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(invalid_surface_output)
+            self.assertEqual(invalid_surface_code, 1, invalid_surface_output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(result["blockers"])
+
+    def test_projection_plan_blocks_missing_and_unsafe_refs_without_echoing_raw_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            unsafe_ref = r"C:\Users\example\private\secret.md"
+            cases = [
+                ("zet_missing", "Referenced zet could not be resolved inside the archive."),
+                ("../private.md", "zet reference must be a safe zet id or archive-relative path under inbox/ or zettels/."),
+                ("https://example.com/private.md", "zet reference must be a safe zet id or archive-relative path under inbox/ or zettels/."),
+                (unsafe_ref, "zet reference must be a safe zet id or archive-relative path under inbox/ or zettels/."),
+            ]
+            for zet_ref, expected in cases:
+                with self.subTest(zet_ref=zet_ref):
+                    code, output = self.run_cli(
+                        [
+                            "projection-plan",
+                            str(archive_root),
+                            "--zet",
+                            zet_ref,
+                            "--surface",
+                            "generic_surface",
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    result = json.loads(output)
+                    serialized = json.dumps(result, ensure_ascii=False)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertIn(expected, result["blockers"])
+                    self.assertNotIn(unsafe_ref, serialized)
+                    self.assertNotIn("https://example.com/private.md", serialized)
+
     def test_block_header_collects_refs_and_hashes_are_deterministic_without_objet_body_reads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

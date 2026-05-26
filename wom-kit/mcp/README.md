@@ -152,6 +152,9 @@ foreign_block_attestation_statement_draft_review_index
 foreign_block_attestation_statement_draft_decision_preview
   Read-only decision-route preview for one recorded foreign block attestation statement draft. It revalidates the current statement draft review index and upstream metadata chain, writes nothing, records no decision, accepts no draft, and never trusts, imports, mints, attests, signs, publishes, shares, calls providers, or runs ZET transport.
 
+zet_projection_plan_check
+  Read-only dry-run projection plan preview for one local zet and one operator-declared surface kind. It writes nothing, emits no full body text, creates no projection receipt, calls no provider, publishes nothing, and runs no ZET transport.
+
 create_draft_zettel
   Create an AI draft in inbox/. `dry_run: true` previews the draft path, frontmatter, body hash, blockers, warnings, and approval replay values without writing. It may consume structured `source_intake_plan` and `prompt_boundary_report` objects and merge validated metadata into the draft preview. Normal profile-bound AI writes require draft approval plus expected body hash replay values. This does not mint the zettel.
 
@@ -247,7 +250,7 @@ ownership_transfer_check
 - `record_attestation_statement_draft_check` is read-only and writes nothing. Approved attestation statement draft recording is CLI-only and requires `--approve --reviewed-by`; MCP exposes no statement draft approve/write/apply, foreign block attest/sign/trust/import/accept, mint, anchor, provider sync, or full-auto tool.
 - `foreign_block_attestation_statement_draft_review_index` is read-only and writes nothing. Its style and scope filters do not relax consistency validation, `case_id` scopes the verdict to one case, and included receipt summaries are sanitized. MCP rejects any `dry_run` value other than boolean `true` and exposes no statement draft review apply, write, approve, accept, import, trust, attest, sign, receipt write, auto-accept, auto-import, transport, or full-auto tool.
 - `foreign_block_attestation_statement_draft_decision_preview` is read-only and writes nothing. MCP rejects any `dry_run` value other than boolean `true`, treats review notes as preview context only, and exposes no decision write/apply, statement draft accept, import, trust, attest, sign, receipt write, WordPress publishing, provider sync, auto-accept, auto-import, transport, or full-auto tool.
-- v0.2.45 publication surface material is documentation/examples only. MCP exposes no projection-plan, projection receipt, WordPress publishing, provider publishing, ZET transport, or automatic posting tool.
+- `zet_projection_plan_check` is read-only and requires `dry_run: true`. MCP exposes no projection-plan apply/write, projection receipt write, WordPress publishing, provider publishing, ZET transport, or automatic posting tool.
 - `create_draft_zettel` accepts a structured `source_intake_plan` object, not a local plan file path. The plan must be a successful dry-run, blocker-free, metadata-only source intake result before refs are merged.
 - `archive_index` writes only the generated search map at `db/archive-index.sqlite`.
 - `archive_onboarding_plan` previews first setup but does not create archive folders, provider bindings, or `.env` files.
