@@ -94,6 +94,12 @@ attestation-candidate-review --format json
 attestation-statement-draft --dry-run
   Preview a non-binding attestation statement draft for one recorded candidate. This writes nothing and never trusts, imports, mints, attests, signs, writes receipts, accepts, applies, shares, calls providers, or runs ZET transport.
 
+record-attestation-statement-draft --dry-run
+  Preview the two local files that an approved attestation statement draft record would create. This writes nothing and keeps the foreign block untrusted.
+
+record-attestation-statement-draft --approve --reviewed-by
+  Write only a sanitized untrusted statement draft JSON and a matching receipt after re-validating the draft preview, current candidate, receipts, quarantine case, and recorded decision. This never trusts, imports, mints, attests, signs, accepts, shares, calls providers, or runs ZET transport.
+
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 

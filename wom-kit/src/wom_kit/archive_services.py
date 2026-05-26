@@ -3918,6 +3918,13 @@ def foreign_attestation_review_candidate_record_paths(case_id: str) -> dict[str,
     }
 
 
+def foreign_attestation_statement_draft_record_paths(case_id: str) -> dict[str, str]:
+    return {
+        "statement_draft_record": f"quarantine/foreign-blocks/{case_id}/attestation-statement-draft.json",
+        "receipt": f"{FOREIGN_BLOCK_QUARANTINE_RECEIPTS_DIR}/{case_id}.foreign-block-attestation-statement-draft.json",
+    }
+
+
 def quarantine_foreign_block_empty_result(
     *,
     archive_id: str,
@@ -7804,6 +7811,749 @@ def foreign_block_attestation_statement_draft_preview(
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
         "would_change": [],
+    }
+    for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
+        result[flag] = False
+    return json_safe(result)
+
+
+def record_attestation_statement_draft_empty_result(
+    *,
+    archive_id: str,
+    dry_run: bool,
+    blockers: list[str] | None = None,
+    warnings: list[str] | None = None,
+    approved: bool = False,
+    reviewed_by: str | None = None,
+    case_id: str | None = None,
+    review_scope: str | None = None,
+    prospective_attestor: str | None = None,
+    statement_style: str | None = None,
+) -> dict[str, Any]:
+    style = statement_style if statement_style in FOREIGN_BLOCK_ATTESTATION_STATEMENT_STYLES else None
+    scope = review_scope if review_scope in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES else None
+    result: dict[str, Any] = {
+        "ok": False,
+        "dry_run": dry_run,
+        "lifecycle_action": "record_attestation_statement_draft",
+        "archive_id": archive_id,
+        "approval_required": True,
+        "approved": approved,
+        "reviewed_by": safe_foreign_quarantine_actor_id(reviewed_by),
+        "trust_state": "untrusted_foreign",
+        "draft_record_status": "not_recorded",
+        "attestation_status": "not_created",
+        "signature_status": "not_created",
+        "case_id": safe_foreign_quarantine_case_id(case_id),
+        "review_scope": scope,
+        "prospective_attestor": safe_foreign_quarantine_actor_id(prospective_attestor),
+        "statement_style": style,
+        "proposed_paths": {},
+        "files_written": [],
+        "blockers": unique_preserve_order(blockers or []),
+        "warnings": unique_preserve_order(warnings or []),
+        "would_change": [],
+    }
+    for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
+        result[flag] = False
+    return result
+
+
+def load_attestation_statement_draft_preview_from_path(
+    root: Path,
+    draft_preview_path: str,
+    blockers: list[str],
+) -> dict[str, Any] | None:
+    try:
+        candidate = Path(draft_preview_path)
+        if "\x00" in draft_preview_path:
+            blockers.append("draft_preview path could not be read safely.")
+            return None
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+            if not is_path_within_root(resolved, root):
+                blockers.append("draft_preview path must stay inside the archive root.")
+                return None
+        else:
+            normalized = normalize_archive_relative_path(draft_preview_path)
+            resolved = resolve_archive_relative_path(root, normalized)
+        if not resolved.is_file():
+            blockers.append("draft_preview path is not a file.")
+            return None
+        parsed = json.loads(resolved.read_text(encoding="utf-8"))
+    except ArchivePathError as exc:
+        blockers.append(f"draft_preview path could not be read safely: {exc}")
+        return None
+    except json.JSONDecodeError as exc:
+        blockers.append(f"draft_preview JSON is invalid: {exc.msg}.")
+        return None
+    except (OSError, UnicodeError):
+        blockers.append("draft_preview path could not be read safely.")
+        return None
+    if not isinstance(parsed, dict):
+        blockers.append("draft_preview JSON must be an object.")
+        return None
+    return parsed
+
+
+def value_contains_raw_review_note(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key).lower()
+            if key_text in {"review_note", "review_note_body", "raw_review_note", "note_body"}:
+                return True
+            if value_contains_raw_review_note(child):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(value_contains_raw_review_note(item) for item in value)
+    return False
+
+
+def statement_draft_text_values(statement: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    title = statement.get("statement_title")
+    if isinstance(title, str):
+        values.append(title)
+    for key in ["statement_lines", "explicit_non_claims", "next_safe_actions"]:
+        item = statement.get(key)
+        if isinstance(item, list):
+            values.extend(child for child in item if isinstance(child, str))
+    return values
+
+
+def statement_text_has_forbidden_completed_claim(values: list[str]) -> str | None:
+    text = "\n".join(values).lower()
+    if "i attest" in text:
+        return "I attest"
+    allowed_phrases = [
+        "not_verified",
+        "not_trusted",
+        "untrusted_foreign",
+        "not proof of authenticity",
+        "has not been imported",
+        "has not been trusted",
+        "no signature has been created",
+        "no attestation has been created",
+        "no provider data has been checked",
+        "without treating them as authenticity proof",
+    ]
+    scrubbed = text
+    for phrase in allowed_phrases:
+        scrubbed = scrubbed.replace(phrase, "")
+    for term in ["verified", "accepted", "authentic", "signed", "minted", "trusted", "safe"]:
+        if re.search(rf"\b{term}\b", scrubbed):
+            return term
+    return None
+
+
+def validate_attestation_statement_boundary_text(statement: dict[str, Any], blockers: list[str]) -> None:
+    values = statement_draft_text_values(statement)
+    if not values:
+        blockers.append("attestation_statement_draft must include statement text values.")
+        return
+    forbidden = statement_text_has_forbidden_completed_claim(values)
+    if forbidden:
+        blockers.append("attestation_statement_draft must not contain completed attestation, trust, signing, authenticity, or safety claims.")
+    statement_blob = json.dumps(json_safe(statement), ensure_ascii=False, sort_keys=True)
+    for required in ["not_verified", "not_trusted", "not proof of authenticity"]:
+        if required not in statement_blob:
+            blockers.append("attestation_statement_draft hash/evidence wording must preserve not_verified, not_trusted, and non-authenticity-proof boundaries.")
+            break
+
+
+def validate_attestation_statement_draft_preview(
+    archive_id: str,
+    preview: dict[str, Any],
+) -> tuple[list[str], list[str], str | None, str | None, str | None, str | None, dict[str, Any], str]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    scan_foreign_quarantine_private_values(preview, blockers, "draft_preview", "draft_preview")
+    if value_contains_raw_review_note(preview):
+        blockers.append("draft_preview must not include raw review note body.")
+
+    def require(condition: bool, message: str) -> None:
+        if not condition:
+            blockers.append(message)
+
+    require(
+        preview.get("lifecycle_action") == "foreign_block_attestation_statement_draft_preview",
+        "draft_preview.lifecycle_action must be foreign_block_attestation_statement_draft_preview.",
+    )
+    require(preview.get("ok") is True, "draft_preview.ok must be true.")
+    require(preview.get("dry_run") is True, "draft_preview.dry_run must be true.")
+    require(preview.get("archive_id") == archive_id, "draft_preview.archive_id must match this archive.")
+    require(preview.get("trust_state") == "untrusted_foreign", "draft_preview.trust_state must remain untrusted_foreign.")
+    require(preview.get("draft_status") == "preview_not_recorded", "draft_preview.draft_status must be preview_not_recorded.")
+    require(preview.get("attestation_status") == "not_created", "draft_preview.attestation_status must be not_created.")
+    require(preview.get("signature_status") == "not_created", "draft_preview.signature_status must be not_created.")
+    require(preview.get("would_change") == [], "draft_preview.would_change must be empty.")
+
+    preview_blockers = preview.get("blockers")
+    if not isinstance(preview_blockers, list):
+        blockers.append("draft_preview.blockers must be a list.")
+    elif preview_blockers:
+        blockers.append("draft_preview.blockers must be empty.")
+
+    preview_warnings = preview.get("warnings", [])
+    if preview_warnings is None:
+        preview_warnings = []
+    if not isinstance(preview_warnings, list):
+        blockers.append("draft_preview.warnings must be a list when present.")
+    elif preview_warnings:
+        warnings.append("draft_preview included warning metadata; the recorded statement draft remains untrusted.")
+
+    for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
+        if preview.get(flag) is not False:
+            blockers.append(f"draft_preview.{flag} must be false.")
+
+    case_id = preview.get("case_id")
+    safe_case_id = safe_foreign_quarantine_case_id(case_id if isinstance(case_id, str) else None)
+    if safe_case_id is None:
+        blockers.append("draft_preview.case_id must be a safe id.")
+
+    statement_style = preview.get("statement_style")
+    safe_statement_style = statement_style if isinstance(statement_style, str) and statement_style in FOREIGN_BLOCK_ATTESTATION_STATEMENT_STYLES else None
+    if safe_statement_style is None:
+        blockers.append("draft_preview.statement_style must be minimal, review_checklist, or human_readable.")
+
+    statement = preview.get("attestation_statement_draft")
+    if not isinstance(statement, dict):
+        blockers.append("draft_preview.attestation_statement_draft must be a populated object.")
+        statement = {}
+    else:
+        scan_foreign_quarantine_private_values(statement, blockers, "attestation_statement_draft", "attestation_statement_draft")
+        if value_contains_raw_review_note(statement):
+            blockers.append("attestation_statement_draft must not include raw review note body.")
+        require(statement.get("case_id") == safe_case_id, "attestation_statement_draft.case_id must match draft_preview.case_id.")
+        require(statement.get("draft_status") == "preview_not_recorded", "attestation_statement_draft.draft_status must be preview_not_recorded.")
+        require(statement.get("trust_state") == "untrusted_foreign", "attestation_statement_draft.trust_state must remain untrusted_foreign.")
+        require(statement.get("attestation_status") == "not_created", "attestation_statement_draft.attestation_status must be not_created.")
+        require(statement.get("signature_status") == "not_created", "attestation_statement_draft.signature_status must be not_created.")
+        require(statement.get("statement_style") == safe_statement_style, "attestation_statement_draft.statement_style must match draft_preview.statement_style.")
+        validate_attestation_statement_boundary_text(statement, blockers)
+
+    review_scope = statement.get("review_scope") if isinstance(statement.get("review_scope"), str) else None
+    if review_scope not in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES:
+        blockers.append("attestation_statement_draft.review_scope must be a supported attestation review scope.")
+        review_scope = None
+    expected_scope = preview.get("expected_review_scope")
+    if isinstance(expected_scope, str) and expected_scope in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_SCOPES and review_scope and expected_scope != review_scope:
+        blockers.append("draft_preview.expected_review_scope does not match attestation_statement_draft.review_scope.")
+
+    prospective_attestor = statement.get("prospective_attestor")
+    safe_attestor = safe_foreign_quarantine_actor_id(prospective_attestor) if isinstance(prospective_attestor, str) else None
+    if prospective_attestor is not None and safe_attestor is None:
+        blockers.append("attestation_statement_draft.prospective_attestor must be a safe actor id when present.")
+    preview_attestor = preview.get("prospective_attestor")
+    if isinstance(preview_attestor, str) and safe_foreign_quarantine_actor_id(preview_attestor) != safe_attestor:
+        blockers.append("draft_preview.prospective_attestor does not match attestation_statement_draft.prospective_attestor.")
+
+    candidate_summary = preview.get("candidate_summary")
+    if not isinstance(candidate_summary, dict):
+        blockers.append("draft_preview.candidate_summary must be an object.")
+        candidate_summary = {}
+    else:
+        scan_foreign_quarantine_private_values(candidate_summary, blockers, "candidate_summary", "candidate_summary")
+        if safe_case_id and candidate_summary.get("case_id") != safe_case_id:
+            blockers.append("draft_preview.candidate_summary.case_id must match draft_preview.case_id.")
+        if review_scope and candidate_summary.get("review_scope") != review_scope:
+            blockers.append("draft_preview.candidate_summary.review_scope must match attestation_statement_draft.review_scope.")
+        if candidate_summary.get("trust_state") != "untrusted_foreign":
+            blockers.append("draft_preview.candidate_summary.trust_state must remain untrusted_foreign.")
+        if candidate_summary.get("attestation_status") != "not_created":
+            blockers.append("draft_preview.candidate_summary.attestation_status must be not_created.")
+
+    return blockers, warnings, safe_case_id, review_scope, safe_attestor, safe_statement_style, json_safe(statement), sha256_json_hex(preview)
+
+
+def revalidate_attestation_statement_draft_current_state(
+    root: Path,
+    *,
+    case_id: str,
+    review_scope: str,
+    prospective_attestor: str | None,
+    statement_style: str,
+    supplied_preview: dict[str, Any],
+    supplied_statement: dict[str, Any],
+) -> tuple[list[str], list[str], str | None, str | None, str | None, str | None, str | None, str | None]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    current_preview = foreign_block_attestation_statement_draft_preview(
+        root,
+        case_id=case_id,
+        dry_run=True,
+        expected_review_scope=review_scope,
+        prospective_attestor=prospective_attestor,
+        statement_style=statement_style,
+    )
+    blockers.extend(str(item) for item in current_preview.get("blockers", []) if isinstance(item, str))
+    warnings.extend(str(item) for item in current_preview.get("warnings", []) if isinstance(item, str))
+    if current_preview.get("ok") is not True:
+        blockers.append("current archive state no longer supports the supplied attestation statement draft preview.")
+    if current_preview.get("draft_status") != "preview_not_recorded":
+        blockers.append("current draft preview status no longer matches the supplied draft preview.")
+    if current_preview.get("trust_state") != "untrusted_foreign":
+        blockers.append("current draft preview trust_state no longer matches the supplied draft preview.")
+    if current_preview.get("attestation_status") != "not_created":
+        blockers.append("current draft preview attestation_status no longer matches the supplied draft preview.")
+    if current_preview.get("signature_status") != "not_created":
+        blockers.append("current draft preview signature_status no longer matches the supplied draft preview.")
+
+    current_statement = current_preview.get("attestation_statement_draft")
+    if not isinstance(current_statement, dict):
+        blockers.append("current attestation statement draft could not be regenerated.")
+    elif sha256_json_hex(current_statement) != sha256_json_hex(supplied_statement):
+        blockers.append("draft_preview attestation_statement_draft no longer matches current archive state.")
+
+    stable_fields = ["case_id", "statement_style", "trust_state", "draft_status", "attestation_status", "signature_status"]
+    for field in stable_fields:
+        if current_preview.get(field) != supplied_preview.get(field):
+            blockers.append(f"draft_preview {field} no longer matches current archive state.")
+    if sha256_json_hex(current_preview.get("candidate_summary") or {}) != sha256_json_hex(supplied_preview.get("candidate_summary") or {}):
+        blockers.append("draft_preview candidate_summary no longer matches current archive state.")
+
+    paths = foreign_attestation_review_candidate_record_paths(case_id)
+    candidate_record_path = archive_internal_path(root, paths["candidate_record"])
+    candidate_receipt_path = archive_internal_path(root, paths["receipt"])
+    quarantine_case_path = archive_internal_path(root, f"quarantine/foreign-blocks/{case_id}/quarantine-case.json")
+    quarantine_receipt_path = archive_internal_path(root, foreign_quarantine_write_paths(case_id)["receipt"])
+    decision_paths = foreign_quarantine_decision_record_paths(case_id)
+    decision_record_path = archive_internal_path(root, decision_paths["decision_record"])
+    decision_receipt_path = archive_internal_path(root, decision_paths["receipt"])
+    for label, path in [
+        ("attestation review candidate record", candidate_record_path),
+        ("attestation review candidate receipt", candidate_receipt_path),
+        ("quarantine case", quarantine_case_path),
+        ("quarantine receipt", quarantine_receipt_path),
+        ("quarantine decision record", decision_record_path),
+        ("quarantine decision receipt", decision_receipt_path),
+    ]:
+        if not path.is_file():
+            blockers.append(f"current {label} is missing.")
+    return (
+        blockers,
+        warnings,
+        sha256_path(candidate_record_path) if candidate_record_path.is_file() else None,
+        sha256_path(candidate_receipt_path) if candidate_receipt_path.is_file() else None,
+        sha256_path(quarantine_case_path) if quarantine_case_path.is_file() else None,
+        sha256_path(quarantine_receipt_path) if quarantine_receipt_path.is_file() else None,
+        sha256_path(decision_record_path) if decision_record_path.is_file() else None,
+        sha256_path(decision_receipt_path) if decision_receipt_path.is_file() else None,
+    )
+
+
+def build_foreign_attestation_statement_draft_record(
+    *,
+    archive_id: str,
+    case_id: str,
+    review_scope: str,
+    prospective_attestor: str | None,
+    statement_style: str,
+    reviewed_by: str,
+    reviewed_at: str,
+    draft_preview_sha256: str,
+    candidate_record_sha256: str,
+    candidate_receipt_sha256: str,
+    quarantine_case_sha256: str,
+    quarantine_receipt_sha256: str,
+    quarantine_decision_sha256: str,
+    decision_receipt_sha256: str,
+    statement: dict[str, Any],
+    source_review_note_summary: dict[str, Any],
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "lifecycle_action": "foreign_block_attestation_statement_draft_record",
+        "archive_id": archive_id,
+        "case_id": case_id,
+        "draft_record_status": "recorded_untrusted_statement_draft",
+        "trust_state": "untrusted_foreign",
+        "attestation_status": "not_created",
+        "signature_status": "not_created",
+        "review_scope": review_scope,
+        "prospective_attestor": prospective_attestor,
+        "statement_style": statement_style,
+        "reviewed_by": reviewed_by,
+        "reviewed_at": reviewed_at,
+        "source_draft_preview_sha256": draft_preview_sha256,
+        "source_attestation_review_candidate_sha256": candidate_record_sha256,
+        "source_attestation_review_candidate_receipt_sha256": candidate_receipt_sha256,
+        "source_quarantine_case_sha256": quarantine_case_sha256,
+        "source_quarantine_receipt_sha256": quarantine_receipt_sha256,
+        "source_quarantine_decision_sha256": quarantine_decision_sha256,
+        "source_decision_receipt_sha256": decision_receipt_sha256,
+        "source_review_note_summary": json_safe(source_review_note_summary),
+        "statement_title": statement.get("statement_title"),
+        "statement_lines": json_safe(statement.get("statement_lines") if isinstance(statement.get("statement_lines"), list) else []),
+        "explicit_non_claims": json_safe(statement.get("explicit_non_claims") if isinstance(statement.get("explicit_non_claims"), list) else []),
+        "evidence_references": json_safe(statement.get("evidence_references") if isinstance(statement.get("evidence_references"), list) else []),
+        "required_human_checks": json_safe(statement.get("required_human_checks") if isinstance(statement.get("required_human_checks"), list) else []),
+        "disallowed_actions": json_safe(statement.get("disallowed_actions") if isinstance(statement.get("disallowed_actions"), list) else []),
+        "next_safe_actions": json_safe(statement.get("next_safe_actions") if isinstance(statement.get("next_safe_actions"), list) else []),
+        "no_original_foreign_body_text_copied": True,
+        "no_provider_api_called": True,
+        "no_trust_granted": True,
+        "no_attestation_created": True,
+        "no_signature_created": True,
+        "block_shared_through_ZET": False,
+    }
+    for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
+        record[flag] = False
+    return json_safe(record)
+
+
+def build_foreign_attestation_statement_draft_receipt(
+    *,
+    archive_id: str,
+    case_id: str,
+    review_scope: str,
+    statement_style: str,
+    reviewed_by: str,
+    reviewed_at: str,
+    files_written: list[str],
+    draft_preview_sha256: str,
+    candidate_record_sha256: str,
+    candidate_receipt_sha256: str,
+    quarantine_case_sha256: str,
+    quarantine_receipt_sha256: str,
+    quarantine_decision_sha256: str,
+    decision_receipt_sha256: str,
+) -> dict[str, Any]:
+    receipt: dict[str, Any] = {
+        "lifecycle_action": "foreign_block_attestation_statement_draft_write",
+        "receipt_kind": "foreign_block_attestation_statement_draft",
+        "archive_id": archive_id,
+        "case_id": case_id,
+        "review_scope": review_scope,
+        "statement_style": statement_style,
+        "draft_record_status": "recorded_untrusted_statement_draft",
+        "attestation_status": "not_created",
+        "signature_status": "not_created",
+        "reviewed_by": reviewed_by,
+        "reviewed_at": reviewed_at,
+        "trust_state": "untrusted_foreign",
+        "files_written": list(files_written),
+        "source_draft_preview_sha256": draft_preview_sha256,
+        "source_attestation_review_candidate_sha256": candidate_record_sha256,
+        "source_attestation_review_candidate_receipt_sha256": candidate_receipt_sha256,
+        "source_quarantine_case_sha256": quarantine_case_sha256,
+        "source_quarantine_receipt_sha256": quarantine_receipt_sha256,
+        "source_quarantine_decision_sha256": quarantine_decision_sha256,
+        "source_decision_receipt_sha256": decision_receipt_sha256,
+        "statement_draft_recorded": True,
+        "trust_granted": False,
+        "no_trust_granted": True,
+        "no_attestation_created": True,
+        "no_signature_created": True,
+        "no_original_foreign_body_text_copied": True,
+        "no_provider_api_called": True,
+        "block_shared_through_ZET": False,
+    }
+    for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
+        receipt[flag] = False
+    return json_safe(receipt)
+
+
+def record_attestation_statement_draft(
+    archive_root: Path | str,
+    *,
+    draft_preview_path: str | None = None,
+    draft_preview: dict[str, Any] | None = None,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+    locator_count = sum(1 for item in [draft_preview_path, draft_preview] if item is not None)
+    if locator_count != 1:
+        blockers.append("Exactly one attestation statement draft preview source is required.")
+
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    if approve and not reviewer:
+        blockers.append("Approved attestation statement draft write requires --reviewed-by with a safe actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    loaded_preview = draft_preview
+    if draft_preview_path is not None and not blockers:
+        loaded_preview = load_attestation_statement_draft_preview_from_path(root, draft_preview_path, blockers)
+
+    if blockers:
+        return record_attestation_statement_draft_empty_result(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            blockers=blockers,
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewed_by,
+        )
+
+    if not isinstance(loaded_preview, dict):
+        return record_attestation_statement_draft_empty_result(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            blockers=["draft_preview JSON must be an object."],
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewed_by,
+        )
+
+    (
+        preview_blockers,
+        preview_warnings,
+        case_id,
+        review_scope,
+        prospective_attestor,
+        statement_style,
+        statement,
+        draft_preview_sha256,
+    ) = validate_attestation_statement_draft_preview(archive_id, loaded_preview)
+    blockers.extend(preview_blockers)
+    warnings.extend(preview_warnings)
+
+    candidate_record_sha256: str | None = None
+    candidate_receipt_sha256: str | None = None
+    quarantine_case_sha256: str | None = None
+    quarantine_receipt_sha256: str | None = None
+    quarantine_decision_sha256: str | None = None
+    decision_receipt_sha256: str | None = None
+    if case_id and review_scope and statement_style:
+        (
+            current_blockers,
+            current_warnings,
+            candidate_record_sha256,
+            candidate_receipt_sha256,
+            quarantine_case_sha256,
+            quarantine_receipt_sha256,
+            quarantine_decision_sha256,
+            decision_receipt_sha256,
+        ) = revalidate_attestation_statement_draft_current_state(
+            root,
+            case_id=case_id,
+            review_scope=review_scope,
+            prospective_attestor=prospective_attestor,
+            statement_style=statement_style,
+            supplied_preview=loaded_preview,
+            supplied_statement=statement,
+        )
+        blockers.extend(current_blockers)
+        warnings.extend(current_warnings)
+
+    if case_id:
+        proposed_paths = foreign_attestation_statement_draft_record_paths(case_id)
+        validate_foreign_quarantine_paths(proposed_paths, blockers)
+        record_path = archive_internal_path(root, proposed_paths["statement_draft_record"])
+        receipt_path = archive_internal_path(root, proposed_paths["receipt"])
+        if record_path.exists():
+            blockers.append("attestation statement draft record already exists.")
+        if receipt_path.exists():
+            blockers.append("attestation statement draft receipt already exists.")
+    else:
+        proposed_paths = {}
+
+    if blockers:
+        return record_attestation_statement_draft_empty_result(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            blockers=blockers,
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewed_by,
+            case_id=case_id,
+            review_scope=review_scope,
+            prospective_attestor=prospective_attestor,
+            statement_style=statement_style,
+        )
+
+    required_replay_values = [
+        case_id,
+        review_scope,
+        statement_style,
+        candidate_record_sha256,
+        candidate_receipt_sha256,
+        quarantine_case_sha256,
+        quarantine_receipt_sha256,
+        quarantine_decision_sha256,
+        decision_receipt_sha256,
+    ]
+    if any(value is None for value in required_replay_values):
+        return record_attestation_statement_draft_empty_result(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            blockers=["Attestation statement draft write could not prepare safe replay values."],
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewed_by,
+            case_id=case_id,
+            review_scope=review_scope,
+            prospective_attestor=prospective_attestor,
+            statement_style=statement_style,
+        )
+
+    assert case_id is not None
+    assert review_scope is not None
+    assert statement_style is not None
+    assert candidate_record_sha256 is not None
+    assert candidate_receipt_sha256 is not None
+    assert quarantine_case_sha256 is not None
+    assert quarantine_receipt_sha256 is not None
+    assert quarantine_decision_sha256 is not None
+    assert decision_receipt_sha256 is not None
+
+    files = [proposed_paths["statement_draft_record"], proposed_paths["receipt"]]
+    record_reviewed_by = reviewer or "required_on_approve"
+    reviewed_at = (
+        "<approval-time>"
+        if dry_run
+        else datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    )
+    source_review_note_summary = (
+        loaded_preview.get("review_note_summary")
+        if isinstance(loaded_preview.get("review_note_summary"), dict)
+        else {}
+    )
+    draft_record = build_foreign_attestation_statement_draft_record(
+        archive_id=archive_id,
+        case_id=case_id,
+        review_scope=review_scope,
+        prospective_attestor=prospective_attestor,
+        statement_style=statement_style,
+        reviewed_by=record_reviewed_by,
+        reviewed_at=reviewed_at,
+        draft_preview_sha256=draft_preview_sha256,
+        candidate_record_sha256=candidate_record_sha256,
+        candidate_receipt_sha256=candidate_receipt_sha256,
+        quarantine_case_sha256=quarantine_case_sha256,
+        quarantine_receipt_sha256=quarantine_receipt_sha256,
+        quarantine_decision_sha256=quarantine_decision_sha256,
+        decision_receipt_sha256=decision_receipt_sha256,
+        statement=statement,
+        source_review_note_summary=source_review_note_summary,
+    )
+    draft_receipt = build_foreign_attestation_statement_draft_receipt(
+        archive_id=archive_id,
+        case_id=case_id,
+        review_scope=review_scope,
+        statement_style=statement_style,
+        reviewed_by=record_reviewed_by,
+        reviewed_at=reviewed_at,
+        files_written=files,
+        draft_preview_sha256=draft_preview_sha256,
+        candidate_record_sha256=candidate_record_sha256,
+        candidate_receipt_sha256=candidate_receipt_sha256,
+        quarantine_case_sha256=quarantine_case_sha256,
+        quarantine_receipt_sha256=quarantine_receipt_sha256,
+        quarantine_decision_sha256=quarantine_decision_sha256,
+        decision_receipt_sha256=decision_receipt_sha256,
+    )
+    post_build_blockers: list[str] = []
+    scan_foreign_quarantine_private_values(draft_record, post_build_blockers, "attestation_statement_draft_record", "attestation_statement_draft_record")
+    scan_foreign_quarantine_private_values(draft_receipt, post_build_blockers, "attestation_statement_draft_receipt", "attestation_statement_draft_receipt")
+    validate_attestation_statement_boundary_text(draft_record, post_build_blockers)
+    if post_build_blockers:
+        return record_attestation_statement_draft_empty_result(
+            archive_id=archive_id,
+            dry_run=dry_run,
+            blockers=post_build_blockers,
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewed_by,
+            case_id=case_id,
+            review_scope=review_scope,
+            prospective_attestor=prospective_attestor,
+            statement_style=statement_style,
+        )
+
+    if dry_run:
+        result = {
+            "ok": True,
+            "dry_run": True,
+            "lifecycle_action": "record_attestation_statement_draft",
+            "archive_id": archive_id,
+            "approval_required": True,
+            "approved": False,
+            "reviewed_by": reviewer,
+            "trust_state": "untrusted_foreign",
+            "draft_record_status": "not_recorded",
+            "attestation_status": "not_created",
+            "signature_status": "not_created",
+            "case_id": case_id,
+            "review_scope": review_scope,
+            "prospective_attestor": prospective_attestor,
+            "statement_style": statement_style,
+            "proposed_paths": proposed_paths,
+            "files_written": [],
+            "attestation_statement_draft_record_preview": draft_record,
+            "attestation_statement_draft_receipt_preview": draft_receipt,
+            "blockers": [],
+            "warnings": unique_preserve_order(warnings),
+            "would_change": files,
+        }
+        for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
+            result[flag] = False
+        return json_safe(result)
+
+    record_path = archive_internal_path(root, proposed_paths["statement_draft_record"])
+    receipt_path = archive_internal_path(root, proposed_paths["receipt"])
+    created_paths: list[Path] = []
+    created_dirs = missing_parent_dirs_before_write(root, [record_path, receipt_path])
+    try:
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_new_file(record_path, draft_record)
+        created_paths.append(record_path)
+        write_json_new_file(receipt_path, draft_receipt)
+        created_paths.append(receipt_path)
+    except Exception:
+        for created_path in reversed(created_paths):
+            try:
+                if created_path.exists():
+                    created_path.unlink()
+            except OSError:
+                pass
+        cleanup_created_empty_dirs(root, created_dirs)
+        return record_attestation_statement_draft_empty_result(
+            archive_id=archive_id,
+            dry_run=False,
+            blockers=["Attestation statement draft write failed and any partial files were rolled back."],
+            warnings=warnings,
+            approved=True,
+            reviewed_by=reviewed_by,
+            case_id=case_id,
+            review_scope=review_scope,
+            prospective_attestor=prospective_attestor,
+            statement_style=statement_style,
+        )
+
+    result = {
+        "ok": True,
+        "dry_run": False,
+        "lifecycle_action": "record_attestation_statement_draft",
+        "archive_id": archive_id,
+        "approval_required": False,
+        "approved": True,
+        "reviewed_by": reviewer,
+        "reviewed_at": reviewed_at,
+        "trust_state": "untrusted_foreign",
+        "draft_record_status": "recorded_untrusted_statement_draft",
+        "attestation_status": "not_created",
+        "signature_status": "not_created",
+        "case_id": case_id,
+        "review_scope": review_scope,
+        "prospective_attestor": prospective_attestor,
+        "statement_style": statement_style,
+        "files_written": files,
+        "blockers": [],
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+        "attestation_statement_draft_record": draft_record,
+        "attestation_statement_draft_receipt": draft_receipt,
     }
     for flag in FOREIGN_BLOCK_ATTESTATION_REVIEW_CANDIDATE_FALSE_FLAGS:
         result[flag] = False

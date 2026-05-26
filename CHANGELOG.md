@@ -4,6 +4,26 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.42 - 2026-05-26
+
+Foreign block attestation statement draft write approval patch.
+
+Added:
+
+- `archive record-attestation-statement-draft <archive-root> --draft-preview <json-file> --dry-run --format json`,
+- CLI-only `--approve --reviewed-by <safe-actor-id>` to record a local statement draft record and matching receipt,
+- read-only MCP `record_attestation_statement_draft_check`,
+- stale/tamper checks that treat the v0.2.41 draft preview JSON as untrusted input and revalidate current candidate, receipt, quarantine, and decision state before any write,
+- rollback-safe exclusive creation for exactly two files: `attestation-statement-draft.json` and its quarantine receipt.
+
+Compatibility:
+
+- no private archive migration is required,
+- dry-run writes nothing and approve writes exactly one statement draft record plus one receipt,
+- approved records stay `untrusted_foreign`, with `attestation_status: not_created` and `signature_status: not_created`,
+- recording the statement draft does not create trust, import, attestation, signatures, minting, sharing, provider calls, ZET transport, acceptance, or apply behavior,
+- MCP remains read-only and exposes no statement draft approve/write/apply, foreign block attest/sign/trust/import/accept, mint, anchor, provider sync, or full-auto tool.
+
 ## v0.2.41 - 2026-05-26
 
 Foreign block attestation statement draft preview patch.

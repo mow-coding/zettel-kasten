@@ -18,7 +18,7 @@ If the user asks about wallet-like identity, signing authority, capability autho
 archive profile-wallet <archive-root> --profile <profile-id-or-label> --dry-run --format json
 ```
 
-Treat the result as concept/readiness context only. v0.2.41 does not generate private keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
+Treat the result as concept/readiness context only. v0.2.42 does not generate private keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
 
 When external text from a source, provider export, foreign zet/block, receipt, or copied document may influence the next action, run:
 
@@ -211,6 +211,15 @@ archive attestation-statement-draft <archive-root> --case-id <safe-id> --dry-run
 
 The statement draft is not an attestation. It is not trust, signing, import, minting, a receipt write, or ZET transport. It must label hash commitments as not proof of authenticity. MCP may only run `foreign_block_attestation_statement_draft_preview`; it must not expose statement write/apply, foreign block attest/sign/trust/import/accept, receipt-write, or full-auto tools.
 
+After human/operator review, the CLI may record only the untrusted statement draft record and receipt:
+
+```bash
+archive record-attestation-statement-draft <archive-root> --draft-preview <json-file> --dry-run --format json
+archive record-attestation-statement-draft <archive-root> --draft-preview <json-file> --approve --reviewed-by <safe-actor-id> --format json
+```
+
+This is still not an attestation or signature. MCP may only run `record_attestation_statement_draft_check`; it must not approve, write, apply, attest, sign, trust, import, mint, anchor, sync providers, or run full-auto tools.
+
 ## Read The Result
 
 Continue only when:
@@ -244,6 +253,7 @@ Prefer these actions:
 - run attestation-review-candidate dry-run only after an eligible decision outcome, without creating attestations,
 - run attestation-candidate-review to inventory recorded candidates without accepting or applying them,
 - run attestation-statement-draft dry-run only as a non-binding statement preview,
+- use CLI-only record-attestation-statement-draft approval only after human/operator statement-draft-record approval; MCP remains check-only,
 - create approved draft in inbox,
 - run mint dry-run,
 - run check-safe-html dry-run,
@@ -280,6 +290,7 @@ Do not:
 - treat attestation-review-candidate as trust, import, mint, attestation, signature, anchor, delegation, execution, acceptance, apply approval, or a write path,
 - treat attestation-candidate-review as trust, import, mint, attestation, signature, anchor, delegation, execution, acceptance, apply approval, or a write path,
 - treat attestation-statement-draft as trust, import, mint, attestation, signature, receipt write, anchor, delegation, execution, acceptance, apply approval, or a write path,
+- treat record-attestation-statement-draft as trust, import, mint, attestation, signature, anchor, delegation, execution, acceptance, apply approval, or ZET transport,
 - expose foreign block apply/import/trust/quarantine write/attest/receipt/auto-accept/full-auto behavior through MCP,
 - expose foreign block quarantine review apply/accept behavior through MCP,
 - expose foreign block quarantine decision apply/write/accept behavior through MCP,
@@ -288,6 +299,7 @@ Do not:
 - expose foreign block attestation review candidate apply/write/accept/sign/attest behavior through MCP,
 - expose foreign block attestation review candidate index apply/write/accept/trust/import/attest/sign behavior through MCP,
 - expose foreign block attestation statement draft write/apply/accept/trust/import/attest/sign behavior through MCP,
+- expose record attestation statement draft approve/write/apply behavior through MCP,
 - implement token, coin, NFT, staking, relay, transport, or provider mutation behavior,
 - treat "upload" or "post" language as mint approval,
 - create a profile-bound AI draft without `draft_approved_by` and `expected_body_sha256`,

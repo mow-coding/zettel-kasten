@@ -49,6 +49,8 @@ Commands:
           List and validate recorded foreign block attestation review candidates.
   attestation-statement-draft
           Preview a non-binding attestation statement draft for one recorded candidate.
+  record-attestation-statement-draft
+          Preview or approve recording that statement draft without attesting or signing.
   init    Create a new archive from a built-in template.
   index   Build a generated local SQLite search index.
   parcel Create a portable parcel from a view. Alias: pack.
@@ -2186,6 +2188,45 @@ def command_attestation_statement_draft(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_record_attestation_statement_draft(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.record_attestation_statement_draft(
+            Path(args.archive_root),
+            draft_preview_path=args.draft_preview,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Foreign block attestation statement draft record: {result.get('draft_record_status') or '-'}")
+        print(f"Trust state: {result.get('trust_state') or '-'}")
+        print(f"Attestation status: {result.get('attestation_status') or '-'}")
+        print(f"Signature status: {result.get('signature_status') or '-'}")
+        if result.get("proposed_paths"):
+            print("Proposed paths:")
+            for key, value in result["proposed_paths"].items():
+                print(f"- {key}: {value}")
+        if result.get("files_written"):
+            print("Files written:")
+            for value in result["files_written"]:
+                print(f"- {value}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok") else 1
+
+
 def command_promote(args: argparse.Namespace) -> int:
     if args.dry_run:
         try:
@@ -4308,6 +4349,22 @@ def build_parser() -> argparse.ArgumentParser:
     attestation_statement_draft.add_argument("--review-note", help="Optional short non-secret operator note. Only summary metadata is returned.")
     attestation_statement_draft.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     attestation_statement_draft.set_defaults(func=command_attestation_statement_draft)
+
+    record_attestation_statement_draft = subcommands.add_parser(
+        "record-attestation-statement-draft",
+        help="Preview or approve recording a local attestation statement draft without attesting.",
+    )
+    record_attestation_statement_draft.add_argument("archive_root", help="Archive root used for path safety and local context.")
+    record_attestation_statement_draft.add_argument(
+        "--draft-preview",
+        required=True,
+        help="Archive-relative JSON output from attestation-statement-draft --dry-run --format json.",
+    )
+    record_attestation_statement_draft.add_argument("--dry-run", action="store_true", help="Preview the two-file statement draft record write.")
+    record_attestation_statement_draft.add_argument("--approve", action="store_true", help="Approve writing the local statement draft record and receipt.")
+    record_attestation_statement_draft.add_argument("--reviewed-by", help="Safe actor id approving the statement draft record.")
+    record_attestation_statement_draft.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    record_attestation_statement_draft.set_defaults(func=command_record_attestation_statement_draft)
 
     create_draft = subcommands.add_parser("create-draft", help="Create a draft zettel in inbox/.")
     create_draft.add_argument("archive_root", help="Archive root to write to.")

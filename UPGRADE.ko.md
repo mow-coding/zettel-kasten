@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.41` | current public pre-release | `wom-kit/docs/releases/v0.2.41.md` |
+| `v0.2.42` | current public pre-release | `wom-kit/docs/releases/v0.2.42.md` |
+| `v0.2.41` | superseded public pre-release | `wom-kit/docs/releases/v0.2.41.md` |
 | `v0.2.40` | superseded public pre-release | `wom-kit/docs/releases/v0.2.40.md` |
 | `v0.2.39` | superseded public pre-release | `wom-kit/docs/releases/v0.2.39.md` |
 | `v0.2.38` | superseded public pre-release | `wom-kit/docs/releases/v0.2.38.md` |
@@ -68,6 +69,21 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.41` To `v0.2.42`
+
+This is a compatible foreign block attestation statement draft write approval patch.
+
+What changed:
+
+- added `archive record-attestation-statement-draft <archive-root> --draft-preview <json-file> --dry-run --format json`,
+- added CLI-only `--approve --reviewed-by <safe-actor-id>` to record the statement draft and matching receipt,
+- added read-only MCP `record_attestation_statement_draft_check`,
+- added stale/tamper checks that revalidate the current candidate, candidate receipt, quarantine case/receipt, and decision record/receipt before writing.
+
+No private archive migration is required.
+
+Dry-run writes nothing. Approved mode writes exactly two local files and keeps the foreign block untrusted. It does not create trust, import, attestation, signature, mint, acceptance, sharing, provider calls, or ZET transport.
 
 ## From `v0.2.40` To `v0.2.41`
 

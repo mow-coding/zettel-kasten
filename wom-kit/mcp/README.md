@@ -143,6 +143,9 @@ foreign_block_attestation_review_candidate_index
 foreign_block_attestation_statement_draft_preview
   Read-only non-binding statement draft preview for one recorded attestation review candidate. It re-reads current candidate, receipt, quarantine, and decision state, writes nothing, and never creates trust, import, attestation, signatures, receipts, minting, sharing, provider calls, or ZET transport.
 
+record_attestation_statement_draft_check
+  Read-only dry-run check for the CLI-only attestation statement draft record write. It validates a draft preview and current candidate/quarantine/decision state, returns the two paths an approved CLI command would write, and writes nothing.
+
 create_draft_zettel
   Create an AI draft in inbox/. `dry_run: true` previews the draft path, frontmatter, body hash, blockers, warnings, and approval replay values without writing. It may consume structured `source_intake_plan` and `prompt_boundary_report` objects and merge validated metadata into the draft preview. Normal profile-bound AI writes require draft approval plus expected body hash replay values. This does not mint the zettel.
 
@@ -235,6 +238,7 @@ ownership_transfer_check
 - `record_attestation_review_candidate_check` is read-only and writes nothing. Approved attestation review candidate recording is CLI-only and requires `--approve --reviewed-by`; MCP exposes no candidate approve/write/apply/accept/import/trust/attest/sign/receipt-write/full-auto tool.
 - `foreign_block_attestation_review_candidate_index` is read-only and writes nothing. Its filters do not relax consistency validation, and included receipt summaries are sanitized. MCP rejects any `dry_run` value other than boolean `true` and exposes no candidate review apply, write, approve, accept, import, trust, attest, sign, receipt write, auto-accept, auto-import, transport, or full-auto tool.
 - `foreign_block_attestation_statement_draft_preview` is read-only and writes nothing. MCP rejects any `dry_run` value other than boolean `true` and exposes no statement draft write/apply, foreign block attest/sign/trust/import/accept, receipt write, auto-accept, auto-import, transport, or full-auto tool.
+- `record_attestation_statement_draft_check` is read-only and writes nothing. Approved attestation statement draft recording is CLI-only and requires `--approve --reviewed-by`; MCP exposes no statement draft approve/write/apply, foreign block attest/sign/trust/import/accept, mint, anchor, provider sync, or full-auto tool.
 - `create_draft_zettel` accepts a structured `source_intake_plan` object, not a local plan file path. The plan must be a successful dry-run, blocker-free, metadata-only source intake result before refs are merged.
 - `archive_index` writes only the generated search map at `db/archive-index.sqlite`.
 - `archive_onboarding_plan` previews first setup but does not create archive folders, provider bindings, or `.env` files.

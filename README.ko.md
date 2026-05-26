@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.2.41 pre-release
+v0.2.42 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -67,6 +67,7 @@ v0.2.41 pre-release
 - `record-attestation-review-candidate --approve --reviewed-by`는 replay validation 뒤 untrusted candidate JSON 하나와 receipt 하나만 기록합니다. trust, import, attest, sign, mint, share, provider call, ZET transport는 하지 않습니다.
 - `attestation-candidate-review`는 recorded untrusted candidate와 candidate receipt, original quarantine case/receipt, decision record/receipt를 read-only index로 확인합니다. trust, import, attest, sign, mint, share, provider call, ZET transport는 하지 않습니다.
 - `attestation-statement-draft`는 recorded candidate 하나에서 non-binding statement draft만 read-only preview로 만듭니다. trust, import, attest, sign, mint, receipt write, share, provider call, ZET transport는 하지 않습니다.
+- `record-attestation-statement-draft --approve --reviewed-by`는 replay validation 후 untrusted statement draft JSON 하나와 receipt 하나만 기록합니다. 여전히 trust, import, attestation, signature, mint, share, provider call, ZET transport는 만들지 않습니다.
 
 아직 없는 것:
 
@@ -205,6 +206,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.42
 v0.2.41
 v0.2.40
 v0.2.39

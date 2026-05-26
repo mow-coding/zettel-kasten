@@ -711,6 +711,20 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "record_attestation_statement_draft_check",
+        "description": "Read-only dry-run check for a CLI-only local attestation statement draft record write.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "path": {"type": "string"},
+                "draft_preview": {"type": "object"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "create_draft_zettel",
         "description": "Create an AI draft zettel in inbox/. This does not mint to canonical memory.",
         "inputSchema": {
@@ -1055,6 +1069,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_foreign_block_attestation_review_candidate_index(arguments)
     if name == "foreign_block_attestation_statement_draft_preview":
         return tool_foreign_block_attestation_statement_draft_preview(arguments)
+    if name == "record_attestation_statement_draft_check":
+        return tool_record_attestation_statement_draft_check(arguments)
     if name == "create_draft_zettel":
         return tool_create_draft_zettel(arguments)
     if name == "list_views":
@@ -1825,6 +1841,29 @@ def tool_foreign_block_attestation_statement_draft_preview(arguments: dict[str, 
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"foreign_block_attestation_statement_draft_preview: {state}.", result)
+
+
+def tool_record_attestation_statement_draft_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("record_attestation_statement_draft_check is dry-run only.")
+    if arguments.get("approve") is not None:
+        raise ToolError("record_attestation_statement_draft_check does not approve or write.")
+    draft_preview = arguments.get("draft_preview")
+    if draft_preview is not None and not isinstance(draft_preview, dict):
+        raise ToolError("draft_preview must be a structured object.")
+    path = optional_string_arg(arguments, "path")
+    result = call_service(
+        archive_services.record_attestation_statement_draft,
+        archive_root,
+        draft_preview_path=path,
+        draft_preview=draft_preview,
+        dry_run=True,
+        approve=False,
+        reviewed_by=None,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"record_attestation_statement_draft_check: {state}.", result)
 
 
 def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:

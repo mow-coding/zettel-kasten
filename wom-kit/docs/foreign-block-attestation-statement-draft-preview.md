@@ -1,6 +1,6 @@
 # Foreign Block Attestation Statement Draft Preview
 
-Status: v0.2.41 baseline
+Status: v0.2.41 baseline, with v0.2.42 record path
 
 ## Principle
 
@@ -117,7 +117,28 @@ MCP does not expose statement draft write/apply, foreign block attest, sign, tru
 
 v0.2.41 does not implement:
 
-- attestation statement writes,
+- attestation creation,
+- signature creation,
+- real attestation statement writes,
+- real trust/apply/import,
+- foreign block import,
+- minting from foreign blocks,
+- anchoring,
+- delegation,
+- real ZET transport,
+- payment,
+- staking,
+- consensus,
+- blockchain,
+- provider sync,
+- OCR,
+- LLM classification,
+- full-auto execution.
+
+v0.2.42 adds a separate CLI-only `record-attestation-statement-draft` approval path that records only the local untrusted statement draft JSON and matching receipt. That record path still does not create attestation, signature, trust, import, minting, sharing, provider calls, or ZET transport.
+
+v0.2.42 still does not implement:
+
 - attestation creation,
 - signature creation,
 - candidate acceptance,
