@@ -4,6 +4,26 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.52 - 2026-05-27
+
+Public privacy hygiene checker patch.
+
+Added:
+
+- local `wom-kit/tools/check_public_privacy.py` checker for public release and documentation privacy hygiene,
+- unit tests for local user-home paths, token-like strings, private key headers, seed-phrase-like text, private/local endpoint examples, placeholder allowances, current-repository pass behavior, and network-free checker scope,
+- documentation, release note, and public-safe work log for the v0.2.52 checker batch.
+
+Compatibility:
+
+- no private archive migration is required,
+- no archive product CLI or MCP behavior changed,
+- the checker reads local Git-known public text files only,
+- no files are rewritten automatically,
+- no external URLs are fetched,
+- no private archives, provider APIs, GitHub Releases, or full-disk locations are inspected or changed,
+- no real ZET transport, RF access, key-sharing registry, mirroring delivery, trust/import/acceptance/anchor, attestation/signature write, provider sync, WordPress publishing, projection write/receipt, recommendation fetching/ranking/feed update, workers, payments, staking, consensus, blockchain, model training, backpropagation, or full-auto behavior is implemented.
+
 ## v0.2.51 - 2026-05-27
 
 Korean product-language hygiene checker patch.
