@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.54 pre-release
+v0.2.55 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -76,6 +76,7 @@ What exists today:
 - read-only `projection-plan` previews that consider one local zet and one operator-declared surface kind before any rendering, provider call, projection write, receipt write, publication, minting, trust, attestation, signature, or ZET transport.
 - ZET closed sharing model baseline docs and sanitized examples that clarify the future closed sharing/SNS layer above GitHub/object-storage/DB base infrastructure.
 - ZET radio-frequency recommendation model docs and sanitized examples that separate followed/neighbor feeds from future recommended/broadcast feeds and keep selector logic user/node-owned and inspectable.
+- ZET shared update record baseline docs and a sanitized non-executable example for future receiver-side review before local renewal.
 - public release link hygiene checker that catches repository links likely to break when release notes are copied into GitHub Release bodies.
 - Korean product-language baseline for explaining WOM as `옴`, `zet` as `쪽글`/`토막글`, `ZET` as `공유 계층`, and key lifecycle/safety/sharing terms without renaming code identifiers.
 - Korean product-language hygiene checker that catches accidental public documentation drift from the baseline without rewriting files, renaming code identifiers, fetching external URLs, or adding product behavior.
@@ -124,6 +125,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Korean Product Language Baseline](wom-kit/docs/concepts/korean-product-language-baseline.ko.md)
 - [Korean Product Language Hygiene](wom-kit/docs/korean-product-language-hygiene.md)
 - [ZET Radio-Frequency Recommendation Model](wom-kit/docs/zet-radio-frequency-recommendation-model.md)
+- [ZET Shared Update Record Baseline](wom-kit/docs/zet-shared-update-record-baseline.md)
 - [Public Release Link Hygiene](wom-kit/docs/public-release-link-hygiene.md)
 - [Public Privacy Hygiene](wom-kit/docs/public-privacy-hygiene.md)
 - [Release Readiness Gate](wom-kit/docs/release-readiness-gate.md)
@@ -233,6 +235,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.55
 v0.2.54
 v0.2.53
 v0.2.52

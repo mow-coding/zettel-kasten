@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.2.54 pre-release
+v0.2.55 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -75,6 +75,7 @@ v0.2.54 pre-release
 - 공개 릴리스 전에 local path, token-like string, private key header, seed-phrase-like text, private endpoint가 섞였는지 로컬에서 읽기 전용으로 검사하는 public privacy hygiene checker가 있습니다.
 - 공개 릴리스 전 public hygiene checker들을 한 번에 돌리는 local release readiness gate가 있습니다.
 - future CI/status check/branch protection으로 가기 위한 main branch protection readiness 문서가 있습니다. 아직 GitHub 설정을 바꾸지는 않습니다.
+- future receiver-side renewal review를 위한 ZET shared update record baseline 문서와 public-safe example이 있습니다. 실제 ZET transport는 구현하지 않습니다.
 
 아직 없는 것:
 
@@ -113,6 +114,7 @@ v0.2.54 pre-release
 - [Public Privacy Hygiene](wom-kit/docs/public-privacy-hygiene.md)
 - [Release Readiness Gate](wom-kit/docs/release-readiness-gate.md)
 - [Main Branch Protection Readiness](wom-kit/docs/main-branch-protection-readiness.md)
+- [ZET Shared Update Record Baseline](wom-kit/docs/zet-shared-update-record-baseline.md)
 - [공개 문서 지도](wom-kit/docs/public-documentation-map.ko.md)
 
 공개 프로젝트 기록은 의도적으로 다음처럼 분리합니다.
@@ -218,6 +220,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.55
 v0.2.54
 v0.2.53
 v0.2.52

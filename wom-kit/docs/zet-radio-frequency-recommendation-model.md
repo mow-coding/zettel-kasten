@@ -121,6 +121,8 @@ central opaque ranking never as the hidden default
 
 This keeps WOM centered on subject-owned memory and explainable circulation rather than platform-owned attention routing.
 
+v0.2.55 extends the surrounding ZET sharing vocabulary with the [ZET Shared Update Record Baseline](zet-shared-update-record-baseline.md), a future receiver-side review artifact before local renewal. It still does not fetch recommendations, update feeds, transport shared zets, or create trust.
+
 ## Non-Goals
 
 v0.2.48 does not:

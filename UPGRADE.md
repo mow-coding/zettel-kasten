@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.54` | current public pre-release | `wom-kit/docs/releases/v0.2.54.md` |
+| `v0.2.55` | current public pre-release | `wom-kit/docs/releases/v0.2.55.md` |
+| `v0.2.54` | superseded public pre-release | `wom-kit/docs/releases/v0.2.54.md` |
 | `v0.2.53` | superseded public pre-release | `wom-kit/docs/releases/v0.2.53.md` |
 | `v0.2.52` | superseded public pre-release | `wom-kit/docs/releases/v0.2.52.md` |
 | `v0.2.51` | superseded public pre-release | `wom-kit/docs/releases/v0.2.51.md` |
@@ -81,6 +82,20 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.54` To `v0.2.55`
+
+This is a compatible ZET shared update record baseline documentation/example patch.
+
+What changed:
+
+- added `wom-kit/docs/zet-shared-update-record-baseline.md`,
+- added a sanitized non-executable example at `wom-kit/examples/zet-shared-update-record/shared-update.example.json`,
+- updated version metadata to `0.2.55`.
+
+No private archive migration is required.
+
+This release adds no archive product CLI or MCP behavior. It does not add shared-update transport, real ZET transport, RF access, key-sharing registry, mirroring delivery, neighbor feed update, automatic feed renewal, recommendation execution, trust/import/acceptance/anchor, attestation/signature writes, provider sync, WordPress publishing, projection writes or receipts, workers, payments/staking/consensus/blockchain, model training, backpropagation, or full-auto behavior.
 
 ## From `v0.2.53` To `v0.2.54`
 

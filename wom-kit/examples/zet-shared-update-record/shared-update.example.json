@@ -1,0 +1,61 @@
+{
+  "record_kind": "zet_shared_update_record_preview",
+  "version": "0.2.55-example",
+  "dry_run": true,
+  "body_included": false,
+  "source": {
+    "sender_node_ref": "node:example:sender",
+    "shared_block_ref": "block:example:shared-update-001",
+    "zet_ref": "zet:example:shared-thought-001"
+  },
+  "receiver_review": {
+    "receiver_node_ref": "node:example:receiver",
+    "proposed_action": "review_before_renewal",
+    "attest_performed": false,
+    "anchor_performed": false,
+    "renewal_performed": false
+  },
+  "sharing_context": {
+    "zet_form": "sns_type_zet",
+    "sharing_methods": [
+      "key-sharing",
+      "radio-frequency"
+    ],
+    "real_transport_performed": false,
+    "neighbor_feed_update_performed": false,
+    "mirroring_delivery_performed": false
+  },
+  "surface_context": {
+    "surface_ref": "surface:example:private-review",
+    "surface_projection_performed": false,
+    "wordpress_publish_performed": false
+  },
+  "product_language": {
+    "sender_side": [
+      "mint",
+      "delegate"
+    ],
+    "receiver_side": [
+      "attest",
+      "anchor",
+      "renewal"
+    ],
+    "korean_receiver_term": "갱신"
+  },
+  "safety": {
+    "trust_created": false,
+    "import_performed": false,
+    "acceptance_performed": false,
+    "attestation_write_created": false,
+    "signature_created": false,
+    "provider_call_performed": false,
+    "projection_write_performed": false,
+    "receipt_write_created": false,
+    "full_auto_performed": false
+  },
+  "notes": [
+    "Example only.",
+    "No body text, transport endpoint, provider URL, token, private key, or local path is included.",
+    "Receiver-side review is not trust, import, acceptance, anchor, attestation, signature, or feed renewal."
+  ]
+}

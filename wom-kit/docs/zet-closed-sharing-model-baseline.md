@@ -16,6 +16,8 @@ GitHub can help the base system track reviewable records and history, but ZET is
 
 v0.2.48 extends this model with a recommendation philosophy baseline: followed/neighbor feeds should come from explicit relationships, while recommended/broadcast feeds should use user/node-owned and inspectable selector logic.
 
+v0.2.55 adds the [ZET Shared Update Record Baseline](zet-shared-update-record-baseline.md), which documents a future receiver-side review artifact that may appear before local renewal of a shared zet update.
+
 ## 1. Base zettel-kasten Layer
 
 The base zettel-kasten system is local-first infrastructure for archive memory.
@@ -91,6 +93,8 @@ The default ZET feed model should start from:
 Recommended or broadcast content may exist later, but it should not be hidden inside the neighbor feed as if it came from explicit relationships. A node should be able to inspect which selector, frequency/channel, source scope, and observation window produced a recommended item.
 
 See [ZET Radio-Frequency Recommendation Model](zet-radio-frequency-recommendation-model.md).
+
+For a future receiver-side review record shape before renewal, see [ZET Shared Update Record Baseline](zet-shared-update-record-baseline.md).
 
 ## 6. Attestation In The Closed SNS Flow
 

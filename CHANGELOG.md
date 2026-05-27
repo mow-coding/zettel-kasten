@@ -4,6 +4,23 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.55 - 2026-05-27
+
+ZET shared update record baseline.
+
+Added:
+
+- public documentation for a future receiver-side ZET shared update record,
+- sanitized non-executable example JSON for a shared update review preview,
+- release note and public-safe work log for the v0.2.55 documentation/example batch.
+
+Compatibility:
+
+- no private archive migration is required,
+- no archive product CLI or MCP behavior changed,
+- the example is body-free and contains placeholder refs only,
+- no shared-update transport, real ZET transport, RF access, key-sharing registry, mirroring delivery, neighbor feed update, automatic feed renewal, recommendation execution, trust/import/acceptance/anchor, attestation/signature write, provider sync, WordPress publishing, projection write/receipt, workers, payments, staking, consensus, blockchain, model training, backpropagation, or full-auto behavior is implemented.
+
 ## v0.2.54 - 2026-05-27
 
 Main branch protection readiness baseline.

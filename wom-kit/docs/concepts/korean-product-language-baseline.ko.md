@@ -175,3 +175,5 @@ v0.2.50은 제품 언어 기준선입니다.
 - full-auto behavior.
 
 이 문서는 앞으로 한국어 README, concept 문서, 미래 UI 문구가 흔들리지 않게 만드는 얇은 기준선입니다.
+
+관련 미래 공유/갱신 문서: [ZET Shared Update Record Baseline](../zet-shared-update-record-baseline.md).
