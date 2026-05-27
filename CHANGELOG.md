@@ -4,6 +4,29 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.50 - 2026-05-27
+
+Korean product-language baseline patch.
+
+Added:
+
+- Korean product-language baseline for WOM, zettel-kasten, zet, ZET, objet, lifecycle verbs, block/header/body wording, foreign block safety terms, sharing forms/methods, surface/action terms, SNS-type ZET actions, and messenger-type ZET threads,
+- README and public documentation map pointers to the new Korean concept document,
+- release note and public-safe work log for the v0.2.50 batch.
+
+Clarified:
+
+- `WOM` is pronounced `옴`, not `웜`,
+- `zet` may be explained as `쪽글` or `토막글`, while the product term remains `zet`,
+- `ZET` may be explained as `공유 계층`, while the product term remains `ZET`,
+- Korean product terms are for public explanation, not CLI/JSON/schema/file/package renames.
+
+Compatibility:
+
+- no private archive migration is required,
+- no archive product CLI or MCP behavior changed,
+- no real ZET transport, real trust/import/acceptance/anchor, attestation/signature write, RF access, key-sharing registry, mirroring delivery, provider sync, WordPress publishing, projection write/receipt, recommendation fetching/ranking/feed update, payments, staking, consensus, blockchain, model training, backpropagation, or full-auto behavior is implemented.
+
 ## v0.2.49 - 2026-05-27
 
 Public release link hygiene patch.

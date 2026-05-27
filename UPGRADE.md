@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.49` | current public pre-release | `wom-kit/docs/releases/v0.2.49.md` |
+| `v0.2.50` | current public pre-release | `wom-kit/docs/releases/v0.2.50.md` |
+| `v0.2.49` | superseded public pre-release | `wom-kit/docs/releases/v0.2.49.md` |
 | `v0.2.48` | superseded public pre-release | `wom-kit/docs/releases/v0.2.48.md` |
 | `v0.2.47` | superseded public pre-release | `wom-kit/docs/releases/v0.2.47.md` |
 | `v0.2.46` | superseded public pre-release | `wom-kit/docs/releases/v0.2.46.md` |
@@ -76,6 +77,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.49` To `v0.2.50`
+
+This is a compatible Korean product-language baseline patch.
+
+What changed:
+
+- added `wom-kit/docs/concepts/korean-product-language-baseline.ko.md`,
+- documented Korean explanation terms for WOM, zettel-kasten, zet, ZET, objet, lifecycle verbs, block/header/body wording, foreign block safety terms, sharing forms/methods, surface/action terms, SNS-type ZET actions, and messenger-type ZET threads,
+- linked the new baseline from README files and public documentation maps,
+- updated version metadata to `0.2.50`.
+
+No private archive migration is required.
+
+This release adds no archive product CLI or MCP behavior. It does not rename CLI commands, JSON fields, schema fields, filenames, or implementation identifiers. It does not implement real ZET transport, real trust/import/acceptance/anchor, attestation/signature writes, RF access, key-sharing registry, mirroring delivery, provider sync, WordPress publishing, projection writes or receipts, recommendation fetching/ranking/feed updates, payments, staking, consensus, blockchain, model training, backpropagation, or full-auto behavior.
 
 ## From `v0.2.48` To `v0.2.49`
 

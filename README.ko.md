@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.2.49 pre-release
+v0.2.50 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -70,6 +70,7 @@ v0.2.49 pre-release
 - `record-attestation-statement-draft --approve --reviewed-by`는 replay validation 후 untrusted statement draft JSON 하나와 receipt 하나만 기록합니다. 여전히 trust, import, attestation, signature, mint, share, provider call, ZET transport는 만들지 않습니다.
 - `attestation-statement-draft-review`는 recorded untrusted statement draft와 receipt, upstream review chain을 read-only index로 검토합니다. trust, import, attestation, signature, mint, share, provider call, ZET transport는 만들지 않습니다.
 - `attestation-statement-draft-decision`은 recorded statement draft 하나에 대해 다음 human-review route만 read-only preview합니다. decision 기록, acceptance, trust, import, attestation, signature, mint, publish, ZET transport는 만들지 않습니다.
+- WOM을 `옴`으로 읽고, `zet`를 `쪽글`/`토막글`로 설명하며, `ZET`를 `공유 계층`으로 설명하는 한국어 제품 언어 기준선이 있습니다. 이 기준선은 code identifier나 CLI/JSON/schema 이름을 한국어로 바꾸지 않습니다.
 
 아직 없는 것:
 
@@ -103,6 +104,7 @@ v0.2.49 pre-release
 - [Product Philosophy](wom-kit/docs/concepts/product-philosophy.md)
 - [한국어 Product Philosophy](wom-kit/docs/concepts/product-philosophy.ko.md)
 - [WOM Safe HTML Profile](wom-kit/docs/concepts/wom-safe-html-profile.ko.md)
+- [한국어 제품 언어 기준선](wom-kit/docs/concepts/korean-product-language-baseline.ko.md)
 - [공개 문서 지도](wom-kit/docs/public-documentation-map.ko.md)
 
 공개 프로젝트 기록은 의도적으로 다음처럼 분리합니다.
@@ -208,6 +210,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.50
 v0.2.49
 v0.2.48
 v0.2.47

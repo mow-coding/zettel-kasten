@@ -1,7 +1,7 @@
 # Public Documentation Map
 
 Status: public navigation baseline
-Date: 2026-05-24
+Date: 2026-05-27
 
 This repository intentionally separates four kinds of public project records:
 
@@ -22,6 +22,7 @@ Start here:
 
 - [WOM Naming And Terminology](concepts/naming-and-terminology.md)
 - [Korean WOM Naming And Terminology](concepts/naming-and-terminology.ko.md)
+- [Korean Product Language Baseline](concepts/korean-product-language-baseline.ko.md)
 - [Foundational Product Whitepaper](concepts/foundational-product-whitepaper.md)
 - [Korean Foundational Product Whitepaper](concepts/foundational-product-whitepaper.ko.md)
 - [Product Philosophy](concepts/product-philosophy.md)
@@ -113,6 +114,7 @@ Onboarding and setup plans:
 - [Responsible Use](responsible-use.md)
 - [Runtime Model Guidance](runtime-model-guidance.md)
 - [Public Release Link Hygiene](public-release-link-hygiene.md)
+- [Korean Product Language Baseline](concepts/korean-product-language-baseline.ko.md)
 - [ZET Publication Surface Baseline](zet-publication-surface-baseline.md)
 - [ZET Projection Plan Preview](zet-projection-plan-preview.md)
 - [ZET Closed Sharing Model Baseline](zet-closed-sharing-model-baseline.md)
@@ -179,6 +181,7 @@ These documents record public-safe work already performed.
 - [ZET Closed Sharing Model Baseline Work Log](../plans/work-log-2026-05-26-zet-closed-sharing-model-baseline.md)
 - [ZET Radio-Frequency Recommendation Model Work Log](../plans/work-log-2026-05-27-zet-radio-frequency-recommendation-model.md)
 - [Public Release Link Hygiene Work Log](../plans/work-log-2026-05-27-public-release-link-hygiene.md)
+- [Korean Product Language Baseline Work Log](../plans/work-log-2026-05-27-korean-product-language-baseline.md)
 - [Draft Provenance Work Log](../plans/work-log-2026-05-24-draft-provenance.md)
 - [WOM-kit Naming Cleanup Work Log](../plans/work-log-2026-05-25-wom-kit-naming-cleanup.md)
 - [Delegate Capability Binding Work Log](../plans/work-log-2026-05-23-delegate-capability-binding.md)

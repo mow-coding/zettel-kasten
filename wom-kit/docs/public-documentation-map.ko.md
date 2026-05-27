@@ -1,7 +1,7 @@
 # 공개 문서 지도
 
 상태: 공개 navigation baseline
-날짜: 2026-05-23
+날짜: 2026-05-27
 
 이 저장소는 공개 프로젝트 기록을 의도적으로 네 종류로 나눕니다.
 
@@ -22,6 +22,7 @@
 
 - [WOM 명칭과 용어 기준](concepts/naming-and-terminology.ko.md)
 - [WOM Naming And Terminology](concepts/naming-and-terminology.md)
+- [한국어 제품 언어 기준선](concepts/korean-product-language-baseline.ko.md)
 - [기초 제품 백서](concepts/foundational-product-whitepaper.ko.md)
 - [Foundational Product Whitepaper](concepts/foundational-product-whitepaper.md)
 - [Product Philosophy](concepts/product-philosophy.md)
@@ -113,6 +114,7 @@
 - [Responsible Use](responsible-use.ko.md)
 - [Runtime Model Guidance](runtime-model-guidance.ko.md)
 - [Public Release Link Hygiene](public-release-link-hygiene.md)
+- [한국어 제품 언어 기준선](concepts/korean-product-language-baseline.ko.md)
 - [ZET Publication Surface Baseline](zet-publication-surface-baseline.md)
 - [ZET Projection Plan Preview](zet-projection-plan-preview.md)
 - [ZET Closed Sharing Model Baseline](zet-closed-sharing-model-baseline.md)
@@ -179,6 +181,7 @@ local archive
 - [ZET Closed Sharing Model Baseline Work Log](../plans/work-log-2026-05-26-zet-closed-sharing-model-baseline.md)
 - [ZET Radio-Frequency Recommendation Model Work Log](../plans/work-log-2026-05-27-zet-radio-frequency-recommendation-model.md)
 - [Public Release Link Hygiene Work Log](../plans/work-log-2026-05-27-public-release-link-hygiene.md)
+- [한국어 제품 언어 기준선 작업일지](../plans/work-log-2026-05-27-korean-product-language-baseline.md)
 - [Draft Provenance Work Log](../plans/work-log-2026-05-24-draft-provenance.md)
 - [WOM-kit Naming Cleanup Work Log](../plans/work-log-2026-05-25-wom-kit-naming-cleanup.md)
 - [Delegate Capability Binding Work Log](../plans/work-log-2026-05-23-delegate-capability-binding.md)

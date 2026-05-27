@@ -7,6 +7,8 @@
 
 이 문서는 public-facing language를 위한 naming freeze입니다. 모든 내부 file path, schema field, compatibility command가 이미 rename되었다는 뜻은 아닙니다.
 
+한국어 설명어의 최신 기준은 [한국어 제품 언어 기준선](korean-product-language-baseline.ko.md)을 함께 보세요.
+
 ## 전체 이름
 
 ```text

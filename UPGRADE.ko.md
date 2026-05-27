@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.49` | current public pre-release | `wom-kit/docs/releases/v0.2.49.md` |
+| `v0.2.50` | current public pre-release | `wom-kit/docs/releases/v0.2.50.md` |
+| `v0.2.49` | superseded public pre-release | `wom-kit/docs/releases/v0.2.49.md` |
 | `v0.2.48` | superseded public pre-release | `wom-kit/docs/releases/v0.2.48.md` |
 | `v0.2.47` | superseded public pre-release | `wom-kit/docs/releases/v0.2.47.md` |
 | `v0.2.46` | superseded public pre-release | `wom-kit/docs/releases/v0.2.46.md` |
@@ -76,6 +77,21 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.49`에서 `v0.2.50`으로
+
+이번 버전은 한국어 제품 언어 기준선을 추가하는 호환 가능한 문서 패치입니다.
+
+바뀐 점:
+
+- `wom-kit/docs/concepts/korean-product-language-baseline.ko.md`를 추가했습니다.
+- WOM, zettel-kasten, zet, ZET, objet, lifecycle 동사, block/header/body, foreign block 안전 용어, 공유 형식/방식, surface/action 용어, SNS형 ZET 행동, 메신저형 ZET 스레드의 한국어 설명 기준을 정리했습니다.
+- README와 공개 문서 지도에서 새 기준선으로 연결했습니다.
+- version metadata를 `0.2.50`으로 업데이트했습니다.
+
+private archive migration은 필요 없습니다.
+
+이번 버전은 archive product CLI나 MCP behavior를 추가하지 않습니다. CLI command, JSON field, schema field, filename, implementation identifier도 한국어로 바꾸지 않습니다. real ZET transport, real trust/import/acceptance/anchor, attestation/signature write, RF access, key-sharing registry, mirroring delivery, provider sync, WordPress publishing, projection write/receipt, recommendation fetching/ranking/feed update, payment, staking, consensus, blockchain, model training, backpropagation, full-auto behavior를 구현하지 않습니다.
 
 ## From `v0.2.48` To `v0.2.49`
 

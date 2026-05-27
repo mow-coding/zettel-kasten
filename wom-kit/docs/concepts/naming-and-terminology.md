@@ -7,6 +7,8 @@ This document defines the current product-language direction for WOM.
 
 It is a naming freeze for public-facing language, not a guarantee that every internal file path, schema field, and compatibility command has already been renamed.
 
+For the current Korean product-language explanation baseline, see [Korean Product Language Baseline](korean-product-language-baseline.ko.md).
+
 ## Umbrella Name
 
 ```text
