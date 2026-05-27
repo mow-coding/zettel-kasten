@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.53` | current public pre-release | `wom-kit/docs/releases/v0.2.53.md` |
+| `v0.2.54` | current public pre-release | `wom-kit/docs/releases/v0.2.54.md` |
+| `v0.2.53` | superseded public pre-release | `wom-kit/docs/releases/v0.2.53.md` |
 | `v0.2.52` | superseded public pre-release | `wom-kit/docs/releases/v0.2.52.md` |
 | `v0.2.51` | superseded public pre-release | `wom-kit/docs/releases/v0.2.51.md` |
 | `v0.2.50` | superseded public pre-release | `wom-kit/docs/releases/v0.2.50.md` |
@@ -80,6 +81,20 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.53` To `v0.2.54`
+
+This is a compatible main branch protection readiness documentation patch.
+
+What changed:
+
+- added `wom-kit/docs/main-branch-protection-readiness.md`,
+- documented a staged path from local release gate to future GitHub Actions, required status checks, and optional review requirements,
+- updated version metadata to `0.2.54`.
+
+No private archive migration is required.
+
+This release adds no archive product CLI or MCP behavior. It does not add GitHub Actions, enable branch protection, change repository settings, call GitHub APIs, call providers, edit GitHub Releases, run ZET transport, create trust/import/acceptance/anchor, write attestations/signatures, publish to WordPress, write projection records or receipts, fetch/rank recommendations, update feeds, add workers, run payments/staking/consensus/blockchain, train models, backpropagate, or enable full-auto behavior.
 
 ## From `v0.2.52` To `v0.2.53`
 

@@ -40,3 +40,5 @@ The gate:
 - does not add product CLI or MCP behavior.
 
 The full release checklist still includes tests, doctor checks, naming scans, privacy scans, and human review.
+
+See [Main Branch Protection Readiness](main-branch-protection-readiness.md) for the staged path from this local gate toward future CI, required status checks, and branch protection.

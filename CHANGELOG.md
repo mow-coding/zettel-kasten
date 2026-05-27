@@ -4,6 +4,25 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.54 - 2026-05-27
+
+Main branch protection readiness baseline.
+
+Added:
+
+- public documentation for staged future `main` branch protection readiness,
+- a recommended path from local release-readiness gate to future GitHub Actions, required status checks, and optional review requirements,
+- release note and public-safe work log for the v0.2.54 documentation batch.
+
+Compatibility:
+
+- no private archive migration is required,
+- no archive product CLI or MCP behavior changed,
+- no GitHub Actions, branch protection, repository settings, or GitHub API behavior changed,
+- no files are rewritten automatically,
+- no external URLs are fetched,
+- no real ZET transport, RF access, key-sharing registry, mirroring delivery, trust/import/acceptance/anchor, attestation/signature write, provider sync, WordPress publishing, projection write/receipt, recommendation fetching/ranking/feed update, workers, payments, staking, consensus, blockchain, model training, backpropagation, or full-auto behavior is implemented.
+
 ## v0.2.53 - 2026-05-27
 
 Release readiness gate patch.
