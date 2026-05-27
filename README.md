@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.48 pre-release
+v0.2.49 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -76,12 +76,14 @@ What exists today:
 - read-only `projection-plan` previews that consider one local zet and one operator-declared surface kind before any rendering, provider call, projection write, receipt write, publication, minting, trust, attestation, signature, or ZET transport.
 - ZET closed sharing model baseline docs and sanitized examples that clarify the future closed sharing/SNS layer above GitHub/object-storage/DB base infrastructure.
 - ZET radio-frequency recommendation model docs and sanitized examples that separate followed/neighbor feeds from future recommended/broadcast feeds and keep selector logic user/node-owned and inspectable.
+- public release link hygiene checker that catches repository links likely to break when release notes are copied into GitHub Release bodies.
 
 What does not exist yet:
 
 - production-grade installation flow,
 - live provider integrations,
 - production `ZET` sharing service,
+- GitHub Release editing or network URL fetching from the public link checker,
 - recommendation fetching, ranking, neighbor feed updates, or provider-backed recommendation services,
 - projection-plan apply/write behavior, projection receipt writes, or provider-specific publishing,
 - real wallet creation, private key custody, or cryptographic signing,
@@ -115,6 +117,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Product Philosophy](wom-kit/docs/concepts/product-philosophy.md)
 - [WOM Safe HTML Profile](wom-kit/docs/concepts/wom-safe-html-profile.md)
 - [ZET Radio-Frequency Recommendation Model](wom-kit/docs/zet-radio-frequency-recommendation-model.md)
+- [Public Release Link Hygiene](wom-kit/docs/public-release-link-hygiene.md)
 - [Public Documentation Map](wom-kit/docs/public-documentation-map.md)
 
 The public project records are intentionally separated into:
@@ -220,6 +223,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.49
 v0.2.48
 v0.2.47
 v0.2.46

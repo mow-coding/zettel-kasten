@@ -828,6 +828,16 @@ recommended / broadcast feed -> user/node-owned selector logic
 
 WOM-kit currently does not fetch recommendations, rank feeds, execute selectors, update neighbor feeds, call providers, write projection records, write receipts, or run ZET transport.
 
+## Public Link Hygiene
+
+v0.2.49 adds a local development checker for public Markdown links:
+
+```powershell
+python wom-kit\tools\check_public_links.py
+```
+
+This is not an archive product command. It validates repository Markdown links and release-note links before release text is copied into GitHub Release bodies. It does not edit GitHub Releases, fetch external URLs, call providers, or mutate archives.
+
 ## Schema Validation
 
 `doctor` validates the main archive files against JSON Schema documents in `schemas/`.

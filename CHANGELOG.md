@@ -4,6 +4,27 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.49 - 2026-05-27
+
+Public release link hygiene patch.
+
+Added:
+
+- local public-link checker for repository Markdown and release-note link hygiene,
+- tests for case-sensitive local Markdown links, release-note relative link rejection, GitHub `blob` link mapping, and suspicious GitHub `tree` file links,
+- documentation explaining repo-local Markdown links, GitHub Release body links, external URLs, and case-sensitive public GitHub paths.
+
+Fixed:
+
+- release note links that were correct inside the repository but unsafe when copied into GitHub Release bodies.
+
+Compatibility:
+
+- no private archive migration is required,
+- no archive product CLI or MCP behavior changed,
+- no GitHub Release was edited by the tool,
+- no network URL fetching, provider calls, WordPress publishing, projection writes, receipts, ZET transport, recommendation fetching/ranking, neighbor feed updates, trust/import/acceptance/attestation/signature/minting changes, background workers, payments, staking, consensus, blockchain, model training, backpropagation, or full-auto behavior is implemented.
+
 ## v0.2.48 - 2026-05-27
 
 ZET radio-frequency recommendation model baseline patch.

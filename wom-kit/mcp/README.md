@@ -9,6 +9,8 @@ Indexing and search also use the same shared service layer.
 
 v0.2.48 radio-frequency recommendation is documentation and sanitized examples only. MCP exposes no recommendation fetch, rank, feed update, selector execution, provider, projection, receipt, or ZET transport tool.
 
+v0.2.49 public release link hygiene is a local development script and test guardrail only. MCP exposes no link checking, GitHub Release editing, network URL fetching, provider, projection, receipt, or archive mutation tool for this batch.
+
 For the full beginner workflow around CLI plus MCP, see:
 
 ```text

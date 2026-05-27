@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.48` | current public pre-release | `wom-kit/docs/releases/v0.2.48.md` |
+| `v0.2.49` | current public pre-release | `wom-kit/docs/releases/v0.2.49.md` |
+| `v0.2.48` | superseded public pre-release | `wom-kit/docs/releases/v0.2.48.md` |
 | `v0.2.47` | superseded public pre-release | `wom-kit/docs/releases/v0.2.47.md` |
 | `v0.2.46` | superseded public pre-release | `wom-kit/docs/releases/v0.2.46.md` |
 | `v0.2.45` | superseded public pre-release | `wom-kit/docs/releases/v0.2.45.md` |
@@ -75,6 +76,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.48` To `v0.2.49`
+
+This is a compatible public release link hygiene patch.
+
+What changed:
+
+- added `wom-kit/tools/check_public_links.py`,
+- added tests for repo-local Markdown link resolution and GitHub Release body link hygiene,
+- documented the difference between repo-local Markdown links and GitHub Release body links,
+- converted known unsafe release-note relative file links to absolute GitHub `blob` URLs.
+
+No private archive migration is required.
+
+This release adds no archive product CLI or MCP behavior. It does not edit GitHub Releases, fetch external URLs, call providers, publish to WordPress, write projection records or receipts, run ZET transport, fetch or rank recommendations, update neighbor feeds, create trust/import/acceptance/attestation/signature/minting changes, add background workers, payments, staking, consensus, blockchain, model training, backpropagation, or full-auto behavior.
 
 ## From `v0.2.47` To `v0.2.48`
 
