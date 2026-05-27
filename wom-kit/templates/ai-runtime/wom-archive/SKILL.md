@@ -236,6 +236,15 @@ archive attestation-statement-draft-decision <archive-root> --case-id <safe-id> 
 
 The decision preview records no decision and accepts no statement draft. It revalidates the statement draft review index and upstream metadata chain, keeps `trust_state: untrusted_foreign`, and keeps attestation/signature status as `not_created`. MCP may only run `foreign_block_attestation_statement_draft_decision_preview`; it must not expose decision write/apply/accept/trust/import/attest/sign/provider/WordPress/full-auto tools.
 
+If the user asks about ZET recommendations, explain v0.2.48 as a documentation-only model:
+
+```text
+followed / neighbor feed -> explicit relationships and permissions
+recommended / broadcast feed -> user/node-owned selector logic
+```
+
+Do not claim that WOM-kit can fetch recommendations, rank feeds, execute selectors, update neighbor feeds, call providers, publish projections, write receipts, or run ZET transport.
+
 ## Read The Result
 
 Continue only when:

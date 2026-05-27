@@ -14,6 +14,8 @@ base zettel-kasten system -> zet/objet units -> ZET closed sharing layer -> user
 
 GitHub can help the base system track reviewable records and history, but ZET is not simply a GitHub-based SNS. WordPress can be a projection surface, but it is not the WOM or ZET core.
 
+v0.2.48 extends this model with a recommendation philosophy baseline: followed/neighbor feeds should come from explicit relationships, while recommended/broadcast feeds should use user/node-owned and inspectable selector logic.
+
 ## 1. Base zettel-kasten Layer
 
 The base zettel-kasten system is local-first infrastructure for archive memory.
@@ -74,7 +76,23 @@ The surface layer is user-selected and pluggable. Possible surfaces include:
 
 The surface is not the canonical archive and not the whole ZET architecture.
 
-## 5. Attestation In The Closed SNS Flow
+## 5. Feed And Recommendation Boundary
+
+Closed sharing should keep relationship-based content and recommendation-shaped content distinguishable.
+
+The default ZET feed model should start from:
+
+- known neighbor nodes,
+- delegated access,
+- groups and workspaces,
+- permission scopes,
+- receiver-side review or attestation state.
+
+Recommended or broadcast content may exist later, but it should not be hidden inside the neighbor feed as if it came from explicit relationships. A node should be able to inspect which selector, frequency/channel, source scope, and observation window produced a recommended item.
+
+See [ZET Radio-Frequency Recommendation Model](zet-radio-frequency-recommendation-model.md).
+
+## 6. Attestation In The Closed SNS Flow
 
 In beginner terms, attestation is the receiver-side review step before a shared zet update affects a local view, neighbor feed, mirror, or projection.
 

@@ -4,6 +4,23 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.48 - 2026-05-27
+
+ZET radio-frequency recommendation model baseline patch.
+
+Added:
+
+- documentation for the future distinction between followed/neighbor feeds and recommended/broadcast feeds,
+- documentation for the radio-frequency metaphor where a node tunes into an accessible ZET channel, frequency, scope, or broadcast lane,
+- documentation for prompt-as-algorithm selectors as inspectable policy/rule/config/code bundles rather than only LLM prompts,
+- sanitized non-executable selector shape example with central black-box ranking disabled.
+
+Compatibility:
+
+- no private archive migration is required,
+- no CLI or MCP behavior changed,
+- no recommendation fetching, ranking, feed update, provider call, WordPress publishing, projection write, receipt write, ZET transport, trust, import, acceptance, attestation, signature, minting, anchoring, delegation, payment, staking, consensus, blockchain, model training, backpropagation, or full-auto behavior is implemented.
+
 ## v0.2.47 - 2026-05-26
 
 ZET closed sharing model baseline patch.

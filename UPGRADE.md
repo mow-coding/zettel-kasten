@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.47` | current public pre-release | `wom-kit/docs/releases/v0.2.47.md` |
+| `v0.2.48` | current public pre-release | `wom-kit/docs/releases/v0.2.48.md` |
+| `v0.2.47` | superseded public pre-release | `wom-kit/docs/releases/v0.2.47.md` |
 | `v0.2.46` | superseded public pre-release | `wom-kit/docs/releases/v0.2.46.md` |
 | `v0.2.45` | superseded public pre-release | `wom-kit/docs/releases/v0.2.45.md` |
 | `v0.2.44` | superseded public pre-release | `wom-kit/docs/releases/v0.2.44.md` |
@@ -74,6 +75,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.47` To `v0.2.48`
+
+This is a compatible ZET radio-frequency recommendation model baseline patch.
+
+What changed:
+
+- documented the distinction between followed/neighbor feeds and recommended/broadcast feeds,
+- documented the radio-frequency metaphor for user/node-selected ZET channels, scopes, or broadcast lanes,
+- documented prompt-as-algorithm selectors as inspectable policy/rule/config/code bundles rather than only LLM prompts,
+- added a sanitized non-executable selector example.
+
+No private archive migration is required.
+
+This release adds no CLI or MCP behavior. It does not fetch recommendations, rank feeds, update neighbor feeds, call providers, publish to WordPress, write projection records or receipts, run real ZET transport, create trust/import/acceptance/attestation/signature/minting changes, add Redis, queues, background workers, payments, staking, consensus, blockchain, model training, backpropagation, or full-auto behavior.
 
 ## From `v0.2.46` To `v0.2.47`
 

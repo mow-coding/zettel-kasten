@@ -85,3 +85,5 @@ v0.2.46 stops at the dry-run plan.
 v0.2.47 adds the ZET closed sharing model baseline. Projection planning is about a local zet and a user-selected surface. Closed ZET sharing is the future relationship/permission layer for shared zet updates between people, groups, archives, agents, or workspaces.
 
 The two layers can meet later, but v0.2.47 still does not publish, write projection receipts, update neighbor feeds, run ZET transport, or accept shared zets automatically.
+
+v0.2.48 adds the ZET radio-frequency recommendation model baseline. It documents future recommendation provenance only; projection planning still does not fetch recommendations, rank feeds, update neighbor feeds, or publish anything.

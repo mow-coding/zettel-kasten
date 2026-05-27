@@ -1,0 +1,39 @@
+{
+  "version": "wom-zet-radio-frequency-recommendation/v0.1-example",
+  "lifecycle_action": "zet_radio_frequency_selector_shape_example",
+  "example_only": true,
+  "selector_owner": "user_node",
+  "selector_visibility": "inspectable_by_user",
+  "selector_form": "prompt_or_rule_placeholder",
+  "feed_class": "recommended_broadcast",
+  "frequency_ref": "frequency:example:morning-public-notes",
+  "observation_window": "PT3H",
+  "central_black_box_ranking_used": false,
+  "automatic_fetch_performed": false,
+  "automatic_feed_update_performed": false,
+  "automatic_neighbor_update_performed": false,
+  "provider_api_call_performed": false,
+  "projection_write_performed": false,
+  "receipt_write_performed": false,
+  "real_zet_transport_performed": false,
+  "trust_created": false,
+  "attestation_created": false,
+  "signature_created": false,
+  "mint_created": false,
+  "full_auto_performed": false,
+  "selector_preview": {
+    "description": "Recommend zets issued in the selected time window on the selected radio-frequency-style channel.",
+    "executed": false,
+    "ranking_performed": false
+  },
+  "recommendation_provenance_preview": {
+    "selector_ref": "selector:example:morning-public-notes",
+    "source_scope": "example_public_broadcast_scope",
+    "permission_scope": "placeholder_scope_not_checked",
+    "selection_explanation_available": true,
+    "review_state": "not_reviewed",
+    "attestation_state": "not_created",
+    "local_projection_allowed": false,
+    "mirroring_allowed": false
+  }
+}

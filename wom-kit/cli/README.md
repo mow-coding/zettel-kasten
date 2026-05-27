@@ -815,6 +815,19 @@ The preview writes nothing, emits no full body text, uses archive-relative paths
 
 WOM-kit does not currently include a projection-plan apply/write command, projection receipt write, WordPress publisher, provider publisher, ZET transport sender, or automatic posting path. Posting is not minting, and a surface locator is not canonical zet identity.
 
+## Recommendation Model Boundary
+
+v0.2.48 documents the future ZET radio-frequency recommendation model, but adds no CLI command for recommendations.
+
+The intended future distinction is:
+
+```text
+followed / neighbor feed -> explicit relationships and permissions
+recommended / broadcast feed -> user/node-owned selector logic
+```
+
+WOM-kit currently does not fetch recommendations, rank feeds, execute selectors, update neighbor feeds, call providers, write projection records, write receipts, or run ZET transport.
+
 ## Schema Validation
 
 `doctor` validates the main archive files against JSON Schema documents in `schemas/`.

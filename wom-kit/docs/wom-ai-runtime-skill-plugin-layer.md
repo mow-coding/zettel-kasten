@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.47 planning and implementation baseline
+Status: v0.2.48 planning and implementation baseline
 
 ## Purpose
 
@@ -534,6 +534,8 @@ There is still no projection apply/write command, no projection receipt, no Word
 
 v0.2.47 adds a documentation baseline for the future ZET closed sharing/SNS layer. An AI runtime may explain that GitHub/object storage/DB are base-system substrates and that ZET sharing sits above them, but it must not imply that GitHub is the whole ZET transport or that WordPress is the WOM/ZET UI.
 
+v0.2.48 adds a documentation baseline for future ZET recommendation behavior. An AI runtime may explain the difference between followed/neighbor feeds and recommended/broadcast feeds, and may describe user/node-owned selector logic. It must not imply that WOM-kit can fetch recommendations, rank feeds, update neighbor feeds, call providers, publish projections, or run ZET transport.
+
 ## Expected AI Runtime Flow
 
 An AI runtime should start with:
@@ -566,8 +568,9 @@ An AI runtime should start with:
 25. use `record-attestation-statement-draft --dry-run` and then CLI `--approve --reviewed-by` only after human/operator statement-draft-record approval
 26. use `attestation-statement-draft-review` to index recorded statement drafts without accepting or applying them
 27. use `attestation-statement-draft-decision --dry-run` to preview one safe next review route without recording a decision
-28. run mint dry-run before asking for mint approval
-29. use CLI approval paths for real minting
+28. discuss the radio-frequency recommendation model only as a future docs/examples baseline, not as an executable feed feature
+29. run mint dry-run before asking for mint approval
+30. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -601,6 +604,7 @@ The skill tells the AI to:
 - use CLI-only `record-attestation-statement-draft` approval only to record an untrusted statement draft; MCP remains check-only,
 - use attestation-statement-draft-review to index recorded statement drafts without accepting or applying them,
 - use attestation-statement-draft-decision dry-run to preview one safe next review route without recording a decision,
+- treat ZET recommendation as documentation-only in v0.2.48 and never claim that recommendations can be fetched, ranked, or applied,
 - keep paths archive-relative,
 - avoid exposing local absolute paths,
 - use dry-run checks before approval requests,
@@ -611,7 +615,7 @@ The skill tells the AI to:
 
 The plugin layer should expose read and preview tools first.
 
-Allowed v0.2.47 direction:
+Allowed v0.2.48 direction:
 
 - profile list and profile resolve,
 - runtime context,
@@ -645,6 +649,7 @@ Allowed v0.2.47 direction:
 
 Not allowed in this layer yet:
 
+- recommendation fetching, ranking, feed update, or selector execution tools,
 - real minting through MCP,
 - profile registration or token registration through MCP,
 - provider API sync,

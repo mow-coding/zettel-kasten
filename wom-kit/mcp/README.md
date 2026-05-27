@@ -7,6 +7,8 @@ It exposes the local archive through MCP tools so an AI client can inspect and w
 The MCP tools share zettel listing, reading, draft creation, and view listing logic with the CLI service layer.
 Indexing and search also use the same shared service layer.
 
+v0.2.48 radio-frequency recommendation is documentation and sanitized examples only. MCP exposes no recommendation fetch, rank, feed update, selector execution, provider, projection, receipt, or ZET transport tool.
+
 For the full beginner workflow around CLI plus MCP, see:
 
 ```text
@@ -251,6 +253,7 @@ ownership_transfer_check
 - `foreign_block_attestation_statement_draft_review_index` is read-only and writes nothing. Its style and scope filters do not relax consistency validation, `case_id` scopes the verdict to one case, and included receipt summaries are sanitized. MCP rejects any `dry_run` value other than boolean `true` and exposes no statement draft review apply, write, approve, accept, import, trust, attest, sign, receipt write, auto-accept, auto-import, transport, or full-auto tool.
 - `foreign_block_attestation_statement_draft_decision_preview` is read-only and writes nothing. MCP rejects any `dry_run` value other than boolean `true`, treats review notes as preview context only, and exposes no decision write/apply, statement draft accept, import, trust, attest, sign, receipt write, WordPress publishing, provider sync, auto-accept, auto-import, transport, or full-auto tool.
 - `zet_projection_plan_check` is read-only and requires `dry_run: true`. MCP exposes no projection-plan apply/write, projection receipt write, WordPress publishing, provider publishing, ZET transport, or automatic posting tool.
+- v0.2.48 radio-frequency recommendation is documentation-only. MCP exposes no recommendation fetch/rank/update, selector execution, provider, projection, receipt, or feed mutation tool.
 - `create_draft_zettel` accepts a structured `source_intake_plan` object, not a local plan file path. The plan must be a successful dry-run, blocker-free, metadata-only source intake result before refs are merged.
 - `archive_index` writes only the generated search map at `db/archive-index.sqlite`.
 - `archive_onboarding_plan` previews first setup but does not create archive folders, provider bindings, or `.env` files.

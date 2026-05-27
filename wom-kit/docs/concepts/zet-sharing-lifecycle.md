@@ -13,6 +13,8 @@ For the broader WOM naming baseline, including `zet`, `node`, `parcel`, `admit`,
 
 For the v0.2.47 closed sharing architecture baseline, see [ZET Closed Sharing Model Baseline](../zet-closed-sharing-model-baseline.md). That baseline clarifies that GitHub/object storage/DB are base-system substrates, while ZET is the future closed sharing/SNS layer above the base zettel-kasten system.
 
+For the v0.2.48 recommendation philosophy baseline, see [ZET Radio-Frequency Recommendation Model](../zet-radio-frequency-recommendation-model.md). That baseline separates followed/neighbor feeds from future recommended/broadcast feeds and requires recommendation selector logic to be user/node-owned and inspectable before any future implementation exists.
+
 ## 1. Why New Verbs Matter
 
 The project should not inherit ordinary SaaS verbs as its primary worldview.
