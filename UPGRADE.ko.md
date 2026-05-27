@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.50` | current public pre-release | `wom-kit/docs/releases/v0.2.50.md` |
+| `v0.2.51` | current public pre-release | `wom-kit/docs/releases/v0.2.51.md` |
+| `v0.2.50` | superseded public pre-release | `wom-kit/docs/releases/v0.2.50.md` |
 | `v0.2.49` | superseded public pre-release | `wom-kit/docs/releases/v0.2.49.md` |
 | `v0.2.48` | superseded public pre-release | `wom-kit/docs/releases/v0.2.48.md` |
 | `v0.2.47` | superseded public pre-release | `wom-kit/docs/releases/v0.2.47.md` |
@@ -77,6 +78,21 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## `v0.2.50`에서 `v0.2.51`로
+
+이번 버전은 한국어 제품 언어 hygiene checker를 추가하는 호환 가능한 문서/도구 패치입니다.
+
+바뀐 점:
+
+- `wom-kit/tools/check_korean_product_language.py`를 추가했습니다.
+- 필수 한국어 제품 언어 anchor와 위험한 wording drift를 검사하는 test를 추가했습니다.
+- `wom-kit/docs/korean-product-language-hygiene.md`에 checker 설명을 추가했습니다.
+- version metadata를 `0.2.51`로 업데이트했습니다.
+
+private archive migration은 필요 없습니다.
+
+이번 버전은 archive product CLI나 MCP behavior를 추가하지 않습니다. checker는 local-only/read-only입니다. 파일을 자동 수정하거나 implementation identifier를 rename하거나 외부 URL을 가져오거나 provider를 호출하거나 GitHub Release를 수정하지 않습니다. ZET transport, trust/import/acceptance/anchor, attestation/signature write, WordPress publishing, projection write/receipt, recommendation fetching/ranking/feed update, worker, payment, staking, consensus, blockchain, model training, backpropagation, full-auto behavior를 구현하지 않습니다.
 
 ## `v0.2.49`에서 `v0.2.50`으로
 

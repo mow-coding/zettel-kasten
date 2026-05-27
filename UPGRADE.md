@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.50` | current public pre-release | `wom-kit/docs/releases/v0.2.50.md` |
+| `v0.2.51` | current public pre-release | `wom-kit/docs/releases/v0.2.51.md` |
+| `v0.2.50` | superseded public pre-release | `wom-kit/docs/releases/v0.2.50.md` |
 | `v0.2.49` | superseded public pre-release | `wom-kit/docs/releases/v0.2.49.md` |
 | `v0.2.48` | superseded public pre-release | `wom-kit/docs/releases/v0.2.48.md` |
 | `v0.2.47` | superseded public pre-release | `wom-kit/docs/releases/v0.2.47.md` |
@@ -77,6 +78,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.50` To `v0.2.51`
+
+This is a compatible Korean product-language hygiene checker patch.
+
+What changed:
+
+- added `wom-kit/tools/check_korean_product_language.py`,
+- added tests for required baseline anchors and high-risk wording drift,
+- documented the checker at `wom-kit/docs/korean-product-language-hygiene.md`,
+- updated version metadata to `0.2.51`.
+
+No private archive migration is required.
+
+This release adds no archive product CLI or MCP behavior. The checker is local-only and read-only. It does not rewrite files, rename implementation identifiers, fetch external URLs, call providers, edit GitHub Releases, run ZET transport, create trust/import/acceptance/anchor, write attestations/signatures, publish to WordPress, write projection records or receipts, fetch/rank recommendations, update feeds, add workers, run payments/staking/consensus/blockchain, train models, backpropagate, or enable full-auto behavior.
 
 ## From `v0.2.49` To `v0.2.50`
 
