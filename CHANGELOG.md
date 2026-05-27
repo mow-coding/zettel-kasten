@@ -4,6 +4,26 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.53 - 2026-05-27
+
+Release readiness gate patch.
+
+Added:
+
+- local `wom-kit/tools/check_release_readiness.py` gate that runs the existing public release hygiene checkers together,
+- unit tests for expected child checker paths, pass/fail behavior, failure output, current-repository pass behavior, and network-free / release-edit-free gate scope,
+- documentation, release note, and public-safe work log for the v0.2.53 gate batch.
+
+Compatibility:
+
+- no private archive migration is required,
+- no archive product CLI or MCP behavior changed,
+- the gate runs local subprocess calls to public hygiene checkers only,
+- no files are rewritten automatically,
+- no external URLs are fetched,
+- no GitHub APIs, GitHub Actions, branch protection, product doctor/test commands, providers, private archives, or GitHub Releases are inspected or changed,
+- no real ZET transport, RF access, key-sharing registry, mirroring delivery, trust/import/acceptance/anchor, attestation/signature write, provider sync, WordPress publishing, projection write/receipt, recommendation fetching/ranking/feed update, workers, payments, staking, consensus, blockchain, model training, backpropagation, or full-auto behavior is implemented.
+
 ## v0.2.52 - 2026-05-27
 
 Public privacy hygiene checker patch.

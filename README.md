@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.52 pre-release
+v0.2.53 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -80,6 +80,7 @@ What exists today:
 - Korean product-language baseline for explaining WOM as `옴`, `zet` as `쪽글`/`토막글`, `ZET` as `공유 계층`, and key lifecycle/safety/sharing terms without renaming code identifiers.
 - Korean product-language hygiene checker that catches accidental public documentation drift from the baseline without rewriting files, renaming code identifiers, fetching external URLs, or adding product behavior.
 - public privacy hygiene checker that catches obvious local path, token-like, private key header, seed-phrase-like, and private endpoint leaks before public release.
+- release readiness gate that runs the current public hygiene checkers together as a local pre-release convenience step.
 
 What does not exist yet:
 
@@ -124,6 +125,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [ZET Radio-Frequency Recommendation Model](wom-kit/docs/zet-radio-frequency-recommendation-model.md)
 - [Public Release Link Hygiene](wom-kit/docs/public-release-link-hygiene.md)
 - [Public Privacy Hygiene](wom-kit/docs/public-privacy-hygiene.md)
+- [Release Readiness Gate](wom-kit/docs/release-readiness-gate.md)
 - [Public Documentation Map](wom-kit/docs/public-documentation-map.md)
 
 The public project records are intentionally separated into:
@@ -229,6 +231,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.53
 v0.2.52
 v0.2.51
 v0.2.50

@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.52` | current public pre-release | `wom-kit/docs/releases/v0.2.52.md` |
+| `v0.2.53` | current public pre-release | `wom-kit/docs/releases/v0.2.53.md` |
+| `v0.2.52` | superseded public pre-release | `wom-kit/docs/releases/v0.2.52.md` |
 | `v0.2.51` | superseded public pre-release | `wom-kit/docs/releases/v0.2.51.md` |
 | `v0.2.50` | superseded public pre-release | `wom-kit/docs/releases/v0.2.50.md` |
 | `v0.2.49` | superseded public pre-release | `wom-kit/docs/releases/v0.2.49.md` |
@@ -79,6 +80,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.52` To `v0.2.53`
+
+This is a compatible release readiness gate patch.
+
+What changed:
+
+- added `wom-kit/tools/check_release_readiness.py`,
+- added tests for expected child checker paths, pass/fail behavior, failure output, current-repository pass behavior, and network-free / release-edit-free gate scope,
+- documented the gate at `wom-kit/docs/release-readiness-gate.md`,
+- updated version metadata to `0.2.53`.
+
+No private archive migration is required.
+
+This release adds no archive product CLI or MCP behavior. The gate is local-only and read-only. It runs the public link, Korean product-language, and public privacy hygiene checkers only. It does not rewrite files, fetch external URLs, call GitHub APIs, add GitHub Actions, enable branch protection, run product doctors/tests, call providers, edit GitHub Releases, run ZET transport, create trust/import/acceptance/anchor, write attestations/signatures, publish to WordPress, write projection records or receipts, fetch/rank recommendations, update feeds, add workers, run payments/staking/consensus/blockchain, train models, backpropagate, or enable full-auto behavior.
 
 ## From `v0.2.51` To `v0.2.52`
 
