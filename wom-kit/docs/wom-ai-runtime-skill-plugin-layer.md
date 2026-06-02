@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.48 planning and implementation baseline
+Status: v0.2.60 planning and implementation baseline
 
 ## Purpose
 
@@ -48,7 +48,7 @@ wom_profile_wallet_check
 
 Profile resolution must happen before runtime context whenever the user names a target profile. This prevents the AI from assuming the current/default archive is correct.
 
-`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but v0.2.47 does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
+`profile-wallet` is a read-only preview of wallet-ready identity context. It helps the AI explain that a WOM profile can later become a signing/capability identity, but WOM-kit currently does not generate keys, sign data, store seed phrases, create wallets, or call blockchain/provider APIs.
 
 ## Prompt Boundary Check
 
@@ -574,6 +574,18 @@ This is read-only and dry-run only. The planner first reuses the single-record s
 
 MCP must not expose ZET transport apply/write/send/deliver/publish/import/trust/attest/sign/anchor/key/radio-frequency/mirror tools.
 
+## v0.2.x Freeze / v0.3.0 Entry Boundary
+
+From v0.2.60, AI runtimes may read the v0.2.x freeze / v0.3.0 entry boundary document when discussing next-line planning:
+
+```text
+wom-kit/docs/v02x-freeze-v03-entry-boundary.md
+```
+
+This is documentation only. It does not add a CLI command, MCP tool, archive service behavior, schema, transport path, public proof anchor, DID/wallet/key custody, provider sync, trust mutation, or full-auto behavior.
+
+If the user asks what v0.3.0 should open first, describe one narrow receiver-side, replay-gated, human-approved, local-first, body-safe write. Do not describe it as available in v0.2.60.
+
 ## Publication Surface Discussion Boundary
 
 An AI runtime may discuss a user-selected publication surface after archive context, source refs, draft preview, human approval, minting, and block/header context are understood.
@@ -621,9 +633,10 @@ An AI runtime should start with:
 28. use `shared-update-record-review-index --dry-run` to inventory local shared update records without recording review
 29. use `shared-update-record-review --dry-run` for one local shared update record before any receiver-side renewal discussion
 30. use `zet-transport-plan --dry-run` only to discuss future transport risks and controls, never to send or deliver anything
-31. discuss the radio-frequency recommendation model only as a future docs/examples baseline, not as an executable feed feature
-32. run mint dry-run before asking for mint approval
-33. use CLI approval paths for real minting
+31. read the v0.2.x freeze / v0.3.0 entry boundary only when discussing next-line planning, not as an executable tool
+32. discuss the radio-frequency recommendation model only as a future docs/examples baseline, not as an executable feed feature
+33. run mint dry-run before asking for mint approval
+34. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.

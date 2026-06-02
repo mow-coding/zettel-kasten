@@ -89,6 +89,7 @@ docs/source-maps.md
 docs/platform-support.md
 docs/server-blueprint.md
 docs/capability-matrix.md
+docs/v02x-freeze-v03-entry-boundary.md
 ```
 
 ## Minimal CLI
@@ -720,6 +721,8 @@ v0.2.58 adds read-only `shared-update-record-review-index` previews. The index s
 
 v0.2.59 adds read-only `zet-transport-plan` previews. The planner reads one local shared update record through the existing review policy and returns method-specific future risk/control notes for `key-sharing`, `radio-frequency`, or `mirroring`; it creates no keys, sends nothing, writes no receipts, calls no providers, starts no workers, and runs no ZET transport.
 
+v0.2.60 closes v0.2.x as a conservative local-first checkpoint and records the proposed v0.3.0 entry boundary. It is documentation, version, and test coverage only: no product CLI command, MCP tool, archive service behavior, or schema changes are added.
+
 ## Minimal MCP Server
 
 v0.2 includes a minimal stdio MCP server:
@@ -802,20 +805,21 @@ Archive ownership is separate from archive operation. A family, company, or othe
 - Zettels reference original files by `object_id`, not provider URLs.
 - Object storage providers are replaceable through manifests.
 - External provider accounts are described in `provider-bindings.yml` with env/keyring references, not secrets.
-- Objet storage setup can be planned locally, but bucket creation, upload, sync, copy, hashing, source intake apply/capture, and source import remain outside WOM-kit v0.2.59.
-- Profile wallet readiness can be previewed locally, but private key custody, wallet creation, real signing, blockchain integration, and payment/economic layers remain outside WOM-kit v0.2.59.
-- Foreign block intake, trust preview, attestation packet preview, quarantine plan, quarantine review index, quarantine decision preview, quarantine decision review index, decision outcome plan, attestation review candidate plan, attestation review candidate index, attestation statement draft preview, attestation statement draft review index, and attestation statement draft decision preview are inspect-only; CLI quarantine write records an isolated untrusted case and receipt, CLI quarantine decision write records only an operator-reviewed local decision and receipt, CLI attestation review candidate write records only an untrusted candidate and receipt, and CLI attestation statement draft write records only an untrusted statement draft and receipt. Foreign block import, trust, drafting, minting, attesting, anchoring, applying, signed attestation statements, quarantine decision acceptance, decision outcome acceptance, attestation review candidate acceptance/apply/trust, attestation statement draft decision write/accept/apply/trust, transport, WordPress publishing, and automatic acceptance remain outside WOM-kit v0.2.59.
+- Objet storage setup can be planned locally, but bucket creation, upload, sync, copy, hashing, source intake apply/capture, and source import remain outside WOM-kit v0.2.60.
+- Profile wallet readiness can be previewed locally, but private key custody, wallet creation, real signing, blockchain integration, and payment/economic layers remain outside WOM-kit v0.2.60.
+- Foreign block intake, trust preview, attestation packet preview, quarantine plan, quarantine review index, quarantine decision preview, quarantine decision review index, decision outcome plan, attestation review candidate plan, attestation review candidate index, attestation statement draft preview, attestation statement draft review index, and attestation statement draft decision preview are inspect-only; CLI quarantine write records an isolated untrusted case and receipt, CLI quarantine decision write records only an operator-reviewed local decision and receipt, CLI attestation review candidate write records only an untrusted candidate and receipt, and CLI attestation statement draft write records only an untrusted statement draft and receipt. Foreign block import, trust, drafting, minting, attesting, anchoring, applying, signed attestation statements, quarantine decision acceptance, decision outcome acceptance, attestation review candidate acceptance/apply/trust, attestation statement draft decision write/accept/apply/trust, transport, WordPress publishing, and automatic acceptance remain outside WOM-kit v0.2.60.
 - ZET publication surfaces now have a dry-run projection plan preview in v0.2.46, but projection-plan apply/write behavior, projection receipt writes, provider-specific publishing, WordPress publishing, and ZET transport remain future work.
 - The ZET closed sharing model is documented in v0.2.47, but shared zet update CLI, neighbor feed CLI, mirror/re-project CLI, real ZET transport, automatic neighbor feed updates, real trust/import/acceptance, and real attestation/signature writes remain future work.
 - The ZET radio-frequency recommendation model is documented in v0.2.48, but recommendation fetching, selector execution, ranking, feed updates, provider-backed recommendation services, and automatic neighbor updates remain future work.
-- Public release link hygiene checks are local validation only; GitHub Release editing and external URL network fetching remain outside WOM-kit v0.2.59.
-- Korean product-language terms and the hygiene checker are public explanation guardrails only; CLI commands, JSON fields, schema fields, filenames, Python identifiers, and package names remain English in WOM-kit v0.2.59.
-- Public privacy hygiene checks are local validation only; automatic rewriting, full-disk scanning, private archive inspection, provider calls, GitHub Release editing, and general-purpose secret scanning remain outside WOM-kit v0.2.59.
-- Release readiness gate checks are local validation only; CI, GitHub Actions, branch protection, product doctors/tests, GitHub API calls, and release editing remain outside WOM-kit v0.2.59.
-- Main branch protection readiness is documentation only; GitHub Actions, branch protection, repository settings changes, and GitHub API calls remain outside WOM-kit v0.2.59.
-- ZET shared update record review/index is dry-run only; shared-update review/index writes, shared-update transport, neighbor feed update, trust/import/acceptance/anchor, attestation/signature writes, provider sync, WordPress publishing, projection writes/receipts, and MCP write/apply tools remain outside WOM-kit v0.2.59.
-- ZET transport planning is dry-run only; real ZET transport, key creation, key-sharing registry, radio-frequency access creation, mirroring delivery, queue jobs, workers, delivery receipts, neighbor feed updates, provider calls, trust/import/acceptance, attestation/signature writes, anchor writes, and MCP write/apply/send/deliver tools remain outside WOM-kit v0.2.59.
-- Prompt boundary checks and prompt-boundary draft metadata are heuristic guardrails only; complete prompt-injection prevention, LLM classification, provider scanning, OCR/import apply, and full-auto safety guarantees remain outside WOM-kit v0.2.59.
+- Public release link hygiene checks are local validation only; GitHub Release editing and external URL network fetching remain outside WOM-kit v0.2.60.
+- Korean product-language terms and the hygiene checker are public explanation guardrails only; CLI commands, JSON fields, schema fields, filenames, Python identifiers, and package names remain English in WOM-kit v0.2.60.
+- Public privacy hygiene checks are local validation only; automatic rewriting, full-disk scanning, private archive inspection, provider calls, GitHub Release editing, and general-purpose secret scanning remain outside WOM-kit v0.2.60.
+- Release readiness gate checks are local validation only; CI, GitHub Actions, branch protection, product doctors/tests, GitHub API calls, and release editing remain outside WOM-kit v0.2.60.
+- Main branch protection readiness is documentation only; GitHub Actions, branch protection, repository settings changes, and GitHub API calls remain outside WOM-kit v0.2.60.
+- ZET shared update record review/index is dry-run only; shared-update review/index writes, shared-update transport, neighbor feed update, trust/import/acceptance/anchor, attestation/signature writes, provider sync, WordPress publishing, projection writes/receipts, and MCP write/apply tools remain outside WOM-kit v0.2.60.
+- ZET transport planning is dry-run only; real ZET transport, key creation, key-sharing registry, radio-frequency access creation, mirroring delivery, queue jobs, workers, delivery receipts, neighbor feed updates, provider calls, trust/import/acceptance, attestation/signature writes, anchor writes, and MCP write/apply/send/deliver tools remain outside WOM-kit v0.2.60.
+- Prompt boundary checks and prompt-boundary draft metadata are heuristic guardrails only; complete prompt-injection prevention, LLM classification, provider scanning, OCR/import apply, and full-auto safety guarantees remain outside WOM-kit v0.2.60.
+- The v0.2.x freeze and v0.3.0 entry boundary is documentation only; the proposed first v0.3.0 write remains future work and must not imply transport, provider sync, trust graph mutation, public proof anchoring, DID/wallet/key custody, blockchain, token, governance, or full-auto behavior.
 - The capability matrix is documentation only; it adds no product command, MCP tool, archive service behavior, provider call, transport, trust, import, attestation, signature, anchor, worker, payment, token, or full-auto behavior.
 - Ownership transfer can update the archive identity locally, but external provider permissions remain manual until a future explicit integration.
 - Provenance and visibility fields are mandatory in shared or derived records.

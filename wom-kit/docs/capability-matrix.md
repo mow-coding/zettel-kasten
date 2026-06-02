@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: ZET transport planning baseline
+Status: v0.2.x freeze checkpoint
 Date: 2026-06-02
-Version: v0.2.59
+Version: v0.2.60
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -17,11 +17,11 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | `approval-gated write` | CLI can write only after explicit human approval inputs. MCP remains read-only or dry-run for that surface. |
 | `local hygiene tool` | A local checker exists for public release hygiene. It does not add archive product behavior. |
 | `documented-only` | Public docs or examples exist, but no product command/tool exists. |
-| `not implemented` | No product behavior exists in v0.2.59. |
+| `not implemented` | No product behavior exists in v0.2.60. |
 
 ## Current Capability Table
 
-| Capability | Status in v0.2.59 | Write behavior | Notes |
+| Capability | Status in v0.2.60 | Write behavior | Notes |
 | --- | --- | --- | --- |
 | Archive doctor | `implemented local command` | read-only | `archive doctor` checks archive structure, schema, manifest, receipt, and lifecycle consistency. |
 | Mint lifecycle | `approval-gated write` | CLI approve writes canonical zet, receipt, and draft snapshot | Dry-run previews first. Minting is private archive memory, not public posting. |
@@ -63,12 +63,15 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Shared update record review preview | `read-only preview` | none | Reviews one local archive-contained shared update JSON record before any receiver-side renewal write exists. |
 | Shared update record review index | `read-only preview` | none | Indexes direct-child local shared update JSON records by reusing the single-record review policy. Writes nothing and records no review. |
 | ZET transport threat model / would-transport plan | `read-only preview` | none | Plans method-specific risks and future controls for `key-sharing`, `radio-frequency`, or `mirroring` after the shared update review policy passes. No real transport. |
+| v0.2.x freeze / v0.3.0 entry boundary | `documented-only` | none | Closes the v0.2.x line as a conservative local-first checkpoint and proposes one narrow receiver-side approved write as the first v0.3.0 boundary. |
 | Public release link hygiene | `local hygiene tool` | none | Checks repository Markdown links for release note copy safety. No GitHub Release edit or external URL fetch. |
 | Korean product-language hygiene | `local hygiene tool` | none | Checks public Markdown drift against the Korean product-language baseline. No auto-rewrite. |
 | Public privacy hygiene | `local hygiene tool` | none | Checks public files for obvious local path, token, private key, seed phrase, and private endpoint leaks. |
 | Release readiness gate | `local hygiene tool` | none | Runs the public hygiene checkers together. It is not CI or branch protection. |
 | Main branch protection readiness | `documented-only` | none | Documents a staged path toward future repository settings. It changes no GitHub settings. |
 | Real ZET transport | `not implemented` | none | No send/receive relay, P2P, inbox transport, or transport worker exists. |
+| Public proof anchoring | `documented-only` | none | Future minimal proof concept only. No anchoring, chain registry, validator behavior, provider call, or public proof write exists. |
+| DID-compatible identity research | `documented-only` | none | Future research only. No DID method, DID registry, wallet creation, key custody, or signing behavior exists. |
 | Key-sharing registry | `not implemented` | none | No key exchange, key registry, private-key custody, or wallet signing exists. |
 | Radio-frequency access | `not implemented` | none | No subscription, channel access, or frequency access control exists. |
 | Mirroring delivery | `not implemented` | none | No mirror/re-project delivery pipeline exists. |
@@ -76,6 +79,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Recommendation execution | `not implemented` | none | No selector execution, fetching, ranking, or automatic recommendation update exists. |
 | Provider sync / WordPress | `not implemented` | none | No WordPress publishing, provider sync, external provider write, or provider API workflow exists. |
 | Redis / queues / workers | `not implemented` | none | No background job infrastructure exists in the product layer. |
+| System token / validator governance | `not implemented` | none | No system token, validator governance, public chain, payment, staking, or consensus behavior exists. |
 | Payments / blockchain / token / consensus | `not implemented` | none | No WOM coin, NFT-like access, staking, payment, ledger, consensus, or blockchain mechanics exist. |
 
 ## v0.2.x Closing Plan
@@ -87,9 +91,9 @@ The v0.2 line should stop adding parallel preview ladders after the remaining cl
 1. `v0.2.57`: capability matrix and README readability cleanup.
 2. `v0.2.58`: shared-update review index, read-only.
 3. `v0.2.59`: ZET transport threat model and dry-run would-transport plan, with no real transport.
-4. Freeze the v0.2.x line after the closing docs and previews are coherent.
+4. `v0.2.60`: freeze/checkpoint documentation and v0.3.0 entry boundary, with no product behavior.
 
-The proposed `v0.3.0` boundary is one narrow receiver-side approved write, likely an attestation record plus receipt for an already-reviewed foreign block. That boundary should be replay-gated and should still avoid real transport, anchors, trust graph mutation, provider sync, full-auto behavior, payment layers, and blockchain/token mechanics.
+The proposed `v0.3.0` boundary is one narrow receiver-side approved write, likely an attestation/review record plus receipt for an already-reviewed shared or foreign update. That boundary should be replay-gated, human-approved, local-first, body-safe, and should still avoid real transport, anchors, trust graph mutation, provider sync, full-auto behavior, payment layers, public proof anchoring, DID/wallet/key custody, and blockchain/token mechanics.
 
 ## Review Context
 
@@ -106,3 +110,5 @@ The v0.2.57 response was deliberately small:
 The v0.2.58 response keeps the same safety shape while adding one read-only index over local JSON records. It still avoids shared-update review writes, feed updates, trust/import/acceptance, attestation/signature writes, anchors, provider calls, receipts, ZET transport, and full-auto behavior.
 
 The v0.2.59 response adds one read-only would-transport planner. It still avoids real ZET transport, key creation, key-sharing registry, radio-frequency access creation, mirroring delivery, feed updates, trust/import/acceptance, attestation/signature writes, anchors, provider calls, receipts, queues/workers, recommendation execution, and full-auto behavior.
+
+The v0.2.60 response is documentation, version, and test coverage only. It closes v0.2.x as a conservative local-first checkpoint, records the proposed v0.3.0 first boundary, and still avoids product CLI/MCP/service changes, schemas, real ZET transport, trust/import/acceptance/anchor mutation, attestation/signature writes, provider sync, queues/workers, DID/wallet/key custody, public proof anchoring, blockchain/token mechanics, and full-auto behavior.

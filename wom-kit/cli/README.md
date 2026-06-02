@@ -6,6 +6,8 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
+v0.2.60 is a documentation, version, and test checkpoint for the v0.2.x freeze and proposed v0.3.0 entry boundary. It adds no product CLI command. See `wom-kit/docs/v02x-freeze-v03-entry-boundary.md`.
+
 For a beginner-friendly full walkthrough, see:
 
 ```text

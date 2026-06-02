@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.59 pre-release
+v0.2.60 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -37,6 +37,7 @@ What exists today:
 - private archive lifecycle tools for doctor checks, draft creation, minting, delegation, receipts, search, and metadata review,
 - read-only preview layers for runtime context, profiles, source/objet intake, block headers, prompt boundaries, foreign block review, projection, shared update review/index, and ZET would-transport planning,
 - approval-gated local write paths for selected private archive and foreign-block review records,
+- a v0.2.x freeze / v0.3.0 entry boundary document that keeps the next line narrow and local-first,
 - local public-release hygiene tools for links, Korean product language, privacy, release readiness, and branch-protection planning.
 
 For a status-by-capability view, see the [WOM-kit Capability Matrix](wom-kit/docs/capability-matrix.md).
@@ -84,6 +85,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [ZET Shared Update Record Review Preview](wom-kit/docs/zet-shared-update-record-review-preview.md)
 - [ZET Shared Update Record Review Index](wom-kit/docs/zet-shared-update-record-review-index.md)
 - [ZET Transport Threat Model](wom-kit/docs/zet-transport-threat-model.md)
+- [v0.2.x Freeze And v0.3.0 Entry Boundary](wom-kit/docs/v02x-freeze-v03-entry-boundary.md)
 - [Public Release Link Hygiene](wom-kit/docs/public-release-link-hygiene.md)
 - [Public Privacy Hygiene](wom-kit/docs/public-privacy-hygiene.md)
 - [Release Readiness Gate](wom-kit/docs/release-readiness-gate.md)
@@ -193,6 +195,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.60
 v0.2.59
 v0.2.58
 v0.2.57

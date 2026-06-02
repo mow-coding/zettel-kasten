@@ -7,6 +7,7 @@ from pathlib import Path
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
+FREEZE_DOC_PATH = KIT_ROOT / "docs" / "v02x-freeze-v03-entry-boundary.md"
 
 
 class CapabilityMatrixDocsTests(unittest.TestCase):
@@ -41,12 +42,18 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Radio-frequency recommendation model",
             "Shared update record baseline",
             "Shared update record review preview",
+            "Shared update record review index",
+            "ZET transport threat model / would-transport plan",
+            "v0.2.x freeze / v0.3.0 entry boundary",
+            "Public proof anchoring",
+            "DID-compatible identity research",
             "Release readiness gate",
             "Main branch protection readiness",
             "Real ZET transport",
             "Key-sharing registry",
             "Provider sync / WordPress",
             "Redis / queues / workers",
+            "System token / validator governance",
             "Payments / blockchain / token / consensus",
         )
         for row in required_rows:
@@ -59,6 +66,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("This is a planning baseline, not a release promise.", text)
         self.assertIn("avoid any new product CLI, MCP, service", text)
         self.assertIn("no real transport", text)
+        self.assertIn("v0.2.60", text)
+        self.assertIn("documentation, version, and test coverage only", text)
+        self.assertIn("one narrow receiver-side approved write", text)
+        self.assertIn("public proof anchoring", text)
+        self.assertIn("DID/wallet/key custody", text)
 
     def test_readme_release_tag_sequence_includes_v0255(self) -> None:
         for relative in ("README.md", "README.ko.md"):
@@ -67,6 +79,35 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(relative=relative):
                 self.assertEqual(positions, sorted(positions))
                 self.assertIn("wom-kit/docs/capability-matrix.md", text)
+                self.assertIn("wom-kit/docs/v02x-freeze-v03-entry-boundary.md", text)
+
+    def test_v02x_freeze_boundary_doc_covers_public_proof_and_non_goals(self) -> None:
+        text = FREEZE_DOC_PATH.read_text(encoding="utf-8")
+        for phrase in (
+            "v0.2.x built the safe local ground.",
+            "one narrow receiver-side, approval-gated write",
+            "attestation/review record + receipt",
+            "replay-gated",
+            "human-approved",
+            "local-first",
+            "body-safe",
+            "InfraBlockchain / COOV-style",
+            "private personal data stays local/off-chain/on-device",
+            "hashes",
+            "receipt references",
+            "delegation/share proof references",
+            "attestation proof references",
+            "revocation pointers",
+            "DID-compatible identity may be future research",
+            "does not implement DID",
+            "system token",
+            "public proof anchoring",
+            "real ZET transport",
+            "automatic feed update",
+            "trust graph mutation",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
 
 
 if __name__ == "__main__":

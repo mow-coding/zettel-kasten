@@ -4,6 +4,27 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.60 - 2026-06-02
+
+v0.2.x freeze and v0.3.0 entry boundary.
+
+Added:
+
+- public [v0.2.x freeze and v0.3.0 entry boundary](wom-kit/docs/v02x-freeze-v03-entry-boundary.md),
+- release note and public-safe work log for the v0.2.60 checkpoint batch,
+- capability matrix updates for the v0.2.x freeze, public proof boundary, DID-compatible identity research boundary, and proposed first v0.3.0 write boundary,
+- focused documentation tests for the freeze/boundary document.
+
+Compatibility:
+
+- no private archive migration is required,
+- no product CLI command was added,
+- no MCP tool was added,
+- no archive service behavior changed,
+- no schema changed,
+- v0.3.0 is proposed to start with one narrow receiver-side, replay-gated, human-approved, local-first, body-safe write,
+- no real ZET transport, key-sharing registry, radio-frequency access creation, mirroring delivery, feed update, trust/import/acceptance/anchor mutation, attestation/signature write, provider sync, WordPress publishing, projection write/receipt, queue, worker, DID registry, wallet/key custody, public proof anchoring, blockchain, token, system token, validator governance, payment, staking, consensus, model training, backpropagation, or full-auto behavior is implemented.
+
 ## v0.2.59 - 2026-06-02
 
 ZET transport threat model and would-transport plan.

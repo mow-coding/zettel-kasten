@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.59` | current public pre-release | `wom-kit/docs/releases/v0.2.59.md` |
+| `v0.2.60` | current public pre-release | `wom-kit/docs/releases/v0.2.60.md` |
+| `v0.2.59` | superseded public pre-release | `wom-kit/docs/releases/v0.2.59.md` |
 | `v0.2.58` | superseded public pre-release | `wom-kit/docs/releases/v0.2.58.md` |
 | `v0.2.57` | superseded public pre-release | `wom-kit/docs/releases/v0.2.57.md` |
 | `v0.2.56` | superseded public pre-release | `wom-kit/docs/releases/v0.2.56.md` |
@@ -86,6 +87,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.59` To `v0.2.60`
+
+This is a compatible documentation, version, and test checkpoint for the v0.2.x freeze and v0.3.0 entry boundary.
+
+What changed:
+
+- added `wom-kit/docs/v02x-freeze-v03-entry-boundary.md`,
+- added the v0.2.60 release note and public-safe work log,
+- updated the capability matrix with the v0.2.x freeze, public proof boundary, DID-compatible identity research boundary, and proposed first v0.3.0 write boundary,
+- updated version metadata to `0.2.60`.
+
+No private archive migration is required.
+
+This release adds no product CLI command, MCP tool, archive service behavior, or schema change. It records that the proposed v0.3.0 first boundary should be one narrow receiver-side, replay-gated, human-approved, local-first, body-safe write. It does not add real ZET transport, key creation, key-sharing registry, radio-frequency access creation, mirroring delivery, feed updates, trust/import/acceptance/anchor mutation, attestation/signature writes, provider sync, WordPress publishing, projection writes or receipts, queues/workers, DID registry, wallet/key custody, public proof anchoring, payments/staking/consensus/blockchain, model training, backpropagation, or full-auto behavior.
 
 ## From `v0.2.58` To `v0.2.59`
 
