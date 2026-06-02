@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: public readability baseline
+Status: shared update review index baseline
 Date: 2026-06-02
-Version: v0.2.57
+Version: v0.2.58
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -17,11 +17,11 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | `approval-gated write` | CLI can write only after explicit human approval inputs. MCP remains read-only or dry-run for that surface. |
 | `local hygiene tool` | A local checker exists for public release hygiene. It does not add archive product behavior. |
 | `documented-only` | Public docs or examples exist, but no product command/tool exists. |
-| `not implemented` | No product behavior exists in v0.2.57. |
+| `not implemented` | No product behavior exists in v0.2.58. |
 
 ## Current Capability Table
 
-| Capability | Status in v0.2.57 | Write behavior | Notes |
+| Capability | Status in v0.2.58 | Write behavior | Notes |
 | --- | --- | --- | --- |
 | Archive doctor | `implemented local command` | read-only | `archive doctor` checks archive structure, schema, manifest, receipt, and lifecycle consistency. |
 | Mint lifecycle | `approval-gated write` | CLI approve writes canonical zet, receipt, and draft snapshot | Dry-run previews first. Minting is private archive memory, not public posting. |
@@ -61,6 +61,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Radio-frequency recommendation model | `documented-only` | none | Describes future user/node-owned recommendation selectors. No fetching, ranking, or feed update exists. |
 | Shared update record baseline | `documented-only` | none | Defines a future receiver-side review artifact and sanitized example. |
 | Shared update record review preview | `read-only preview` | none | Reviews one local archive-contained shared update JSON record before any receiver-side renewal write exists. |
+| Shared update record review index | `read-only preview` | none | Indexes direct-child local shared update JSON records by reusing the single-record review policy. Writes nothing and records no review. |
 | Public release link hygiene | `local hygiene tool` | none | Checks repository Markdown links for release note copy safety. No GitHub Release edit or external URL fetch. |
 | Korean product-language hygiene | `local hygiene tool` | none | Checks public Markdown drift against the Korean product-language baseline. No auto-rewrite. |
 | Public privacy hygiene | `local hygiene tool` | none | Checks public files for obvious local path, token, private key, seed phrase, and private endpoint leaks. |
@@ -93,10 +94,12 @@ The proposed `v0.3.0` boundary is one narrow receiver-side approved write, likel
 
 A big-picture external review summarized the v0.2.56 line as `GO WITH CAUTIONS`: the WOM vision is coherent and the safety-first pattern is credible, but the project has readability debt and too many similar preview ladders for new readers.
 
-The v0.2.57 response is deliberately small:
+The v0.2.57 response was deliberately small:
 
 - add this matrix,
 - shorten the top-level README status summary,
 - restore the missing `v0.2.55` tag in README release lists,
 - document the v0.2.x closing plan,
 - avoid any new product CLI, MCP, service, provider, transport, trust, import, attestation, signature, anchor, or full-auto behavior.
+
+The v0.2.58 response keeps the same safety shape while adding one read-only index over local JSON records. It still avoids shared-update review writes, feed updates, trust/import/acceptance, attestation/signature writes, anchors, provider calls, receipts, ZET transport, and full-auto behavior.

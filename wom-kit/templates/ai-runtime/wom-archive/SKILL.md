@@ -253,6 +253,14 @@ archive shared-update-record-review <archive-root> --record <archive-relative-js
 
 The review preview reads only the selected archive-relative JSON record. It writes nothing, echoes no body text or local absolute paths, blocks body-included records and true mutation/write/transport/provider/trust flags, and does not update feeds, trust, import, attest, sign, anchor, project, call providers, or run ZET transport. MCP may only run `zet_shared_update_record_review_preview`; it must not expose shared update write/apply/publish/transport/import/trust/attest/sign/anchor tools.
 
+For a local directory of ZET shared update records, preview only a compact index before selecting one record:
+
+```bash
+archive shared-update-record-review-index <archive-root> --records-dir <archive-relative-dir> --dry-run --format json
+```
+
+The review index scans only direct-child `.json` files under an archive-relative directory. It writes nothing, ignores non-JSON files, reuses the single-record review policy, echoes no body text or local absolute paths, and does not update feeds, trust, import, attest, sign, anchor, project, call providers, write receipts, or run ZET transport. MCP may only run `zet_shared_update_record_review_index`; it must not expose shared update index write/apply/publish/transport/import/trust/attest/sign/anchor tools.
+
 ## Read The Result
 
 Continue only when:
@@ -289,6 +297,7 @@ Prefer these actions:
 - use CLI-only record-attestation-statement-draft approval only after human/operator statement-draft-record approval; MCP remains check-only,
 - run attestation-statement-draft-review to inventory recorded statement drafts without accepting or applying them,
 - run attestation-statement-draft-decision dry-run to preview one safe next review route without recording a decision,
+- run shared-update-record-review-index dry-run to inventory local shared update records without writing review metadata,
 - run shared-update-record-review dry-run before any receiver-side renewal discussion,
 - create approved draft in inbox,
 - run mint dry-run,

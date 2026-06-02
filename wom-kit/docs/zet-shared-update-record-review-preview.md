@@ -7,6 +7,8 @@ Status: read-only dry-run preview
 
 v0.2.56 adds a read-only review preview for one local ZET shared update record JSON before any receiver-side renewal action exists.
 
+v0.2.58 adds [ZET Shared Update Record Review Index](zet-shared-update-record-review-index.md) for direct-child local JSON records. The index reuses this single-record preview policy instead of maintaining a separate policy list.
+
 The preview answers one narrow question:
 
 ```text

@@ -3021,6 +3021,142 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertIn("shared update record archive_id does not match the current archive.", result["blockers"])
 
+    def test_shared_update_record_review_index_reads_records_and_writes_no_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            valid_relative = self.write_shared_update_record_fixture(archive_root, "workbench/shared-updates/001-valid.json")
+            secret_body = "private body C:\\Users\\example\\secret\\note.md"
+            blocked_relative = self.write_shared_update_record_fixture(
+                archive_root,
+                "workbench/shared-updates/002-blocked.json",
+                body_included=True,
+                body_text=secret_body,
+                safety={"trust_created": True},
+            )
+            (archive_root / "workbench" / "shared-updates" / "003-note.txt").write_text(
+                "not json\n",
+                encoding="utf-8",
+            )
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+            code, output = self.run_cli(
+                [
+                    "shared-update-record-review-index",
+                    str(archive_root),
+                    "--records-dir",
+                    "workbench/shared-updates",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 1, output)
+            self.assertEqual(before, after)
+            self.assertFalse(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "zet_shared_update_record_review_index")
+            self.assertEqual(result["records_dir"], "workbench/shared-updates")
+            self.assertEqual(result["index_status"], "index_preview_not_recorded")
+            self.assertEqual(result["policy_reused_from"], "zet_shared_update_record_review_preview")
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(result["record_count"], 2)
+            self.assertEqual(result["reviewable_count"], 1)
+            self.assertEqual(result["blocked_count"], 1)
+            self.assertEqual(result["skipped_non_json_count"], 1)
+            self.assertFalse(result["shared_update_review_index_recorded"])
+            self.assertFalse(result["shared_update_review_recorded"])
+            self.assertFalse(result["neighbor_feed_updated"])
+            self.assertFalse(result["trust_created"])
+            self.assertFalse(result["import_performed"])
+            self.assertFalse(result["acceptance_created"])
+            self.assertFalse(result["attestation_written"])
+            self.assertFalse(result["signature_created"])
+            self.assertFalse(result["anchor_performed"])
+            self.assertFalse(result["real_zet_transport_performed"])
+            self.assertFalse(result["provider_api_call_performed"])
+            self.assertFalse(result["projection_write_performed"])
+            self.assertFalse(result["receipt_write_performed"])
+            self.assertEqual([entry["record_path"] for entry in result["records"]], [valid_relative, blocked_relative])
+            self.assertTrue(result["records"][0]["ok"])
+            self.assertFalse(result["records"][1]["ok"])
+            self.assertGreater(result["records"][1]["blocker_count"], 0)
+            self.assertNotIn(secret_body, serialized)
+            self.assertNotIn(r"C:\Users\example", serialized)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+
+    def test_shared_update_record_review_index_requires_dry_run_and_safe_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.write_shared_update_record_fixture(archive_root, "workbench/shared-updates/001-valid.json")
+            missing_dry_run_code, missing_dry_run_output = self.run_cli(
+                [
+                    "shared-update-record-review-index",
+                    str(archive_root),
+                    "--records-dir",
+                    "workbench/shared-updates",
+                    "--format",
+                    "json",
+                ]
+            )
+            missing_dry_run = json.loads(missing_dry_run_output)
+            self.assertEqual(missing_dry_run_code, 1, missing_dry_run_output)
+            self.assertFalse(missing_dry_run["ok"])
+            self.assertIn("shared-update-record-review-index is dry-run only; pass --dry-run.", missing_dry_run["blockers"])
+
+            unsafe_dir = r"C:\Users\example\private\shared-updates"
+            unsafe_code, unsafe_output = self.run_cli(
+                [
+                    "shared-update-record-review-index",
+                    str(archive_root),
+                    "--records-dir",
+                    unsafe_dir,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            unsafe_result = json.loads(unsafe_output)
+            unsafe_serialized = json.dumps(unsafe_result, ensure_ascii=False)
+            self.assertEqual(unsafe_code, 1, unsafe_output)
+            self.assertFalse(unsafe_result["ok"])
+            self.assertIn("records-dir must be a safe archive-relative directory path.", unsafe_result["blockers"])
+            self.assertNotIn(unsafe_dir, unsafe_serialized)
+            self.assertNotIn(r"C:\Users\example", unsafe_serialized)
+
+    def test_shared_update_record_review_index_limit_and_nonrecursive_scan_are_deterministic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.write_shared_update_record_fixture(archive_root, "workbench/shared-updates/c.json")
+            self.write_shared_update_record_fixture(archive_root, "workbench/shared-updates/a.json")
+            self.write_shared_update_record_fixture(archive_root, "workbench/shared-updates/b.json")
+            self.write_shared_update_record_fixture(archive_root, "workbench/shared-updates/nested/d.json")
+            code, output = self.run_cli(
+                [
+                    "shared-update-record-review-index",
+                    str(archive_root),
+                    "--records-dir",
+                    "workbench/shared-updates",
+                    "--limit",
+                    "2",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["limit_reached"])
+            self.assertEqual(result["record_count"], 2)
+            self.assertEqual(
+                [entry["record_path"] for entry in result["records"]],
+                ["workbench/shared-updates/a.json", "workbench/shared-updates/b.json"],
+            )
+            self.assertNotIn("workbench/shared-updates/nested/d.json", json.dumps(result, ensure_ascii=False))
+
     def test_block_header_collects_refs_and_hashes_are_deterministic_without_objet_body_reads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

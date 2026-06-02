@@ -107,7 +107,9 @@ ZET_PROJECTION_SURFACE_KINDS = {
 ZET_PROJECTION_VISIBILITIES = {"private", "team", "public", "unknown"}
 ZET_PROJECTION_FORMATS = {"metadata_only", "safe_html_summary", "plain_text_summary"}
 ZET_SHARED_UPDATE_RECORD_EXPECTED_KIND = "zet_shared_update_record_preview"
+ZET_SHARED_UPDATE_REVIEW_INDEX_MAX_LIMIT = 100
 ZET_SHARED_UPDATE_REVIEW_CLOSED_FLAGS = {
+    "shared_update_review_index_recorded": False,
     "shared_update_review_recorded": False,
     "neighbor_feed_updated": False,
     "trust_created": False,
@@ -9915,7 +9917,148 @@ def zet_shared_update_record_review_preview(
     return result
 
 
+def zet_shared_update_record_review_index(
+    archive_root: Path | str,
+    *,
+    records_dir: str | None,
+    dry_run: bool = True,
+    limit: int = ZET_SHARED_UPDATE_REVIEW_INDEX_MAX_LIMIT,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run is not True:
+        blockers.append("shared-update-record-review-index is dry-run only; pass --dry-run.")
+
+    try:
+        limit_value = int(limit)
+    except (TypeError, ValueError):
+        limit_value = ZET_SHARED_UPDATE_REVIEW_INDEX_MAX_LIMIT
+        blockers.append("limit must be between 1 and 100.")
+    if limit_value < 1 or limit_value > ZET_SHARED_UPDATE_REVIEW_INDEX_MAX_LIMIT:
+        blockers.append("limit must be between 1 and 100.")
+        limit_value = max(1, min(limit_value, ZET_SHARED_UPDATE_REVIEW_INDEX_MAX_LIMIT))
+
+    raw_dir = str(records_dir or "").strip() if isinstance(records_dir, str) else ""
+    records_dir_path: Path | None = None
+    records_dir_relative: str | None = None
+    if not raw_dir:
+        blockers.append("records-dir must be a safe archive-relative directory path.")
+    elif not safe_shared_update_records_dir_path(raw_dir):
+        blockers.append("records-dir must be a safe archive-relative directory path.")
+    else:
+        try:
+            records_dir_path = resolve_archive_relative_path(root, raw_dir)
+            if records_dir_path.is_file():
+                blockers.append("records-dir must point to a directory, not a file.")
+            elif not records_dir_path.is_dir():
+                blockers.append("records directory was not found inside the archive.")
+            else:
+                records_dir_relative = archive_relative_path(records_dir_path, root)
+        except (ArchivePathError, OSError, RuntimeError, ValueError):
+            blockers.append("records-dir must be a safe archive-relative directory path.")
+
+    record_entries: list[dict[str, Any]] = []
+    json_paths: list[Path] = []
+    skipped_non_json_count = 0
+    limit_reached = False
+    if records_dir_path is not None and records_dir_relative is not None and records_dir_path.is_dir():
+        direct_children = sorted(
+            (path for path in records_dir_path.iterdir() if path.is_file() and is_path_within_root(path, root)),
+            key=lambda path: archive_relative_path(path, root),
+        )
+        for path in direct_children:
+            if path.suffix.lower() != ".json":
+                skipped_non_json_count += 1
+                continue
+            json_paths.append(path)
+        if len(json_paths) > limit_value:
+            limit_reached = True
+            warnings.append("shared update review index limit reached; only the first records were scanned.")
+            json_paths = json_paths[:limit_value]
+
+        for path in json_paths:
+            record_relative = archive_relative_path(path, root)
+            preview = zet_shared_update_record_review_preview(
+                root,
+                record=record_relative,
+                dry_run=True,
+            )
+            preview_blockers = list(preview.get("blockers") or [])
+            preview_warnings = list(preview.get("warnings") or [])
+            if preview_blockers:
+                blockers.append("one or more shared update records are blocked; review per-record blockers.")
+            record_entries.append(
+                {
+                    "record_path": record_relative,
+                    "ok": bool(preview.get("ok")),
+                    "preview_status": preview.get("preview_status"),
+                    "record_kind": preview.get("record_kind"),
+                    "record_version": preview.get("record_version"),
+                    "blocker_count": len(preview_blockers),
+                    "warning_count": len(preview_warnings),
+                    "blockers": preview_blockers,
+                    "warnings": preview_warnings,
+                    "source_preview": preview.get("source_preview") if isinstance(preview.get("source_preview"), dict) else {},
+                    "receiver_review_preview": (
+                        preview.get("receiver_review_preview")
+                        if isinstance(preview.get("receiver_review_preview"), dict)
+                        else {}
+                    ),
+                }
+            )
+
+    reviewable_count = sum(1 for entry in record_entries if entry.get("ok") is True)
+    blocked_count = sum(1 for entry in record_entries if entry.get("ok") is not True)
+    result = {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "zet_shared_update_record_review_index",
+        "archive_id": archive_id,
+        "records_dir": records_dir_relative,
+        "index_status": "index_preview_not_recorded",
+        "scan_mode": "direct_child_json_files_only",
+        "policy_reused_from": "zet_shared_update_record_review_preview",
+        "limit": limit_value,
+        "record_count": len(record_entries),
+        "reviewable_count": reviewable_count,
+        "blocked_count": blocked_count,
+        "skipped_non_json_count": skipped_non_json_count,
+        "limit_reached": limit_reached,
+        "records": record_entries,
+        "next_safe_actions": [
+            "review per-record blockers without reading or echoing body text",
+            "run the single-record shared-update review preview for any record needing detail",
+            "keep shared updates untrusted before any separate receiver-side renewal approval path exists",
+        ],
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+    result.update(ZET_SHARED_UPDATE_REVIEW_CLOSED_FLAGS)
+    return result
+
+
 def safe_shared_update_record_path(value: str) -> bool:
+    text = value.strip()
+    if not text or "\x00" in text or "\n" in text or "\r" in text:
+        return False
+    if "://" in text or text.lower().startswith(("file:", "http:", "https:", "s3:", "b2:", "r2:", "gs:")):
+        return False
+    if re.match(r"^[A-Za-z]:", text):
+        return False
+    if contains_forbidden_location_reference(text) or DRAFT_SECRET_VALUE_RE.search(text):
+        return False
+    try:
+        normalize_archive_relative_path(text)
+    except ArchivePathError:
+        return False
+    return True
+
+
+def safe_shared_update_records_dir_path(value: str) -> bool:
     text = value.strip()
     if not text or "\x00" in text or "\n" in text or "\r" in text:
         return False

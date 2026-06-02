@@ -542,6 +542,22 @@ This is read-only and dry-run only. The record path must be archive-relative and
 
 MCP must not expose shared update write/apply/publish/transport/import/trust/attest/sign/anchor tools.
 
+From v0.2.58, an AI runtime may preview a compact index of local shared update records before choosing one record for closer review:
+
+```powershell
+archive shared-update-record-review-index <archive-root> --records-dir <archive-relative-dir> --dry-run --format json
+```
+
+MCP:
+
+```text
+zet_shared_update_record_review_index
+```
+
+This is read-only and dry-run only. The records directory must be archive-relative and contained under the archive root. The index scans only direct-child `.json` files, ignores non-JSON files, reuses the single-record preview policy for each JSON record, writes nothing, returns `would_change: []`, echoes no body text or local absolute paths, and does not create review records, receipts, trust, import, acceptance, attestation, signature, anchor, feed updates, provider calls, projections, or ZET transport.
+
+MCP must not expose shared update index write/apply/publish/transport/import/trust/attest/sign/anchor tools.
+
 ## Publication Surface Discussion Boundary
 
 An AI runtime may discuss a user-selected publication surface after archive context, source refs, draft preview, human approval, minting, and block/header context are understood.
@@ -586,10 +602,11 @@ An AI runtime should start with:
 25. use `record-attestation-statement-draft --dry-run` and then CLI `--approve --reviewed-by` only after human/operator statement-draft-record approval
 26. use `attestation-statement-draft-review` to index recorded statement drafts without accepting or applying them
 27. use `attestation-statement-draft-decision --dry-run` to preview one safe next review route without recording a decision
-28. use `shared-update-record-review --dry-run` for one local shared update record before any receiver-side renewal discussion
-29. discuss the radio-frequency recommendation model only as a future docs/examples baseline, not as an executable feed feature
-30. run mint dry-run before asking for mint approval
-31. use CLI approval paths for real minting
+28. use `shared-update-record-review-index --dry-run` to inventory local shared update records without recording review
+29. use `shared-update-record-review --dry-run` for one local shared update record before any receiver-side renewal discussion
+30. discuss the radio-frequency recommendation model only as a future docs/examples baseline, not as an executable feed feature
+31. run mint dry-run before asking for mint approval
+32. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -623,6 +640,7 @@ The skill tells the AI to:
 - use CLI-only `record-attestation-statement-draft` approval only to record an untrusted statement draft; MCP remains check-only,
 - use attestation-statement-draft-review to index recorded statement drafts without accepting or applying them,
 - use attestation-statement-draft-decision dry-run to preview one safe next review route without recording a decision,
+- use shared-update-record-review-index dry-run to inventory local shared update records without writing review metadata,
 - use shared-update-record-review dry-run before any receiver-side renewal discussion,
 - treat ZET recommendation as documentation-only in v0.2.48 and never claim that recommendations can be fetched, ranked, or applied,
 - keep paths archive-relative,

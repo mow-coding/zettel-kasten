@@ -13,6 +13,8 @@ v0.2.49 public release link hygiene is a local development script and test guard
 
 v0.2.56 shared update record review preview exposes only a read-only dry-run MCP tool. MCP cannot write review records, update feeds, trust/import/attest/sign/anchor shared updates, call providers, publish, or run ZET transport.
 
+v0.2.58 shared update record review index exposes only a read-only dry-run MCP tool. MCP requires boolean `dry_run: true`, scans only direct-child local JSON records under an archive-relative directory, and cannot write review indexes, update feeds, trust/import/attest/sign/anchor shared updates, call providers, publish, or run ZET transport.
+
 For the full beginner workflow around CLI plus MCP, see:
 
 ```text
@@ -163,6 +165,9 @@ zet_projection_plan_check
 
 zet_shared_update_record_review_preview
   Read-only dry-run preview for one local archive-contained ZET shared update record JSON before receiver-side renewal. `dry_run` must be boolean `true`; the tool writes nothing, echoes no body text or local absolute paths, blocks true mutation/write/transport/provider/trust flags, and never updates feeds, trusts, imports, attests, signs, anchors, calls providers, writes receipts, projects, or runs ZET transport.
+
+zet_shared_update_record_review_index
+  Read-only dry-run review index for direct-child local ZET shared update record JSON files under an archive-relative directory. `dry_run` must be boolean `true`; the tool writes nothing, ignores non-JSON files, reuses the single-record review policy, echoes no body text or local absolute paths, and never updates feeds, trusts, imports, attests, signs, anchors, calls providers, writes receipts, projects, or runs ZET transport.
 
 create_draft_zettel
   Create an AI draft in inbox/. `dry_run: true` previews the draft path, frontmatter, body hash, blockers, warnings, and approval replay values without writing. It may consume structured `source_intake_plan` and `prompt_boundary_report` objects and merge validated metadata into the draft preview. Normal profile-bound AI writes require draft approval plus expected body hash replay values. This does not mint the zettel.

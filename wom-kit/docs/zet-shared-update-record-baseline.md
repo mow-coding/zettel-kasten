@@ -114,9 +114,27 @@ zet_shared_update_record_review_preview
 
 MCP requires `dry_run: true` as a boolean and exposes no write/apply/publish/transport/import/trust/attest/anchor sibling tool.
 
+## v0.2.58 Review Index
+
+v0.2.58 adds a read-only review index for direct-child local shared update record JSON files:
+
+```powershell
+python wom-kit\cli\archive.py shared-update-record-review-index <archive-root> --records-dir <archive-relative-dir> --dry-run --format json
+```
+
+The index reuses the v0.2.56 single-record review preview policy for each JSON record. It writes nothing, ignores non-JSON files, does not recurse, and does not create review records, feed updates, trust, import, acceptance, attestation, signature, anchor, provider calls, projection writes, receipts, or ZET transport effects.
+
+The MCP tool is:
+
+```text
+zet_shared_update_record_review_index
+```
+
+MCP requires `dry_run: true` as a boolean and exposes no write/apply/publish/transport/import/trust/attest/anchor sibling tool.
+
 ## Non-Goals
 
-v0.2.56 still does not implement:
+v0.2.58 still does not implement:
 
 - shared-update transport,
 - neighbor feed update,
@@ -130,4 +148,4 @@ v0.2.56 still does not implement:
 - ZET transport,
 - review writes or approval records.
 
-v0.2.55 was a docs/examples/version baseline only. v0.2.56 adds a read-only preview command and MCP tool only.
+v0.2.55 was a docs/examples/version baseline only. v0.2.56 adds a read-only preview command and MCP tool only. v0.2.58 adds a read-only index command and MCP tool only.

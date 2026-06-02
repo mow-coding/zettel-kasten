@@ -49,6 +49,9 @@ projection-plan --dry-run
 shared-update-record-review --dry-run
   Preview one local archive-contained ZET shared update record JSON before receiver-side renewal. This writes nothing, echoes no body text or local absolute paths, blocks true mutation/write/transport/provider/trust flags, and never updates feeds, trusts, imports, attests, signs, anchors, calls providers, writes receipts, projects, or runs ZET transport.
 
+shared-update-record-review-index --dry-run
+  Preview a compact deterministic review index for direct-child local ZET shared update record JSON files under an archive-relative directory. This writes nothing, ignores non-JSON files, reuses the single-record review policy, echoes no body text or local absolute paths, and never updates feeds, trusts, imports, attests, signs, anchors, calls providers, writes receipts, projects, or runs ZET transport.
+
 foreign-block --dry-run
   Preview a foreign/shared block-header JSON artifact or Markdown-compatible foreign zet before trust/import. This writes nothing and never imports, drafts, mints, attests, anchors, applies, or calls providers.
 

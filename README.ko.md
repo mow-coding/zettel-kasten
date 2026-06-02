@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.2.57 pre-release
+v0.2.58 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -33,7 +33,7 @@ v0.2.57 pre-release
 - WOM / zet / ZET 설계 기준, specs, schemas, fake archive, release notes, work logs,
 - `wom-kit/` 안의 local CLI와 MCP tooling,
 - doctor, draft, mint, delegate, receipt, search, metadata review 같은 private archive lifecycle 도구,
-- runtime context, profile, source/objet intake, block header, prompt boundary, foreign block review, projection, shared update review를 위한 read-only preview layer,
+- runtime context, profile, source/objet intake, block header, prompt boundary, foreign block review, projection, shared update review/index를 위한 read-only preview layer,
 - 사람 승인 뒤에만 동작하는 일부 local write path,
 - public link, Korean product language, privacy, release readiness, branch-protection planning을 위한 local hygiene tool.
 
@@ -83,6 +83,7 @@ v0.2.57 pre-release
 - [Main Branch Protection Readiness](wom-kit/docs/main-branch-protection-readiness.md)
 - [ZET Shared Update Record Baseline](wom-kit/docs/zet-shared-update-record-baseline.md)
 - [ZET Shared Update Record Review Preview](wom-kit/docs/zet-shared-update-record-review-preview.md)
+- [ZET Shared Update Record Review Index](wom-kit/docs/zet-shared-update-record-review-index.md)
 - [공개 문서 지도](wom-kit/docs/public-documentation-map.ko.md)
 
 공개 프로젝트 기록은 의도적으로 다음처럼 분리합니다.
@@ -188,6 +189,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.58
 v0.2.57
 v0.2.56
 v0.2.55

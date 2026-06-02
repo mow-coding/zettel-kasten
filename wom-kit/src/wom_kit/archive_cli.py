@@ -25,6 +25,8 @@ Commands:
           Preview a dry-run ZET publication/projection plan for one local zet.
   shared-update-record-review
           Preview a local ZET shared update record before any renewal action.
+  shared-update-record-review-index
+          Index local ZET shared update records before any renewal action.
   foreign-block
           Preview a foreign/shared block or zet before any trust/import action.
   foreign-block-trust
@@ -1773,6 +1775,39 @@ def command_shared_update_record_review(args: argparse.Namespace) -> int:
         print(f"Archive: {result.get('archive_id') or '-'}")
         print(f"Record: {result.get('record_path') or '-'}")
         print(f"Preview status: {result.get('preview_status') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_shared_update_record_review_index(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.zet_shared_update_record_review_index(
+            Path(args.archive_root),
+            records_dir=args.records_dir,
+            dry_run=args.dry_run,
+            limit=args.limit,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        print(f"Shared update record review index {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Records dir: {result.get('records_dir') or '-'}")
+        print(f"Index status: {result.get('index_status') or '-'}")
+        print(f"Reviewable: {result.get('reviewable_count', 0)}")
+        print(f"Blocked: {result.get('blocked_count', 0)}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -4279,6 +4314,26 @@ def build_parser() -> argparse.ArgumentParser:
     shared_update_record_review.add_argument("--dry-run", action="store_true", help="Preview only; write nothing.")
     shared_update_record_review.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     shared_update_record_review.set_defaults(func=command_shared_update_record_review)
+
+    shared_update_record_review_index = subcommands.add_parser(
+        "shared-update-record-review-index",
+        help="Index local ZET shared update records before any renewal action.",
+    )
+    shared_update_record_review_index.add_argument("archive_root", help="Archive root used for path safety and local context.")
+    shared_update_record_review_index.add_argument(
+        "--records-dir",
+        required=True,
+        help="Archive-relative directory containing JSON shared update records.",
+    )
+    shared_update_record_review_index.add_argument(
+        "--limit",
+        type=int,
+        default=archive_services.ZET_SHARED_UPDATE_REVIEW_INDEX_MAX_LIMIT,
+        help="Maximum direct-child JSON records to scan. Defaults to 100.",
+    )
+    shared_update_record_review_index.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    shared_update_record_review_index.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    shared_update_record_review_index.set_defaults(func=command_shared_update_record_review_index)
 
     foreign_block = subcommands.add_parser("foreign-block", help="Preview a foreign/shared block or zet before trust/import.")
     foreign_block.add_argument("archive_root", help="Archive root used for path safety and local context.")

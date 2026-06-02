@@ -68,7 +68,7 @@ class McpServerTests(unittest.TestCase):
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
         return root
 
-    def write_shared_update_record_fixture(self, archive_root: Path, relative_path: str = "workbench/shared-update.json") -> str:
+    def write_shared_update_record_fixture(self, archive_root: Path, relative_path: str = "workbench/shared-update.json", **overrides) -> str:
         payload = {
             "record_kind": "zet_shared_update_record_preview",
             "version": "0.2.55-test",
@@ -103,6 +103,7 @@ class McpServerTests(unittest.TestCase):
                 "receipt_write_created": False,
             },
         }
+        payload.update(overrides)
         path = archive_root / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -640,6 +641,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("block_header_check", tool_names)
             self.assertIn("zet_projection_plan_check", tool_names)
             self.assertIn("zet_shared_update_record_review_preview", tool_names)
+            self.assertIn("zet_shared_update_record_review_index", tool_names)
             self.assertIn("foreign_block_intake_check", tool_names)
             self.assertIn("foreign_block_trust_check", tool_names)
             self.assertIn("foreign_block_attestation_packet_check", tool_names)
@@ -741,8 +743,26 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("projection_plan_write", tool_names)
             self.assertNotIn("zet_shared_update_record_review_apply", tool_names)
             self.assertNotIn("zet_shared_update_record_review_write", tool_names)
+            self.assertNotIn("zet_shared_update_record_review_index_apply", tool_names)
+            self.assertNotIn("zet_shared_update_record_review_index_write", tool_names)
+            self.assertNotIn("zet_shared_update_record_review_index_publish", tool_names)
+            self.assertNotIn("zet_shared_update_record_review_index_transport", tool_names)
+            self.assertNotIn("zet_shared_update_record_review_index_import", tool_names)
+            self.assertNotIn("zet_shared_update_record_review_index_trust", tool_names)
+            self.assertNotIn("zet_shared_update_record_review_index_attest", tool_names)
+            self.assertNotIn("zet_shared_update_record_review_index_sign", tool_names)
+            self.assertNotIn("zet_shared_update_record_review_index_anchor", tool_names)
             self.assertNotIn("shared_update_record_review_apply", tool_names)
             self.assertNotIn("shared_update_record_review_write", tool_names)
+            self.assertNotIn("shared_update_record_review_index_apply", tool_names)
+            self.assertNotIn("shared_update_record_review_index_write", tool_names)
+            self.assertNotIn("shared_update_record_review_index_publish", tool_names)
+            self.assertNotIn("shared_update_record_review_index_transport", tool_names)
+            self.assertNotIn("shared_update_record_review_index_import", tool_names)
+            self.assertNotIn("shared_update_record_review_index_trust", tool_names)
+            self.assertNotIn("shared_update_record_review_index_attest", tool_names)
+            self.assertNotIn("shared_update_record_review_index_sign", tool_names)
+            self.assertNotIn("shared_update_record_review_index_anchor", tool_names)
             self.assertNotIn("shared_update_publish", tool_names)
             self.assertNotIn("shared_update_transport", tool_names)
             self.assertNotIn("shared_update_import", tool_names)
@@ -2127,6 +2147,96 @@ class McpServerTests(unittest.TestCase):
                                     "arguments": {
                                         "archive_root": str(archive_root),
                                         "record": record_relative,
+                                        "dry_run": dry_run_value,
+                                    },
+                                },
+                            },
+                        )
+                        self.assertTrue(response["result"]["isError"])
+                        self.assertIn("dry-run only", response["result"]["content"][0]["text"])
+        finally:
+            self.stop_server(process)
+
+    def test_zet_shared_update_record_review_index_writes_nothing(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                self.write_shared_update_record_fixture(archive_root, "workbench/shared-updates/001-valid.json")
+                self.write_shared_update_record_fixture(
+                    archive_root,
+                    "workbench/shared-updates/002-blocked.json",
+                    body_included=True,
+                    body_text="private body C:\\Users\\example\\secret\\note.md",
+                )
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "zet_shared_update_record_review_index",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "records_dir": "workbench/shared-updates",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                serialized = json.dumps(structured, ensure_ascii=False)
+                self.assertEqual(before, after)
+                self.assertFalse(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "zet_shared_update_record_review_index")
+                self.assertEqual(structured["records_dir"], "workbench/shared-updates")
+                self.assertEqual(structured["index_status"], "index_preview_not_recorded")
+                self.assertEqual(structured["would_change"], [])
+                self.assertEqual(structured["record_count"], 2)
+                self.assertEqual(structured["reviewable_count"], 1)
+                self.assertEqual(structured["blocked_count"], 1)
+                self.assertFalse(structured["shared_update_review_index_recorded"])
+                self.assertFalse(structured["shared_update_review_recorded"])
+                self.assertFalse(structured["neighbor_feed_updated"])
+                self.assertFalse(structured["trust_created"])
+                self.assertFalse(structured["import_performed"])
+                self.assertFalse(structured["acceptance_created"])
+                self.assertFalse(structured["attestation_written"])
+                self.assertFalse(structured["signature_created"])
+                self.assertFalse(structured["anchor_performed"])
+                self.assertFalse(structured["real_zet_transport_performed"])
+                self.assertFalse(structured["provider_api_call_performed"])
+                self.assertFalse(structured["projection_write_performed"])
+                self.assertFalse(structured["receipt_write_performed"])
+                self.assertNotIn("private body", serialized)
+                self.assertNotIn(r"C:\Users\example", serialized)
+                self.assertNotIn(str(archive_root.resolve()), serialized)
+        finally:
+            self.stop_server(process)
+
+    def test_zet_shared_update_record_review_index_rejects_non_true_dry_run(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                self.write_shared_update_record_fixture(archive_root, "workbench/shared-updates/001-valid.json")
+                for index, dry_run_value in enumerate([False, "true", 1], start=1):
+                    with self.subTest(dry_run=dry_run_value):
+                        response = self.send(
+                            process,
+                            {
+                                "jsonrpc": "2.0",
+                                "id": index,
+                                "method": "tools/call",
+                                "params": {
+                                    "name": "zet_shared_update_record_review_index",
+                                    "arguments": {
+                                        "archive_root": str(archive_root),
+                                        "records_dir": "workbench/shared-updates",
                                         "dry_run": dry_run_value,
                                     },
                                 },

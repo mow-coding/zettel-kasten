@@ -480,6 +480,25 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "zet_shared_update_record_review_index",
+        "description": "Read-only dry-run index over local archive-contained ZET shared update records before any renewal action.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "records_dir": {"type": "string"},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": archive_services.ZET_SHARED_UPDATE_REVIEW_INDEX_MAX_LIMIT,
+                    "default": archive_services.ZET_SHARED_UPDATE_REVIEW_INDEX_MAX_LIMIT,
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "records_dir"],
+        },
+    },
+    {
         "name": "foreign_block_intake_check",
         "description": "Read-only dry-run intake preview for a foreign/shared block or Markdown-compatible zet before any trust/import action.",
         "inputSchema": {
@@ -1134,6 +1153,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_zet_projection_plan_check(arguments)
     if name == "zet_shared_update_record_review_preview":
         return tool_zet_shared_update_record_review_preview(arguments)
+    if name == "zet_shared_update_record_review_index":
+        return tool_zet_shared_update_record_review_index(arguments)
     if name == "foreign_block_intake_check":
         return tool_foreign_block_intake_check(arguments)
     if name == "foreign_block_trust_check":
@@ -1650,6 +1671,24 @@ def tool_zet_shared_update_record_review_preview(arguments: dict[str, Any]) -> d
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"zet_shared_update_record_review_preview: {state}.", result)
+
+
+def tool_zet_shared_update_record_review_index(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("zet_shared_update_record_review_index is dry-run only.")
+    limit = arguments.get("limit", archive_services.ZET_SHARED_UPDATE_REVIEW_INDEX_MAX_LIMIT)
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        raise ToolError("limit must be an integer between 1 and 100.")
+    result = call_service(
+        archive_services.zet_shared_update_record_review_index,
+        archive_root,
+        records_dir=require_string_arg(arguments, "records_dir"),
+        dry_run=True,
+        limit=limit,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"zet_shared_update_record_review_index: {state}.", result)
 
 
 def tool_foreign_block_intake_check(arguments: dict[str, Any]) -> dict[str, Any]:

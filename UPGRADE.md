@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.57` | current public pre-release | `wom-kit/docs/releases/v0.2.57.md` |
+| `v0.2.58` | current public pre-release | `wom-kit/docs/releases/v0.2.58.md` |
+| `v0.2.57` | superseded public pre-release | `wom-kit/docs/releases/v0.2.57.md` |
 | `v0.2.56` | superseded public pre-release | `wom-kit/docs/releases/v0.2.56.md` |
 | `v0.2.55` | superseded public pre-release | `wom-kit/docs/releases/v0.2.55.md` |
 | `v0.2.54` | superseded public pre-release | `wom-kit/docs/releases/v0.2.54.md` |
@@ -84,6 +85,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.57` To `v0.2.58`
+
+This is a compatible read-only shared update review index patch.
+
+What changed:
+
+- added CLI `archive shared-update-record-review-index <archive-root> --records-dir <path> --dry-run --format json`,
+- added MCP `zet_shared_update_record_review_index`,
+- added `wom-kit/docs/zet-shared-update-record-review-index.md`,
+- updated version metadata to `0.2.58`.
+
+No private archive migration is required.
+
+The new command inspects only direct-child local JSON records under an archive-relative directory, reuses the v0.2.56 single-record review policy, writes nothing, and returns a compact deterministic index. It does not add shared-update review writes, shared-update transport, real ZET transport, neighbor feed update, trust/import/acceptance/anchor, attestation/signature writes, provider sync, WordPress publishing, projection writes or receipts, workers, payments/staking/consensus/blockchain, model training, backpropagation, or full-auto behavior.
 
 ## From `v0.2.56` To `v0.2.57`
 
