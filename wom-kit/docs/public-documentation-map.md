@@ -1,7 +1,7 @@
 # Public Documentation Map
 
 Status: public navigation baseline
-Date: 2026-05-27
+Date: 2026-06-02
 
 This repository intentionally separates four kinds of public project records:
 
@@ -119,6 +119,7 @@ Onboarding and setup plans:
 - [Public Privacy Hygiene](public-privacy-hygiene.md)
 - [Release Readiness Gate](release-readiness-gate.md)
 - [Main Branch Protection Readiness](main-branch-protection-readiness.md)
+- [WOM-kit Capability Matrix](capability-matrix.md)
 - [ZET Publication Surface Baseline](zet-publication-surface-baseline.md)
 - [ZET Projection Plan Preview](zet-projection-plan-preview.md)
 - [ZET Closed Sharing Model Baseline](zet-closed-sharing-model-baseline.md)
@@ -194,6 +195,7 @@ These documents record public-safe work already performed.
 - [Main Branch Protection Readiness Work Log](../plans/work-log-2026-05-27-main-branch-protection-readiness.md)
 - [ZET Shared Update Record Baseline Work Log](../plans/work-log-2026-05-27-zet-shared-update-record-baseline.md)
 - [ZET Shared Update Record Review Preview Work Log](../plans/work-log-2026-05-27-zet-shared-update-record-review-preview.md)
+- [Capability Matrix And README Readability Work Log](../plans/work-log-2026-06-02-capability-matrix-readability.md)
 - [Draft Provenance Work Log](../plans/work-log-2026-05-24-draft-provenance.md)
 - [WOM-kit Naming Cleanup Work Log](../plans/work-log-2026-05-25-wom-kit-naming-cleanup.md)
 - [Delegate Capability Binding Work Log](../plans/work-log-2026-05-23-delegate-capability-binding.md)

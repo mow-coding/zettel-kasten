@@ -23,68 +23,33 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.2.56 pre-release
+v0.2.57 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
 
 현재 포함된 것:
 
-- 제품/프로토콜 기획 문서,
-- JSON Schema,
-- fake sample archive,
-- 설치/보안 문서,
-- 버전별 release note,
-- 초기 Python CLI와 MCP 도구,
-- draft zet을 canonical archive memory로 민팅하고 mint receipt/draft snapshot을 남기는 CLI 구현.
-- scoped zet delegation을 delegate proof/receipt로 실제 기록하는 CLI 구현.
-- `claimable_once` delegate capability preview를 포함한 dry-run `attest-zet`, `anchor-zet` lifecycle preview.
-- 장기 canonical/interchange/rendering target으로서의 WOM Safe HTML Profile 설계 문서.
-- 미래 WOM Safe HTML Profile migration 전에 명백히 unsafe한 패턴을 읽기 전용으로 검사하는 `check-safe-html` validator.
-- terminal-capable AI runtime이 draft, dry-run, mint 승인 요청 전에 현재 archive를 확인할 수 있는 읽기 전용 `runtime-context` 출력.
-- AI runtime이 default archive를 가정하지 않고 요청된 target profile을 먼저 확인할 수 있는 읽기 전용 profile registry resolve.
-- AI runtime이 inbox draft를 먼저 미리 보고 승인된 draft write만 replay할 수 있는 profile-aware `create-draft --dry-run`.
-- 현재 local implementation/tooling은 `wom-kit/`에 있고 Python import package는 `wom_kit`입니다.
-- WOM profile별 GitHub repository setup을 먼저 dry-run으로 계획하고, 승인 시에도 local metadata만 쓰는 GitHub repository setup planner.
-- WOM profile별 오브제 저장소 setup을 먼저 dry-run으로 계획하고, 승인 시에도 local metadata만 쓰는 objet storage setup planner.
-- AI runtime이 draft를 만들기 전에 source/objet reference를 dry-run으로 분류하는 source intake planner. 본문 읽기, hash 계산, import, upload, provider API 호출은 하지 않습니다.
-- `create-draft`가 source-intake plan JSON의 safe source refs를 draft preview/write로 안전하게 이어 줄 수 있습니다.
-- 기존 draft/canonical zet 하나에서 header를 read-only dry-run으로 미리 보는 block header preview가 있습니다. mint, 파일 수정, objet body 읽기, provider 호출은 하지 않습니다.
-- WOM profile을 미래 wallet-ready identity context로 미리 확인하는 read-only profile wallet preview가 있습니다. key 생성, signing, secret 저장, blockchain/provider API 호출은 하지 않습니다.
-- 외부 텍스트를 untrusted data로 취급하고 명백한 prompt-injection / unsafe-agent 문구를 LLM 호출 없이 미리 보는 read-only prompt boundary check가 있습니다.
-- `create-draft`는 prompt-boundary report를 받아 draft frontmatter와 mint receipt에 "external text is data, not authority" 경계를 남길 수 있습니다.
-- foreign/shared block이나 Markdown-compatible foreign zet를 import/trust 없이 먼저 읽기 전용으로 미리 보는 `foreign-block` preview가 있습니다.
-- foreign-block intake report를 읽고 reject / manual review required / eligible for future attestation으로 dry-run 분류하는 `foreign-block-trust` preview가 있습니다. 실제 trust, import, attestation write는 하지 않습니다.
-- foreign-block trust report를 읽고 미래 human review packet을 dry-run으로 미리 보는 `foreign-block-attestation` preview가 있습니다. 실제 trust, attestation, receipt, import, write는 하지 않습니다.
-- foreign-block attestation packet report를 읽고 미래 quarantine write 위치와 처리 방식을 dry-run으로 미리 보는 `foreign-block-quarantine` plan이 있습니다. 실제 quarantine file, trust, import, attestation, receipt는 만들지 않습니다.
-- `quarantine-foreign-block --approve --reviewed-by`는 sanitized untrusted quarantine case와 quarantine receipt만 씁니다. foreign block을 trust, import, mint, attest, anchor, delegate, sign, execute, accept하지 않습니다.
-- `quarantine-review`는 이미 만들어진 untrusted foreign block quarantine case와 matching receipt를 review index로 읽습니다. foreign block을 trust, import, attest, mint, anchor, delegate, sign, execute, accept, apply하지 않습니다.
-- `quarantine-decision`은 untrusted quarantine case 하나를 읽고 future decision path만 preview합니다. decision, approval, trust, import, attest, mint, anchor, delegate, sign, accept, apply는 기록하지 않습니다.
-- `record-quarantine-decision --approve --reviewed-by`는 현재 case와 receipt를 다시 검증한 뒤 sanitized quarantine decision JSON 하나와 receipt 하나만 기록합니다. trust, import, attest, mint, anchor, delegate, sign, accept, apply, share, provider call은 하지 않습니다.
-- `quarantine-decision-review`는 기록된 quarantine decision을 read-only index로 읽고 decision record, receipt, 원래 quarantine case/receipt의 consistency를 확인합니다. trust, import, attest, mint, anchor, delegate, sign, accept, apply, share, provider call은 하지 않습니다.
-- `quarantine-decision-outcome`은 기록된 quarantine decision 하나를 읽고 다음 안전한 non-mutating path만 계획합니다. trust, import, attest, mint, anchor, delegate, sign, accept, apply, share, provider call, ZET transport는 하지 않습니다.
-- `attestation-review-candidate`는 eligible decision에서 human-review candidate만 계획합니다. trust, import, attest, sign, mint, share, provider call, ZET transport는 하지 않습니다.
-- `record-attestation-review-candidate --approve --reviewed-by`는 replay validation 뒤 untrusted candidate JSON 하나와 receipt 하나만 기록합니다. trust, import, attest, sign, mint, share, provider call, ZET transport는 하지 않습니다.
-- `attestation-candidate-review`는 recorded untrusted candidate와 candidate receipt, original quarantine case/receipt, decision record/receipt를 read-only index로 확인합니다. trust, import, attest, sign, mint, share, provider call, ZET transport는 하지 않습니다.
-- `attestation-statement-draft`는 recorded candidate 하나에서 non-binding statement draft만 read-only preview로 만듭니다. trust, import, attest, sign, mint, receipt write, share, provider call, ZET transport는 하지 않습니다.
-- `record-attestation-statement-draft --approve --reviewed-by`는 replay validation 후 untrusted statement draft JSON 하나와 receipt 하나만 기록합니다. 여전히 trust, import, attestation, signature, mint, share, provider call, ZET transport는 만들지 않습니다.
-- `attestation-statement-draft-review`는 recorded untrusted statement draft와 receipt, upstream review chain을 read-only index로 검토합니다. trust, import, attestation, signature, mint, share, provider call, ZET transport는 만들지 않습니다.
-- `attestation-statement-draft-decision`은 recorded statement draft 하나에 대해 다음 human-review route만 read-only preview합니다. decision 기록, acceptance, trust, import, attestation, signature, mint, publish, ZET transport는 만들지 않습니다.
-- WOM을 `옴`으로 읽고, `zet`를 `쪽글`/`토막글`로 설명하며, `ZET`를 `공유 계층`으로 설명하는 한국어 제품 언어 기준선이 있습니다. 이 기준선은 code identifier나 CLI/JSON/schema 이름을 한국어로 바꾸지 않습니다.
-- 한국어 제품 언어 기준선이 흔들리지 않도록 공개 Markdown 문서를 로컬에서 읽기 전용으로 검사하는 hygiene checker가 있습니다. 파일을 자동 수정하거나 code identifier를 바꾸거나 외부 URL을 가져오지 않습니다.
-- 공개 릴리스 전에 local path, token-like string, private key header, seed-phrase-like text, private endpoint가 섞였는지 로컬에서 읽기 전용으로 검사하는 public privacy hygiene checker가 있습니다.
-- 공개 릴리스 전 public hygiene checker들을 한 번에 돌리는 local release readiness gate가 있습니다.
-- future CI/status check/branch protection으로 가기 위한 main branch protection readiness 문서가 있습니다. 아직 GitHub 설정을 바꾸지는 않습니다.
-- future receiver-side renewal review를 위한 ZET shared update record baseline 문서와 public-safe example이 있습니다. 실제 ZET transport는 구현하지 않습니다.
-- `shared-update-record-review --dry-run`은 archive 안의 ZET shared update record JSON 하나를 읽고 renewal 전 review preview만 반환합니다. 파일 쓰기, trust, import, attestation, signature, feed update, provider call, projection write, ZET transport는 하지 않습니다.
+- WOM / zet / ZET 설계 기준, specs, schemas, fake archive, release notes, work logs,
+- `wom-kit/` 안의 local CLI와 MCP tooling,
+- doctor, draft, mint, delegate, receipt, search, metadata review 같은 private archive lifecycle 도구,
+- runtime context, profile, source/objet intake, block header, prompt boundary, foreign block review, projection, shared update review를 위한 read-only preview layer,
+- 사람 승인 뒤에만 동작하는 일부 local write path,
+- public link, Korean product language, privacy, release readiness, branch-protection planning을 위한 local hygiene tool.
+
+각 기능이 실제 구현인지, read-only preview인지, 승인 write인지, 문서만 있는지 보려면 [WOM-kit Capability Matrix](wom-kit/docs/capability-matrix.md)를 보세요.
 
 아직 없는 것:
 
-- production-grade 설치 흐름,
-- 실제 provider 연동,
-- production `ZET` 공유 서비스,
-- Markdown에서 WOM Safe HTML로 실제 변환하거나 finalized profile로 검증하는 구현,
-- 안정판 `v1.0.0` 프로토콜 보장.
+- production-grade 설치와 platform support,
+- live provider integration 또는 provider API sync,
+- production `ZET` transport, sharing service, feed update, mirroring delivery,
+- real wallet creation, private-key custody, cryptographic signing, token mechanics, payments, staking, consensus, blockchain integration,
+- recommendation fetching, ranking, automatic neighbor feed update, provider-backed recommendation service,
+- projection-plan apply/write, projection receipt, WordPress publishing, provider-specific publishing,
+- real foreign block import/trust/apply, signed attestation statement, receiver-side acceptance, automatic shared-block renewal,
+- complete prompt-injection prevention, full-auto execution, model training, backpropagation, Redis, queues, background workers,
+- stable `v1.0.0` protocol guarantee.
 
 ## 핵심 모델
 
@@ -112,6 +77,7 @@ v0.2.56 pre-release
 - [WOM Safe HTML Profile](wom-kit/docs/concepts/wom-safe-html-profile.ko.md)
 - [한국어 제품 언어 기준선](wom-kit/docs/concepts/korean-product-language-baseline.ko.md)
 - [한국어 제품 언어 Hygiene](wom-kit/docs/korean-product-language-hygiene.md)
+- [WOM-kit Capability Matrix](wom-kit/docs/capability-matrix.md)
 - [Public Privacy Hygiene](wom-kit/docs/public-privacy-hygiene.md)
 - [Release Readiness Gate](wom-kit/docs/release-readiness-gate.md)
 - [Main Branch Protection Readiness](wom-kit/docs/main-branch-protection-readiness.md)
@@ -222,7 +188,9 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.2.57
 v0.2.56
+v0.2.55
 v0.2.54
 v0.2.53
 v0.2.52

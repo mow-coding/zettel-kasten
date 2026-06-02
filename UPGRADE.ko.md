@@ -28,7 +28,8 @@ MAJOR upgrade -> protocol/schema breaking change
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.56` | current public pre-release | `wom-kit/docs/releases/v0.2.56.md` |
+| `v0.2.57` | current public pre-release | `wom-kit/docs/releases/v0.2.57.md` |
+| `v0.2.56` | superseded public pre-release | `wom-kit/docs/releases/v0.2.56.md` |
 | `v0.2.55` | superseded public pre-release | `wom-kit/docs/releases/v0.2.55.md` |
 | `v0.2.54` | superseded public pre-release | `wom-kit/docs/releases/v0.2.54.md` |
 | `v0.2.53` | superseded public pre-release | `wom-kit/docs/releases/v0.2.53.md` |
@@ -83,6 +84,22 @@ MAJOR upgrade -> protocol/schema breaking change
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.56` To `v0.2.57`
+
+This is a compatible capability matrix and README readability patch.
+
+What changed:
+
+- added `wom-kit/docs/capability-matrix.md`,
+- shortened the top-level README status summary and linked to the capability matrix,
+- restored the missing `v0.2.55` README release-tag entry,
+- documented a proposed v0.2.x closing plan and narrow proposed v0.3.0 boundary,
+- updated version metadata to `0.2.57`.
+
+No private archive migration is required.
+
+This release adds no archive product CLI, MCP, or service behavior. It does not add provider calls, real ZET transport, shared-update writes, receiver-side renewal writes, RF access, key-sharing registry, mirroring delivery, neighbor feed update, automatic feed renewal, recommendation execution, trust/import/acceptance/anchor, attestation/signature writes, provider sync, WordPress publishing, projection writes or receipts, workers, payments/staking/consensus/blockchain, model training, backpropagation, or full-auto behavior.
 
 ## From `v0.2.55` To `v0.2.56`
 

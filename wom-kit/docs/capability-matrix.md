@@ -1,0 +1,102 @@
+# WOM-kit Capability Matrix
+
+Status: public readability baseline
+Date: 2026-06-02
+Version: v0.2.57
+
+This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
+
+Read it as a safety label. A row marked `read-only preview` means WOM-kit can inspect or plan something and return JSON, but it does not write files. A row marked `approval-gated write` means the CLI has a human-reviewed write path with explicit approval fields. A row marked `documented-only` means the idea is described, but no product command exists yet.
+
+## Status Legend
+
+| Status | Meaning |
+| --- | --- |
+| `implemented local command` | A local CLI behavior exists and can be run in the repository. |
+| `read-only preview` | CLI and/or MCP can inspect or plan, but writes nothing. |
+| `approval-gated write` | CLI can write only after explicit human approval inputs. MCP remains read-only or dry-run for that surface. |
+| `local hygiene tool` | A local checker exists for public release hygiene. It does not add archive product behavior. |
+| `documented-only` | Public docs or examples exist, but no product command/tool exists. |
+| `not implemented` | No product behavior exists in v0.2.57. |
+
+## Current Capability Table
+
+| Capability | Status in v0.2.57 | Write behavior | Notes |
+| --- | --- | --- | --- |
+| Archive doctor | `implemented local command` | read-only | `archive doctor` checks archive structure, schema, manifest, receipt, and lifecycle consistency. |
+| Mint lifecycle | `approval-gated write` | CLI approve writes canonical zet, receipt, and draft snapshot | Dry-run previews first. Minting is private archive memory, not public posting. |
+| Delegate lifecycle | `approval-gated write` | CLI approve writes delegate receipt only | MCP delegate checks remain dry-run. Real external transport is not implemented. |
+| Attest lifecycle preview | `read-only preview` | none | `attest-zet --dry-run` previews delegated receipt review without writing attestation records. |
+| Anchor lifecycle preview | `read-only preview` | none | `anchor-zet --dry-run` previews local meaning anchoring without writing anchor metadata. |
+| Block header preview | `read-only preview` | none | Derives a header preview for an existing draft or canonical zet. It does not modify the zet. |
+| Runtime context | `read-only preview` | none | AI runtimes can confirm archive id, type, paths, policy, and safe next actions. |
+| Profile registry list/resolve | `read-only preview` | none | Resolves the intended WOM profile before runtime-context or draft work. |
+| Profile wallet preview | `read-only preview` | none | Wallet-ready identity model only. No keys, signing, or blockchain calls. |
+| GitHub repository setup plan | `approval-gated write` | CLI approve writes local provider metadata/receipt only | Does not create a repository, configure remotes, push, call GitHub APIs, or run OAuth. |
+| Objet storage setup plan | `approval-gated write` | CLI approve writes local provider metadata/receipt only | Does not create buckets, upload, sync, copy files, hash source files, or call provider APIs. |
+| Source intake planner | `read-only preview` | none | Metadata-only classification before draft creation. It does not import, copy, upload, OCR, transcribe, or hash file bodies. |
+| Source intake to draft composer | `approval-gated write` | CLI draft approval can write inbox draft only | Consumes validated source-intake plans without reading original source files. Minting remains separate. |
+| Prompt boundary check | `read-only preview` | none | Heuristic local check for obvious prompt-injection and unsafe-agent strings. Not complete prevention. |
+| Prompt boundary to draft composer | `approval-gated write` | CLI draft approval can write inbox draft only | Carries untrusted-text boundary metadata into draft/mint metadata where supported. |
+| Foreign block intake | `read-only preview` | none | Inspects shared block/header JSON or Markdown-compatible foreign zets without trusting or importing. |
+| Foreign block trust preview | `read-only preview` | none | Classifies intake as reject, manual review, or future attestation candidate. It grants no trust. |
+| Foreign block attestation packet preview | `read-only preview` | none | Prepares a human-review packet. It creates no trust, receipt, attestation, or signature. |
+| Foreign block quarantine plan | `read-only preview` | none | Proposes future holding paths without writing quarantine files. |
+| Foreign block quarantine write | `approval-gated write` | CLI approve writes untrusted quarantine case and receipt | The foreign block stays untrusted and unimported. |
+| Foreign block quarantine review index | `read-only preview` | none | Indexes existing untrusted quarantine cases and matching receipts. |
+| Foreign block quarantine decision preview | `read-only preview` | none | Proposes a human decision path without recording a decision. |
+| Foreign block quarantine decision write | `approval-gated write` | CLI approve writes decision record and receipt | Keeps the foreign block untrusted and unimported. |
+| Foreign block quarantine decision review index | `read-only preview` | none | Reviews recorded decisions and receipts without changing trust state. |
+| Foreign block decision outcome plan | `read-only preview` | none | Routes one recorded decision to the next safe non-mutating path. |
+| Attestation review candidate plan | `read-only preview` | none | Plans a human-review candidate from an eligible recorded decision. |
+| Attestation review candidate write | `approval-gated write` | CLI approve writes untrusted candidate and receipt | Does not create an attestation, signature, trust, import, or ZET transport. |
+| Attestation review candidate index | `read-only preview` | none | Reviews recorded untrusted candidates and receipts. |
+| Attestation statement draft preview | `read-only preview` | none | Creates a non-binding draft preview only. It is not an attestation. |
+| Attestation statement draft write | `approval-gated write` | CLI approve writes untrusted statement draft and receipt | Does not create trust, signatures, attestation, acceptance, or transport. |
+| Attestation statement draft review index | `read-only preview` | none | Reviews recorded untrusted statement drafts and upstream chain consistency. |
+| Attestation statement draft decision preview | `read-only preview` | none | Proposes one safe next route without recording acceptance or creating trust. |
+| Publication surface baseline | `documented-only` | none | Describes future projection surfaces such as WordPress-like posts. No provider posting exists. |
+| Projection plan | `read-only preview` | none | Plans one local zet projection for one declared surface kind. No rendering, receipt, provider call, or publish action. |
+| Closed sharing model | `documented-only` | none | Describes the future closed sharing/SNS layer above GitHub, objet storage, and database infrastructure. |
+| Radio-frequency recommendation model | `documented-only` | none | Describes future user/node-owned recommendation selectors. No fetching, ranking, or feed update exists. |
+| Shared update record baseline | `documented-only` | none | Defines a future receiver-side review artifact and sanitized example. |
+| Shared update record review preview | `read-only preview` | none | Reviews one local archive-contained shared update JSON record before any receiver-side renewal write exists. |
+| Public release link hygiene | `local hygiene tool` | none | Checks repository Markdown links for release note copy safety. No GitHub Release edit or external URL fetch. |
+| Korean product-language hygiene | `local hygiene tool` | none | Checks public Markdown drift against the Korean product-language baseline. No auto-rewrite. |
+| Public privacy hygiene | `local hygiene tool` | none | Checks public files for obvious local path, token, private key, seed phrase, and private endpoint leaks. |
+| Release readiness gate | `local hygiene tool` | none | Runs the public hygiene checkers together. It is not CI or branch protection. |
+| Main branch protection readiness | `documented-only` | none | Documents a staged path toward future repository settings. It changes no GitHub settings. |
+| Real ZET transport | `not implemented` | none | No send/receive relay, P2P, inbox transport, or transport worker exists. |
+| Key-sharing registry | `not implemented` | none | No key exchange, key registry, private-key custody, or wallet signing exists. |
+| Radio-frequency access | `not implemented` | none | No subscription, channel access, or frequency access control exists. |
+| Mirroring delivery | `not implemented` | none | No mirror/re-project delivery pipeline exists. |
+| Neighbor feed update | `not implemented` | none | No receiver-side feed mutation exists. |
+| Recommendation execution | `not implemented` | none | No selector execution, fetching, ranking, or automatic recommendation update exists. |
+| Provider sync / WordPress | `not implemented` | none | No WordPress publishing, provider sync, external provider write, or provider API workflow exists. |
+| Redis / queues / workers | `not implemented` | none | No background job infrastructure exists in the product layer. |
+| Payments / blockchain / token / consensus | `not implemented` | none | No WOM coin, NFT-like access, staking, payment, ledger, consensus, or blockchain mechanics exist. |
+
+## v0.2.x Closing Plan
+
+This is a planning baseline, not a release promise.
+
+The v0.2 line should stop adding parallel preview ladders after the remaining closing work:
+
+1. `v0.2.57`: capability matrix and README readability cleanup.
+2. `v0.2.58`: shared-update review index, read-only.
+3. `v0.2.59`: ZET transport threat model and dry-run would-transport plan, with no real transport.
+4. Freeze the v0.2.x line after the closing docs and previews are coherent.
+
+The proposed `v0.3.0` boundary is one narrow receiver-side approved write, likely an attestation record plus receipt for an already-reviewed foreign block. That boundary should be replay-gated and should still avoid real transport, anchors, trust graph mutation, provider sync, full-auto behavior, payment layers, and blockchain/token mechanics.
+
+## Review Context
+
+A big-picture external review summarized the v0.2.56 line as `GO WITH CAUTIONS`: the WOM vision is coherent and the safety-first pattern is credible, but the project has readability debt and too many similar preview ladders for new readers.
+
+The v0.2.57 response is deliberately small:
+
+- add this matrix,
+- shorten the top-level README status summary,
+- restore the missing `v0.2.55` tag in README release lists,
+- document the v0.2.x closing plan,
+- avoid any new product CLI, MCP, service, provider, transport, trust, import, attestation, signature, anchor, or full-auto behavior.

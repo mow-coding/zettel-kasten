@@ -4,6 +4,28 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.57 - 2026-06-02
+
+Capability matrix and README readability patch.
+
+Added:
+
+- public [WOM-kit Capability Matrix](wom-kit/docs/capability-matrix.md) for implemented, read-only preview, approval-gated write, documented-only, local hygiene, and not-implemented surfaces,
+- release note and public-safe work log for the v0.2.57 readability batch,
+- focused documentation tests for the capability matrix and README release-tag sequence.
+
+Changed:
+
+- shortened the top-level README status summary and pointed readers to the capability matrix,
+- restored the missing `v0.2.55` README release-tag entry,
+- recorded a proposed v0.2.x closing plan and a narrow proposed v0.3.0 boundary,
+- updated version metadata to `0.2.57`.
+
+Compatibility:
+
+- no private archive migration is required,
+- no archive product CLI, MCP, service, provider, transport, trust/import, attestation/signature, anchor, payment, blockchain, token, worker, or full-auto behavior changed.
+
 ## v0.2.56 - 2026-06-02
 
 ZET shared update record review preview.

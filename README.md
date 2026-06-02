@@ -25,79 +25,32 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.56 pre-release
+v0.2.57 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
 
 What exists today:
 
-- product and protocol specifications,
-- JSON schemas,
-- fake sample archives,
-- setup and security documentation,
-- versioned release notes,
-- early Python CLI and MCP tooling,
-- CLI-backed private minting from draft zet to canonical archive memory, currently recorded with mint receipts and draft snapshots,
-- CLI-backed real delegate proof/receipt writes for scoped zet delegation,
-- dry-run `attest-zet` and `anchor-zet` lifecycle previews, including `claimable_once` delegate capability previews.
-- WOM Safe HTML Profile design notes for the long-term canonical/interchange/rendering target.
-- read-only `check-safe-html` validation for obvious unsafe patterns before future WOM Safe HTML Profile migration.
-- read-only `runtime-context` output so terminal-capable AI runtimes can confirm the active archive before drafting, dry-runs, or mint approval requests.
-- read-only profile registry resolution so AI runtimes resolve the requested target profile before assuming the default archive.
-- profile-aware `create-draft --dry-run` so AI runtimes preview inbox drafts and replay approved draft writes without minting.
-- current local implementation/tooling lives in `wom-kit/` and imports as `wom_kit`.
-- dry-run-first GitHub repository setup planning for WOM profiles, with local-only approval metadata and no provider API calls.
-- dry-run-first objet storage setup planning for WOM profiles, with local-only approval metadata and no bucket creation, upload, sync, copy, or hashing.
-- dry-run-only source intake planning so AI runtimes can classify source/objet references before draft creation without reading bodies, hashing, importing, uploading, or calling provider APIs.
-- source-intake plan composition for `create-draft`, so AI runtimes can safely carry source refs into draft previews or approved inbox draft writes without re-reading source files.
-- read-only block header previews that derive a header from one existing draft or canonical zet without minting, modifying files, reading objet bodies, or calling providers.
-- read-only profile wallet previews that treat a WOM profile as wallet-ready identity context without generating keys, signing, storing secrets, or calling blockchain/provider APIs.
-- read-only prompt boundary checks that treat inspected external text as untrusted data and flag obvious prompt-injection / unsafe-agent strings without calling LLMs.
-- prompt-boundary report composition for `create-draft`, so AI runtimes can preserve the "external text is data, not authority" boundary in draft frontmatter and mint receipts.
-- read-only foreign block intake previews that inspect shared block/header JSON or Markdown-compatible foreign zets without importing, trusting, drafting, minting, attesting, anchoring, or applying them.
-- read-only foreign block trust previews that consume intake reports and classify them as reject, manual review required, or eligible for future attestation without creating trust or attestations.
-- read-only foreign block attestation packet previews that consume trust reports and prepare a human-review packet without creating trust, writing attestations, writing receipts, or re-reading the foreign artifact.
-- read-only foreign block quarantine plans that consume attestation packet previews and propose archive-relative future holding paths without creating quarantine files, trust, imports, attestations, or receipts.
-- CLI-only approved foreign block quarantine writes that create a sanitized untrusted review case and quarantine receipt without importing, trusting, minting, attesting, anchoring, delegating, signing, executing, or accepting the foreign block.
-- read-only foreign block quarantine review indexes that list existing untrusted quarantine cases and receipt consistency checks without changing trust state, importing, attesting, minting, anchoring, delegating, signing, or accepting the foreign block.
-- read-only foreign block quarantine decision previews that inspect one untrusted case and propose a future decision path without recording approval, trusting, importing, attesting, minting, anchoring, delegating, signing, accepting, or applying the foreign block.
-- CLI-only approved foreign block quarantine decision records that write exactly one sanitized decision JSON and one receipt after replay-validating the current case and receipt, without trusting, importing, attesting, minting, anchoring, delegating, signing, accepting, applying, sharing, or calling providers.
-- read-only foreign block quarantine decision review indexes that list recorded local decisions and check their decision records, receipts, original quarantine cases, and quarantine receipts without modifying trust state.
-- read-only foreign block decision outcome plans that route one recorded decision into the next safe non-mutating path without trust, import, attestation, minting, acceptance, sharing, signing, provider calls, or ZET transport.
-- read-only foreign block attestation review candidate plans that prepare a safe human-review candidate from an eligible recorded decision without creating trust, import, attestation, signatures, minting, sharing, provider calls, or ZET transport.
-- CLI-only approved foreign block attestation review candidate records that write exactly one untrusted candidate JSON and one receipt after replay-validating the current case, receipts, and supplied candidate plan, without creating trust, import, attestation, signatures, minting, sharing, provider calls, or ZET transport.
-- read-only foreign block attestation review candidate indexes that list recorded untrusted candidates and validate their candidate records, candidate receipts, original quarantine cases/receipts, and decision records/receipts without changing trust state.
-- read-only foreign block attestation statement draft previews that prepare a non-binding statement draft from one recorded candidate without creating trust, import, attestation, signatures, minting, receipts, sharing, provider calls, or ZET transport.
-- CLI-only approved foreign block attestation statement draft records that write exactly one untrusted statement draft JSON and one receipt after replay-validating the current preview, candidate, receipts, quarantine case, and decision records, without creating trust, import, attestation, signatures, minting, sharing, provider calls, or ZET transport.
-- read-only foreign block attestation statement draft review indexes that list recorded untrusted statement drafts, validate their receipts and upstream review chain, and still do not create trust, import, attestation, signatures, minting, sharing, provider calls, or ZET transport.
-- read-only foreign block attestation statement draft decision previews that propose one safe next human-review route without recording a decision, accepting a draft, trusting, importing, attesting, signing, minting, publishing, or running ZET transport.
-- ZET publication surface baseline docs and sanitized examples that separate canonical archive memory from user-selected projection surfaces such as a future WordPress post.
-- read-only `projection-plan` previews that consider one local zet and one operator-declared surface kind before any rendering, provider call, projection write, receipt write, publication, minting, trust, attestation, signature, or ZET transport.
-- ZET closed sharing model baseline docs and sanitized examples that clarify the future closed sharing/SNS layer above GitHub/object-storage/DB base infrastructure.
-- ZET radio-frequency recommendation model docs and sanitized examples that separate followed/neighbor feeds from future recommended/broadcast feeds and keep selector logic user/node-owned and inspectable.
-- ZET shared update record baseline docs and a sanitized non-executable example for future receiver-side review before local renewal.
-- public release link hygiene checker that catches repository links likely to break when release notes are copied into GitHub Release bodies.
-- Korean product-language baseline for explaining WOM as `옴`, `zet` as `쪽글`/`토막글`, `ZET` as `공유 계층`, and key lifecycle/safety/sharing terms without renaming code identifiers.
-- Korean product-language hygiene checker that catches accidental public documentation drift from the baseline without rewriting files, renaming code identifiers, fetching external URLs, or adding product behavior.
-- public privacy hygiene checker that catches obvious local path, token-like, private key header, seed-phrase-like, and private endpoint leaks before public release.
-- release readiness gate that runs the current public hygiene checkers together as a local pre-release convenience step.
-- main branch protection readiness notes that document a staged path toward future CI/status checks/branch protection without enabling them yet.
-- read-only shared update record review previews that inspect one local archive-contained JSON record before any receiver-side renewal action, without writing files or creating trust/import/attestation/signature/feed/provider/projection/ZET transport effects.
+- a public WOM/zet/ZET design baseline with specs, schemas, fake archives, release notes, and work logs,
+- WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
+- private archive lifecycle tools for doctor checks, draft creation, minting, delegation, receipts, search, and metadata review,
+- read-only preview layers for runtime context, profiles, source/objet intake, block headers, prompt boundaries, foreign block review, projection, and shared update review,
+- approval-gated local write paths for selected private archive and foreign-block review records,
+- local public-release hygiene tools for links, Korean product language, privacy, release readiness, and branch-protection planning.
+
+For a status-by-capability view, see the [WOM-kit Capability Matrix](wom-kit/docs/capability-matrix.md).
 
 What does not exist yet:
 
-- production-grade installation flow,
-- live provider integrations,
-- production `ZET` sharing service,
-- GitHub Release editing or network URL fetching from the public link checker,
-- recommendation fetching, ranking, neighbor feed updates, or provider-backed recommendation services,
-- projection-plan apply/write behavior, projection receipt writes, or provider-specific publishing,
-- real wallet creation, private key custody, or cryptographic signing,
-- complete prompt-injection prevention or full-auto safety guarantees,
-- LLM-based prompt classification, provider scanning, OCR/import apply, ZET transport, real signing, payments, staking, consensus, or blockchain integration,
-- real foreign block import/trust/apply, real foreign attestation writes, real signed attestation statements, real quarantine review apply/accept, real quarantine decision accept/apply/trust, real attestation review candidate accept/apply/trust, real ZET transport, or automatic acceptance of shared blocks,
-- full Markdown-to-WOM-Safe-HTML conversion or finalized profile validation,
+- production-grade installation and platform support,
+- live provider integrations or provider API sync,
+- production `ZET` transport, sharing service, feed update, or mirroring delivery,
+- real wallet creation, private-key custody, cryptographic signing, token mechanics, payments, staking, consensus, or blockchain integration,
+- recommendation fetching, ranking, automatic neighbor feed updates, or provider-backed recommendation services,
+- projection-plan apply/write behavior, projection receipts, WordPress publishing, or provider-specific publishing,
+- real foreign block import/trust/apply, signed attestation statements, receiver-side acceptance, or automatic shared-block renewal,
+- complete prompt-injection prevention, full-auto execution, model training, backpropagation, Redis, queues, or background workers,
 - stable `v1.0.0` protocol guarantee.
 
 ## Core Model
@@ -125,6 +78,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [WOM Safe HTML Profile](wom-kit/docs/concepts/wom-safe-html-profile.md)
 - [Korean Product Language Baseline](wom-kit/docs/concepts/korean-product-language-baseline.ko.md)
 - [Korean Product Language Hygiene](wom-kit/docs/korean-product-language-hygiene.md)
+- [WOM-kit Capability Matrix](wom-kit/docs/capability-matrix.md)
 - [ZET Radio-Frequency Recommendation Model](wom-kit/docs/zet-radio-frequency-recommendation-model.md)
 - [ZET Shared Update Record Baseline](wom-kit/docs/zet-shared-update-record-baseline.md)
 - [ZET Shared Update Record Review Preview](wom-kit/docs/zet-shared-update-record-review-preview.md)
@@ -237,7 +191,9 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.57
 v0.2.56
+v0.2.55
 v0.2.54
 v0.2.53
 v0.2.52
