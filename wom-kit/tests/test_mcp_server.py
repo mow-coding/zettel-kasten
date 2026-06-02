@@ -68,6 +68,46 @@ class McpServerTests(unittest.TestCase):
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
         return root
 
+    def write_shared_update_record_fixture(self, archive_root: Path, relative_path: str = "workbench/shared-update.json") -> str:
+        payload = {
+            "record_kind": "zet_shared_update_record_preview",
+            "version": "0.2.55-test",
+            "dry_run": True,
+            "body_included": False,
+            "source": {
+                "sender_node_ref": "node:example:sender",
+                "shared_block_ref": "block:example:shared-update-001",
+                "zet_ref": "zet:example:shared-thought-001",
+            },
+            "receiver_review": {
+                "receiver_node_ref": "node:example:receiver",
+                "proposed_action": "review_before_renewal",
+                "attest_performed": False,
+                "anchor_performed": False,
+                "renewal_performed": False,
+            },
+            "sharing_context": {
+                "zet_form": "sns_type_zet",
+                "sharing_methods": ["key-sharing", "radio-frequency"],
+                "real_transport_performed": False,
+                "neighbor_feed_update_performed": False,
+            },
+            "safety": {
+                "trust_created": False,
+                "import_performed": False,
+                "acceptance_performed": False,
+                "attestation_write_created": False,
+                "signature_created": False,
+                "provider_call_performed": False,
+                "projection_write_performed": False,
+                "receipt_write_created": False,
+            },
+        }
+        path = archive_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        return relative_path
+
     def prompt_boundary_report_fixture(self, risk_level: str = "low") -> dict:
         patterns = []
         if risk_level == "high":
@@ -599,6 +639,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("create_draft_zettel", tool_names)
             self.assertIn("block_header_check", tool_names)
             self.assertIn("zet_projection_plan_check", tool_names)
+            self.assertIn("zet_shared_update_record_review_preview", tool_names)
             self.assertIn("foreign_block_intake_check", tool_names)
             self.assertIn("foreign_block_trust_check", tool_names)
             self.assertIn("foreign_block_attestation_packet_check", tool_names)
@@ -698,6 +739,16 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("zet_projection_plan_write", tool_names)
             self.assertNotIn("projection_plan_apply", tool_names)
             self.assertNotIn("projection_plan_write", tool_names)
+            self.assertNotIn("zet_shared_update_record_review_apply", tool_names)
+            self.assertNotIn("zet_shared_update_record_review_write", tool_names)
+            self.assertNotIn("shared_update_record_review_apply", tool_names)
+            self.assertNotIn("shared_update_record_review_write", tool_names)
+            self.assertNotIn("shared_update_publish", tool_names)
+            self.assertNotIn("shared_update_transport", tool_names)
+            self.assertNotIn("shared_update_import", tool_names)
+            self.assertNotIn("shared_update_trust", tool_names)
+            self.assertNotIn("shared_update_attest", tool_names)
+            self.assertNotIn("shared_update_anchor", tool_names)
             self.assertNotIn("projection_receipt_write", tool_names)
             self.assertNotIn("wordpress_publish", tool_names)
             self.assertNotIn("provider_sync", tool_names)
@@ -2008,6 +2059,81 @@ class McpServerTests(unittest.TestCase):
                 )
                 self.assertTrue(blocked["result"]["isError"])
                 self.assertIn("dry-run only", blocked["result"]["content"][0]["text"])
+        finally:
+            self.stop_server(process)
+
+    def test_zet_shared_update_record_review_preview_writes_nothing(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                record_relative = self.write_shared_update_record_fixture(archive_root)
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "zet_shared_update_record_review_preview",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "record": record_relative,
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                serialized = json.dumps(structured, ensure_ascii=False)
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "zet_shared_update_record_review_preview")
+                self.assertEqual(structured["record_path"], record_relative)
+                self.assertEqual(structured["would_change"], [])
+                self.assertEqual(structured["preview_status"], "preview_not_recorded")
+                self.assertEqual(structured["trust_state"], "untrusted_foreign")
+                self.assertFalse(structured["shared_update_review_recorded"])
+                self.assertFalse(structured["neighbor_feed_updated"])
+                self.assertFalse(structured["trust_created"])
+                self.assertFalse(structured["import_performed"])
+                self.assertFalse(structured["attestation_written"])
+                self.assertFalse(structured["signature_created"])
+                self.assertFalse(structured["real_zet_transport_performed"])
+                self.assertFalse(structured["provider_api_call_performed"])
+                self.assertNotIn(str(archive_root.resolve()), serialized)
+        finally:
+            self.stop_server(process)
+
+    def test_zet_shared_update_record_review_preview_rejects_non_true_dry_run(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                record_relative = self.write_shared_update_record_fixture(archive_root)
+                for index, dry_run_value in enumerate([False, "true", 1], start=1):
+                    with self.subTest(dry_run=dry_run_value):
+                        response = self.send(
+                            process,
+                            {
+                                "jsonrpc": "2.0",
+                                "id": index,
+                                "method": "tools/call",
+                                "params": {
+                                    "name": "zet_shared_update_record_review_preview",
+                                    "arguments": {
+                                        "archive_root": str(archive_root),
+                                        "record": record_relative,
+                                        "dry_run": dry_run_value,
+                                    },
+                                },
+                            },
+                        )
+                        self.assertTrue(response["result"]["isError"])
+                        self.assertIn("dry-run only", response["result"]["content"][0]["text"])
         finally:
             self.stop_server(process)
 

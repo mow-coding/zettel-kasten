@@ -4,6 +4,25 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.56 - 2026-06-02
+
+ZET shared update record review preview.
+
+Added:
+
+- CLI `archive shared-update-record-review <archive-root> --record <path> --dry-run --format json`,
+- MCP `zet_shared_update_record_review_preview`,
+- read-only service validation for local archive-contained shared update record JSON before any receiver-side renewal action,
+- release note and public-safe work log for the v0.2.56 preview batch.
+
+Compatibility:
+
+- no private archive migration is required,
+- the new CLI/MCP path is dry-run only and writes no files,
+- the preview reads only the selected archive-relative JSON record,
+- unsafe absolute paths, URL-like record paths, body-included records, token/secret-like values, and true mutation/write/transport/provider/trust flags block,
+- no shared-update transport, real ZET transport, neighbor feed update, automatic feed renewal, trust/import/acceptance/anchor, attestation/signature write, provider sync, WordPress publishing, projection write/receipt, workers, payments, staking, consensus, blockchain, model training, backpropagation, or full-auto behavior is implemented.
+
 ## v0.2.55 - 2026-05-27
 
 ZET shared update record baseline.

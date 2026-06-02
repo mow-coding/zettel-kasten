@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.55` | current public pre-release | `wom-kit/docs/releases/v0.2.55.md` |
+| `v0.2.56` | current public pre-release | `wom-kit/docs/releases/v0.2.56.md` |
+| `v0.2.55` | superseded public pre-release | `wom-kit/docs/releases/v0.2.55.md` |
 | `v0.2.54` | superseded public pre-release | `wom-kit/docs/releases/v0.2.54.md` |
 | `v0.2.53` | superseded public pre-release | `wom-kit/docs/releases/v0.2.53.md` |
 | `v0.2.52` | superseded public pre-release | `wom-kit/docs/releases/v0.2.52.md` |
@@ -82,6 +83,21 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.55` To `v0.2.56`
+
+This is a compatible read-only ZET shared update record review preview patch.
+
+What changed:
+
+- added CLI `archive shared-update-record-review <archive-root> --record <path> --dry-run --format json`,
+- added MCP `zet_shared_update_record_review_preview`,
+- added `wom-kit/docs/zet-shared-update-record-review-preview.md`,
+- updated version metadata to `0.2.56`.
+
+No private archive migration is required.
+
+The new command reads only one archive-relative JSON record and writes nothing. It blocks unsafe record paths, body-included records, token/secret-like values, local absolute path leakage, and true mutation/write/transport/provider/trust flags. It does not add shared-update transport, real ZET transport, neighbor feed update, trust/import/acceptance/anchor, attestation/signature writes, provider sync, WordPress publishing, projection writes or receipts, workers, payments/staking/consensus/blockchain, model training, backpropagation, or full-auto behavior.
 
 ## From `v0.2.54` To `v0.2.55`
 

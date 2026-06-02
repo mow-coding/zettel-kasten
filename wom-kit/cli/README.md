@@ -46,6 +46,9 @@ block-header --dry-run
 projection-plan --dry-run
   Preview a metadata-only ZET projection plan for one local zet and one operator-declared surface kind. This writes nothing, emits no full body text, creates no projection receipt, calls no provider, publishes nothing, and runs no ZET transport.
 
+shared-update-record-review --dry-run
+  Preview one local archive-contained ZET shared update record JSON before receiver-side renewal. This writes nothing, echoes no body text or local absolute paths, blocks true mutation/write/transport/provider/trust flags, and never updates feeds, trusts, imports, attests, signs, anchors, calls providers, writes receipts, projects, or runs ZET transport.
+
 foreign-block --dry-run
   Preview a foreign/shared block-header JSON artifact or Markdown-compatible foreign zet before trust/import. This writes nothing and never imports, drafts, mints, attests, anchors, applies, or calls providers.
 

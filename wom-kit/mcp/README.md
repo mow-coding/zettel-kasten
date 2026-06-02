@@ -11,6 +11,8 @@ v0.2.48 radio-frequency recommendation is documentation and sanitized examples o
 
 v0.2.49 public release link hygiene is a local development script and test guardrail only. MCP exposes no link checking, GitHub Release editing, network URL fetching, provider, projection, receipt, or archive mutation tool for this batch.
 
+v0.2.56 shared update record review preview exposes only a read-only dry-run MCP tool. MCP cannot write review records, update feeds, trust/import/attest/sign/anchor shared updates, call providers, publish, or run ZET transport.
+
 For the full beginner workflow around CLI plus MCP, see:
 
 ```text
@@ -158,6 +160,9 @@ foreign_block_attestation_statement_draft_decision_preview
 
 zet_projection_plan_check
   Read-only dry-run projection plan preview for one local zet and one operator-declared surface kind. It writes nothing, emits no full body text, creates no projection receipt, calls no provider, publishes nothing, and runs no ZET transport.
+
+zet_shared_update_record_review_preview
+  Read-only dry-run preview for one local archive-contained ZET shared update record JSON before receiver-side renewal. `dry_run` must be boolean `true`; the tool writes nothing, echoes no body text or local absolute paths, blocks true mutation/write/transport/provider/trust flags, and never updates feeds, trusts, imports, attests, signs, anchors, calls providers, writes receipts, projects, or runs ZET transport.
 
 create_draft_zettel
   Create an AI draft in inbox/. `dry_run: true` previews the draft path, frontmatter, body hash, blockers, warnings, and approval replay values without writing. It may consume structured `source_intake_plan` and `prompt_boundary_report` objects and merge validated metadata into the draft preview. Normal profile-bound AI writes require draft approval plus expected body hash replay values. This does not mint the zettel.

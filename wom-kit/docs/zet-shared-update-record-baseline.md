@@ -96,9 +96,27 @@ The example is non-executable and public-safe. It keeps:
 - `body_included: false`,
 - all mutation, write, transport, provider, trust, import, acceptance, anchor, attestation, signature, and full-auto flags set to `false`.
 
+## v0.2.56 Review Preview
+
+v0.2.56 adds a read-only review preview for one local shared update record:
+
+```powershell
+python wom-kit\cli\archive.py shared-update-record-review <archive-root> --record <archive-relative-json> --dry-run --format json
+```
+
+The command reads only the selected archive-relative JSON record. It writes nothing, does not read a shared body, and does not create trust, import, acceptance, attestation, signature, anchor, feed update, projection, provider call, receipt, or ZET transport effects.
+
+The MCP tool is:
+
+```text
+zet_shared_update_record_review_preview
+```
+
+MCP requires `dry_run: true` as a boolean and exposes no write/apply/publish/transport/import/trust/attest/anchor sibling tool.
+
 ## Non-Goals
 
-v0.2.55 does not implement:
+v0.2.56 still does not implement:
 
 - shared-update transport,
 - neighbor feed update,
@@ -110,7 +128,6 @@ v0.2.55 does not implement:
 - WordPress publishing,
 - projection writes or projection receipts,
 - ZET transport,
-- product CLI behavior,
-- product MCP behavior.
+- review writes or approval records.
 
-This release is a docs/examples/version baseline only.
+v0.2.55 was a docs/examples/version baseline only. v0.2.56 adds a read-only preview command and MCP tool only.

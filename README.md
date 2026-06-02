@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.55 pre-release
+v0.2.56 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -83,6 +83,7 @@ What exists today:
 - public privacy hygiene checker that catches obvious local path, token-like, private key header, seed-phrase-like, and private endpoint leaks before public release.
 - release readiness gate that runs the current public hygiene checkers together as a local pre-release convenience step.
 - main branch protection readiness notes that document a staged path toward future CI/status checks/branch protection without enabling them yet.
+- read-only shared update record review previews that inspect one local archive-contained JSON record before any receiver-side renewal action, without writing files or creating trust/import/attestation/signature/feed/provider/projection/ZET transport effects.
 
 What does not exist yet:
 
@@ -126,6 +127,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Korean Product Language Hygiene](wom-kit/docs/korean-product-language-hygiene.md)
 - [ZET Radio-Frequency Recommendation Model](wom-kit/docs/zet-radio-frequency-recommendation-model.md)
 - [ZET Shared Update Record Baseline](wom-kit/docs/zet-shared-update-record-baseline.md)
+- [ZET Shared Update Record Review Preview](wom-kit/docs/zet-shared-update-record-review-preview.md)
 - [Public Release Link Hygiene](wom-kit/docs/public-release-link-hygiene.md)
 - [Public Privacy Hygiene](wom-kit/docs/public-privacy-hygiene.md)
 - [Release Readiness Gate](wom-kit/docs/release-readiness-gate.md)
@@ -235,7 +237,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.2.55
+v0.2.56
 v0.2.54
 v0.2.53
 v0.2.52

@@ -245,6 +245,14 @@ recommended / broadcast feed -> user/node-owned selector logic
 
 Do not claim that WOM-kit can fetch recommendations, rank feeds, execute selectors, update neighbor feeds, call providers, publish projections, write receipts, or run ZET transport.
 
+For one local ZET shared update record, preview only before any receiver-side renewal:
+
+```bash
+archive shared-update-record-review <archive-root> --record <archive-relative-json> --dry-run --format json
+```
+
+The review preview reads only the selected archive-relative JSON record. It writes nothing, echoes no body text or local absolute paths, blocks body-included records and true mutation/write/transport/provider/trust flags, and does not update feeds, trust, import, attest, sign, anchor, project, call providers, or run ZET transport. MCP may only run `zet_shared_update_record_review_preview`; it must not expose shared update write/apply/publish/transport/import/trust/attest/sign/anchor tools.
+
 ## Read The Result
 
 Continue only when:
@@ -281,6 +289,7 @@ Prefer these actions:
 - use CLI-only record-attestation-statement-draft approval only after human/operator statement-draft-record approval; MCP remains check-only,
 - run attestation-statement-draft-review to inventory recorded statement drafts without accepting or applying them,
 - run attestation-statement-draft-decision dry-run to preview one safe next review route without recording a decision,
+- run shared-update-record-review dry-run before any receiver-side renewal discussion,
 - create approved draft in inbox,
 - run mint dry-run,
 - run check-safe-html dry-run,
@@ -320,6 +329,7 @@ Do not:
 - treat record-attestation-statement-draft as trust, import, mint, attestation, signature, anchor, delegation, execution, acceptance, apply approval, or ZET transport,
 - treat attestation-statement-draft-review as trust, import, mint, attestation, signature, anchor, delegation, execution, acceptance, apply approval, or a write path,
 - treat attestation-statement-draft-decision as trust, import, mint, attestation, signature, anchor, delegation, execution, acceptance, apply approval, or a write path,
+- treat shared-update-record-review as receiver-side renewal, trust, import, acceptance, attestation, signature, feed update, projection, provider call, receipt write, or ZET transport,
 - expose foreign block apply/import/trust/quarantine write/attest/receipt/auto-accept/full-auto behavior through MCP,
 - expose foreign block quarantine review apply/accept behavior through MCP,
 - expose foreign block quarantine decision apply/write/accept behavior through MCP,
@@ -331,6 +341,7 @@ Do not:
 - expose record attestation statement draft approve/write/apply behavior through MCP,
 - expose foreign block attestation statement draft review apply/write/accept/trust/import/attest/sign behavior through MCP,
 - expose foreign block attestation statement draft decision apply/write/accept/trust/import/attest/sign/provider/WordPress behavior through MCP,
+- expose shared update record review apply/write/publish/transport/import/trust/attest/sign/anchor behavior through MCP,
 - implement token, coin, NFT, staking, relay, transport, or provider mutation behavior,
 - treat "upload" or "post" language as mint approval,
 - create a profile-bound AI draft without `draft_approved_by` and `expected_body_sha256`,

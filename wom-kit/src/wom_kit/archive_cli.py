@@ -23,6 +23,8 @@ Commands:
           Preview the derived block header for one draft or canonical zet.
   projection-plan
           Preview a dry-run ZET publication/projection plan for one local zet.
+  shared-update-record-review
+          Preview a local ZET shared update record before any renewal action.
   foreign-block
           Preview a foreign/shared block or zet before any trust/import action.
   foreign-block-trust
@@ -1741,6 +1743,36 @@ def command_projection_plan(args: argparse.Namespace) -> int:
         print(f"Archive: {result.get('archive_id') or '-'}")
         print(f"zet: {zet.get('zettel_id') or zet.get('source_path') or '-'}")
         print(f"Surface: {surface.get('surface_kind') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_shared_update_record_review(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.zet_shared_update_record_review_preview(
+            Path(args.archive_root),
+            record=args.record,
+            dry_run=args.dry_run,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        print(f"Shared update record review preview {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Record: {result.get('record_path') or '-'}")
+        print(f"Preview status: {result.get('preview_status') or '-'}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -4233,6 +4265,20 @@ def build_parser() -> argparse.ArgumentParser:
     projection_plan.add_argument("--dry-run", action="store_true", help="Preview only; write nothing.")
     projection_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     projection_plan.set_defaults(func=command_projection_plan)
+
+    shared_update_record_review = subcommands.add_parser(
+        "shared-update-record-review",
+        help="Preview a local ZET shared update record before any renewal action.",
+    )
+    shared_update_record_review.add_argument("archive_root", help="Archive root used for path safety and local context.")
+    shared_update_record_review.add_argument(
+        "--record",
+        required=True,
+        help="Archive-relative JSON shared update record path.",
+    )
+    shared_update_record_review.add_argument("--dry-run", action="store_true", help="Preview only; write nothing.")
+    shared_update_record_review.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    shared_update_record_review.set_defaults(func=command_shared_update_record_review)
 
     foreign_block = subcommands.add_parser("foreign-block", help="Preview a foreign/shared block or zet before trust/import.")
     foreign_block.add_argument("archive_root", help="Archive root used for path safety and local context.")

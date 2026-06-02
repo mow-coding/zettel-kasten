@@ -123,6 +123,8 @@ This keeps WOM centered on subject-owned memory and explainable circulation rath
 
 v0.2.55 extends the surrounding ZET sharing vocabulary with the [ZET Shared Update Record Baseline](zet-shared-update-record-baseline.md), a future receiver-side review artifact before local renewal. It still does not fetch recommendations, update feeds, transport shared zets, or create trust.
 
+v0.2.56 adds [ZET Shared Update Record Review Preview](zet-shared-update-record-review-preview.md), a read-only local inspection layer for one shared update record. It still does not fetch recommendations, update neighbor feeds, transport shared zets, trust/import/attest/sign/anchor, call providers, or project content.
+
 ## Non-Goals
 
 v0.2.48 does not:

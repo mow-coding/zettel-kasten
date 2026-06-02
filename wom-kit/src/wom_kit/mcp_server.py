@@ -467,6 +467,19 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "zet_shared_update_record_review_preview",
+        "description": "Read-only dry-run review preview for one local ZET shared update record before any renewal action.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "record": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "record"],
+        },
+    },
+    {
         "name": "foreign_block_intake_check",
         "description": "Read-only dry-run intake preview for a foreign/shared block or Markdown-compatible zet before any trust/import action.",
         "inputSchema": {
@@ -1119,6 +1132,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_block_header_check(arguments)
     if name == "zet_projection_plan_check":
         return tool_zet_projection_plan_check(arguments)
+    if name == "zet_shared_update_record_review_preview":
+        return tool_zet_shared_update_record_review_preview(arguments)
     if name == "foreign_block_intake_check":
         return tool_foreign_block_intake_check(arguments)
     if name == "foreign_block_trust_check":
@@ -1621,6 +1636,20 @@ def tool_zet_projection_plan_check(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"zet_projection_plan_check: {state}.", result)
+
+
+def tool_zet_shared_update_record_review_preview(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("zet_shared_update_record_review_preview is dry-run only.")
+    result = call_service(
+        archive_services.zet_shared_update_record_review_preview,
+        archive_root,
+        record=require_string_arg(arguments, "record"),
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"zet_shared_update_record_review_preview: {state}.", result)
 
 
 def tool_foreign_block_intake_check(arguments: dict[str, Any]) -> dict[str, Any]:

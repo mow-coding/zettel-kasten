@@ -96,6 +96,8 @@ See [ZET Radio-Frequency Recommendation Model](zet-radio-frequency-recommendatio
 
 For a future receiver-side review record shape before renewal, see [ZET Shared Update Record Baseline](zet-shared-update-record-baseline.md).
 
+For the v0.2.56 read-only local inspection command that checks one shared update record before renewal, see [ZET Shared Update Record Review Preview](zet-shared-update-record-review-preview.md).
+
 ## 6. Attestation In The Closed SNS Flow
 
 In beginner terms, attestation is the receiver-side review step before a shared zet update affects a local view, neighbor feed, mirror, or projection.

@@ -106,6 +106,62 @@ ZET_PROJECTION_SURFACE_KINDS = {
 }
 ZET_PROJECTION_VISIBILITIES = {"private", "team", "public", "unknown"}
 ZET_PROJECTION_FORMATS = {"metadata_only", "safe_html_summary", "plain_text_summary"}
+ZET_SHARED_UPDATE_RECORD_EXPECTED_KIND = "zet_shared_update_record_preview"
+ZET_SHARED_UPDATE_REVIEW_CLOSED_FLAGS = {
+    "shared_update_review_recorded": False,
+    "neighbor_feed_updated": False,
+    "trust_created": False,
+    "import_performed": False,
+    "acceptance_created": False,
+    "attestation_written": False,
+    "signature_created": False,
+    "anchor_performed": False,
+    "real_zet_transport_performed": False,
+    "provider_api_call_performed": False,
+    "projection_write_performed": False,
+    "receipt_write_performed": False,
+}
+ZET_SHARED_UPDATE_BODY_KEYS = {
+    "body",
+    "body_text",
+    "body_content",
+    "raw_body",
+    "full_body",
+    "zet_body",
+    "foreign_body",
+    "foreign_body_text",
+    "shared_body",
+    "review_note_body",
+    "raw_review_note",
+}
+ZET_SHARED_UPDATE_TRUE_FLAG_KEYWORDS = {
+    "acceptance",
+    "anchor",
+    "apply",
+    "attestation",
+    "attest",
+    "auto",
+    "call",
+    "create",
+    "feed",
+    "import",
+    "mint",
+    "mutation",
+    "perform",
+    "provider",
+    "publish",
+    "receipt",
+    "recommendation",
+    "share",
+    "signature",
+    "sign",
+    "sync",
+    "transport",
+    "trust",
+    "update",
+    "write",
+}
+ZET_SHARED_UPDATE_TRUE_FLAG_ALLOWED_KEYS = {"dry_run"}
 PROFILE_WALLET_REGISTRY_CANDIDATES = [
     "profiles/wom-profiles.yml",
     "profiles/wom-profiles.yaml",
@@ -9717,6 +9773,251 @@ def zet_projection_plan_preview(
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
+
+
+def zet_shared_update_record_review_preview(
+    archive_root: Path | str,
+    *,
+    record: str | None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("shared-update-record-review is dry-run only; pass --dry-run.")
+
+    record_path: Path | None = None
+    record_relative: str | None = None
+    raw_record = str(record or "").strip() if isinstance(record, str) else ""
+    if not raw_record:
+        blockers.append("record must be a safe archive-relative JSON path.")
+    elif not safe_shared_update_record_path(raw_record):
+        blockers.append("record must be a safe archive-relative JSON path.")
+    else:
+        try:
+            record_path = resolve_archive_relative_path(root, raw_record)
+            if record_path.suffix.lower() != ".json":
+                blockers.append("record must point to a JSON file.")
+            elif not record_path.is_file():
+                blockers.append("record JSON file was not found inside the archive.")
+            else:
+                record_relative = archive_relative_path(record_path, root)
+        except (ArchivePathError, OSError, RuntimeError, ValueError):
+            blockers.append("record must be a safe archive-relative JSON path.")
+
+    record_doc: dict[str, Any] = {}
+    if record_path is not None and record_relative is not None and not any("JSON file" in blocker for blocker in blockers):
+        try:
+            parsed = json.loads(record_path.read_text(encoding="utf-8"))
+            if not isinstance(parsed, dict):
+                blockers.append("shared update record JSON must be an object.")
+            else:
+                record_doc = parsed
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            blockers.append("shared update record JSON could not be parsed.")
+
+    flagged_paths: list[str] = []
+    unsafe_values: list[str] = []
+    body_like_paths: list[str] = []
+    if record_doc:
+        inspect_shared_update_record_value(
+            record_doc,
+            "$",
+            flagged_paths=flagged_paths,
+            unsafe_values=unsafe_values,
+            body_like_paths=body_like_paths,
+        )
+        if record_doc.get("dry_run") is not True:
+            blockers.append("shared update record must claim dry_run: true.")
+        if record_doc.get("body_included") is True:
+            blockers.append("shared update record must not include or claim body text.")
+        if flagged_paths:
+            blockers.append("shared update record claims a mutation/write/transport/provider/trust flag is true.")
+        if unsafe_values:
+            blockers.append("shared update record contains a private location, provider URL, token, or secret-like value.")
+        if body_like_paths:
+            blockers.append("shared update record contains body-like content that cannot be reviewed by this preview.")
+
+        record_archive_id = record_doc.get("archive_id")
+        if isinstance(record_archive_id, str) and record_archive_id.strip() and record_archive_id.strip() != archive_id:
+            blockers.append("shared update record archive_id does not match the current archive.")
+
+        record_kind = str(record_doc.get("record_kind") or "").strip()
+        if record_kind and record_kind != ZET_SHARED_UPDATE_RECORD_EXPECTED_KIND:
+            warnings.append("shared update record kind is not the v0.2.55 baseline kind.")
+        elif not record_kind:
+            warnings.append("shared update record kind is missing; review remains metadata-only.")
+
+    source = record_doc.get("source") if isinstance(record_doc.get("source"), dict) else {}
+    receiver_review = record_doc.get("receiver_review") if isinstance(record_doc.get("receiver_review"), dict) else {}
+    sharing_context = record_doc.get("sharing_context") if isinstance(record_doc.get("sharing_context"), dict) else {}
+    surface_context = record_doc.get("surface_context") if isinstance(record_doc.get("surface_context"), dict) else {}
+    body_included = record_doc.get("body_included") if isinstance(record_doc.get("body_included"), bool) else None
+    record_kind = record_doc.get("record_kind") if isinstance(record_doc.get("record_kind"), str) else None
+    record_version = record_doc.get("version") if isinstance(record_doc.get("version"), str) else None
+
+    result = {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "zet_shared_update_record_review_preview",
+        "archive_id": archive_id,
+        "record_path": record_relative,
+        "record_kind": record_kind,
+        "record_version": record_version,
+        "preview_status": "preview_not_recorded",
+        "trust_state": "untrusted_foreign",
+        "attestation_status": "not_created",
+        "signature_status": "not_created",
+        "body_included": body_included,
+        "input_record_summary": {
+            "dry_run_claimed": record_doc.get("dry_run") is True if record_doc else False,
+            "body_included": body_included,
+            "true_mutation_flag_count": len(flagged_paths),
+            "unsafe_value_count": len(unsafe_values),
+            "body_like_field_count": len(body_like_paths),
+        },
+        "review_preview": {
+            "record_review_state": "metadata_only_review_preview",
+            "shared_update_status": "candidate_for_human_review_only",
+            "receiver_renewal_status": "not_performed",
+            "header_review_surface": "safe_header_and_record_metadata_only",
+            "body_review_surface": "not_available_from_this_record",
+        },
+        "source_preview": {
+            "sender_node_ref": safe_shared_update_optional_scalar(source.get("sender_node_ref")),
+            "shared_block_ref": safe_shared_update_optional_scalar(source.get("shared_block_ref")),
+            "zet_ref": safe_shared_update_optional_scalar(source.get("zet_ref")),
+        },
+        "receiver_review_preview": {
+            "receiver_node_ref": safe_shared_update_optional_scalar(receiver_review.get("receiver_node_ref")),
+            "proposed_action": safe_shared_update_optional_scalar(receiver_review.get("proposed_action")),
+        },
+        "sharing_context_preview": {
+            "zet_form": safe_shared_update_optional_scalar(sharing_context.get("zet_form")),
+            "sharing_methods": safe_shared_update_string_list(sharing_context.get("sharing_methods")),
+        },
+        "surface_context_preview": {
+            "surface_ref": safe_shared_update_optional_scalar(surface_context.get("surface_ref")),
+        },
+        "next_safe_actions": [
+            "review the shared update record metadata only",
+            "keep the shared update untrusted before any receiver-side renewal",
+            "run future approval-gated renewal steps only after separate human review",
+        ],
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+    result.update(ZET_SHARED_UPDATE_REVIEW_CLOSED_FLAGS)
+    return result
+
+
+def safe_shared_update_record_path(value: str) -> bool:
+    text = value.strip()
+    if not text or "\x00" in text or "\n" in text or "\r" in text:
+        return False
+    if "://" in text or text.lower().startswith(("file:", "http:", "https:", "s3:", "b2:", "r2:", "gs:")):
+        return False
+    if re.match(r"^[A-Za-z]:", text):
+        return False
+    if contains_forbidden_location_reference(text) or DRAFT_SECRET_VALUE_RE.search(text):
+        return False
+    try:
+        normalize_archive_relative_path(text)
+    except ArchivePathError:
+        return False
+    return True
+
+
+def inspect_shared_update_record_value(
+    value: Any,
+    field_path: str,
+    *,
+    flagged_paths: list[str],
+    unsafe_values: list[str],
+    body_like_paths: list[str],
+) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            key_lower = key_text.casefold()
+            child_path = f"{field_path}.{key_text}"
+            if key_lower == "body_included" and child is True:
+                body_like_paths.append(child_path)
+            elif key_lower in ZET_SHARED_UPDATE_BODY_KEYS and shared_update_value_present(child):
+                body_like_paths.append(child_path)
+            if isinstance(child, bool) and child is True and shared_update_true_flag_is_forbidden(key_lower):
+                flagged_paths.append(child_path)
+            inspect_shared_update_record_value(
+                child,
+                child_path,
+                flagged_paths=flagged_paths,
+                unsafe_values=unsafe_values,
+                body_like_paths=body_like_paths,
+            )
+        return
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            inspect_shared_update_record_value(
+                child,
+                f"{field_path}[{index}]",
+                flagged_paths=flagged_paths,
+                unsafe_values=unsafe_values,
+                body_like_paths=body_like_paths,
+            )
+        return
+    if isinstance(value, str) and shared_update_string_is_private_or_secret(value):
+        unsafe_values.append(field_path)
+
+
+def shared_update_true_flag_is_forbidden(key_lower: str) -> bool:
+    if key_lower in ZET_SHARED_UPDATE_TRUE_FLAG_ALLOWED_KEYS:
+        return False
+    return any(keyword in key_lower for keyword in ZET_SHARED_UPDATE_TRUE_FLAG_KEYWORDS)
+
+
+def shared_update_value_present(value: Any) -> bool:
+    if value is None:
+        return False
+    if value in ("", [], {}):
+        return False
+    return True
+
+
+def shared_update_string_is_private_or_secret(value: str) -> bool:
+    text = value.strip()
+    if not text:
+        return False
+    return bool(
+        contains_forbidden_location_reference(text)
+        or "://" in text
+        or DRAFT_SECRET_VALUE_RE.search(text)
+        or GITHUB_SECRET_LIKE_RE.search(text)
+    )
+
+
+def safe_shared_update_optional_scalar(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or shared_update_string_is_private_or_secret(text):
+        return None
+    return text
+
+
+def safe_shared_update_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            safe = safe_shared_update_optional_scalar(item)
+            if safe:
+                items.append(safe)
+    return items
 
 
 def safe_projection_zet_ref(value: str) -> bool:

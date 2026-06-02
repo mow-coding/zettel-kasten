@@ -546,6 +546,7 @@ archive_doctor
 archive_runtime_context
 github_repository_setup_plan
 object_storage_setup_plan
+zet_shared_update_record_review_preview
 archive_init
 list_zettels
 read_zettel
@@ -570,7 +571,7 @@ ownership_transfer_check
 
 For AI clients, the first safe call should be `wom_profile_resolve` when the user names a target profile or archive. After that, call `archive_runtime_context` with the resolved archive id and type, then use `create_draft_zettel` with `dry_run: true` before any profile-bound draft write. This prevents the AI from assuming the current/default archive is the target.
 
-MCP can dry-run draft creation, create approved inbox drafts, inspect archives, search, plan onboarding, preview GitHub repository setup, preview object storage setup for WOM objets, preview external imports, list sources, preview source registration, preview source mount plans, preview source scans, preview minting, preview legacy promotion, preview archive sharing, preview delegate/attest/anchor lifecycle checks, check ownership transfer, read runtime context, and resolve profile registry entries. It cannot perform real onboarding apply, profile registration, token registration, source registration apply, source scan apply, canonical minting, real share, real delegate, real attest, real anchor, merge, fork, ownership transfer, runtime context apply, GitHub create/connect/push/sync, or object storage apply/create/connect/upload/sync. Use the CLI for explicit human-approved minting steps.
+MCP can dry-run draft creation, create approved inbox drafts, inspect archives, search, plan onboarding, preview GitHub repository setup, preview object storage setup for WOM objets, preview shared update record review, preview external imports, list sources, preview source registration, preview source mount plans, preview source scans, preview minting, preview legacy promotion, preview archive sharing, preview delegate/attest/anchor lifecycle checks, check ownership transfer, read runtime context, and resolve profile registry entries. It cannot perform real onboarding apply, profile registration, token registration, source registration apply, source scan apply, canonical minting, real share, real delegate, real attest, real anchor, shared update write/apply/transport/import/trust/attest/sign/anchor, merge, fork, ownership transfer, runtime context apply, GitHub create/connect/push/sync, or object storage apply/create/connect/upload/sync. Use the CLI for explicit human-approved minting steps.
 
 ## Flow 8: Keep Secrets Out
 

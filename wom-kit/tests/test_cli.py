@@ -11,6 +11,7 @@ import unittest
 import unicodedata
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 
@@ -178,6 +179,51 @@ class ArchiveCliTests(unittest.TestCase):
     def copy_fake_archive(self, root: Path) -> Path:
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
         return root
+
+    def write_shared_update_record_fixture(self, archive_root: Path, relative_path: str = "workbench/shared-update.json", **overrides: Any) -> str:
+        payload = {
+            "record_kind": "zet_shared_update_record_preview",
+            "version": "0.2.55-test",
+            "dry_run": True,
+            "body_included": False,
+            "source": {
+                "sender_node_ref": "node:example:sender",
+                "shared_block_ref": "block:example:shared-update-001",
+                "zet_ref": "zet:example:shared-thought-001",
+            },
+            "receiver_review": {
+                "receiver_node_ref": "node:example:receiver",
+                "proposed_action": "review_before_renewal",
+                "attest_performed": False,
+                "anchor_performed": False,
+                "renewal_performed": False,
+            },
+            "sharing_context": {
+                "zet_form": "sns_type_zet",
+                "sharing_methods": ["key-sharing", "radio-frequency"],
+                "real_transport_performed": False,
+                "neighbor_feed_update_performed": False,
+            },
+            "surface_context": {
+                "surface_ref": "surface:example:private-review",
+                "surface_projection_performed": False,
+            },
+            "safety": {
+                "trust_created": False,
+                "import_performed": False,
+                "acceptance_performed": False,
+                "attestation_write_created": False,
+                "signature_created": False,
+                "provider_call_performed": False,
+                "projection_write_performed": False,
+                "receipt_write_created": False,
+            },
+        }
+        payload.update(overrides)
+        path = archive_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        return relative_path
 
     def write_profile_registry(self, path: Path, profiles: list[dict], default_profile: str = "profile:personal:me") -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2837,6 +2883,143 @@ class ArchiveCliTests(unittest.TestCase):
                     self.assertIn(expected, result["blockers"])
                     self.assertNotIn(unsafe_ref, serialized)
                     self.assertNotIn("https://example.com/private.md", serialized)
+
+    def test_shared_update_record_review_dry_run_returns_preview_and_writes_no_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            record_relative = self.write_shared_update_record_fixture(archive_root)
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+            code, output = self.run_cli(
+                [
+                    "shared-update-record-review",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(before, after)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "zet_shared_update_record_review_preview")
+            self.assertEqual(result["record_path"], record_relative)
+            self.assertEqual(result["preview_status"], "preview_not_recorded")
+            self.assertEqual(result["trust_state"], "untrusted_foreign")
+            self.assertEqual(result["would_change"], [])
+            self.assertFalse(result["shared_update_review_recorded"])
+            self.assertFalse(result["neighbor_feed_updated"])
+            self.assertFalse(result["trust_created"])
+            self.assertFalse(result["import_performed"])
+            self.assertFalse(result["acceptance_created"])
+            self.assertFalse(result["attestation_written"])
+            self.assertFalse(result["signature_created"])
+            self.assertFalse(result["anchor_performed"])
+            self.assertFalse(result["real_zet_transport_performed"])
+            self.assertFalse(result["provider_api_call_performed"])
+            self.assertFalse(result["projection_write_performed"])
+            self.assertFalse(result["receipt_write_performed"])
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+
+    def test_shared_update_record_review_requires_dry_run_and_safe_record_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            record_relative = self.write_shared_update_record_fixture(archive_root)
+            missing_dry_run_code, missing_dry_run_output = self.run_cli(
+                [
+                    "shared-update-record-review",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--format",
+                    "json",
+                ]
+            )
+            missing_dry_run = json.loads(missing_dry_run_output)
+            self.assertEqual(missing_dry_run_code, 1, missing_dry_run_output)
+            self.assertFalse(missing_dry_run["ok"])
+            self.assertIn("shared-update-record-review is dry-run only; pass --dry-run.", missing_dry_run["blockers"])
+
+            unsafe_path = r"C:\Users\example\private\shared-update.json"
+            unsafe_code, unsafe_output = self.run_cli(
+                [
+                    "shared-update-record-review",
+                    str(archive_root),
+                    "--record",
+                    unsafe_path,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            unsafe_result = json.loads(unsafe_output)
+            unsafe_serialized = json.dumps(unsafe_result, ensure_ascii=False)
+            self.assertEqual(unsafe_code, 1, unsafe_output)
+            self.assertFalse(unsafe_result["ok"])
+            self.assertIn("record must be a safe archive-relative JSON path.", unsafe_result["blockers"])
+            self.assertNotIn(unsafe_path, unsafe_serialized)
+
+    def test_shared_update_record_review_blocks_body_and_mutation_flags_without_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            secret_body = "private body C:\\Users\\example\\secret\\note.md"
+            record_relative = self.write_shared_update_record_fixture(
+                archive_root,
+                body_included=True,
+                body_text=secret_body,
+                safety={"trust_created": True},
+            )
+            code, output = self.run_cli(
+                [
+                    "shared-update-record-review",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertIn("shared update record must not include or claim body text.", result["blockers"])
+            self.assertIn(
+                "shared update record claims a mutation/write/transport/provider/trust flag is true.",
+                result["blockers"],
+            )
+            self.assertNotIn(secret_body, serialized)
+            self.assertNotIn(r"C:\Users\example", serialized)
+
+    def test_shared_update_record_review_blocks_archive_id_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            record_relative = self.write_shared_update_record_fixture(
+                archive_root,
+                archive_id="archive:personal:other",
+            )
+            code, output = self.run_cli(
+                [
+                    "shared-update-record-review",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertIn("shared update record archive_id does not match the current archive.", result["blockers"])
 
     def test_block_header_collects_refs_and_hashes_are_deterministic_without_objet_body_reads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
