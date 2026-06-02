@@ -15,6 +15,8 @@ v0.2.56 shared update record review preview exposes only a read-only dry-run MCP
 
 v0.2.58 shared update record review index exposes only a read-only dry-run MCP tool. MCP requires boolean `dry_run: true`, scans only direct-child local JSON records under an archive-relative directory, and cannot write review indexes, update feeds, trust/import/attest/sign/anchor shared updates, call providers, publish, or run ZET transport.
 
+v0.2.59 ZET transport would-plan exposes only a read-only dry-run MCP tool. MCP requires boolean `dry_run: true`, reuses the single-record review policy, and cannot send/deliver/publish, create keys, create radio-frequency access, create mirroring payloads, write receipts, start queues/workers, update feeds, trust/import/attest/sign/anchor shared updates, call providers, or run ZET transport.
+
 For the full beginner workflow around CLI plus MCP, see:
 
 ```text
@@ -169,6 +171,9 @@ zet_shared_update_record_review_preview
 zet_shared_update_record_review_index
   Read-only dry-run review index for direct-child local ZET shared update record JSON files under an archive-relative directory. `dry_run` must be boolean `true`; the tool writes nothing, ignores non-JSON files, reuses the single-record review policy, echoes no body text or local absolute paths, and never updates feeds, trusts, imports, attests, signs, anchors, calls providers, writes receipts, projects, or runs ZET transport.
 
+zet_transport_would_plan
+  Read-only dry-run ZET would-transport plan for one local shared update record and one future method: `key-sharing`, `radio-frequency`, or `mirroring`. `dry_run` must be boolean `true`; the tool reuses the single-record review policy, writes nothing, creates no keys, sends nothing, creates no receipts, calls no providers, starts no queues/workers, and never updates feeds, trusts, imports, attests, signs, anchors, mirrors, publishes, or runs ZET transport.
+
 create_draft_zettel
   Create an AI draft in inbox/. `dry_run: true` previews the draft path, frontmatter, body hash, blockers, warnings, and approval replay values without writing. It may consume structured `source_intake_plan` and `prompt_boundary_report` objects and merge validated metadata into the draft preview. Normal profile-bound AI writes require draft approval plus expected body hash replay values. This does not mint the zettel.
 
@@ -265,6 +270,7 @@ ownership_transfer_check
 - `foreign_block_attestation_statement_draft_review_index` is read-only and writes nothing. Its style and scope filters do not relax consistency validation, `case_id` scopes the verdict to one case, and included receipt summaries are sanitized. MCP rejects any `dry_run` value other than boolean `true` and exposes no statement draft review apply, write, approve, accept, import, trust, attest, sign, receipt write, auto-accept, auto-import, transport, or full-auto tool.
 - `foreign_block_attestation_statement_draft_decision_preview` is read-only and writes nothing. MCP rejects any `dry_run` value other than boolean `true`, treats review notes as preview context only, and exposes no decision write/apply, statement draft accept, import, trust, attest, sign, receipt write, WordPress publishing, provider sync, auto-accept, auto-import, transport, or full-auto tool.
 - `zet_projection_plan_check` is read-only and requires `dry_run: true`. MCP exposes no projection-plan apply/write, projection receipt write, WordPress publishing, provider publishing, ZET transport, or automatic posting tool.
+- `zet_transport_would_plan` is read-only and requires `dry_run: true`. MCP exposes no ZET transport apply/write/send/deliver/publish, key creation, radio-frequency access creation, mirroring delivery, queue/worker, receipt write, provider, trust/import/attest/sign/anchor, or full-auto tool.
 - v0.2.48 radio-frequency recommendation is documentation-only. MCP exposes no recommendation fetch/rank/update, selector execution, provider, projection, receipt, or feed mutation tool.
 - `create_draft_zettel` accepts a structured `source_intake_plan` object, not a local plan file path. The plan must be a successful dry-run, blocker-free, metadata-only source intake result before refs are merged.
 - `archive_index` writes only the generated search map at `db/archive-index.sqlite`.

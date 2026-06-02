@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.58` | current public pre-release | `wom-kit/docs/releases/v0.2.58.md` |
+| `v0.2.59` | current public pre-release | `wom-kit/docs/releases/v0.2.59.md` |
+| `v0.2.58` | superseded public pre-release | `wom-kit/docs/releases/v0.2.58.md` |
 | `v0.2.57` | superseded public pre-release | `wom-kit/docs/releases/v0.2.57.md` |
 | `v0.2.56` | superseded public pre-release | `wom-kit/docs/releases/v0.2.56.md` |
 | `v0.2.55` | superseded public pre-release | `wom-kit/docs/releases/v0.2.55.md` |
@@ -85,6 +86,22 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.58` To `v0.2.59`
+
+This is a compatible read-only ZET transport threat model and would-transport planning patch.
+
+What changed:
+
+- added CLI `archive zet-transport-plan <archive-root> --record <path> --method <key-sharing|radio-frequency|mirroring> --dry-run --format json`,
+- added MCP `zet_transport_would_plan`,
+- added service `zet_transport_would_plan`,
+- added `wom-kit/docs/zet-transport-threat-model.md`,
+- updated version metadata to `0.2.59`.
+
+No private archive migration is required.
+
+The new command reads one local archive-contained shared update record JSON, reuses the v0.2.56 single-record review preview policy, writes nothing, and returns a planning-only risk/control preview for a future transport method. It does not add real ZET transport, key creation, key-sharing registry, radio-frequency access creation, mirroring delivery, shared-update review writes, receiver-side renewal writes, neighbor feed update, recommendation execution, trust/import/acceptance/anchor, attestation/signature writes, provider sync, WordPress publishing, projection writes or receipts, queues/workers, payments/staking/consensus/blockchain, model training, backpropagation, or full-auto behavior.
 
 ## From `v0.2.57` To `v0.2.58`
 

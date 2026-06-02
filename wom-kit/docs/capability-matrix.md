@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: shared update review index baseline
+Status: ZET transport planning baseline
 Date: 2026-06-02
-Version: v0.2.58
+Version: v0.2.59
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -17,11 +17,11 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | `approval-gated write` | CLI can write only after explicit human approval inputs. MCP remains read-only or dry-run for that surface. |
 | `local hygiene tool` | A local checker exists for public release hygiene. It does not add archive product behavior. |
 | `documented-only` | Public docs or examples exist, but no product command/tool exists. |
-| `not implemented` | No product behavior exists in v0.2.58. |
+| `not implemented` | No product behavior exists in v0.2.59. |
 
 ## Current Capability Table
 
-| Capability | Status in v0.2.58 | Write behavior | Notes |
+| Capability | Status in v0.2.59 | Write behavior | Notes |
 | --- | --- | --- | --- |
 | Archive doctor | `implemented local command` | read-only | `archive doctor` checks archive structure, schema, manifest, receipt, and lifecycle consistency. |
 | Mint lifecycle | `approval-gated write` | CLI approve writes canonical zet, receipt, and draft snapshot | Dry-run previews first. Minting is private archive memory, not public posting. |
@@ -62,6 +62,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Shared update record baseline | `documented-only` | none | Defines a future receiver-side review artifact and sanitized example. |
 | Shared update record review preview | `read-only preview` | none | Reviews one local archive-contained shared update JSON record before any receiver-side renewal write exists. |
 | Shared update record review index | `read-only preview` | none | Indexes direct-child local shared update JSON records by reusing the single-record review policy. Writes nothing and records no review. |
+| ZET transport threat model / would-transport plan | `read-only preview` | none | Plans method-specific risks and future controls for `key-sharing`, `radio-frequency`, or `mirroring` after the shared update review policy passes. No real transport. |
 | Public release link hygiene | `local hygiene tool` | none | Checks repository Markdown links for release note copy safety. No GitHub Release edit or external URL fetch. |
 | Korean product-language hygiene | `local hygiene tool` | none | Checks public Markdown drift against the Korean product-language baseline. No auto-rewrite. |
 | Public privacy hygiene | `local hygiene tool` | none | Checks public files for obvious local path, token, private key, seed phrase, and private endpoint leaks. |
@@ -103,3 +104,5 @@ The v0.2.57 response was deliberately small:
 - avoid any new product CLI, MCP, service, provider, transport, trust, import, attestation, signature, anchor, or full-auto behavior.
 
 The v0.2.58 response keeps the same safety shape while adding one read-only index over local JSON records. It still avoids shared-update review writes, feed updates, trust/import/acceptance, attestation/signature writes, anchors, provider calls, receipts, ZET transport, and full-auto behavior.
+
+The v0.2.59 response adds one read-only would-transport planner. It still avoids real ZET transport, key creation, key-sharing registry, radio-frequency access creation, mirroring delivery, feed updates, trust/import/acceptance, attestation/signature writes, anchors, provider calls, receipts, queues/workers, recommendation execution, and full-auto behavior.

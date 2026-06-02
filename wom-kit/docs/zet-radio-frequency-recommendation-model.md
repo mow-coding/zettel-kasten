@@ -31,6 +31,8 @@ It means:
 
 It does not mean WOM-kit implements radio hardware, live streaming, wireless transport, P2P relay, provider sync, or real ZET transport in v0.2.48.
 
+v0.2.59 adds a read-only [ZET Transport Threat Model](zet-transport-threat-model.md) that can preview radio-frequency planning risks. It still does not create a frequency, update a feed, rank recommendations, call providers, or run real ZET transport.
+
 ## Prompt-As-Algorithm
 
 Future selectors may be expressed as:

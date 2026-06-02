@@ -15,6 +15,8 @@ Which local shared update records in this archive-relative directory can be prev
 
 It does not record review, accept updates, refresh feeds, grant trust, import content, write attestations, create signatures, anchor anything, call providers, write receipts, publish projections, or run ZET transport.
 
+v0.2.59 adds [ZET Transport Threat Model](zet-transport-threat-model.md) planning for one selected shared update record after the single-record review policy passes. That planner still writes nothing and opens no real transport.
+
 ## CLI
 
 ```powershell

@@ -3157,6 +3157,173 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertNotIn("workbench/shared-updates/nested/d.json", json.dumps(result, ensure_ascii=False))
 
+    def test_zet_transport_plan_valid_methods_return_risks_and_write_nothing(self) -> None:
+        expected_risk = {
+            "key-sharing": "key leakage",
+            "radio-frequency": "accidental broad discoverability",
+            "mirroring": "copying more than intended",
+        }
+        expected_control = {
+            "key-sharing": "explicit recipient node review",
+            "radio-frequency": "explicit frequency intent",
+            "mirroring": "exact block/zet scope",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            record_relative = self.write_shared_update_record_fixture(archive_root)
+            for method in ["key-sharing", "radio-frequency", "mirroring"]:
+                with self.subTest(method=method):
+                    before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                    code, output = self.run_cli(
+                        [
+                            "zet-transport-plan",
+                            str(archive_root),
+                            "--record",
+                            record_relative,
+                            "--method",
+                            method,
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                    result = json.loads(output)
+                    serialized = json.dumps(result, ensure_ascii=False)
+                    self.assertEqual(code, 0, output)
+                    self.assertEqual(before, after)
+                    self.assertTrue(result["ok"])
+                    self.assertTrue(result["dry_run"])
+                    self.assertEqual(result["lifecycle_action"], "zet_transport_would_plan")
+                    self.assertEqual(result["policy_reused_from"], "zet_shared_update_record_review_preview")
+                    self.assertEqual(result["plan_status"], "transport_plan_preview_not_recorded")
+                    self.assertEqual(result["method"], method)
+                    self.assertIn(expected_risk[method], result["method_risk_model"]["risks"])
+                    self.assertIn(expected_control[method], result["method_risk_model"]["required_future_controls"])
+                    self.assertEqual(result["would_change"], [])
+                    self.assertFalse(result["transport_performed"])
+                    self.assertFalse(result["real_zet_transport_performed"])
+                    self.assertFalse(result["transport_receipt_created"])
+                    self.assertFalse(result["delivery_created"])
+                    self.assertFalse(result["key_created"])
+                    self.assertFalse(result["radio_frequency_access_created"])
+                    self.assertFalse(result["mirroring_payload_created"])
+                    self.assertFalse(result["provider_api_call_performed"])
+                    self.assertFalse(result["queue_job_created"])
+                    self.assertFalse(result["worker_started"])
+                    self.assertFalse(result["neighbor_feed_updated"])
+                    self.assertFalse(result["trust_created"])
+                    self.assertFalse(result["import_performed"])
+                    self.assertFalse(result["acceptance_created"])
+                    self.assertFalse(result["attestation_written"])
+                    self.assertFalse(result["signature_created"])
+                    self.assertFalse(result["anchor_performed"])
+                    self.assertFalse(result["projection_write_performed"])
+                    self.assertFalse(result["receipt_write_performed"])
+                    self.assertNotIn(str(archive_root.resolve()), serialized)
+
+    def test_zet_transport_plan_requires_dry_run_and_safe_record_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            record_relative = self.write_shared_update_record_fixture(archive_root)
+            missing_dry_run_code, missing_dry_run_output = self.run_cli(
+                [
+                    "zet-transport-plan",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--method",
+                    "key-sharing",
+                    "--format",
+                    "json",
+                ]
+            )
+            missing_dry_run = json.loads(missing_dry_run_output)
+            self.assertEqual(missing_dry_run_code, 1, missing_dry_run_output)
+            self.assertFalse(missing_dry_run["ok"])
+            self.assertIn("zet-transport-plan is dry-run only; pass --dry-run.", missing_dry_run["blockers"])
+
+            invalid_method_code, invalid_method_output = self.run_cli(
+                [
+                    "zet-transport-plan",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--method",
+                    "send-now",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            invalid_method = json.loads(invalid_method_output)
+            self.assertEqual(invalid_method_code, 1, invalid_method_output)
+            self.assertFalse(invalid_method["ok"])
+            self.assertIsNone(invalid_method["method"])
+            self.assertIn("method must be one of key-sharing, radio-frequency, or mirroring.", invalid_method["blockers"])
+            self.assertNotIn("send-now", json.dumps(invalid_method, ensure_ascii=False))
+
+            unsafe_record = r"C:\Users\example\private\shared-update.json"
+            unsafe_code, unsafe_output = self.run_cli(
+                [
+                    "zet-transport-plan",
+                    str(archive_root),
+                    "--record",
+                    unsafe_record,
+                    "--method",
+                    "key-sharing",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            unsafe_result = json.loads(unsafe_output)
+            unsafe_serialized = json.dumps(unsafe_result, ensure_ascii=False)
+            self.assertEqual(unsafe_code, 1, unsafe_output)
+            self.assertFalse(unsafe_result["ok"])
+            self.assertIn("shared update record review preview blocked; would-transport plan cannot proceed.", unsafe_result["blockers"])
+            self.assertNotIn(unsafe_record, unsafe_serialized)
+            self.assertNotIn(r"C:\Users\example", unsafe_serialized)
+
+    def test_zet_transport_plan_blocks_bad_shared_update_record_without_body_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            secret_body = "private body C:\\Users\\example\\secret\\note.md"
+            record_relative = self.write_shared_update_record_fixture(
+                archive_root,
+                body_included=True,
+                body_text=secret_body,
+                safety={"transport_performed": True},
+            )
+            code, output = self.run_cli(
+                [
+                    "zet-transport-plan",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--method",
+                    "mirroring",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["policy_reused_from"], "zet_shared_update_record_review_preview")
+            self.assertFalse(result["record_review_summary"]["ok"])
+            self.assertIn("shared update record review preview blocked; would-transport plan cannot proceed.", result["blockers"])
+            self.assertIn(
+                "shared update record must not include or claim body text.",
+                result["record_review_summary"]["blockers"],
+            )
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn(secret_body, serialized)
+            self.assertNotIn(r"C:\Users\example", serialized)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+
     def test_block_header_collects_refs_and_hashes_are_deterministic_without_objet_body_reads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.58 pre-release
+v0.2.59 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -35,7 +35,7 @@ What exists today:
 - a public WOM/zet/ZET design baseline with specs, schemas, fake archives, release notes, and work logs,
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
 - private archive lifecycle tools for doctor checks, draft creation, minting, delegation, receipts, search, and metadata review,
-- read-only preview layers for runtime context, profiles, source/objet intake, block headers, prompt boundaries, foreign block review, projection, and shared update review/index,
+- read-only preview layers for runtime context, profiles, source/objet intake, block headers, prompt boundaries, foreign block review, projection, shared update review/index, and ZET would-transport planning,
 - approval-gated local write paths for selected private archive and foreign-block review records,
 - local public-release hygiene tools for links, Korean product language, privacy, release readiness, and branch-protection planning.
 
@@ -83,6 +83,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [ZET Shared Update Record Baseline](wom-kit/docs/zet-shared-update-record-baseline.md)
 - [ZET Shared Update Record Review Preview](wom-kit/docs/zet-shared-update-record-review-preview.md)
 - [ZET Shared Update Record Review Index](wom-kit/docs/zet-shared-update-record-review-index.md)
+- [ZET Transport Threat Model](wom-kit/docs/zet-transport-threat-model.md)
 - [Public Release Link Hygiene](wom-kit/docs/public-release-link-hygiene.md)
 - [Public Privacy Hygiene](wom-kit/docs/public-privacy-hygiene.md)
 - [Release Readiness Gate](wom-kit/docs/release-readiness-gate.md)
@@ -192,6 +193,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.2.59
 v0.2.58
 v0.2.57
 v0.2.56

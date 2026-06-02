@@ -558,6 +558,22 @@ This is read-only and dry-run only. The records directory must be archive-relati
 
 MCP must not expose shared update index write/apply/publish/transport/import/trust/attest/sign/anchor tools.
 
+From v0.2.59, an AI runtime may preview a future ZET transport risk/control plan for one local shared update record:
+
+```powershell
+archive zet-transport-plan <archive-root> --record <archive-relative-json> --method <key-sharing|radio-frequency|mirroring> --dry-run --format json
+```
+
+MCP:
+
+```text
+zet_transport_would_plan
+```
+
+This is read-only and dry-run only. The planner first reuses the single-record shared update review policy. If that preview blocks, the would-transport plan blocks too. It writes nothing, returns `would_change: []`, echoes no body text or local absolute paths, creates no keys, creates no radio-frequency access, creates no mirroring payload, creates no receipts, calls no providers, starts no queues/workers, updates no feeds, and runs no real ZET transport.
+
+MCP must not expose ZET transport apply/write/send/deliver/publish/import/trust/attest/sign/anchor/key/radio-frequency/mirror tools.
+
 ## Publication Surface Discussion Boundary
 
 An AI runtime may discuss a user-selected publication surface after archive context, source refs, draft preview, human approval, minting, and block/header context are understood.
@@ -604,9 +620,10 @@ An AI runtime should start with:
 27. use `attestation-statement-draft-decision --dry-run` to preview one safe next review route without recording a decision
 28. use `shared-update-record-review-index --dry-run` to inventory local shared update records without recording review
 29. use `shared-update-record-review --dry-run` for one local shared update record before any receiver-side renewal discussion
-30. discuss the radio-frequency recommendation model only as a future docs/examples baseline, not as an executable feed feature
-31. run mint dry-run before asking for mint approval
-32. use CLI approval paths for real minting
+30. use `zet-transport-plan --dry-run` only to discuss future transport risks and controls, never to send or deliver anything
+31. discuss the radio-frequency recommendation model only as a future docs/examples baseline, not as an executable feed feature
+32. run mint dry-run before asking for mint approval
+33. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -642,6 +659,7 @@ The skill tells the AI to:
 - use attestation-statement-draft-decision dry-run to preview one safe next review route without recording a decision,
 - use shared-update-record-review-index dry-run to inventory local shared update records without writing review metadata,
 - use shared-update-record-review dry-run before any receiver-side renewal discussion,
+- use zet-transport-plan dry-run only for future transport risk/control planning, never for real send/deliver,
 - treat ZET recommendation as documentation-only in v0.2.48 and never claim that recommendations can be fetched, ranked, or applied,
 - keep paths archive-relative,
 - avoid exposing local absolute paths,

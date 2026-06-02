@@ -18,6 +18,8 @@ v0.2.48 extends this model with a recommendation philosophy baseline: followed/n
 
 v0.2.55 adds the [ZET Shared Update Record Baseline](zet-shared-update-record-baseline.md), which documents a future receiver-side review artifact that may appear before local renewal of a shared zet update.
 
+v0.2.59 adds the [ZET Transport Threat Model](zet-transport-threat-model.md), which previews future transport risks for `key-sharing`, `radio-frequency`, and `mirroring` without opening real transport.
+
 ## 1. Base zettel-kasten Layer
 
 The base zettel-kasten system is local-first infrastructure for archive memory.
@@ -97,6 +99,8 @@ See [ZET Radio-Frequency Recommendation Model](zet-radio-frequency-recommendatio
 For a future receiver-side review record shape before renewal, see [ZET Shared Update Record Baseline](zet-shared-update-record-baseline.md).
 
 For the v0.2.56 read-only local inspection command that checks one shared update record before renewal, see [ZET Shared Update Record Review Preview](zet-shared-update-record-review-preview.md).
+
+For the v0.2.59 read-only would-transport planner, see [ZET Transport Threat Model](zet-transport-threat-model.md).
 
 ## 6. Attestation In The Closed SNS Flow
 

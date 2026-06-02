@@ -261,6 +261,14 @@ archive shared-update-record-review-index <archive-root> --records-dir <archive-
 
 The review index scans only direct-child `.json` files under an archive-relative directory. It writes nothing, ignores non-JSON files, reuses the single-record review policy, echoes no body text or local absolute paths, and does not update feeds, trust, import, attest, sign, anchor, project, call providers, write receipts, or run ZET transport. MCP may only run `zet_shared_update_record_review_index`; it must not expose shared update index write/apply/publish/transport/import/trust/attest/sign/anchor tools.
 
+For one local ZET shared update record, preview future transport risk only:
+
+```bash
+archive zet-transport-plan <archive-root> --record <archive-relative-json> --method <key-sharing|radio-frequency|mirroring> --dry-run --format json
+```
+
+The would-transport plan first reuses the single-record review policy. It writes nothing, echoes no body text or local absolute paths, creates no keys, creates no radio-frequency access, creates no mirroring payload, writes no receipts, calls no providers, starts no queues/workers, updates no feeds, and runs no ZET transport. MCP may only run `zet_transport_would_plan`; it must not expose ZET transport apply/write/send/deliver/publish/import/trust/attest/sign/anchor/key/radio-frequency/mirror tools.
+
 ## Read The Result
 
 Continue only when:
@@ -299,6 +307,7 @@ Prefer these actions:
 - run attestation-statement-draft-decision dry-run to preview one safe next review route without recording a decision,
 - run shared-update-record-review-index dry-run to inventory local shared update records without writing review metadata,
 - run shared-update-record-review dry-run before any receiver-side renewal discussion,
+- run zet-transport-plan dry-run only to discuss future transport risks and controls, never to send or deliver,
 - create approved draft in inbox,
 - run mint dry-run,
 - run check-safe-html dry-run,

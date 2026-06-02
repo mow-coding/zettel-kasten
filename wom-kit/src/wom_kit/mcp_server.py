@@ -499,6 +499,20 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "zet_transport_would_plan",
+        "description": "Read-only dry-run ZET would-transport plan for one local shared update record. This never transports, creates keys, writes receipts, calls providers, or starts workers.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "record": {"type": "string"},
+                "method": {"type": "string", "enum": sorted(archive_services.ZET_TRANSPORT_METHODS)},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "record", "method"],
+        },
+    },
+    {
         "name": "foreign_block_intake_check",
         "description": "Read-only dry-run intake preview for a foreign/shared block or Markdown-compatible zet before any trust/import action.",
         "inputSchema": {
@@ -1155,6 +1169,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_zet_shared_update_record_review_preview(arguments)
     if name == "zet_shared_update_record_review_index":
         return tool_zet_shared_update_record_review_index(arguments)
+    if name == "zet_transport_would_plan":
+        return tool_zet_transport_would_plan(arguments)
     if name == "foreign_block_intake_check":
         return tool_foreign_block_intake_check(arguments)
     if name == "foreign_block_trust_check":
@@ -1689,6 +1705,21 @@ def tool_zet_shared_update_record_review_index(arguments: dict[str, Any]) -> dic
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"zet_shared_update_record_review_index: {state}.", result)
+
+
+def tool_zet_transport_would_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("zet_transport_would_plan is dry-run only.")
+    result = call_service(
+        archive_services.zet_transport_would_plan,
+        archive_root,
+        record=require_string_arg(arguments, "record"),
+        method=require_string_arg(arguments, "method"),
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"zet_transport_would_plan: {state}.", result)
 
 
 def tool_foreign_block_intake_check(arguments: dict[str, Any]) -> dict[str, Any]:

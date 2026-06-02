@@ -4,6 +4,26 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.2.59 - 2026-06-02
+
+ZET transport threat model and would-transport plan.
+
+Added:
+
+- CLI `archive zet-transport-plan <archive-root> --record <path> --method <key-sharing|radio-frequency|mirroring> --dry-run --format json`,
+- MCP `zet_transport_would_plan`,
+- read-only service `zet_transport_would_plan`,
+- method-specific planning-only risk/control previews for `key-sharing`, `radio-frequency`, and `mirroring`,
+- public documentation, release note, and work log for the v0.2.59 planning batch.
+
+Compatibility:
+
+- no private archive migration is required,
+- the new CLI/MCP path is dry-run only and writes no files,
+- the planner reuses the v0.2.56 single-record review preview policy before producing any plan,
+- body text, local absolute paths, provider URLs, tokens, secrets, and unsafe values are not echoed,
+- no real ZET transport, key creation, key-sharing registry, radio-frequency access creation, mirroring delivery, shared-update review writes, receiver-side renewal writes, neighbor feed update, recommendation execution, trust/import/acceptance/anchor, attestation/signature write, provider sync, WordPress publishing, projection write/receipt, queues, workers, payments, staking, consensus, blockchain, model training, backpropagation, or full-auto behavior is implemented.
+
 ## v0.2.58 - 2026-06-02
 
 ZET shared update record review index.

@@ -108,6 +108,7 @@ ZET_PROJECTION_VISIBILITIES = {"private", "team", "public", "unknown"}
 ZET_PROJECTION_FORMATS = {"metadata_only", "safe_html_summary", "plain_text_summary"}
 ZET_SHARED_UPDATE_RECORD_EXPECTED_KIND = "zet_shared_update_record_preview"
 ZET_SHARED_UPDATE_REVIEW_INDEX_MAX_LIMIT = 100
+ZET_TRANSPORT_METHODS = {"key-sharing", "radio-frequency", "mirroring"}
 ZET_SHARED_UPDATE_REVIEW_CLOSED_FLAGS = {
     "shared_update_review_index_recorded": False,
     "shared_update_review_recorded": False,
@@ -122,6 +123,73 @@ ZET_SHARED_UPDATE_REVIEW_CLOSED_FLAGS = {
     "provider_api_call_performed": False,
     "projection_write_performed": False,
     "receipt_write_performed": False,
+}
+ZET_TRANSPORT_WOULD_PLAN_CLOSED_FLAGS = {
+    "transport_performed": False,
+    "real_zet_transport_performed": False,
+    "transport_receipt_created": False,
+    "delivery_created": False,
+    "key_created": False,
+    "radio_frequency_access_created": False,
+    "mirroring_payload_created": False,
+    "provider_api_call_performed": False,
+    "queue_job_created": False,
+    "worker_started": False,
+    "neighbor_feed_updated": False,
+    "trust_created": False,
+    "import_performed": False,
+    "acceptance_created": False,
+    "attestation_written": False,
+    "signature_created": False,
+    "anchor_performed": False,
+    "projection_write_performed": False,
+    "receipt_write_performed": False,
+}
+ZET_TRANSPORT_METHOD_RISKS = {
+    "key-sharing": [
+        "key leakage",
+        "unintended recipient binding",
+        "replay or reuse",
+        "recipient identity mismatch",
+        "unclear revocation",
+    ],
+    "radio-frequency": [
+        "accidental broad discoverability",
+        "frequency guessing",
+        "stale frequency reuse",
+        "recommendation/feed confusion",
+        "central-ranking confusion",
+    ],
+    "mirroring": [
+        "copying more than intended",
+        "stale mirror copies",
+        "sender/receiver mismatch",
+        "repeated fetch beyond intended count",
+        "conflating mirror copy with trust or acceptance",
+    ],
+}
+ZET_TRANSPORT_METHOD_CONTROLS = {
+    "key-sharing": [
+        "explicit recipient node review",
+        "one-time or bounded-use key policy",
+        "replay guard",
+        "receipt/audit trail",
+        "no key material in logs",
+    ],
+    "radio-frequency": [
+        "explicit frequency intent",
+        "provenance review",
+        "visible selector policy",
+        "no central black-box ranking claim",
+        "no automatic feed update",
+    ],
+    "mirroring": [
+        "exact block/zet scope",
+        "receiver node binding",
+        "copy count or replay guard",
+        "receipt/audit trail",
+        "explicit post-copy review before trust/import/anchor",
+    ],
 }
 ZET_SHARED_UPDATE_BODY_KEYS = {
     "body",
@@ -10038,6 +10106,107 @@ def zet_shared_update_record_review_index(
         "warnings": unique_preserve_order(warnings),
     }
     result.update(ZET_SHARED_UPDATE_REVIEW_CLOSED_FLAGS)
+    return result
+
+
+def zet_transport_would_plan(
+    archive_root: Path | str,
+    *,
+    record: str | None,
+    method: str | None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run is not True:
+        blockers.append("zet-transport-plan is dry-run only; pass --dry-run.")
+
+    method_text = str(method or "").strip() if isinstance(method, str) else ""
+    selected_method: str | None = method_text if method_text in ZET_TRANSPORT_METHODS else None
+    if selected_method is None:
+        blockers.append("method must be one of key-sharing, radio-frequency, or mirroring.")
+
+    review = zet_shared_update_record_review_preview(
+        root,
+        record=record,
+        dry_run=True,
+    )
+    review_blockers = list(review.get("blockers") or [])
+    review_warnings = list(review.get("warnings") or [])
+    if review_blockers:
+        blockers.append("shared update record review preview blocked; would-transport plan cannot proceed.")
+    warnings.extend(str(warning) for warning in review_warnings if isinstance(warning, str))
+
+    method_risk_model = {
+        "method": selected_method,
+        "planning_only": True,
+        "risks": list(ZET_TRANSPORT_METHOD_RISKS.get(selected_method or "", [])),
+        "required_future_controls": list(ZET_TRANSPORT_METHOD_CONTROLS.get(selected_method or "", [])),
+        "security_guarantee": "not_a_security_guarantee",
+    }
+    transport_preconditions = [
+        "shared update record review preview passes",
+        "human selects an explicit transport method",
+        "recipient/scope intent is reviewed before any future transport",
+        "no body text is exposed by the plan",
+        "future approval must be separate from this dry-run plan",
+    ]
+    if selected_method == "key-sharing":
+        transport_preconditions.append("future implementation must not log or output key material")
+    elif selected_method == "radio-frequency":
+        transport_preconditions.append("future implementation must not claim automatic ranking or feed update")
+    elif selected_method == "mirroring":
+        transport_preconditions.append("future implementation must bind exact mirror scope before copy")
+
+    result = {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "zet_transport_would_plan",
+        "archive_id": archive_id,
+        "record_path": review.get("record_path"),
+        "method": selected_method,
+        "plan_status": "transport_plan_preview_not_recorded",
+        "policy_reused_from": "zet_shared_update_record_review_preview",
+        "record_review_summary": {
+            "ok": bool(review.get("ok")),
+            "preview_status": review.get("preview_status"),
+            "trust_state": review.get("trust_state"),
+            "record_kind": review.get("record_kind"),
+            "record_version": review.get("record_version"),
+            "blocker_count": len(review_blockers),
+            "warning_count": len(review_warnings),
+            "blockers": review_blockers,
+            "warnings": review_warnings,
+            "source_preview": review.get("source_preview") if isinstance(review.get("source_preview"), dict) else {},
+            "receiver_review_preview": (
+                review.get("receiver_review_preview")
+                if isinstance(review.get("receiver_review_preview"), dict)
+                else {}
+            ),
+            "sharing_context_preview": (
+                review.get("sharing_context_preview") if isinstance(review.get("sharing_context_preview"), dict) else {}
+            ),
+        },
+        "header_body_boundary": {
+            "header_review_surface": "safe_header_and_record_metadata_only",
+            "body_review_surface": "not_read_or_echoed",
+            "body_content_included": False,
+        },
+        "method_risk_model": method_risk_model,
+        "transport_preconditions": transport_preconditions,
+        "next_safe_actions": [
+            "review method-specific risks with a human",
+            "keep the shared update untrusted before any separate receiver-side renewal approval path exists",
+            "do not create transport, keys, receipts, delivery, feed updates, trust, import, or acceptance from this plan",
+        ],
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+    result.update(ZET_TRANSPORT_WOULD_PLAN_CLOSED_FLAGS)
     return result
 
 

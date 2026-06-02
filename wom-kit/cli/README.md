@@ -52,6 +52,9 @@ shared-update-record-review --dry-run
 shared-update-record-review-index --dry-run
   Preview a compact deterministic review index for direct-child local ZET shared update record JSON files under an archive-relative directory. This writes nothing, ignores non-JSON files, reuses the single-record review policy, echoes no body text or local absolute paths, and never updates feeds, trusts, imports, attests, signs, anchors, calls providers, writes receipts, projects, or runs ZET transport.
 
+zet-transport-plan --dry-run
+  Preview a planning-only would-transport risk/control model for one local ZET shared update record and one future method. This writes nothing, reuses the single-record review policy, creates no keys, sends nothing, creates no receipts, calls no providers, starts no workers, and never updates feeds, trusts, imports, attests, signs, anchors, projects, mirrors, or runs ZET transport.
+
 foreign-block --dry-run
   Preview a foreign/shared block-header JSON artifact or Markdown-compatible foreign zet before trust/import. This writes nothing and never imports, drafts, mints, attests, anchors, applies, or calls providers.
 
