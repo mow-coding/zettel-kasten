@@ -261,6 +261,14 @@ archive shared-update-record-review-index <archive-root> --records-dir <archive-
 
 The review index scans only direct-child `.json` files under an archive-relative directory. It writes nothing, ignores non-JSON files, reuses the single-record review policy, echoes no body text or local absolute paths, and does not update feeds, trust, import, attest, sign, anchor, project, call providers, write receipts, or run ZET transport. MCP may only run `zet_shared_update_record_review_index`; it must not expose shared update index write/apply/publish/transport/import/trust/attest/sign/anchor tools.
 
+After human/operator review, record only a local shared update attestation/review record and receipt through CLI:
+
+```bash
+archive shared-update-attestation-review <archive-root> --record <archive-relative-json> --decision <attest|needs_more_review|reject> --reviewed-by <safe-actor-id> --approve --format json
+```
+
+This first reuses the single-record review policy. It writes exactly two JSON files, refuses replay/overwrite, and rolls back the record if the receipt write fails. Even `--decision attest` is only a local human review decision; it is not trust, import, acceptance, signature, anchor, feed update, provider sync, projection, public proof, or ZET transport. MCP must not expose shared update attestation/review write/apply/approve/publish/transport/import/trust/sign/anchor tools.
+
 For one local ZET shared update record, preview future transport risk only:
 
 ```bash
@@ -315,6 +323,7 @@ Prefer these actions:
 - run attestation-statement-draft-decision dry-run to preview one safe next review route without recording a decision,
 - run shared-update-record-review-index dry-run to inventory local shared update records without writing review metadata,
 - run shared-update-record-review dry-run before any receiver-side renewal discussion,
+- run CLI-only shared-update-attestation-review approval only to record local review metadata and a receipt,
 - run zet-transport-plan dry-run only to discuss future transport risks and controls, never to send or deliver,
 - read the v0.2.x freeze / v0.3.0 entry boundary only when discussing next-line planning, not as an executable tool,
 - create approved draft in inbox,
@@ -357,6 +366,7 @@ Do not:
 - treat attestation-statement-draft-review as trust, import, mint, attestation, signature, anchor, delegation, execution, acceptance, apply approval, or a write path,
 - treat attestation-statement-draft-decision as trust, import, mint, attestation, signature, anchor, delegation, execution, acceptance, apply approval, or a write path,
 - treat shared-update-record-review as receiver-side renewal, trust, import, acceptance, attestation, signature, feed update, projection, provider call, receipt write, or ZET transport,
+- treat shared-update-attestation-review as receiver-side renewal, trust, import, acceptance, real attestation, signature, feed update, projection, provider call, public proof, or ZET transport,
 - expose foreign block apply/import/trust/quarantine write/attest/receipt/auto-accept/full-auto behavior through MCP,
 - expose foreign block quarantine review apply/accept behavior through MCP,
 - expose foreign block quarantine decision apply/write/accept behavior through MCP,
@@ -369,6 +379,7 @@ Do not:
 - expose foreign block attestation statement draft review apply/write/accept/trust/import/attest/sign behavior through MCP,
 - expose foreign block attestation statement draft decision apply/write/accept/trust/import/attest/sign/provider/WordPress behavior through MCP,
 - expose shared update record review apply/write/publish/transport/import/trust/attest/sign/anchor behavior through MCP,
+- expose shared update attestation/review apply/write/approve/publish/transport/import/trust/sign/anchor behavior through MCP,
 - treat the v0.2.x freeze / v0.3.0 entry boundary as an implemented write, transport, public proof, DID/wallet/key custody, provider sync, trust mutation, token/governance, or full-auto surface,
 - implement token, coin, NFT, staking, relay, transport, or provider mutation behavior,
 - treat "upload" or "post" language as mint approval,

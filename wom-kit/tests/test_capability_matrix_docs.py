@@ -43,6 +43,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Shared update record baseline",
             "Shared update record review preview",
             "Shared update record review index",
+            "Shared update attestation/review write",
             "ZET transport threat model / would-transport plan",
             "v0.2.x freeze / v0.3.0 entry boundary",
             "Public proof anchoring",
@@ -62,13 +63,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
     def test_capability_matrix_documents_closing_plan_without_product_behavior(self) -> None:
         text = MATRIX_PATH.read_text(encoding="utf-8")
-        self.assertIn("v0.2.x Closing Plan", text)
-        self.assertIn("This is a planning baseline, not a release promise.", text)
+        self.assertIn("v0.3.0 Boundary Status", text)
+        self.assertIn("v0.2 line closed", text)
         self.assertIn("avoid any new product CLI, MCP, service", text)
         self.assertIn("no real transport", text)
         self.assertIn("v0.2.60", text)
         self.assertIn("documentation, version, and test coverage only", text)
-        self.assertIn("one narrow receiver-side approved write", text)
+        self.assertIn("CLI-only shared update attestation/review record plus receipt", text)
+        self.assertIn("MCP write/apply tools", text)
         self.assertIn("public proof anchoring", text)
         self.assertIn("DID/wallet/key custody", text)
 

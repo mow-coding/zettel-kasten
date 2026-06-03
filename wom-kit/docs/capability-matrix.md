@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.2.x freeze checkpoint
-Date: 2026-06-02
-Version: v0.2.60
+Status: v0.3.0 first write-boundary checkpoint
+Date: 2026-06-03
+Version: v0.3.0
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -17,11 +17,11 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | `approval-gated write` | CLI can write only after explicit human approval inputs. MCP remains read-only or dry-run for that surface. |
 | `local hygiene tool` | A local checker exists for public release hygiene. It does not add archive product behavior. |
 | `documented-only` | Public docs or examples exist, but no product command/tool exists. |
-| `not implemented` | No product behavior exists in v0.2.60. |
+| `not implemented` | No product behavior exists in v0.3.0. |
 
 ## Current Capability Table
 
-| Capability | Status in v0.2.60 | Write behavior | Notes |
+| Capability | Status in v0.3.0 | Write behavior | Notes |
 | --- | --- | --- | --- |
 | Archive doctor | `implemented local command` | read-only | `archive doctor` checks archive structure, schema, manifest, receipt, and lifecycle consistency. |
 | Mint lifecycle | `approval-gated write` | CLI approve writes canonical zet, receipt, and draft snapshot | Dry-run previews first. Minting is private archive memory, not public posting. |
@@ -62,6 +62,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Shared update record baseline | `documented-only` | none | Defines a future receiver-side review artifact and sanitized example. |
 | Shared update record review preview | `read-only preview` | none | Reviews one local archive-contained shared update JSON record before any receiver-side renewal write exists. |
 | Shared update record review index | `read-only preview` | none | Indexes direct-child local shared update JSON records by reusing the single-record review policy. Writes nothing and records no review. |
+| Shared update attestation/review write | `approval-gated write` | CLI approve writes one local review record and one receipt | Reuses the shared update record review preview policy, refuses replay/overwrite, and keeps trust/import/acceptance/signature/anchor/feed/provider/projection/real ZET transport closed. MCP exposes no write/apply sibling tool. |
 | ZET transport threat model / would-transport plan | `read-only preview` | none | Plans method-specific risks and future controls for `key-sharing`, `radio-frequency`, or `mirroring` after the shared update review policy passes. No real transport. |
 | v0.2.x freeze / v0.3.0 entry boundary | `documented-only` | none | Closes the v0.2.x line as a conservative local-first checkpoint and proposes one narrow receiver-side approved write as the first v0.3.0 boundary. |
 | Public release link hygiene | `local hygiene tool` | none | Checks repository Markdown links for release note copy safety. No GitHub Release edit or external URL fetch. |
@@ -82,18 +83,16 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | System token / validator governance | `not implemented` | none | No system token, validator governance, public chain, payment, staking, or consensus behavior exists. |
 | Payments / blockchain / token / consensus | `not implemented` | none | No WOM coin, NFT-like access, staking, payment, ledger, consensus, or blockchain mechanics exist. |
 
-## v0.2.x Closing Plan
+## v0.3.0 Boundary Status
 
-This is a planning baseline, not a release promise.
-
-The v0.2 line should stop adding parallel preview ladders after the remaining closing work:
+The v0.2 line closed after this sequence:
 
 1. `v0.2.57`: capability matrix and README readability cleanup.
 2. `v0.2.58`: shared-update review index, read-only.
 3. `v0.2.59`: ZET transport threat model and dry-run would-transport plan, with no real transport.
 4. `v0.2.60`: freeze/checkpoint documentation and v0.3.0 entry boundary, with no product behavior.
 
-The proposed `v0.3.0` boundary is one narrow receiver-side approved write, likely an attestation/review record plus receipt for an already-reviewed shared or foreign update. That boundary should be replay-gated, human-approved, local-first, body-safe, and should still avoid real transport, anchors, trust graph mutation, provider sync, full-auto behavior, payment layers, public proof anchoring, DID/wallet/key custody, and blockchain/token mechanics.
+v0.3.0 implements that boundary as a CLI-only shared update attestation/review record plus receipt. It is replay-gated, human-approved, local-first, and body-safe, and it still avoids real transport, anchors, trust graph mutation, provider sync, full-auto behavior, payment layers, public proof anchoring, DID/wallet/key custody, and blockchain/token mechanics.
 
 ## Review Context
 
@@ -112,3 +111,5 @@ The v0.2.58 response keeps the same safety shape while adding one read-only inde
 The v0.2.59 response adds one read-only would-transport planner. It still avoids real ZET transport, key creation, key-sharing registry, radio-frequency access creation, mirroring delivery, feed updates, trust/import/acceptance, attestation/signature writes, anchors, provider calls, receipts, queues/workers, recommendation execution, and full-auto behavior.
 
 The v0.2.60 response is documentation, version, and test coverage only. It closes v0.2.x as a conservative local-first checkpoint, records the proposed v0.3.0 first boundary, and still avoids product CLI/MCP/service changes, schemas, real ZET transport, trust/import/acceptance/anchor mutation, attestation/signature writes, provider sync, queues/workers, DID/wallet/key custody, public proof anchoring, blockchain/token mechanics, and full-auto behavior.
+
+The v0.3.0 response opens only the CLI local review record and receipt for shared update attestation/review. It still avoids MCP write/apply tools, real ZET transport, key creation, feed updates, trust/import/acceptance, real attestation/signature writes, anchors, public proof, provider sync, projection writes, queues/workers, DID/wallet/key custody, blockchain/token mechanics, and full-auto behavior.

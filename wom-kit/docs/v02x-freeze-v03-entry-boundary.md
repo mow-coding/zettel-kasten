@@ -3,6 +3,8 @@
 Date: 2026-06-02
 Status: public checkpoint baseline
 
+Update: v0.3.0 implements the first boundary described here as a CLI-only shared update attestation/review record and receipt write. The rest of the closed scope remains closed.
+
 ## Summary
 
 v0.2.60 freezes the v0.2.x line as a conservative local-first foundation checkpoint.
@@ -154,3 +156,15 @@ Even if v0.3.0 starts with one approved receiver-side write, the first boundary 
 - full-auto execution.
 
 The next line should stay small enough that a human can inspect it and understand what changed.
+
+## v0.3.0 Boundary Realization
+
+v0.3.0 opens only this write:
+
+```text
+archive shared-update-attestation-review
+```
+
+It reuses `zet_shared_update_record_review_preview`, requires `--approve` and `--reviewed-by`, writes exactly one local review record and one matching receipt, refuses overwrite/replay, and rolls back the record if the receipt write fails.
+
+This is still not real ZET transport, trust graph mutation, import, acceptance, signature, anchor/apply, public proof, provider sync, projection, feed update, queue/worker, DID/wallet/key custody, payment/staking/consensus/blockchain/token behavior, model training, backpropagation, or full-auto execution.

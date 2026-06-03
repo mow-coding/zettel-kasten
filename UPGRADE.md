@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.2.60` | current public pre-release | `wom-kit/docs/releases/v0.2.60.md` |
+| `v0.3.0` | current public pre-release | `wom-kit/docs/releases/v0.3.0.md` |
+| `v0.2.60` | superseded public pre-release | `wom-kit/docs/releases/v0.2.60.md` |
 | `v0.2.59` | superseded public pre-release | `wom-kit/docs/releases/v0.2.59.md` |
 | `v0.2.58` | superseded public pre-release | `wom-kit/docs/releases/v0.2.58.md` |
 | `v0.2.57` | superseded public pre-release | `wom-kit/docs/releases/v0.2.57.md` |
@@ -87,6 +88,23 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.2.60` To `v0.3.0`
+
+This is a compatible first v0.3.0 write-boundary release.
+
+What changed:
+
+- added CLI `archive shared-update-attestation-review <archive-root> --record <path> --decision <attest|needs_more_review|reject> --reviewed-by <actor> --approve --format json`,
+- added a local service that reuses `zet_shared_update_record_review_preview` before writing,
+- added deterministic receiver-side review record and receipt paths,
+- added replay/overwrite refusal and receipt-failure rollback,
+- added `wom-kit/docs/shared-update-attestation-review-write.md`,
+- updated version metadata to `0.3.0`.
+
+No private archive migration is required.
+
+The new command writes only a local shared update attestation/review record and matching receipt. It does not expose an MCP write/apply tool and does not create real ZET transport, keys, feed updates, trust/import/acceptance, signatures, anchors, public proofs, provider sync, projection writes, queues/workers, wallet/key custody, payment/staking/consensus/blockchain, tokens, model training, backpropagation, or full-auto behavior.
 
 ## From `v0.2.59` To `v0.2.60`
 

@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.2.60 pre-release
+v0.3.0 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -84,6 +84,7 @@ v0.2.60 pre-release
 - [ZET Shared Update Record Baseline](wom-kit/docs/zet-shared-update-record-baseline.md)
 - [ZET Shared Update Record Review Preview](wom-kit/docs/zet-shared-update-record-review-preview.md)
 - [ZET Shared Update Record Review Index](wom-kit/docs/zet-shared-update-record-review-index.md)
+- [Shared Update Attestation Review Write](wom-kit/docs/shared-update-attestation-review-write.md)
 - [ZET Transport Threat Model](wom-kit/docs/zet-transport-threat-model.md)
 - [v0.2.x Freeze And v0.3.0 Entry Boundary](wom-kit/docs/v02x-freeze-v03-entry-boundary.md)
 - [공개 문서 지도](wom-kit/docs/public-documentation-map.ko.md)
@@ -191,6 +192,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.3.0
 v0.2.60
 v0.2.59
 v0.2.58

@@ -108,6 +108,10 @@ ZET_PROJECTION_VISIBILITIES = {"private", "team", "public", "unknown"}
 ZET_PROJECTION_FORMATS = {"metadata_only", "safe_html_summary", "plain_text_summary"}
 ZET_SHARED_UPDATE_RECORD_EXPECTED_KIND = "zet_shared_update_record_preview"
 ZET_SHARED_UPDATE_REVIEW_INDEX_MAX_LIMIT = 100
+ZET_SHARED_UPDATE_ATTESTATION_REVIEW_DECISIONS = {"attest", "needs_more_review", "reject"}
+ZET_SHARED_UPDATE_ATTESTATION_REVIEW_RECORDS_DIR = "shared-updates/attestation-reviews"
+ZET_SHARED_UPDATE_ATTESTATION_REVIEW_RECEIPTS_DIR = "receipts/shared-updates"
+ZET_SHARED_UPDATE_ATTESTATION_REVIEW_ACTOR_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,199}$")
 ZET_TRANSPORT_METHODS = {"key-sharing", "radio-frequency", "mirroring"}
 ZET_SHARED_UPDATE_REVIEW_CLOSED_FLAGS = {
     "shared_update_review_index_recorded": False,
@@ -123,6 +127,41 @@ ZET_SHARED_UPDATE_REVIEW_CLOSED_FLAGS = {
     "provider_api_call_performed": False,
     "projection_write_performed": False,
     "receipt_write_performed": False,
+}
+ZET_SHARED_UPDATE_ATTESTATION_REVIEW_CLOSED_FLAGS = {
+    "real_zet_transport_performed": False,
+    "key_created": False,
+    "key_sharing_registry_created": False,
+    "radio_frequency_access_created": False,
+    "mirroring_payload_created": False,
+    "mirroring_delivery_created": False,
+    "neighbor_feed_updated": False,
+    "automatic_renewal_performed": False,
+    "trust_graph_mutated": False,
+    "trust_created": False,
+    "import_performed": False,
+    "acceptance_created": False,
+    "anchor_performed": False,
+    "apply_performed": False,
+    "attestation_created": False,
+    "signature_created": False,
+    "public_proof_anchor_created": False,
+    "did_wallet_key_custody_used": False,
+    "provider_api_call_performed": False,
+    "wordpress_published": False,
+    "projection_write_performed": False,
+    "projection_receipt_created": False,
+    "queue_job_created": False,
+    "worker_started": False,
+    "payment_performed": False,
+    "staking_performed": False,
+    "consensus_performed": False,
+    "blockchain_written": False,
+    "token_created": False,
+    "system_token_created": False,
+    "model_training_performed": False,
+    "backpropagation_performed": False,
+    "full_auto_used": False,
 }
 ZET_TRANSPORT_WOULD_PLAN_CLOSED_FLAGS = {
     "transport_performed": False,
@@ -10107,6 +10146,444 @@ def zet_shared_update_record_review_index(
     }
     result.update(ZET_SHARED_UPDATE_REVIEW_CLOSED_FLAGS)
     return result
+
+
+def record_shared_update_attestation_review(
+    archive_root: Path | str,
+    *,
+    record: str | None,
+    decision: str | None,
+    reviewed_by: str | None,
+    approve: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    selected_decision = str(decision or "").strip()
+    if selected_decision not in ZET_SHARED_UPDATE_ATTESTATION_REVIEW_DECISIONS:
+        blockers.append("decision must be one of attest, needs_more_review, or reject.")
+
+    reviewer = safe_shared_update_attestation_review_actor_id(reviewed_by)
+    if not approve:
+        blockers.append("shared-update-attestation-review requires --approve.")
+    if approve and reviewer is None:
+        blockers.append("approved shared update attestation/review write requires --reviewed-by with a safe actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    review = zet_shared_update_record_review_preview(root, record=record, dry_run=True)
+    review_blockers = [str(item) for item in review.get("blockers") or [] if isinstance(item, str)]
+    review_warnings = [str(item) for item in review.get("warnings") or [] if isinstance(item, str)]
+    warnings.extend(review_warnings)
+    if review_blockers:
+        blockers.append("shared update record review preview blocked; attestation/review write cannot proceed.")
+
+    record_relative = review.get("record_path") if isinstance(review.get("record_path"), str) else None
+    source_record_sha256: str | None = None
+    case_id: str | None = None
+    proposed_paths: dict[str, str] = {}
+    if record_relative:
+        try:
+            source_path = archive_internal_path(root, record_relative)
+            if source_path.is_file():
+                source_record_sha256 = sha256_path(source_path)
+                case_id = shared_update_attestation_review_case_id(source_record_sha256)
+                proposed_paths = shared_update_attestation_review_paths(case_id)
+                review_record_path = archive_internal_path(root, proposed_paths["review_record"])
+                receipt_path = archive_internal_path(root, proposed_paths["receipt"])
+                if review_record_path.exists():
+                    blockers.append(f"Shared update attestation/review record already exists: {proposed_paths['review_record']}.")
+                if receipt_path.exists():
+                    blockers.append(f"Shared update attestation/review receipt already exists: {proposed_paths['receipt']}.")
+        except (ArchiveServiceError, OSError):
+            blockers.append("shared update record could not be hashed safely.")
+
+    if blockers:
+        return shared_update_attestation_review_empty_result(
+            archive_id=archive_id,
+            blockers=blockers,
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewer,
+            decision=selected_decision if selected_decision in ZET_SHARED_UPDATE_ATTESTATION_REVIEW_DECISIONS else None,
+            record_relative=record_relative,
+            source_record_sha256=source_record_sha256,
+            case_id=case_id,
+            proposed_paths=proposed_paths,
+            review=review,
+            preview_blockers=review_blockers,
+        )
+
+    assert reviewer is not None
+    assert source_record_sha256 is not None
+    assert case_id is not None
+    assert proposed_paths
+
+    reviewed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    files = [proposed_paths["review_record"], proposed_paths["receipt"]]
+    review_record = build_shared_update_attestation_review_record(
+        archive_id=archive_id,
+        case_id=case_id,
+        record_relative=record_relative or "",
+        source_record_sha256=source_record_sha256,
+        decision=selected_decision,
+        reviewed_by=reviewer,
+        reviewed_at=reviewed_at,
+        receipt_path=proposed_paths["receipt"],
+        review=review,
+    )
+    receipt = build_shared_update_attestation_review_receipt(
+        archive_id=archive_id,
+        case_id=case_id,
+        record_relative=record_relative or "",
+        source_record_sha256=source_record_sha256,
+        decision=selected_decision,
+        reviewed_by=reviewer,
+        reviewed_at=reviewed_at,
+        review_record_path=proposed_paths["review_record"],
+        files_written=files,
+        review=review,
+    )
+
+    post_build_blockers: list[str] = []
+    scan_shared_update_attestation_review_safe_values(review_record, post_build_blockers, "review_record")
+    scan_shared_update_attestation_review_safe_values(receipt, post_build_blockers, "receipt")
+    if post_build_blockers:
+        return shared_update_attestation_review_empty_result(
+            archive_id=archive_id,
+            blockers=post_build_blockers,
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewer,
+            decision=selected_decision,
+            record_relative=record_relative,
+            source_record_sha256=source_record_sha256,
+            case_id=case_id,
+            proposed_paths=proposed_paths,
+            review=review,
+            preview_blockers=review_blockers,
+        )
+
+    review_record_path = archive_internal_path(root, proposed_paths["review_record"])
+    receipt_path = archive_internal_path(root, proposed_paths["receipt"])
+    created_paths: list[Path] = []
+    created_dirs = missing_parent_dirs_before_write(root, [review_record_path, receipt_path])
+    try:
+        review_record_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_new_file(review_record_path, review_record)
+        created_paths.append(review_record_path)
+        write_json_new_file(receipt_path, receipt)
+        created_paths.append(receipt_path)
+    except Exception:
+        for created_path in reversed(created_paths):
+            try:
+                if created_path.exists():
+                    created_path.unlink()
+            except OSError:
+                pass
+        cleanup_created_empty_dirs(root, created_dirs)
+        return shared_update_attestation_review_empty_result(
+            archive_id=archive_id,
+            blockers=["Shared update attestation/review write failed and any partial files were rolled back."],
+            warnings=warnings,
+            approved=approve,
+            reviewed_by=reviewer,
+            decision=selected_decision,
+            record_relative=record_relative,
+            source_record_sha256=source_record_sha256,
+            case_id=case_id,
+            proposed_paths=proposed_paths,
+            review=review,
+            preview_blockers=review_blockers,
+        )
+
+    review_record_sha256 = sha256_path(review_record_path)
+    receipt_sha256 = sha256_path(receipt_path)
+    result = {
+        "ok": True,
+        "dry_run": False,
+        "lifecycle_action": "zet_shared_update_attestation_review_write",
+        "archive_id": archive_id,
+        "approval_required": False,
+        "approved": True,
+        "reviewed_by": reviewer,
+        "reviewed_at": reviewed_at,
+        "decision": selected_decision,
+        "decision_status": "recorded_local_review_only",
+        "trust_state": "untrusted_foreign",
+        "attestation_status": "not_created",
+        "signature_status": "not_created",
+        "record_status": "recorded_local_review_only",
+        "receipt_status": "created",
+        "case_id": case_id,
+        "policy_reused_from": "zet_shared_update_record_review_preview",
+        "source_shared_update_record": {
+            "record_path": record_relative,
+            "sha256": source_record_sha256,
+            "record_kind": review.get("record_kind"),
+            "record_version": review.get("record_version"),
+        },
+        "proposed_paths": proposed_paths,
+        "files_written": files,
+        "review_record_path": proposed_paths["review_record"],
+        "review_record_sha256": review_record_sha256,
+        "receipt_path": proposed_paths["receipt"],
+        "receipt_sha256": receipt_sha256,
+        "write_summary": {
+            "file_count": 2,
+            "paths": files,
+            "exclusive_create": True,
+            "rollback_on_receipt_failure": True,
+        },
+        "boundary_summary": shared_update_attestation_review_boundary_summary(),
+        "blockers": [],
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+        "shared_update_attestation_review_record": review_record,
+        "shared_update_attestation_review_receipt": receipt,
+    }
+    result.update(ZET_SHARED_UPDATE_ATTESTATION_REVIEW_CLOSED_FLAGS)
+    return json_safe(result)
+
+
+def shared_update_attestation_review_empty_result(
+    *,
+    archive_id: str,
+    blockers: list[str],
+    warnings: list[str],
+    approved: bool,
+    reviewed_by: str | None,
+    decision: str | None,
+    record_relative: str | None,
+    source_record_sha256: str | None,
+    case_id: str | None,
+    proposed_paths: dict[str, str],
+    review: dict[str, Any],
+    preview_blockers: list[str],
+) -> dict[str, Any]:
+    result = {
+        "ok": False,
+        "dry_run": False,
+        "lifecycle_action": "zet_shared_update_attestation_review_write",
+        "archive_id": archive_id,
+        "approval_required": True,
+        "approved": bool(approved),
+        "reviewed_by": reviewed_by,
+        "decision": decision,
+        "decision_status": "not_recorded",
+        "trust_state": "untrusted_foreign",
+        "attestation_status": "not_created",
+        "signature_status": "not_created",
+        "record_status": "not_recorded",
+        "receipt_status": "not_created",
+        "case_id": case_id,
+        "policy_reused_from": "zet_shared_update_record_review_preview",
+        "source_shared_update_record": {
+            "record_path": record_relative,
+            "sha256": source_record_sha256,
+            "record_kind": review.get("record_kind"),
+            "record_version": review.get("record_version"),
+        },
+        "preview_summary": {
+            "ok": bool(review.get("ok")),
+            "preview_status": review.get("preview_status"),
+            "trust_state": review.get("trust_state"),
+            "blocker_count": len(preview_blockers),
+        },
+        "proposed_paths": dict(proposed_paths),
+        "files_written": [],
+        "write_summary": {
+            "file_count": 0,
+            "paths": [],
+            "exclusive_create": True,
+            "rollback_on_receipt_failure": True,
+        },
+        "boundary_summary": shared_update_attestation_review_boundary_summary(),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+    }
+    result.update(ZET_SHARED_UPDATE_ATTESTATION_REVIEW_CLOSED_FLAGS)
+    return json_safe(result)
+
+
+def shared_update_attestation_review_case_id(source_record_sha256: str) -> str:
+    return f"shared_update_{source_record_sha256[:16]}"
+
+
+def shared_update_attestation_review_paths(case_id: str) -> dict[str, str]:
+    return {
+        "review_record": f"{ZET_SHARED_UPDATE_ATTESTATION_REVIEW_RECORDS_DIR}/{case_id}.json",
+        "receipt": f"{ZET_SHARED_UPDATE_ATTESTATION_REVIEW_RECEIPTS_DIR}/{case_id}.shared-update-attestation-review.json",
+    }
+
+
+def build_shared_update_attestation_review_record(
+    *,
+    archive_id: str,
+    case_id: str,
+    record_relative: str,
+    source_record_sha256: str,
+    decision: str,
+    reviewed_by: str,
+    reviewed_at: str,
+    receipt_path: str,
+    review: dict[str, Any],
+) -> dict[str, Any]:
+    return json_safe(
+        {
+            "record_kind": "zet_shared_update_attestation_review_record",
+            "version": "wom-shared-update-attestation-review/v0.1",
+            "lifecycle_action": "zet_shared_update_attestation_review_write",
+            "archive_id": archive_id,
+            "receiver_archive_id": archive_id,
+            "case_id": case_id,
+            "trust_state": "untrusted_foreign",
+            "attestation_status": "not_created",
+            "signature_status": "not_created",
+            "decision": decision,
+            "decision_status": "recorded_local_review_only",
+            "reviewed_by": reviewed_by,
+            "reviewed_at": reviewed_at,
+            "policy_reused_from": "zet_shared_update_record_review_preview",
+            "source_shared_update_record": {
+                "record_path": record_relative,
+                "sha256": source_record_sha256,
+                "record_kind": review.get("record_kind"),
+                "record_version": review.get("record_version"),
+            },
+            "receiver_context": {
+                "receiver_node_ref": (
+                    review.get("receiver_review_preview", {}).get("receiver_node_ref")
+                    if isinstance(review.get("receiver_review_preview"), dict)
+                    else None
+                ),
+                "proposed_action": (
+                    review.get("receiver_review_preview", {}).get("proposed_action")
+                    if isinstance(review.get("receiver_review_preview"), dict)
+                    else None
+                ),
+            },
+            "source_preview": review.get("source_preview") if isinstance(review.get("source_preview"), dict) else {},
+            "sharing_context_preview": (
+                review.get("sharing_context_preview") if isinstance(review.get("sharing_context_preview"), dict) else {}
+            ),
+            "receipt_ref": receipt_path,
+            "body_boundary": {
+                "body_included": False,
+                "body_text_persisted": False,
+                "body_text_echoed": False,
+                "review_surface": "metadata_only",
+            },
+            "boundary_summary": shared_update_attestation_review_boundary_summary(),
+            "safety_flags": dict(ZET_SHARED_UPDATE_ATTESTATION_REVIEW_CLOSED_FLAGS),
+        }
+    )
+
+
+def build_shared_update_attestation_review_receipt(
+    *,
+    archive_id: str,
+    case_id: str,
+    record_relative: str,
+    source_record_sha256: str,
+    decision: str,
+    reviewed_by: str,
+    reviewed_at: str,
+    review_record_path: str,
+    files_written: list[str],
+    review: dict[str, Any],
+) -> dict[str, Any]:
+    return json_safe(
+        {
+            "receipt_kind": "zet_shared_update_attestation_review_receipt",
+            "lifecycle_action": "zet_shared_update_attestation_review_write",
+            "archive_id": archive_id,
+            "case_id": case_id,
+            "reviewed_by": reviewed_by,
+            "reviewed_at": reviewed_at,
+            "decision": decision,
+            "decision_status": "recorded_local_review_only",
+            "trust_state": "untrusted_foreign",
+            "attestation_status": "not_created",
+            "signature_status": "not_created",
+            "review_record_path": review_record_path,
+            "source_shared_update_record": {
+                "record_path": record_relative,
+                "sha256": source_record_sha256,
+                "record_kind": review.get("record_kind"),
+                "record_version": review.get("record_version"),
+            },
+            "policy_reused_from": "zet_shared_update_record_review_preview",
+            "files_written": list(files_written),
+            "exclusive_create": True,
+            "rollback_on_receipt_failure": True,
+            "boundary_summary": shared_update_attestation_review_boundary_summary(),
+            "safety_flags": dict(ZET_SHARED_UPDATE_ATTESTATION_REVIEW_CLOSED_FLAGS),
+        }
+    )
+
+
+def shared_update_attestation_review_boundary_summary() -> dict[str, Any]:
+    return {
+        "local_record_only": True,
+        "body_safe": True,
+        "review_record_is_not_trust": True,
+        "attest_decision_is_not_real_attestation": True,
+        "no_real_zet_transport": True,
+        "no_feed_update": True,
+        "no_trust_graph_mutation": True,
+        "no_import_or_acceptance": True,
+        "no_anchor_or_public_proof": True,
+        "no_signature_or_key_custody": True,
+        "no_provider_call": True,
+        "no_projection_or_publish": True,
+        "no_queue_worker_or_full_auto": True,
+        "no_payment_staking_consensus_blockchain_or_token": True,
+    }
+
+
+def safe_shared_update_attestation_review_actor_id(value: str | None) -> str | None:
+    """Validate reviewer ids for the shared-update attestation/review boundary.
+
+    This intentionally matches the current quarantine actor-id shape, but the
+    shared-update review write owns this helper so later quarantine regex changes
+    do not silently redefine reviewer ids for this boundary.
+    """
+
+    if value is None:
+        return None
+    normalized = value.strip()
+    if ZET_SHARED_UPDATE_ATTESTATION_REVIEW_ACTOR_ID_RE.match(normalized) and not header_string_is_private_or_unsafe(normalized):
+        return normalized
+    return None
+
+
+def scan_shared_update_attestation_review_safe_values(value: Any, blockers: list[str], label: str) -> None:
+    found_problem = False
+
+    def visit(item: Any, field_name: str | None = None) -> None:
+        nonlocal found_problem
+        if isinstance(item, dict):
+            for key, child in item.items():
+                key_lower = str(key).casefold()
+                if key_lower in ZET_SHARED_UPDATE_BODY_KEYS and shared_update_value_present(child):
+                    found_problem = True
+                visit(child, key_lower)
+            return
+        if isinstance(item, list):
+            for child in item:
+                visit(child, field_name)
+            return
+        if isinstance(item, str) and shared_update_string_is_private_or_secret(item):
+            found_problem = True
+
+    visit(value)
+    if found_problem:
+        blockers.append(f"{label} contains body text, a private location, provider URL, token, or secret-like value.")
 
 
 def zet_transport_would_plan(

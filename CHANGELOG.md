@@ -4,6 +4,27 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.3.0 - 2026-06-03
+
+Shared update attestation/review write boundary.
+
+Added:
+
+- CLI `archive shared-update-attestation-review <archive-root> --record <path> --decision <attest|needs_more_review|reject> --reviewed-by <actor> --approve --format json`,
+- service `record_shared_update_attestation_review`,
+- deterministic local review record and receipt paths under `shared-updates/attestation-reviews/` and `receipts/shared-updates/`,
+- replay/overwrite refusal for the same reviewed shared update record,
+- rollback if the receipt write fails after the review record write,
+- public documentation, release note, and work log for the v0.3.0 first write boundary.
+
+Compatibility:
+
+- no private archive migration is required,
+- MCP exposes no write/apply sibling tool for this boundary,
+- the write reuses `zet_shared_update_record_review_preview` before recording anything,
+- body text, local absolute paths, provider URLs, tokens, secrets, and unsafe values are not echoed or persisted,
+- `attest` records only a local human review decision and does not create real trust, import, acceptance, signature, anchor, public proof, provider sync, feed update, projection, ZET transport, queue/worker, wallet/key custody, payment, staking, consensus, blockchain, token, model training, backpropagation, or full-auto behavior.
+
 ## v0.2.60 - 2026-06-02
 
 v0.2.x freeze and v0.3.0 entry boundary.

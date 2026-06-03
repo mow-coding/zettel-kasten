@@ -19,6 +19,8 @@ v0.2.59 ZET transport would-plan exposes only a read-only dry-run MCP tool. MCP 
 
 v0.2.60 is a documentation, version, and test checkpoint for the v0.2.x freeze and proposed v0.3.0 entry boundary. MCP exposes no new tool for this boundary and still cannot perform receiver-side renewal writes, real ZET transport, public proof anchoring, DID/wallet/key custody, provider sync, trust mutation, or full-auto behavior.
 
+v0.3.0 adds a CLI-only shared update attestation/review write boundary. MCP intentionally exposes no write/apply/approve sibling tool for this boundary. MCP may still use the existing read-only `zet_shared_update_record_review_preview` and `zet_shared_update_record_review_index` tools.
+
 For the full beginner workflow around CLI plus MCP, see:
 
 ```text
@@ -274,7 +276,7 @@ ownership_transfer_check
 - `zet_projection_plan_check` is read-only and requires `dry_run: true`. MCP exposes no projection-plan apply/write, projection receipt write, WordPress publishing, provider publishing, ZET transport, or automatic posting tool.
 - `zet_transport_would_plan` is read-only and requires `dry_run: true`. MCP exposes no ZET transport apply/write/send/deliver/publish, key creation, radio-frequency access creation, mirroring delivery, queue/worker, receipt write, provider, trust/import/attest/sign/anchor, or full-auto tool.
 - v0.2.48 radio-frequency recommendation is documentation-only. MCP exposes no recommendation fetch/rank/update, selector execution, provider, projection, receipt, or feed mutation tool.
-- v0.2.60 v0.2.x freeze / v0.3.0 entry boundary is documentation-only. MCP exposes no boundary apply/write, receiver-side renewal write, public proof anchor, DID/wallet/key custody, transport, provider sync, trust mutation, token, governance, or full-auto tool.
+- v0.3.0 shared update attestation/review recording is CLI-only. MCP exposes no boundary apply/write/approve, receiver-side renewal write, public proof anchor, DID/wallet/key custody, transport, provider sync, trust mutation, token, governance, or full-auto tool.
 - `create_draft_zettel` accepts a structured `source_intake_plan` object, not a local plan file path. The plan must be a successful dry-run, blocker-free, metadata-only source intake result before refs are merged.
 - `archive_index` writes only the generated search map at `db/archive-index.sqlite`.
 - `archive_onboarding_plan` previews first setup but does not create archive folders, provider bindings, or `.env` files.

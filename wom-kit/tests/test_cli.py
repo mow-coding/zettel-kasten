@@ -3021,6 +3021,266 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertIn("shared update record archive_id does not match the current archive.", result["blockers"])
 
+    def test_shared_update_attestation_review_requires_approve(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            record_relative = self.write_shared_update_record_fixture(archive_root)
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+            code, output = self.run_cli(
+                [
+                    "shared-update-attestation-review",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--decision",
+                    "attest",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertEqual(before, after)
+            self.assertFalse(result["ok"])
+            self.assertIn("shared-update-attestation-review requires --approve.", result["blockers"])
+            self.assertEqual(result["record_status"], "not_recorded")
+            self.assertEqual(result["receipt_status"], "not_created")
+            self.assertEqual(result["would_change"], [])
+
+    def test_shared_update_attestation_review_approve_writes_record_and_receipt_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            record_relative = self.write_shared_update_record_fixture(archive_root)
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+            code, output = self.run_cli(
+                [
+                    "shared-update-attestation-review",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--decision",
+                    "attest",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "zet_shared_update_attestation_review_write")
+            self.assertEqual(result["decision"], "attest")
+            self.assertEqual(result["decision_status"], "recorded_local_review_only")
+            self.assertEqual(result["trust_state"], "untrusted_foreign")
+            self.assertEqual(result["attestation_status"], "not_created")
+            self.assertEqual(result["signature_status"], "not_created")
+            self.assertEqual(result["record_status"], "recorded_local_review_only")
+            self.assertEqual(result["receipt_status"], "created")
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(len(result["files_written"]), 2)
+            self.assertEqual(
+                sorted(set(after) - set(before)),
+                sorted(result["files_written"]),
+            )
+            self.assertTrue(result["review_record_path"].startswith("shared-updates/attestation-reviews/"))
+            self.assertTrue(result["receipt_path"].startswith("receipts/shared-updates/"))
+            self.assertFalse(result["real_zet_transport_performed"])
+            self.assertFalse(result["key_created"])
+            self.assertFalse(result["key_sharing_registry_created"])
+            self.assertFalse(result["radio_frequency_access_created"])
+            self.assertFalse(result["mirroring_payload_created"])
+            self.assertFalse(result["mirroring_delivery_created"])
+            self.assertFalse(result["neighbor_feed_updated"])
+            self.assertFalse(result["automatic_renewal_performed"])
+            self.assertFalse(result["trust_graph_mutated"])
+            self.assertFalse(result["trust_created"])
+            self.assertFalse(result["import_performed"])
+            self.assertFalse(result["acceptance_created"])
+            self.assertFalse(result["anchor_performed"])
+            self.assertFalse(result["apply_performed"])
+            self.assertFalse(result["attestation_created"])
+            self.assertFalse(result["signature_created"])
+            self.assertFalse(result["public_proof_anchor_created"])
+            self.assertFalse(result["did_wallet_key_custody_used"])
+            self.assertFalse(result["provider_api_call_performed"])
+            self.assertFalse(result["wordpress_published"])
+            self.assertFalse(result["projection_write_performed"])
+            self.assertFalse(result["projection_receipt_created"])
+            self.assertFalse(result["queue_job_created"])
+            self.assertFalse(result["worker_started"])
+            self.assertFalse(result["payment_performed"])
+            self.assertFalse(result["staking_performed"])
+            self.assertFalse(result["consensus_performed"])
+            self.assertFalse(result["blockchain_written"])
+            self.assertFalse(result["token_created"])
+            self.assertFalse(result["system_token_created"])
+            self.assertFalse(result["model_training_performed"])
+            self.assertFalse(result["backpropagation_performed"])
+            self.assertFalse(result["full_auto_used"])
+
+            review_record = json.loads((archive_root / result["review_record_path"]).read_text(encoding="utf-8"))
+            receipt = json.loads((archive_root / result["receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(review_record["trust_state"], "untrusted_foreign")
+            self.assertEqual(review_record["attestation_status"], "not_created")
+            self.assertEqual(review_record["signature_status"], "not_created")
+            self.assertEqual(receipt["trust_state"], "untrusted_foreign")
+            self.assertEqual(receipt["attestation_status"], "not_created")
+            self.assertEqual(receipt["signature_status"], "not_created")
+            self.assertEqual(review_record["source_shared_update_record"]["record_path"], record_relative)
+            self.assertEqual(receipt["files_written"], result["files_written"])
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn("private body", serialized)
+            self.assertNotIn("https://example.com/private", serialized)
+
+    def test_shared_update_attestation_review_blocks_preview_failure_without_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            secret_body = "private body C:\\Users\\example\\secret\\note.md"
+            record_relative = self.write_shared_update_record_fixture(
+                archive_root,
+                body_included=True,
+                body_text=secret_body,
+                source={
+                    "sender_node_ref": "https://example.com/private/source",
+                    "shared_block_ref": "block:example:shared-update-001",
+                    "zet_ref": "zet:example:shared-thought-001",
+                },
+            )
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+            code, output = self.run_cli(
+                [
+                    "shared-update-attestation-review",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--decision",
+                    "reject",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 1, output)
+            self.assertEqual(before, after)
+            self.assertFalse(result["ok"])
+            self.assertIn("shared update record review preview blocked; attestation/review write cannot proceed.", result["blockers"])
+            self.assertNotIn(secret_body, serialized)
+            self.assertNotIn(r"C:\Users\example", serialized)
+            self.assertNotIn("https://example.com/private/source", serialized)
+
+    def test_shared_update_attestation_review_refuses_replay_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            record_relative = self.write_shared_update_record_fixture(archive_root)
+            first_code, first_output = self.run_cli(
+                [
+                    "shared-update-attestation-review",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--decision",
+                    "needs_more_review",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(first_code, 0, first_output)
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+            second_code, second_output = self.run_cli(
+                [
+                    "shared-update-attestation-review",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--decision",
+                    "needs_more_review",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+            result = json.loads(second_output)
+            self.assertEqual(second_code, 1, second_output)
+            self.assertEqual(before, after)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("already exists" in blocker for blocker in result["blockers"]))
+
+    def test_shared_update_attestation_review_rejects_unsafe_reviewed_by_without_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            record_relative = self.write_shared_update_record_fixture(archive_root)
+            unsafe_reviewer = "person:reviewer unsafe value"
+            code, output = self.run_cli(
+                [
+                    "shared-update-attestation-review",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--decision",
+                    "reject",
+                    "--reviewed-by",
+                    unsafe_reviewer,
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertIn("reviewed_by must be a safe non-secret actor id.", result["blockers"])
+            self.assertNotIn(unsafe_reviewer, serialized)
+            self.assertNotIn("unsafe value", serialized)
+
+    def test_shared_update_attestation_review_rolls_back_partial_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            record_relative = self.write_shared_update_record_fixture(archive_root)
+            original_writer = archive_services.write_json_new_file
+            calls: list[Path] = []
+
+            def flaky_writer(path: Path, payload: dict[str, Any]) -> None:
+                calls.append(path)
+                if len(calls) == 2:
+                    raise OSError("simulated receipt write failure")
+                original_writer(path, payload)
+
+            with patch.object(archive_services, "write_json_new_file", side_effect=flaky_writer):
+                result = archive_services.record_shared_update_attestation_review(
+                    archive_root,
+                    record=record_relative,
+                    decision="attest",
+                    reviewed_by="person:reviewer",
+                    approve=True,
+                )
+
+            self.assertFalse(result["ok"])
+            self.assertIn("Shared update attestation/review write failed and any partial files were rolled back.", result["blockers"])
+            proposed = result["proposed_paths"]
+            self.assertFalse((archive_root / proposed["review_record"]).exists())
+            self.assertFalse((archive_root / proposed["receipt"]).exists())
+
     def test_shared_update_record_review_index_reads_records_and_writes_no_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

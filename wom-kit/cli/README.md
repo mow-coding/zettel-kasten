@@ -6,7 +6,7 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
-v0.2.60 is a documentation, version, and test checkpoint for the v0.2.x freeze and proposed v0.3.0 entry boundary. It adds no product CLI command. See `wom-kit/docs/v02x-freeze-v03-entry-boundary.md`.
+v0.3.0 opens the first narrow receiver-side write boundary: an approval-gated shared update attestation/review record and receipt. See `wom-kit/docs/shared-update-attestation-review-write.md`.
 
 For a beginner-friendly full walkthrough, see:
 
@@ -53,6 +53,9 @@ shared-update-record-review --dry-run
 
 shared-update-record-review-index --dry-run
   Preview a compact deterministic review index for direct-child local ZET shared update record JSON files under an archive-relative directory. This writes nothing, ignores non-JSON files, reuses the single-record review policy, echoes no body text or local absolute paths, and never updates feeds, trusts, imports, attests, signs, anchors, calls providers, writes receipts, projects, or runs ZET transport.
+
+shared-update-attestation-review --approve --reviewed-by
+  Write exactly one local shared update attestation/review record and one matching receipt after reusing the shared-update record review preview policy. This is a receiver-side review record only; it never updates feeds, trusts, imports, accepts, signs, anchors, calls providers, projects, starts workers, creates keys, or runs real ZET transport.
 
 zet-transport-plan --dry-run
   Preview a planning-only would-transport risk/control model for one local ZET shared update record and one future method. This writes nothing, reuses the single-record review policy, creates no keys, sends nothing, creates no receipts, calls no providers, starts no workers, and never updates feeds, trusts, imports, attests, signs, anchors, projects, mirrors, or runs ZET transport.

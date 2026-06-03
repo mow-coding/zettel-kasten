@@ -2,6 +2,7 @@
 
 Status: public navigation baseline
 Date: 2026-06-02
+Updated: 2026-06-03
 
 This repository intentionally separates four kinds of public project records:
 
@@ -127,6 +128,7 @@ Onboarding and setup plans:
 - [ZET Shared Update Record Baseline](zet-shared-update-record-baseline.md)
 - [ZET Shared Update Record Review Preview](zet-shared-update-record-review-preview.md)
 - [ZET Shared Update Record Review Index](zet-shared-update-record-review-index.md)
+- [Shared Update Attestation Review Write](shared-update-attestation-review-write.md)
 - [ZET Transport Threat Model](zet-transport-threat-model.md)
 - [v0.2.x Freeze And v0.3.0 Entry Boundary](v02x-freeze-v03-entry-boundary.md)
 - [Foreign Block Intake](foreign-block-intake.md)
@@ -202,6 +204,7 @@ These documents record public-safe work already performed.
 - [ZET Shared Update Record Review Index Work Log](../plans/work-log-2026-06-02-shared-update-review-index.md)
 - [ZET Transport Threat Model And Would-Plan Work Log](../plans/work-log-2026-06-02-zet-transport-threat-model-would-plan.md)
 - [v0.2.x Freeze And v0.3.0 Entry Boundary Work Log](../plans/work-log-2026-06-02-v02x-freeze-v03-entry-boundary.md)
+- [Shared Update Attestation Review Write Work Log](../plans/work-log-2026-06-03-shared-update-attestation-review-write.md)
 - [Draft Provenance Work Log](../plans/work-log-2026-05-24-draft-provenance.md)
 - [WOM-kit Naming Cleanup Work Log](../plans/work-log-2026-05-25-wom-kit-naming-cleanup.md)
 - [Delegate Capability Binding Work Log](../plans/work-log-2026-05-23-delegate-capability-binding.md)

@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.2.60 planning and implementation baseline
+Status: v0.3.0 planning and implementation baseline
 
 ## Purpose
 
@@ -558,6 +558,16 @@ This is read-only and dry-run only. The records directory must be archive-relati
 
 MCP must not expose shared update index write/apply/publish/transport/import/trust/attest/sign/anchor tools.
 
+From v0.3.0, a human/operator may record the first narrow receiver-side review boundary through CLI only:
+
+```powershell
+archive shared-update-attestation-review <archive-root> --record <archive-relative-json> --decision <attest|needs_more_review|reject> --reviewed-by <safe-actor-id> --approve --format json
+```
+
+This command first reuses `zet_shared_update_record_review_preview`. It writes exactly one local review record and one receipt, refuses replay/overwrite, and rolls back the record if the receipt write fails. Even `--decision attest` means only a local human review decision was recorded. It is not real trust, import, acceptance, signature, anchor, public proof, feed update, provider sync, projection, or ZET transport.
+
+MCP must not expose shared update attestation/review write/apply/approve/publish/transport/import/trust/sign/anchor tools.
+
 From v0.2.59, an AI runtime may preview a future ZET transport risk/control plan for one local shared update record:
 
 ```powershell
@@ -576,7 +586,7 @@ MCP must not expose ZET transport apply/write/send/deliver/publish/import/trust/
 
 ## v0.2.x Freeze / v0.3.0 Entry Boundary
 
-From v0.2.60, AI runtimes may read the v0.2.x freeze / v0.3.0 entry boundary document when discussing next-line planning:
+AI runtimes may read the v0.2.x freeze / v0.3.0 entry boundary document when discussing boundary history:
 
 ```text
 wom-kit/docs/v02x-freeze-v03-entry-boundary.md
@@ -584,7 +594,7 @@ wom-kit/docs/v02x-freeze-v03-entry-boundary.md
 
 This is documentation only. It does not add a CLI command, MCP tool, archive service behavior, schema, transport path, public proof anchor, DID/wallet/key custody, provider sync, trust mutation, or full-auto behavior.
 
-If the user asks what v0.3.0 should open first, describe one narrow receiver-side, replay-gated, human-approved, local-first, body-safe write. Do not describe it as available in v0.2.60.
+If the user asks what v0.3.0 opened first, describe the CLI-only shared update attestation/review record and receipt write. Do not describe it as real transport, trust, import, acceptance, signature, anchor, public proof, provider sync, or full-auto behavior.
 
 ## Publication Surface Discussion Boundary
 
@@ -632,11 +642,12 @@ An AI runtime should start with:
 27. use `attestation-statement-draft-decision --dry-run` to preview one safe next review route without recording a decision
 28. use `shared-update-record-review-index --dry-run` to inventory local shared update records without recording review
 29. use `shared-update-record-review --dry-run` for one local shared update record before any receiver-side renewal discussion
-30. use `zet-transport-plan --dry-run` only to discuss future transport risks and controls, never to send or deliver anything
-31. read the v0.2.x freeze / v0.3.0 entry boundary only when discussing next-line planning, not as an executable tool
-32. discuss the radio-frequency recommendation model only as a future docs/examples baseline, not as an executable feed feature
-33. run mint dry-run before asking for mint approval
-34. use CLI approval paths for real minting
+30. use CLI-only `shared-update-attestation-review --approve --reviewed-by` only after human review, and only to record local review metadata plus a receipt
+31. use `zet-transport-plan --dry-run` only to discuss future transport risks and controls, never to send or deliver anything
+32. read the v0.2.x freeze / v0.3.0 entry boundary only when discussing next-line planning, not as a transport/public-proof tool
+33. discuss the radio-frequency recommendation model only as a future docs/examples baseline, not as an executable feed feature
+34. run mint dry-run before asking for mint approval
+35. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -672,6 +683,7 @@ The skill tells the AI to:
 - use attestation-statement-draft-decision dry-run to preview one safe next review route without recording a decision,
 - use shared-update-record-review-index dry-run to inventory local shared update records without writing review metadata,
 - use shared-update-record-review dry-run before any receiver-side renewal discussion,
+- use CLI-only shared-update-attestation-review approval only to record local review metadata and a receipt,
 - use zet-transport-plan dry-run only for future transport risk/control planning, never for real send/deliver,
 - treat ZET recommendation as documentation-only in v0.2.48 and never claim that recommendations can be fetched, ranked, or applied,
 - keep paths archive-relative,
@@ -684,7 +696,7 @@ The skill tells the AI to:
 
 The plugin layer should expose read and preview tools first.
 
-Allowed v0.2.56 direction:
+Allowed current direction:
 
 - profile list and profile resolve,
 - runtime context,
@@ -711,7 +723,7 @@ Allowed v0.2.56 direction:
 - shared update record review preview,
 - doctor,
 - list/read zets,
-- create-draft dry-run, source-intake plan composition, prompt-boundary report composition, foreign block intake/trust/packet/quarantine previews, CLI-only quarantine case writes, quarantine review indexes, quarantine decision previews, CLI-only quarantine decision records, quarantine decision review indexes, decision outcome plans, attestation review candidate plans, attestation review candidate indexes, attestation statement draft previews, CLI-only attestation statement draft records, attestation statement draft review indexes, attestation statement draft decision previews, shared update record review previews, and approved inbox draft writes,
+- create-draft dry-run, source-intake plan composition, prompt-boundary report composition, foreign block intake/trust/packet/quarantine previews, CLI-only quarantine case writes, quarantine review indexes, quarantine decision previews, CLI-only quarantine decision records, quarantine decision review indexes, decision outcome plans, attestation review candidate plans, attestation review candidate indexes, attestation statement draft previews, CLI-only attestation statement draft records, attestation statement draft review indexes, attestation statement draft decision previews, shared update record review previews, CLI-only shared update attestation/review records, and approved inbox draft writes,
 - dry-run mint checks,
 - safe HTML dry-run through CLI,
 - onboarding and source planning,
@@ -738,6 +750,7 @@ Not allowed in this layer yet:
 - foreign block attestation statement draft review apply/write/accept/trust/import/attest/sign tools through MCP,
 - foreign block attestation statement draft decision apply/write/accept/trust/import/attest/sign tools through MCP,
 - shared update record review apply/write/publish/transport/import/trust/attest/sign/anchor tools through MCP,
+- shared update attestation/review apply/write/approve/publish/transport/import/trust/sign/anchor tools through MCP,
 - WordPress publishing or projection publish tools,
 - prompt boundary apply, auto-approve, or full-auto tools,
 - block header apply or block minting,

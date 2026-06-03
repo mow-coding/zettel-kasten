@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.2.60 pre-release
+v0.3.0 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -36,8 +36,8 @@ What exists today:
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
 - private archive lifecycle tools for doctor checks, draft creation, minting, delegation, receipts, search, and metadata review,
 - read-only preview layers for runtime context, profiles, source/objet intake, block headers, prompt boundaries, foreign block review, projection, shared update review/index, and ZET would-transport planning,
-- approval-gated local write paths for selected private archive and foreign-block review records,
-- a v0.2.x freeze / v0.3.0 entry boundary document that keeps the next line narrow and local-first,
+- approval-gated local write paths for selected private archive, foreign-block review records, and the first v0.3.0 shared update attestation/review record,
+- a v0.2.x freeze / v0.3.0 entry boundary document plus a narrow v0.3.0 write boundary that stays local-first and body-safe,
 - local public-release hygiene tools for links, Korean product language, privacy, release readiness, and branch-protection planning.
 
 For a status-by-capability view, see the [WOM-kit Capability Matrix](wom-kit/docs/capability-matrix.md).
@@ -84,6 +84,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [ZET Shared Update Record Baseline](wom-kit/docs/zet-shared-update-record-baseline.md)
 - [ZET Shared Update Record Review Preview](wom-kit/docs/zet-shared-update-record-review-preview.md)
 - [ZET Shared Update Record Review Index](wom-kit/docs/zet-shared-update-record-review-index.md)
+- [Shared Update Attestation Review Write](wom-kit/docs/shared-update-attestation-review-write.md)
 - [ZET Transport Threat Model](wom-kit/docs/zet-transport-threat-model.md)
 - [v0.2.x Freeze And v0.3.0 Entry Boundary](wom-kit/docs/v02x-freeze-v03-entry-boundary.md)
 - [Public Release Link Hygiene](wom-kit/docs/public-release-link-hygiene.md)
@@ -195,6 +196,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.0
 v0.2.60
 v0.2.59
 v0.2.58

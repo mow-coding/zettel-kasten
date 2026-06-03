@@ -27,6 +27,8 @@ Commands:
           Preview a local ZET shared update record before any renewal action.
   shared-update-record-review-index
           Index local ZET shared update records before any renewal action.
+  shared-update-attestation-review
+          Approve recording a local shared update attestation/review record and receipt.
   zet-transport-plan
           Preview a dry-run would-transport plan without real ZET transport.
   foreign-block
@@ -1810,6 +1812,39 @@ def command_shared_update_record_review_index(args: argparse.Namespace) -> int:
         print(f"Index status: {result.get('index_status') or '-'}")
         print(f"Reviewable: {result.get('reviewable_count', 0)}")
         print(f"Blocked: {result.get('blocked_count', 0)}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_shared_update_attestation_review(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.record_shared_update_attestation_review(
+            Path(args.archive_root),
+            record=args.record,
+            decision=args.decision,
+            reviewed_by=args.reviewed_by,
+            approve=args.approve,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "recorded" if result.get("ok") else "blocked"
+        print(f"Shared update attestation/review write {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Decision: {result.get('decision') or '-'}")
+        print(f"Record: {result.get('review_record_path') or result.get('proposed_paths', {}).get('review_record') or '-'}")
+        print(f"Receipt: {result.get('receipt_path') or result.get('proposed_paths', {}).get('receipt') or '-'}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -4368,6 +4403,31 @@ def build_parser() -> argparse.ArgumentParser:
     shared_update_record_review_index.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
     shared_update_record_review_index.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     shared_update_record_review_index.set_defaults(func=command_shared_update_record_review_index)
+
+    shared_update_attestation_review = subcommands.add_parser(
+        "shared-update-attestation-review",
+        help="Approve recording a local shared update attestation/review record and receipt.",
+    )
+    shared_update_attestation_review.add_argument("archive_root", help="Archive root used for path safety and local context.")
+    shared_update_attestation_review.add_argument(
+        "--record",
+        required=True,
+        help="Archive-relative JSON shared update record path already accepted by shared-update-record-review.",
+    )
+    shared_update_attestation_review.add_argument(
+        "--decision",
+        required=True,
+        choices=sorted(archive_services.ZET_SHARED_UPDATE_ATTESTATION_REVIEW_DECISIONS),
+        help="Human receiver-side review decision to record locally.",
+    )
+    shared_update_attestation_review.add_argument(
+        "--reviewed-by",
+        required=False,
+        help="Safe reviewer actor id. Required with --approve.",
+    )
+    shared_update_attestation_review.add_argument("--approve", action="store_true", help="Required. Record the local review and receipt.")
+    shared_update_attestation_review.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    shared_update_attestation_review.set_defaults(func=command_shared_update_attestation_review)
 
     zet_transport_plan = subcommands.add_parser(
         "zet-transport-plan",
