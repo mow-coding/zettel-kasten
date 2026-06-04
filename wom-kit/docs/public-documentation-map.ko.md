@@ -129,6 +129,7 @@
 - [ZET Shared Update Record Review Index](zet-shared-update-record-review-index.md)
 - [Shared Update Attestation Review Write](shared-update-attestation-review-write.md)
 - [Shared Update Route Preview](shared-update-route-preview.ko.md)
+- [Shared Update Route Preview Example](shared-update-route-preview-example.ko.md)
 - [ZET Transport Threat Model](zet-transport-threat-model.md)
 - [v0.2.x Freeze And v0.3.0 Entry Boundary](v02x-freeze-v03-entry-boundary.md)
 - [Foreign Block Intake](foreign-block-intake.md)
