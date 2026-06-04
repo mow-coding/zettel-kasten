@@ -4,6 +4,28 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.3.1 - 2026-06-04
+
+Shared update route preview.
+
+Added:
+
+- CLI `archive shared-update-route-preview <archive-root> --record <path> --dry-run --format json`,
+- service `shared_update_route_preview`,
+- read-only route pointers for `delegate`, `attest`, `anchor`, and `none`,
+- explicit `related_shared_update_review_required_flags` when the route points toward `shared-update-attestation-review`,
+- hardening so free-form or hostile proposed-action metadata is not echoed as a route,
+- public documentation, release note, and work log for the v0.3.1 route-preview boundary.
+
+Compatibility:
+
+- no private archive migration is required,
+- the command is dry-run only and writes no files,
+- the command reuses `zet_shared_update_record_review_preview` before returning a route pointer,
+- MCP exposes no shared-update route write/apply/approve tool for this boundary,
+- body text, local absolute paths, provider URLs, tokens, secrets, and unsafe free-form route metadata are not echoed,
+- the route preview does not create real trust, import, acceptance, attestation, signature, anchor, public proof, provider sync, feed update, projection, ZET transport, queue/worker, wallet/key custody, payment, staking, consensus, blockchain, token, model training, backpropagation, or full-auto behavior.
+
 ## v0.3.0 - 2026-06-03
 
 Shared update attestation/review write boundary.

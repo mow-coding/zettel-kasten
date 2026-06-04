@@ -28,7 +28,8 @@ The archive should never silently rewrite memory.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.0` | current public pre-release | `wom-kit/docs/releases/v0.3.0.md` |
+| `v0.3.1` | current public pre-release | `wom-kit/docs/releases/v0.3.1.md` |
+| `v0.3.0` | superseded public pre-release | `wom-kit/docs/releases/v0.3.0.md` |
 | `v0.2.60` | superseded public pre-release | `wom-kit/docs/releases/v0.2.60.md` |
 | `v0.2.59` | superseded public pre-release | `wom-kit/docs/releases/v0.2.59.md` |
 | `v0.2.58` | superseded public pre-release | `wom-kit/docs/releases/v0.2.58.md` |
@@ -88,6 +89,24 @@ The archive should never silently rewrite memory.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.0` To `v0.3.1`
+
+This is a compatible read-only route-preview release.
+
+What changed:
+
+- added CLI `archive shared-update-route-preview <archive-root> --record <path> --dry-run --format json`,
+- added a local service that reuses `zet_shared_update_record_review_preview` before returning any route pointer,
+- added route pointer fields for `delegate`, `attest`, `anchor`, and `none`,
+- added explicit `related_shared_update_review_required_flags` when the route points toward `shared-update-attestation-review`,
+- hardened route selection so free-form or hostile `proposed_action` metadata is not echoed,
+- added `wom-kit/docs/shared-update-route-preview.md`,
+- updated version metadata to `0.3.1`.
+
+No private archive migration is required.
+
+The new command is read-only and dry-run only. It writes no files and only points a human toward an existing canonical command surface. It does not expose an MCP write/apply/approve tool and does not create real ZET transport, keys, feed updates, trust/import/acceptance, attestations, signatures, anchors, public proofs, provider sync, projection writes, queues/workers, wallet/key custody, payment/staking/consensus/blockchain, tokens, model training, backpropagation, or full-auto behavior.
 
 ## From `v0.2.60` To `v0.3.0`
 

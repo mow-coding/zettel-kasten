@@ -146,6 +146,9 @@ shared-update-record-review-index
 shared-update-attestation-review
   Approve recording a local shared update attestation/review record and matching receipt after `shared-update-record-review` passes. This writes exactly two JSON files with exclusive-create semantics and keeps trust, import, signatures, anchors, feed updates, provider calls, projection, and real ZET transport closed.
 
+shared-update-route-preview
+  Preview the candidate receiver-side route for one local shared update record: delegate, attest, anchor, or none. Dry-run only; reuses the single-record review policy, writes nothing, echoes no unsafe free-form route metadata, and does not authorize or perform the route.
+
 zet-transport-plan
   Preview a planning-only ZET would-transport risk/control model for one local shared update record and one future method. Dry-run only; reuses the single-record review policy, writes nothing, creates no keys, sends nothing, calls no providers, starts no workers, and runs no ZET transport.
 
@@ -728,6 +731,8 @@ v0.2.59 adds read-only `zet-transport-plan` previews. The planner reads one loca
 v0.2.60 closes v0.2.x as a conservative local-first checkpoint and records the proposed v0.3.0 entry boundary. It is documentation, version, and test coverage only: no product CLI command, MCP tool, archive service behavior, or schema changes are added.
 
 v0.3.0 opens that first boundary narrowly. `shared-update-attestation-review` is CLI-only, requires `--approve --reviewed-by`, reuses the shared update review preview policy, writes one local review record and one receipt, refuses replay/overwrite, and still does not create real trust, import, acceptance, signature, anchor, feed update, provider sync, projection, or ZET transport.
+
+v0.3.1 adds read-only `shared-update-route-preview`. The router reads one local shared update record through the existing review policy and returns a candidate route pointer, `delegate`, `attest`, `anchor`, or `none`. It writes nothing, does not authorize the route, does not duplicate lifecycle previews, and still does not create real trust, import, acceptance, signature, anchor, feed update, provider sync, projection, receipt, or ZET transport.
 
 ## Minimal MCP Server
 

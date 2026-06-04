@@ -180,6 +180,16 @@ class ArchiveCliTests(unittest.TestCase):
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
         return root
 
+    def archive_tree_snapshot(self, archive_root: Path) -> list[tuple[str, str, str]]:
+        snapshot: list[tuple[str, str, str]] = []
+        for path in sorted(archive_root.rglob("*"), key=lambda item: item.relative_to(archive_root).as_posix()):
+            relative = path.relative_to(archive_root).as_posix()
+            if path.is_dir():
+                snapshot.append(("dir", relative, ""))
+            elif path.is_file():
+                snapshot.append(("file", relative, hashlib.sha256(path.read_bytes()).hexdigest()))
+        return snapshot
+
     def write_shared_update_record_fixture(self, archive_root: Path, relative_path: str = "workbench/shared-update.json", **overrides: Any) -> str:
         payload = {
             "record_kind": "zet_shared_update_record_preview",
@@ -3416,6 +3426,261 @@ class ArchiveCliTests(unittest.TestCase):
                 ["workbench/shared-updates/a.json", "workbench/shared-updates/b.json"],
             )
             self.assertNotIn("workbench/shared-updates/nested/d.json", json.dumps(result, ensure_ascii=False))
+
+    def test_shared_update_route_preview_points_to_next_route_and_writes_no_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            record_relative = self.write_shared_update_record_fixture(archive_root)
+            before = self.archive_tree_snapshot(archive_root)
+            code, output = self.run_cli(
+                [
+                    "shared-update-route-preview",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = self.archive_tree_snapshot(archive_root)
+
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(before, after)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "zet_shared_update_route_preview")
+            self.assertEqual(result["route_status"], "route_preview_not_recorded")
+            self.assertEqual(result["candidate_route"], "attest")
+            self.assertEqual(result["record_path"], record_relative)
+            self.assertEqual(result["source_shared_update_record"]["record_path"], record_relative)
+            self.assertRegex(result["source_shared_update_record"]["sha256"], r"^[0-9a-f]{64}$")
+            self.assertEqual(result["policy_reused_from"], "zet_shared_update_record_review_preview")
+            self.assertTrue(result["route_eligibility"]["attest"]["applies"])
+            self.assertTrue(result["attest_route_preview"]["applies"])
+            self.assertEqual(result["attest_route_preview"]["defer_to"], "attest-zet")
+            self.assertEqual(result["attest_route_preview"]["related_lifecycle_preview"], "attest-zet --dry-run")
+            self.assertEqual(
+                result["attest_route_preview"]["related_shared_update_review_command"],
+                "shared-update-attestation-review",
+            )
+            self.assertEqual(
+                result["attest_route_preview"]["related_shared_update_review_required_flags"],
+                ["--approve", "--reviewed-by"],
+            )
+            self.assertEqual(
+                result["capability_gate_preview"]["related_shared_update_review_required_flags"],
+                ["--approve", "--reviewed-by"],
+            )
+            self.assertFalse(result["delegate_route_preview"]["applies"])
+            self.assertFalse(result["anchor_route_preview"]["applies"])
+            self.assertEqual(result["anchor_status"], "not_created")
+            self.assertEqual(result["renewal_status"], "not_performed")
+            self.assertEqual(result["would_change"], [])
+            self.assertFalse(result["would_anchor"])
+            self.assertFalse(result["attestation_created"])
+            self.assertFalse(result["anchor_performed"])
+            self.assertFalse(result["trust_created"])
+            self.assertFalse(result["shared_update_route_preview_recorded"])
+            self.assertNotIn("attestation_receipt_preview", serialized)
+            self.assertNotIn("anchor_metadata_preview", serialized)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+
+    def test_shared_update_route_preview_requires_dry_run_and_safe_record_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            record_relative = self.write_shared_update_record_fixture(archive_root)
+            missing_dry_run_code, missing_dry_run_output = self.run_cli(
+                [
+                    "shared-update-route-preview",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--format",
+                    "json",
+                ]
+            )
+            missing_dry_run = json.loads(missing_dry_run_output)
+            self.assertEqual(missing_dry_run_code, 1, missing_dry_run_output)
+            self.assertFalse(missing_dry_run["ok"])
+            self.assertEqual(missing_dry_run["candidate_route"], "none")
+            self.assertIn("shared-update-route-preview is dry-run only; pass --dry-run.", missing_dry_run["blockers"])
+            self.assertEqual(missing_dry_run["would_change"], [])
+
+            unsafe_record = r"C:\Users\example\private\shared-update.json"
+            unsafe_code, unsafe_output = self.run_cli(
+                [
+                    "shared-update-route-preview",
+                    str(archive_root),
+                    "--record",
+                    unsafe_record,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            unsafe_result = json.loads(unsafe_output)
+            unsafe_serialized = json.dumps(unsafe_result, ensure_ascii=False)
+            self.assertEqual(unsafe_code, 1, unsafe_output)
+            self.assertFalse(unsafe_result["ok"])
+            self.assertEqual(unsafe_result["candidate_route"], "none")
+            self.assertIn("shared update record review preview blocked; route preview cannot proceed.", unsafe_result["blockers"])
+            self.assertNotIn(unsafe_record, unsafe_serialized)
+            self.assertNotIn(r"C:\Users\example", unsafe_serialized)
+
+    def test_shared_update_route_preview_blocks_hostile_metadata_without_echo_or_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            planted_literals = [
+                "https://provider.example/private",
+                r"C:\Users\example\private\shared-update.md",
+                "sk-TESTLEAK123",
+                "private-source-note.md",
+                "raw body text that must not appear",
+            ]
+            record_relative = self.write_shared_update_record_fixture(
+                archive_root,
+                "workbench/shared-updates/hostile.json",
+                body_included=True,
+                body_text="raw body text that must not appear C:/private/body.md",
+                source={
+                    "sender_node_ref": "https://provider.example/private",
+                    "shared_block_ref": "block:example:shared-update-001",
+                    "zet_ref": "private-source-note.md",
+                },
+                receiver_review={
+                    "receiver_node_ref": r"C:\Users\example\private\shared-update.md",
+                    "proposed_action": "review_before_renewal sk-TESTLEAK123",
+                    "notes": "raw body text that must not appear",
+                },
+                sharing_context={
+                    "zet_form": "sns_type_zet",
+                    "sharing_methods": ["key-sharing", "https://provider.example/private"],
+                },
+                surface_context={
+                    "surface_ref": r"C:\Users\example\private\shared-update.md",
+                },
+                metadata={
+                    "private_file": "private-source-note.md",
+                    "provider_url": "https://provider.example/private",
+                    "token_ref": "sk-TESTLEAK123",
+                },
+            )
+            before = self.archive_tree_snapshot(archive_root)
+            code, output = self.run_cli(
+                [
+                    "shared-update-route-preview",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = self.archive_tree_snapshot(archive_root)
+
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 1, output)
+            self.assertEqual(before, after)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["candidate_route"], "none")
+            self.assertEqual(result["record_path"], record_relative)
+            self.assertEqual(result["source_shared_update_record"]["record_path"], record_relative)
+            self.assertEqual(
+                result["route_selection"]["reason"],
+                "shared update record review preview must pass before any receiver-side route can be considered",
+            )
+            self.assertIsNone(result["route_selection"]["receiver_proposed_action"])
+            self.assertIn("shared update record review preview blocked; route preview cannot proceed.", result["blockers"])
+            self.assertIn(
+                "shared update record contains a private location, provider URL, token, or secret-like value.",
+                result["record_review_summary"]["blockers"],
+            )
+            for literal in planted_literals:
+                self.assertNotIn(literal, serialized)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+
+    def test_shared_update_route_preview_does_not_echo_freeform_proposed_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            planted_action = "review_before_renewal raw body text that must not appear"
+            record_relative = self.write_shared_update_record_fixture(
+                archive_root,
+                "workbench/shared-updates/freeform-action.json",
+                receiver_review={
+                    "receiver_node_ref": "node:example:receiver",
+                    "proposed_action": planted_action,
+                    "attest_performed": False,
+                    "anchor_performed": False,
+                    "renewal_performed": False,
+                },
+            )
+            before = self.archive_tree_snapshot(archive_root)
+            code, output = self.run_cli(
+                [
+                    "shared-update-route-preview",
+                    str(archive_root),
+                    "--record",
+                    record_relative,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = self.archive_tree_snapshot(archive_root)
+
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(before, after)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["candidate_route"], "none")
+            self.assertEqual(result["route_selection"]["receiver_proposed_action"], None)
+            self.assertEqual(
+                result["record_review_summary"]["receiver_review_preview"]["proposed_action"],
+                None,
+            )
+            self.assertNotIn(planted_action, serialized)
+            self.assertNotIn("raw body text that must not appear", serialized)
+
+    def test_shared_update_route_preview_selects_only_pointer_routes(self) -> None:
+        cases = [
+            ("consider_delegate", "delegate", "delegate-zet"),
+            ("review_before_renewal", "attest", "attest-zet"),
+            ("consider_anchor", "anchor", "anchor-zet"),
+            ("hold_for_human", "none", None),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            for proposed_action, expected_route, expected_command in cases:
+                with self.subTest(proposed_action=proposed_action):
+                    record_relative = self.write_shared_update_record_fixture(
+                        archive_root,
+                        receiver_review={
+                            "receiver_node_ref": "node:example:receiver",
+                            "proposed_action": proposed_action,
+                        },
+                    )
+                    result = archive_services.shared_update_route_preview(
+                        archive_root,
+                        record=record_relative,
+                        dry_run=True,
+                    )
+                    self.assertTrue(result["ok"])
+                    self.assertEqual(result["candidate_route"], expected_route)
+                    self.assertEqual(result["would_change"], [])
+                    if expected_route == "none":
+                        self.assertTrue(result["none_route_preview"]["applies"])
+                    else:
+                        selected = result[f"{expected_route}_route_preview"]
+                        self.assertTrue(selected["applies"])
+                        self.assertEqual(selected["defer_to"], expected_command)
+                    for route in {"delegate", "attest", "anchor"} - {expected_route}:
+                        self.assertFalse(result[f"{route}_route_preview"]["applies"])
 
     def test_zet_transport_plan_valid_methods_return_risks_and_write_nothing(self) -> None:
         expected_risk = {

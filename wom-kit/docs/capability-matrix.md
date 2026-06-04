@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.0 first write-boundary checkpoint
-Date: 2026-06-03
-Version: v0.3.0
+Status: v0.3.1 route-preview checkpoint
+Date: 2026-06-04
+Version: v0.3.1, released
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -17,11 +17,11 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | `approval-gated write` | CLI can write only after explicit human approval inputs. MCP remains read-only or dry-run for that surface. |
 | `local hygiene tool` | A local checker exists for public release hygiene. It does not add archive product behavior. |
 | `documented-only` | Public docs or examples exist, but no product command/tool exists. |
-| `not implemented` | No product behavior exists in v0.3.0. |
+| `not implemented` | No product behavior exists in the current release. |
 
 ## Current Capability Table
 
-| Capability | Status in v0.3.0 | Write behavior | Notes |
+| Capability | Status in current working tree | Write behavior | Notes |
 | --- | --- | --- | --- |
 | Archive doctor | `implemented local command` | read-only | `archive doctor` checks archive structure, schema, manifest, receipt, and lifecycle consistency. |
 | Mint lifecycle | `approval-gated write` | CLI approve writes canonical zet, receipt, and draft snapshot | Dry-run previews first. Minting is private archive memory, not public posting. |
@@ -63,6 +63,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Shared update record review preview | `read-only preview` | none | Reviews one local archive-contained shared update JSON record before any receiver-side renewal write exists. |
 | Shared update record review index | `read-only preview` | none | Indexes direct-child local shared update JSON records by reusing the single-record review policy. Writes nothing and records no review. |
 | Shared update attestation/review write | `approval-gated write` | CLI approve writes one local review record and one receipt | Reuses the shared update record review preview policy, refuses replay/overwrite, and keeps trust/import/acceptance/signature/anchor/feed/provider/projection/real ZET transport closed. MCP exposes no write/apply sibling tool. |
+| Shared update route preview | `read-only preview` | none | Maps one reviewed shared update record to a candidate receiver-side route pointer: `delegate`, `attest`, `anchor`, or `none`. It points to existing canonical commands, writes nothing, and does not duplicate lifecycle preview logic. |
 | ZET transport threat model / would-transport plan | `read-only preview` | none | Plans method-specific risks and future controls for `key-sharing`, `radio-frequency`, or `mirroring` after the shared update review policy passes. No real transport. |
 | v0.2.x freeze / v0.3.0 entry boundary | `documented-only` | none | Closes the v0.2.x line as a conservative local-first checkpoint and proposes one narrow receiver-side approved write as the first v0.3.0 boundary. |
 | Public release link hygiene | `local hygiene tool` | none | Checks repository Markdown links for release note copy safety. No GitHub Release edit or external URL fetch. |
@@ -113,3 +114,10 @@ The v0.2.59 response adds one read-only would-transport planner. It still avoids
 The v0.2.60 response is documentation, version, and test coverage only. It closes v0.2.x as a conservative local-first checkpoint, records the proposed v0.3.0 first boundary, and still avoids product CLI/MCP/service changes, schemas, real ZET transport, trust/import/acceptance/anchor mutation, attestation/signature writes, provider sync, queues/workers, DID/wallet/key custody, public proof anchoring, blockchain/token mechanics, and full-auto behavior.
 
 The v0.3.0 response opens only the CLI local review record and receipt for shared update attestation/review. It still avoids MCP write/apply tools, real ZET transport, key creation, feed updates, trust/import/acceptance, real attestation/signature writes, anchors, public proof, provider sync, projection writes, queues/workers, DID/wallet/key custody, blockchain/token mechanics, and full-auto behavior.
+
+The v0.3.1 route-preview response adds only a read-only router over an already
+reviewed shared update record. It points to existing delegate/attest/anchor
+surfaces, writes nothing, exposes no MCP write/apply tool, and still avoids
+real transport, trust/import/acceptance, real attestation/signature writes,
+anchors/apply/public proof, provider sync, queues/workers, wallet/key custody,
+blockchain/token mechanics, and full-auto behavior.

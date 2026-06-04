@@ -27,6 +27,8 @@ Commands:
           Preview a local ZET shared update record before any renewal action.
   shared-update-record-review-index
           Index local ZET shared update records before any renewal action.
+  shared-update-route-preview
+          Preview the next receiver-side route without writes.
   shared-update-attestation-review
           Approve recording a local shared update attestation/review record and receipt.
   zet-transport-plan
@@ -1812,6 +1814,37 @@ def command_shared_update_record_review_index(args: argparse.Namespace) -> int:
         print(f"Index status: {result.get('index_status') or '-'}")
         print(f"Reviewable: {result.get('reviewable_count', 0)}")
         print(f"Blocked: {result.get('blocked_count', 0)}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_shared_update_route_preview(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.shared_update_route_preview(
+            Path(args.archive_root),
+            record=args.record,
+            dry_run=args.dry_run,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        print(f"Shared update route preview {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Record: {result.get('record_path') or '-'}")
+        print(f"Candidate route: {result.get('candidate_route') or '-'}")
+        print(f"Route status: {result.get('route_status') or '-'}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -4403,6 +4436,23 @@ def build_parser() -> argparse.ArgumentParser:
     shared_update_record_review_index.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
     shared_update_record_review_index.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     shared_update_record_review_index.set_defaults(func=command_shared_update_record_review_index)
+
+    shared_update_route_preview_parser = subcommands.add_parser(
+        "shared-update-route-preview",
+        help="Preview the next receiver-side route without writing files.",
+    )
+    shared_update_route_preview_parser.add_argument(
+        "archive_root",
+        help="Archive root used for path safety and local context.",
+    )
+    shared_update_route_preview_parser.add_argument(
+        "--record",
+        required=True,
+        help="Archive-relative JSON shared update record path.",
+    )
+    shared_update_route_preview_parser.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    shared_update_route_preview_parser.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    shared_update_route_preview_parser.set_defaults(func=command_shared_update_route_preview)
 
     shared_update_attestation_review = subcommands.add_parser(
         "shared-update-attestation-review",

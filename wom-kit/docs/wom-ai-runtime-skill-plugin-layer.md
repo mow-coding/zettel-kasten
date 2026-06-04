@@ -568,6 +568,16 @@ This command first reuses `zet_shared_update_record_review_preview`. It writes e
 
 MCP must not expose shared update attestation/review write/apply/approve/publish/transport/import/trust/sign/anchor tools.
 
+From v0.3.1, an AI runtime may preview the next receiver-side route for one reviewed shared update record:
+
+```powershell
+archive shared-update-route-preview <archive-root> --record <archive-relative-json> --dry-run --format json
+```
+
+This is read-only and dry-run only. It reuses the shared-update record review policy, returns `would_change: []`, and reports route pointers through `route_eligibility`, `delegate_route_preview`, `attest_route_preview`, `anchor_route_preview`, and `none_route_preview`. If it names `shared-update-attestation-review`, it also returns `related_shared_update_review_required_flags: ["--approve", "--reviewed-by"]`; naming that command is not authorization. The route preview does not duplicate `delegate-zet`, `attest-zet`, or `anchor-zet`, and it does not create transport, keys, receipts, feed updates, trust, import, acceptance, attestation, signature, anchor, apply behavior, provider calls, projections, queues/workers, blockchain/token behavior, or full-auto behavior.
+
+MCP must not expose shared update route write/apply/approve/publish/transport/import/trust/sign/anchor tools.
+
 From v0.2.59, an AI runtime may preview a future ZET transport risk/control plan for one local shared update record:
 
 ```powershell
@@ -643,11 +653,12 @@ An AI runtime should start with:
 28. use `shared-update-record-review-index --dry-run` to inventory local shared update records without recording review
 29. use `shared-update-record-review --dry-run` for one local shared update record before any receiver-side renewal discussion
 30. use CLI-only `shared-update-attestation-review --approve --reviewed-by` only after human review, and only to record local review metadata plus a receipt
-31. use `zet-transport-plan --dry-run` only to discuss future transport risks and controls, never to send or deliver anything
-32. read the v0.2.x freeze / v0.3.0 entry boundary only when discussing next-line planning, not as a transport/public-proof tool
-33. discuss the radio-frequency recommendation model only as a future docs/examples baseline, not as an executable feed feature
-34. run mint dry-run before asking for mint approval
-35. use CLI approval paths for real minting
+31. use `shared-update-route-preview --dry-run` only to explain candidate receiver-side route pointers without performing them
+32. use `zet-transport-plan --dry-run` only to discuss future transport risks and controls, never to send or deliver anything
+33. read the v0.2.x freeze / v0.3.0 entry boundary only when discussing next-line planning, not as a transport/public-proof tool
+34. discuss the radio-frequency recommendation model only as a future docs/examples baseline, not as an executable feed feature
+35. run mint dry-run before asking for mint approval
+36. use CLI approval paths for real minting
 ```
 
 This keeps the AI helpful without giving it a broad mutation surface.
@@ -683,7 +694,8 @@ The skill tells the AI to:
 - use attestation-statement-draft-decision dry-run to preview one safe next review route without recording a decision,
 - use shared-update-record-review-index dry-run to inventory local shared update records without writing review metadata,
 - use shared-update-record-review dry-run before any receiver-side renewal discussion,
-- use CLI-only shared-update-attestation-review approval only to record local review metadata and a receipt,
+- use CLI-only `shared-update-attestation-review --approve --reviewed-by` only to record local review metadata and a receipt,
+- use shared-update-route-preview dry-run only to explain candidate route pointers without performing them,
 - use zet-transport-plan dry-run only for future transport risk/control planning, never for real send/deliver,
 - treat ZET recommendation as documentation-only in v0.2.48 and never claim that recommendations can be fetched, ranked, or applied,
 - keep paths archive-relative,

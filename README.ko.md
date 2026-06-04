@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.3.0 pre-release
+v0.3.1 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -33,7 +33,7 @@ v0.3.0 pre-release
 - WOM / zet / ZET 설계 기준, specs, schemas, fake archive, release notes, work logs,
 - `wom-kit/` 안의 local CLI와 MCP tooling,
 - doctor, draft, mint, delegate, receipt, search, metadata review 같은 private archive lifecycle 도구,
-- runtime context, profile, source/objet intake, block header, prompt boundary, foreign block review, projection, shared update review/index, ZET would-transport planning을 위한 read-only preview layer,
+- runtime context, profile, source/objet intake, block header, prompt boundary, foreign block review, projection, shared update review/index, shared update route preview, ZET would-transport planning을 위한 read-only preview layer,
 - 사람 승인 뒤에만 동작하는 일부 local write path,
 - public link, Korean product language, privacy, release readiness, branch-protection planning을 위한 local hygiene tool.
 
@@ -85,6 +85,7 @@ v0.3.0 pre-release
 - [ZET Shared Update Record Review Preview](wom-kit/docs/zet-shared-update-record-review-preview.md)
 - [ZET Shared Update Record Review Index](wom-kit/docs/zet-shared-update-record-review-index.md)
 - [Shared Update Attestation Review Write](wom-kit/docs/shared-update-attestation-review-write.md)
+- [Shared Update Route Preview](wom-kit/docs/shared-update-route-preview.ko.md)
 - [ZET Transport Threat Model](wom-kit/docs/zet-transport-threat-model.md)
 - [v0.2.x Freeze And v0.3.0 Entry Boundary](wom-kit/docs/v02x-freeze-v03-entry-boundary.md)
 - [공개 문서 지도](wom-kit/docs/public-documentation-map.ko.md)
@@ -192,6 +193,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.3.1
 v0.3.0
 v0.2.60
 v0.2.59
@@ -242,7 +244,8 @@ v0.2.14
 v0.2.13
 v0.2.12
 v0.2.11
-v0.3.0
+v0.2.10
+v0.2.9
 v1.0.0
 ```
 

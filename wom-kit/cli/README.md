@@ -8,6 +8,8 @@ See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
 v0.3.0 opens the first narrow receiver-side write boundary: an approval-gated shared update attestation/review record and receipt. See `wom-kit/docs/shared-update-attestation-review-write.md`.
 
+v0.3.1 adds a read-only shared update route preview. It points to an existing candidate route surface and writes nothing. See `wom-kit/docs/shared-update-route-preview.md`.
+
 For a beginner-friendly full walkthrough, see:
 
 ```text
@@ -56,6 +58,9 @@ shared-update-record-review-index --dry-run
 
 shared-update-attestation-review --approve --reviewed-by
   Write exactly one local shared update attestation/review record and one matching receipt after reusing the shared-update record review preview policy. This is a receiver-side review record only; it never updates feeds, trusts, imports, accepts, signs, anchors, calls providers, projects, starts workers, creates keys, or runs real ZET transport.
+
+shared-update-route-preview --dry-run
+  Preview the candidate receiver-side route for one local ZET shared update record: delegate, attest, anchor, or none. This writes nothing, reuses the single-record review policy, echoes no body text or unsafe free-form route metadata, and never authorizes, updates feeds, trusts, imports, accepts, signs, anchors, calls providers, writes receipts, projects, starts workers, creates keys, or runs real ZET transport.
 
 zet-transport-plan --dry-run
   Preview a planning-only would-transport risk/control model for one local ZET shared update record and one future method. This writes nothing, reuses the single-record review policy, creates no keys, sends nothing, creates no receipts, calls no providers, starts no workers, and never updates feeds, trusts, imports, attests, signs, anchors, projects, mirrors, or runs ZET transport.

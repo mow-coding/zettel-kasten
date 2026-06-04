@@ -21,6 +21,8 @@ v0.2.60 is a documentation, version, and test checkpoint for the v0.2.x freeze a
 
 v0.3.0 adds a CLI-only shared update attestation/review write boundary. MCP intentionally exposes no write/apply/approve sibling tool for this boundary. MCP may still use the existing read-only `zet_shared_update_record_review_preview` and `zet_shared_update_record_review_index` tools.
 
+v0.3.1 adds a CLI-only read-only shared update route preview. MCP intentionally exposes no shared-update route write/apply/approve tool and no new shared-update route MCP tool for this boundary.
+
 For the full beginner workflow around CLI plus MCP, see:
 
 ```text

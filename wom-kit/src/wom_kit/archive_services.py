@@ -163,6 +163,49 @@ ZET_SHARED_UPDATE_ATTESTATION_REVIEW_CLOSED_FLAGS = {
     "backpropagation_performed": False,
     "full_auto_used": False,
 }
+ZET_SHARED_UPDATE_ROUTE_PREVIEW_CLOSED_FLAGS = {
+    "shared_update_route_preview_recorded": False,
+    "shared_update_review_index_recorded": False,
+    "shared_update_review_recorded": False,
+    "shared_update_attestation_review_recorded": False,
+    "real_zet_transport_performed": False,
+    "key_created": False,
+    "key_sharing_registry_created": False,
+    "radio_frequency_access_created": False,
+    "mirroring_payload_created": False,
+    "mirroring_delivery_created": False,
+    "neighbor_feed_updated": False,
+    "automatic_renewal_performed": False,
+    "renewal_performed": False,
+    "trust_graph_mutated": False,
+    "trust_created": False,
+    "import_performed": False,
+    "acceptance_created": False,
+    "anchor_performed": False,
+    "apply_performed": False,
+    "attestation_created": False,
+    "attestation_written": False,
+    "signature_created": False,
+    "signature_written": False,
+    "public_proof_anchor_created": False,
+    "did_wallet_key_custody_used": False,
+    "provider_api_call_performed": False,
+    "wordpress_published": False,
+    "projection_write_performed": False,
+    "projection_receipt_created": False,
+    "receipt_write_performed": False,
+    "queue_job_created": False,
+    "worker_started": False,
+    "payment_performed": False,
+    "staking_performed": False,
+    "consensus_performed": False,
+    "blockchain_written": False,
+    "token_created": False,
+    "system_token_created": False,
+    "model_training_performed": False,
+    "backpropagation_performed": False,
+    "full_auto_used": False,
+}
 ZET_TRANSPORT_WOULD_PLAN_CLOSED_FLAGS = {
     "transport_performed": False,
     "real_zet_transport_performed": False,
@@ -796,6 +839,20 @@ GITHUB_SECRET_LIKE_RE = re.compile(
     r"(?i)\b(?:ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9]{20,}|"
     r"token|secret|password|oauth|cookie|credential)\b"
 )
+SHARED_UPDATE_TOKEN_LIKE_RE = re.compile(r"(?i)\bsk-[A-Za-z0-9_-]{8,}\b")
+SHARED_UPDATE_FILE_REF_RE = re.compile(r"(?i)(?:^|[\\/])[^\\/]+\.(?:md|markdown|txt)\b")
+SHARED_UPDATE_DELEGATE_ROUTE_ACTIONS = {"consider_delegate", "delegate", "delegate_review", "prepare_delegate"}
+SHARED_UPDATE_ATTEST_ROUTE_ACTIONS = {
+    "review_before_renewal",
+    "renewal_review",
+    "prepare_review",
+    "consider_attest",
+    "consider_attestation",
+    "attest",
+    "attestation_review",
+}
+SHARED_UPDATE_ANCHOR_ROUTE_ACTIONS = {"consider_anchor", "anchor", "anchor_review", "prepare_anchor"}
+SHARED_UPDATE_NONE_ROUTE_ACTIONS = {"hold_for_human", "needs_more_review", "manual_review", "none", "no_route"}
 OBJECT_STORAGE_SETUP_RECEIPTS_DIR = "receipts/providers"
 OBJECT_STORAGE_ALLOWED_PROVIDERS = {
     "cloudflare-r2",
@@ -10148,6 +10205,220 @@ def zet_shared_update_record_review_index(
     return result
 
 
+def shared_update_route_preview(
+    archive_root: Path | str,
+    *,
+    record: str | None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run is not True:
+        blockers.append("shared-update-route-preview is dry-run only; pass --dry-run.")
+
+    review = zet_shared_update_record_review_preview(
+        root,
+        record=record,
+        dry_run=True,
+    )
+    review_blockers = [str(blocker) for blocker in review.get("blockers") or [] if isinstance(blocker, str)]
+    review_warnings = [str(warning) for warning in review.get("warnings") or [] if isinstance(warning, str)]
+    if review_blockers:
+        blockers.append("shared update record review preview blocked; route preview cannot proceed.")
+    warnings.extend(review_warnings)
+
+    receiver_review = review.get("receiver_review_preview") if isinstance(review.get("receiver_review_preview"), dict) else {}
+    route_proposed_action = safe_shared_update_route_proposed_action(receiver_review.get("proposed_action"))
+    route_receiver_review = dict(receiver_review)
+    route_receiver_review["proposed_action"] = route_proposed_action
+    sharing_context = review.get("sharing_context_preview") if isinstance(review.get("sharing_context_preview"), dict) else {}
+    candidate_route, route_reason = shared_update_candidate_route_from_action(route_proposed_action)
+    if blockers:
+        candidate_route = "none"
+        if review_blockers:
+            route_reason = "shared update record review preview must pass before any receiver-side route can be considered"
+        else:
+            route_reason = "shared-update-route-preview must be run with --dry-run before a route can be considered"
+
+    record_relative = review.get("record_path") if isinstance(review.get("record_path"), str) else None
+    source_record_sha256: str | None = None
+    if record_relative:
+        try:
+            source_record_path = archive_internal_path(root, record_relative)
+            if source_record_path.is_file():
+                source_record_sha256 = sha256_path(source_record_path)
+        except (ArchiveServiceError, OSError, RuntimeError, ValueError):
+            source_record_sha256 = None
+
+    route_pointers = {
+        "delegate": shared_update_route_pointer(
+            route="delegate",
+            candidate_route=candidate_route,
+            reason=route_reason,
+            defer_to="delegate-zet",
+            related_lifecycle_preview="delegate-zet --dry-run",
+        ),
+        "attest": shared_update_route_pointer(
+            route="attest",
+            candidate_route=candidate_route,
+            reason=route_reason,
+            defer_to="attest-zet",
+            related_lifecycle_preview="attest-zet --dry-run",
+            related_shared_update_review_command="shared-update-attestation-review",
+        ),
+        "anchor": shared_update_route_pointer(
+            route="anchor",
+            candidate_route=candidate_route,
+            reason=route_reason,
+            defer_to="anchor-zet",
+            related_lifecycle_preview="anchor-zet --dry-run",
+        ),
+    }
+    none_preview = {
+        "route": "none",
+        "applies": candidate_route == "none",
+        "reason": route_reason if candidate_route == "none" else "a specific receiver-side route was selected",
+        "defer_to": None,
+        "pointer_status": "route_eligibility_pointer_only",
+        "writes_performed": False,
+        "would_change": [],
+    }
+
+    result = {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "zet_shared_update_route_preview",
+        "archive_id": archive_id,
+        "record_path": record_relative,
+        "record_kind": review.get("record_kind"),
+        "record_version": review.get("record_version"),
+        "source_shared_update_record": {
+            "record_path": record_relative,
+            "sha256": source_record_sha256,
+            "record_kind": review.get("record_kind"),
+            "record_version": review.get("record_version"),
+        },
+        "route_status": "route_preview_not_recorded",
+        "candidate_route": candidate_route,
+        "trust_state": "untrusted_foreign",
+        "attestation_status": "not_created",
+        "signature_status": "not_created",
+        "anchor_status": "not_created",
+        "renewal_status": "not_performed",
+        "would_anchor": False,
+        "would_attest": False,
+        "would_delegate": False,
+        "would_renew": False,
+        "policy_reused_from": "zet_shared_update_record_review_preview",
+        "route_selection": {
+            "candidate_route": candidate_route,
+            "reason": route_reason,
+            "receiver_proposed_action": route_proposed_action,
+            "selection_scope": "safe shared update metadata only",
+        },
+        "record_review_summary": {
+            "ok": bool(review.get("ok")),
+            "preview_status": review.get("preview_status"),
+            "trust_state": review.get("trust_state"),
+            "record_kind": review.get("record_kind"),
+            "record_version": review.get("record_version"),
+            "blocker_count": len(review_blockers),
+            "warning_count": len(review_warnings),
+            "blockers": review_blockers,
+            "warnings": review_warnings,
+            "source_preview": review.get("source_preview") if isinstance(review.get("source_preview"), dict) else {},
+            "receiver_review_preview": route_receiver_review,
+            "sharing_context_preview": sharing_context,
+        },
+        "route_eligibility": {
+            "delegate": route_pointers["delegate"],
+            "attest": route_pointers["attest"],
+            "anchor": route_pointers["anchor"],
+            "none": none_preview,
+        },
+        "delegate_route_preview": route_pointers["delegate"],
+        "attest_route_preview": route_pointers["attest"],
+        "anchor_route_preview": route_pointers["anchor"],
+        "none_route_preview": none_preview,
+        "trust_gate_preview": {
+            "status": "closed_until_separate_human_review",
+            "trust_state": "untrusted_foreign",
+            "trust_created": False,
+            "trust_graph_mutated": False,
+            "import_performed": False,
+            "acceptance_created": False,
+        },
+        "capability_gate_preview": {
+            "status": "preview_only",
+            "requires_dry_run": True,
+            "mcp_write_apply_exposed": False,
+            "approval_gate_performed": False,
+            "canonical_route_commands": ["delegate-zet", "attest-zet", "anchor-zet"],
+            "related_shared_update_review_command": "shared-update-attestation-review",
+            "related_shared_update_review_required_flags": ["--approve", "--reviewed-by"],
+            "related_shared_update_review_gate": "requires separate human review plus --approve and --reviewed-by",
+        },
+        "header_body_boundary": {
+            "header_review_surface": "safe_header_and_record_metadata_only",
+            "body_review_surface": "not_read_or_echoed",
+            "body_content_included": False,
+        },
+        "next_safe_actions": [
+            "run the named canonical command only if a human deliberately chooses that route",
+            "keep the shared update untrusted before any separate receiver-side approval path",
+            "do not create transport, keys, receipts, feed updates, trust, import, acceptance, attestation, signature, anchor, or apply behavior from this preview",
+        ],
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+    result.update(ZET_SHARED_UPDATE_ROUTE_PREVIEW_CLOSED_FLAGS)
+    return json_safe(result)
+
+
+def shared_update_candidate_route_from_action(proposed_action: str | None) -> tuple[str, str]:
+    action = str(proposed_action or "").strip().casefold()
+    if not action:
+        return "none", "no safe receiver proposed_action was available"
+    if action in SHARED_UPDATE_ANCHOR_ROUTE_ACTIONS:
+        return "anchor", "receiver metadata points to future anchor-route consideration"
+    if action in SHARED_UPDATE_DELEGATE_ROUTE_ACTIONS:
+        return "delegate", "receiver metadata points to future delegate-route consideration"
+    if action in SHARED_UPDATE_ATTEST_ROUTE_ACTIONS:
+        return "attest", "receiver metadata points to future attestation/review-route consideration before renewal"
+    return "none", "receiver proposed_action is not mapped to delegate, attest, or anchor"
+
+
+def shared_update_route_pointer(
+    *,
+    route: str,
+    candidate_route: str,
+    reason: str,
+    defer_to: str,
+    related_lifecycle_preview: str,
+    related_shared_update_review_command: str | None = None,
+) -> dict[str, Any]:
+    applies = candidate_route == route
+    pointer = {
+        "route": route,
+        "applies": applies,
+        "reason": reason if applies else f"{route} route not selected by the reviewed metadata",
+        "defer_to": defer_to,
+        "related_lifecycle_preview": related_lifecycle_preview,
+        "pointer_status": "route_eligibility_pointer_only",
+        "writes_performed": False,
+        "would_change": [],
+    }
+    if related_shared_update_review_command:
+        pointer["related_shared_update_review_command"] = related_shared_update_review_command
+        pointer["related_shared_update_review_required_flags"] = ["--approve", "--reviewed-by"]
+        pointer["related_shared_update_review_gate"] = "requires separate human review plus --approve and --reviewed-by"
+    return pointer
+
+
 def record_shared_update_attestation_review(
     archive_root: Path | str,
     *,
@@ -10785,6 +11056,8 @@ def shared_update_string_is_private_or_secret(value: str) -> bool:
         or "://" in text
         or DRAFT_SECRET_VALUE_RE.search(text)
         or GITHUB_SECRET_LIKE_RE.search(text)
+        or SHARED_UPDATE_TOKEN_LIKE_RE.search(text)
+        or SHARED_UPDATE_FILE_REF_RE.search(text)
     )
 
 
@@ -10795,6 +11068,21 @@ def safe_shared_update_optional_scalar(value: Any) -> str | None:
     if not text or shared_update_string_is_private_or_secret(text):
         return None
     return text
+
+
+def safe_shared_update_route_proposed_action(value: Any) -> str | None:
+    text = safe_shared_update_optional_scalar(value)
+    if text is None:
+        return None
+    action = text.strip().casefold().replace("-", "_")
+    if action in (
+        SHARED_UPDATE_DELEGATE_ROUTE_ACTIONS
+        | SHARED_UPDATE_ATTEST_ROUTE_ACTIONS
+        | SHARED_UPDATE_ANCHOR_ROUTE_ACTIONS
+        | SHARED_UPDATE_NONE_ROUTE_ACTIONS
+    ):
+        return action
+    return None
 
 
 def safe_shared_update_string_list(value: Any) -> list[str]:
