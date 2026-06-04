@@ -32,6 +32,10 @@ raw-data/
 /archive-infra-decision-log-*.md
 /*-zettel-kasten-mapping-*.md
 
+# Local-only Codex<->Claude collaboration workspace.
+/collab/
+/.mow-harness/
+
 # Public release safety: portfolio/private strategy drafts are not part of the showcase repo.
 /wom-kit/specs/*context-brief*.md
 /wom-kit/specs/local-*.md
