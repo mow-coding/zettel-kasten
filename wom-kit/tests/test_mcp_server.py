@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import hashlib
@@ -1295,10 +1295,10 @@ class McpServerTests(unittest.TestCase):
                             "name": "github_repository_setup_plan",
                             "arguments": {
                                 "archive_root": str(allowed_archive),
-                                "profile_id": "profile:personal:HongGilDong",
-                                "profile_slug": "HongGilDong",
+                                "profile_id": "profile:personal:username",
+                                "profile_slug": "username",
                                 "github_owner": "example-user",
-                                "github_account_ref": "github:account:honggildong",
+                                "github_account_ref": "github:account:username",
                             },
                         },
                     },
@@ -1309,7 +1309,7 @@ class McpServerTests(unittest.TestCase):
                 self.assertTrue(structured["ok"])
                 self.assertTrue(structured["dry_run"])
                 self.assertEqual(structured["lifecycle_action"], "github_repository_setup_plan")
-                self.assertEqual(structured["proposed_repo_name"], "zettel-kasten-HongGilDong")
+                self.assertEqual(structured["proposed_repo_name"], "zettel-kasten-username")
                 self.assertFalse(structured["provider_setup_receipt_preview"]["external_actions"]["github_api_called"])
                 after = {
                     path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
@@ -1328,10 +1328,10 @@ class McpServerTests(unittest.TestCase):
                             "name": "github_repository_setup_plan",
                             "arguments": {
                                 "archive_root": str(outside_archive),
-                                "profile_id": "profile:personal:HongGilDong",
-                                "profile_slug": "HongGilDong",
+                                "profile_id": "profile:personal:username",
+                                "profile_slug": "username",
                                 "github_owner": "example-user",
-                                "github_account_ref": "github:account:honggildong",
+                                "github_account_ref": "github:account:username",
                             },
                         },
                     },
@@ -1368,9 +1368,9 @@ class McpServerTests(unittest.TestCase):
                             "arguments": {
                                 "archive_root": str(allowed_archive),
                                 "provider": "cloudflare-r2",
-                                "profile_id": "profile:personal:HongGilDong",
-                                "profile_slug": "HongGilDong",
-                                "storage_account_ref": "storage:account:honggildong",
+                                "profile_id": "profile:personal:username",
+                                "profile_slug": "username",
+                                "storage_account_ref": "storage:account:username",
                             },
                         },
                     },
@@ -1381,7 +1381,7 @@ class McpServerTests(unittest.TestCase):
                 self.assertTrue(structured["ok"])
                 self.assertTrue(structured["dry_run"])
                 self.assertEqual(structured["lifecycle_action"], "object_storage_setup_plan")
-                self.assertEqual(structured["proposed_bucket_name"], "zettel-kasten-honggildong-objets")
+                self.assertEqual(structured["proposed_bucket_name"], "zettel-kasten-username-objets")
                 self.assertFalse(structured["provider_setup_receipt_preview"]["external_actions"]["provider_api_called"])
                 self.assertFalse(structured["provider_setup_receipt_preview"]["external_actions"]["files_uploaded"])
                 after = {
@@ -1402,9 +1402,9 @@ class McpServerTests(unittest.TestCase):
                             "arguments": {
                                 "archive_root": str(outside_archive),
                                 "provider": "cloudflare-r2",
-                                "profile_id": "profile:personal:HongGilDong",
-                                "profile_slug": "HongGilDong",
-                                "storage_account_ref": "storage:account:honggildong",
+                                "profile_id": "profile:personal:username",
+                                "profile_slug": "username",
+                                "storage_account_ref": "storage:account:username",
                             },
                         },
                     },

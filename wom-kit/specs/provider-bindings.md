@@ -27,24 +27,24 @@ bindings:
     purpose: zettels_specs_code_and_view_definitions
     resource:
       owner: example-user
-      repo: zettel-kasten-HongGilDong
+      repo: zettel-kasten-username
       visibility: private
       remote_protocol: ssh
     auth:
       method: gh_cli_or_token_ref
       token_env: GITHUB_TOKEN
-      account_ref: github:account:honggildong
+      account_ref: github:account:username
     owner_mapping:
       archive_id: archive:personal:example
-      profile_id: profile:personal:HongGilDong
-      profile_slug: HongGilDong
-  - binding_id: object_storage:cloudflare-r2:zettel-kasten-honggildong-objets
+      profile_id: profile:personal:username
+      profile_slug: username
+  - binding_id: object_storage:cloudflare-r2:zettel-kasten-username-objets
     provider: object_storage
     provider_kind: cloudflare-r2
     enabled: true
     purpose: objet_storage_metadata_and_manual_setup_plan
     resource:
-      bucket: zettel-kasten-honggildong-objets
+      bucket: zettel-kasten-username-objets
       prefix: archives/archive:personal:example/objets/
       visibility: private
       region: auto
@@ -52,21 +52,21 @@ bindings:
     auth:
       method: token_ref_or_env
       token_env: R2_TOKEN
-      account_ref: storage:account:honggildong
+      account_ref: storage:account:username
     owner_mapping:
       archive_id: archive:personal:example
-      profile_id: profile:personal:HongGilDong
-      profile_slug: HongGilDong
+      profile_id: profile:personal:username
+      profile_slug: username
 ```
 
 WOM-kit v0.2.20 can plan this GitHub binding with:
 
 ```bash
 archive github-repo <archive-root> --dry-run \
-  --profile-id profile:personal:HongGilDong \
-  --profile-slug HongGilDong \
+  --profile-id profile:personal:username \
+  --profile-slug username \
   --github-owner example-user \
-  --github-account-ref github:account:honggildong \
+  --github-account-ref github:account:username \
   --format json
 ```
 
@@ -77,9 +77,9 @@ WOM-kit v0.2.21 can plan the object storage / objet binding with:
 ```bash
 archive object-storage <archive-root> --dry-run \
   --provider cloudflare-r2 \
-  --profile-id profile:personal:HongGilDong \
-  --profile-slug HongGilDong \
-  --storage-account-ref storage:account:honggildong \
+  --profile-id profile:personal:username \
+  --profile-slug username \
+  --storage-account-ref storage:account:username \
   --format json
 ```
 

@@ -155,6 +155,62 @@ But the AI should not silently:
 
 ## 4. Setup Wizard Stages
 
+### Stage 0: First Personal WOM Setup Shape
+
+For a first personal WOM archive, the AI should be directive before it is creative.
+It should not ask the user to freely choose repository names, invent example
+memories, or create a filled sample archive. It should first run a short
+archive-shaping conversation and then show the canonical setup path.
+
+Ask:
+
+```text
+What part of your life or work should WOM help with first?
+Which source materials should be handled first: PDFs, chats, screenshots, notes, videos, docs, or something else?
+Should this feel more like a private memory room, project workbench, research notebook, or evidence vault?
+What must stay out of Git?
+Do you want a tiny first test or a broader empty structure?
+```
+
+Then show the canonical first-use defaults:
+
+```text
+profile_slug:        username
+GitHub repo:         zettel-kasten-<profile_slug>              [enforced prefix/default]
+local archive root:  C:\Users\<user>\zettel-kasten-<profile_slug> [recommended default]
+local objet store:   C:\Users\<user>\zettel-kasten-<profile_slug>-objets [recommended default]
+object bucket:       zettel-kasten-<profile_slug>-objets      [deferred manual external step]
+SQLite:              local generated search/index DB          [generated local]
+Neon/Postgres:       remote coordination DB                    [deferred]
+R2/B2/S3:            remote object storage provider            [deferred manual external step]
+```
+
+The enforced GitHub rule is the `zettel-kasten-` prefix. The first-use default
+is the full `zettel-kasten-<profile_slug>` name, so guidance should show that
+canonical default before any manual GitHub step.
+
+`local objet store` means the local folder for raw source/original files. Git
+stores zets, source maps, manifests, specs, and receipts. It should not be
+presented as the default place for private raw documents, videos, photos, or
+large binary originals.
+
+Do now:
+
+- choose/confirm `profile_slug`,
+- confirm the local archive root,
+- confirm the local objet store location,
+- run GitHub and object storage planners with `--dry-run` before manual provider setup.
+
+Defer:
+
+- Neon/Postgres,
+- R2/B2/S3 bucket creation,
+- provider account creation,
+- token entry,
+- upload/sync,
+- source import,
+- minting.
+
 ### Stage 1: Local Environment Check
 
 Check:
@@ -176,7 +232,9 @@ Ask simple beginner questions:
 ```text
 Is this archive for you personally or an organization/project?
 What display name should this archive use?
-Where should the local archive folder live?
+What profile_slug should be used for safe folder, repo, and bucket names?
+Is C:\Users\<user>\zettel-kasten-<profile_slug> okay as the local archive root?
+Is C:\Users\<user>\zettel-kasten-<profile_slug>-objets okay as the local objet store for raw source/original files?
 ```
 
 Default:
@@ -185,6 +243,9 @@ Default:
 personal archive
 local-first
 private
+profile_slug = username
+local archive root = C:\Users\<user>\zettel-kasten-<profile_slug>
+local objet store = C:\Users\<user>\zettel-kasten-<profile_slug>-objets
 ```
 
 ### Stage 3: Versioned Map
@@ -199,6 +260,7 @@ If yes:
 
 - resolve the WOM profile first,
 - run `archive github-repo --dry-run`,
+- show that the default repo name is `zettel-kasten-<profile_slug>`,
 - ask for human review,
 - write local provider metadata only with `--approve --reviewed-by`,
 - create/select the actual GitHub repository manually outside this batch,
@@ -220,6 +282,7 @@ other S3-compatible storage
 If object storage is selected:
 
 - run `archive object-storage --dry-run`,
+- explain that local objet store means raw source/original files and the remote bucket is deferred unless the user explicitly proceeds,
 - review the proposed bucket/container, prefix, provider binding, and receipt,
 - use provider login/API key flow outside WOM-kit,
 - store credentials in keyring/env/local profile,

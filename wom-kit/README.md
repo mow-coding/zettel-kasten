@@ -388,9 +388,9 @@ Object storage / objet setup example:
 python wom-kit\cli\archive.py object-storage wom-kit\examples\fake-life-archive `
   --dry-run `
   --provider cloudflare-r2 `
-  --profile-id profile:personal:HongGilDong `
-  --profile-slug HongGilDong `
-  --storage-account-ref storage:account:honggildong `
+  --profile-id profile:personal:username `
+  --profile-slug username `
+  --storage-account-ref storage:account:username `
   --format json
 ```
 

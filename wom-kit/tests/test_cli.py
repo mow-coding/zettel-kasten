@@ -1097,13 +1097,13 @@ class ArchiveCliTests(unittest.TestCase):
                     str(archive_root),
                     "--dry-run",
                     "--profile-id",
-                    "profile:personal:HongGilDong",
+                    "profile:personal:username",
                     "--profile-slug",
-                    "HongGilDong",
+                    "username",
                     "--github-owner",
                     "example-user",
                     "--github-account-ref",
-                    "github:account:honggildong",
+                    "github:account:username",
                     "--format",
                     "json",
                 ]
@@ -1114,7 +1114,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertTrue(result["dry_run"])
             self.assertEqual(result["lifecycle_action"], "github_repository_setup_plan")
-            self.assertEqual(result["proposed_repo_name"], "zettel-kasten-HongGilDong")
+            self.assertEqual(result["proposed_repo_name"], "zettel-kasten-username")
             self.assertEqual(result["proposed_visibility"], "private")
             self.assertEqual(result["proposed_remote_protocol"], "ssh")
             self.assertFalse(result["provider_setup_receipt_preview"]["external_actions"]["github_api_called"])
@@ -1145,9 +1145,9 @@ class ArchiveCliTests(unittest.TestCase):
                     self.assertFalse(result["ok"])
                     self.assertTrue(any("profile_slug" in blocker for blocker in result["blockers"]))
 
-            for bad_repo in ["wrong-HongGilDong", "zettel-kasten-Hong/GilDong", "zettel-kasten-Hong GilDong", "zettel-kasten-" + "a" * 90]:
+            for bad_repo in ["wrong-username", "zettel-kasten-user/name", "zettel-kasten-user name", "zettel-kasten-" + "a" * 90]:
                 with self.subTest(repo=bad_repo):
-                    code, output = self.run_cli(common + ["--profile-slug", "HongGilDong", "--repo-name", bad_repo])
+                    code, output = self.run_cli(common + ["--profile-slug", "username", "--repo-name", bad_repo])
                     result = json.loads(output)
                     self.assertEqual(code, 1, output)
                     self.assertFalse(result["ok"])
@@ -1163,7 +1163,7 @@ class ArchiveCliTests(unittest.TestCase):
                 "--profile-id",
                 "profile:personal:test",
                 "--profile-slug",
-                "HongGilDong",
+                "username",
                 "--format",
                 "json",
             ]
@@ -1209,7 +1209,7 @@ class ArchiveCliTests(unittest.TestCase):
                     "--github-owner",
                     "example-user",
                     "--github-account-ref",
-                    "github:account:honggildong",
+                    "github:account:username",
                     "--format",
                     "json",
                 ]
@@ -1230,13 +1230,13 @@ class ArchiveCliTests(unittest.TestCase):
                     str(archive_root),
                     "--approve",
                     "--profile-id",
-                    "profile:personal:HongGilDong",
+                    "profile:personal:username",
                     "--profile-slug",
-                    "HongGilDong",
+                    "username",
                     "--github-owner",
                     "example-user",
                     "--github-account-ref",
-                    "github:account:honggildong",
+                    "github:account:username",
                     "--format",
                     "json",
                 ]
@@ -1261,13 +1261,13 @@ class ArchiveCliTests(unittest.TestCase):
                     "person:me",
                     "--write-local-profile",
                     "--profile-id",
-                    "profile:personal:HongGilDong",
+                    "profile:personal:username",
                     "--profile-slug",
-                    "HongGilDong",
+                    "username",
                     "--github-owner",
                     "example-user",
                     "--github-account-ref",
-                    "github:account:honggildong",
+                    "github:account:username",
                     "--format",
                     "json",
                 ]
@@ -1285,7 +1285,7 @@ class ArchiveCliTests(unittest.TestCase):
                 set(result["changed_paths"]),
                 {
                     "provider-bindings.yml",
-                    "receipts/providers/zettel_kasten_honggildong.github-repository-setup.json",
+                    "receipts/providers/zettel_kasten_username.github-repository-setup.json",
                     "profiles/local/github-accounts.local.yml",
                 },
             )
@@ -1294,7 +1294,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(changed, set(result["changed_paths"]))
             provider_text = (archive_root / "provider-bindings.yml").read_text(encoding="utf-8")
             receipt_text = (archive_root / result["receipt_path"]).read_text(encoding="utf-8")
-            self.assertIn("repo: zettel-kasten-HongGilDong", provider_text)
+            self.assertIn("repo: zettel-kasten-username", provider_text)
             for text in [provider_text, receipt_text]:
                 self.assertNotIn("ghp_", text)
                 self.assertNotIn("github_pat_", text)
@@ -1324,13 +1324,13 @@ class ArchiveCliTests(unittest.TestCase):
                     "person:me",
                     "--write-local-profile",
                     "--profile-id",
-                    "profile:personal:HongGilDong",
+                    "profile:personal:username",
                     "--profile-slug",
-                    "HongGilDong",
+                    "username",
                     "--github-owner",
                     "example-user",
                     "--github-account-ref",
-                    "github:account:honggildong",
+                    "github:account:username",
                     "--format",
                     "json",
                 ]
@@ -1359,13 +1359,13 @@ class ArchiveCliTests(unittest.TestCase):
                     "person:me",
                     "--write-local-profile",
                     "--profile-id",
-                    "profile:personal:HongGilDong",
+                    "profile:personal:username",
                     "--profile-slug",
-                    "HongGilDong",
+                    "username",
                     "--github-owner",
                     "example-user",
                     "--github-account-ref",
-                    "github:account:honggildong",
+                    "github:account:username",
                     "--format",
                     "json",
                 ]
@@ -1374,7 +1374,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
             self.assertFalse(
-                (archive_root / "receipts" / "providers" / "zettel_kasten_honggildong.github-repository-setup.json").exists()
+                (archive_root / "receipts" / "providers" / "zettel_kasten_username.github-repository-setup.json").exists()
             )
 
     def test_object_storage_dry_run_generates_bucket_prefix_and_writes_no_files(self) -> None:
@@ -1390,11 +1390,11 @@ class ArchiveCliTests(unittest.TestCase):
                     "--provider",
                     "cloudflare-r2",
                     "--profile-id",
-                    "profile:personal:HongGilDong",
+                    "profile:personal:username",
                     "--profile-slug",
-                    "HongGilDong",
+                    "username",
                     "--storage-account-ref",
-                    "storage:account:honggildong",
+                    "storage:account:username",
                     "--format",
                     "json",
                 ]
@@ -1405,7 +1405,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertTrue(result["dry_run"])
             self.assertEqual(result["lifecycle_action"], "object_storage_setup_plan")
-            self.assertEqual(result["proposed_bucket_name"], "zettel-kasten-honggildong-objets")
+            self.assertEqual(result["proposed_bucket_name"], "zettel-kasten-username-objets")
             self.assertEqual(result["proposed_objet_prefix"], "archives/archive:personal:fake-life/objets/")
             self.assertEqual(result["proposed_visibility"], "private")
             self.assertEqual(result["provider"], "cloudflare-r2")
@@ -1423,7 +1423,7 @@ class ArchiveCliTests(unittest.TestCase):
                 "--profile-id",
                 "profile:personal:test",
                 "--profile-slug",
-                "HongGilDong",
+                "username",
                 "--storage-account-ref",
                 "storage:account:test",
                 "--format",
@@ -1436,7 +1436,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertTrue(any("provider" in blocker for blocker in result["blockers"]))
 
-            for bad_bucket in ["Zettel-Kasten-Hong", "zettel.kasten.hong", "zettel_kasten_hong", "zettel-kasten/hong", "a" * 64]:
+            for bad_bucket in ["Zettel-Kasten-User", "zettel.kasten.user", "zettel_kasten_user", "zettel-kasten/user", "a" * 64]:
                 with self.subTest(bucket=bad_bucket):
                     code, output = self.run_cli(common + ["--provider", "cloudflare-r2", "--bucket-name", bad_bucket])
                     result = json.loads(output)
@@ -1492,7 +1492,7 @@ class ArchiveCliTests(unittest.TestCase):
                     "--profile-id",
                     "profile:personal:홍길동",
                     "--storage-account-ref",
-                    "storage:account:honggildong",
+                    "storage:account:username",
                     "--format",
                     "json",
                 ]
@@ -1515,11 +1515,11 @@ class ArchiveCliTests(unittest.TestCase):
                     "--provider",
                     "cloudflare-r2",
                     "--profile-id",
-                    "profile:personal:HongGilDong",
+                    "profile:personal:username",
                     "--profile-slug",
-                    "HongGilDong",
+                    "username",
                     "--storage-account-ref",
-                    "storage:account:honggildong",
+                    "storage:account:username",
                     "--format",
                     "json",
                 ]
@@ -1546,11 +1546,11 @@ class ArchiveCliTests(unittest.TestCase):
                     "--provider",
                     "cloudflare-r2",
                     "--profile-id",
-                    "profile:personal:HongGilDong",
+                    "profile:personal:username",
                     "--profile-slug",
-                    "HongGilDong",
+                    "username",
                     "--storage-account-ref",
-                    "storage:account:honggildong",
+                    "storage:account:username",
                     "--format",
                     "json",
                 ]
@@ -1569,7 +1569,7 @@ class ArchiveCliTests(unittest.TestCase):
                 set(result["changed_paths"]),
                 {
                     "provider-bindings.yml",
-                    "receipts/providers/zettel_kasten_honggildong_objets.object-storage-setup.json",
+                    "receipts/providers/zettel_kasten_username_objets.object-storage-setup.json",
                     "profiles/local/object-storage-accounts.local.yml",
                 },
             )
@@ -1580,7 +1580,7 @@ class ArchiveCliTests(unittest.TestCase):
             receipt_text = (archive_root / result["receipt_path"]).read_text(encoding="utf-8")
             self.assertIn("provider: object_storage", provider_text)
             self.assertIn("provider_kind: cloudflare-r2", provider_text)
-            self.assertIn("bucket: zettel-kasten-honggildong-objets", provider_text)
+            self.assertIn("bucket: zettel-kasten-username-objets", provider_text)
             for text in [provider_text, receipt_text]:
                 self.assertNotIn("github_pat_", text)
                 self.assertNotIn("person@example.com", text)
@@ -1605,17 +1605,17 @@ class ArchiveCliTests(unittest.TestCase):
                 "--provider",
                 "cloudflare-r2",
                 "--profile-id",
-                "profile:personal:HongGilDong",
+                "profile:personal:username",
                 "--profile-slug",
-                "HongGilDong",
+                "username",
                 "--storage-account-ref",
-                "storage:account:honggildong",
+                "storage:account:username",
                 "--format",
                 "json",
             ]
             first_code, first_output = self.run_cli(common)
             self.assertEqual(first_code, 0, first_output)
-            second_code, second_output = self.run_cli(common + ["--bucket-name", "zettel-kasten-honggildong-media"])
+            second_code, second_output = self.run_cli(common + ["--bucket-name", "zettel-kasten-username-media"])
             self.assertEqual(second_code, 0, second_output)
 
             provider_data = archive_cli.load_yaml((archive_root / "provider-bindings.yml").read_text(encoding="utf-8"))
@@ -1626,7 +1626,7 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertEqual(
                 object_buckets,
-                ["zettel-kasten-honggildong-media", "zettel-kasten-honggildong-objets"],
+                ["zettel-kasten-username-media", "zettel-kasten-username-objets"],
             )
 
             local_data = archive_cli.load_yaml(
@@ -1651,14 +1651,14 @@ class ArchiveCliTests(unittest.TestCase):
                     reviewed_by="person:me",
                     write_local_profile=True,
                     provider="cloudflare-r2",
-                    profile_id="profile:personal:HongGilDong",
-                    profile_slug="HongGilDong",
-                    storage_account_ref="storage:account:honggildong",
+                    profile_id="profile:personal:username",
+                    profile_slug="username",
+                    storage_account_ref="storage:account:username",
                 )
 
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
             self.assertFalse(
-                (archive_root / "receipts" / "providers" / "zettel_kasten_honggildong_objets.object-storage-setup.json").exists()
+                (archive_root / "receipts" / "providers" / "zettel_kasten_username_objets.object-storage-setup.json").exists()
             )
 
     def test_source_intake_local_path_dry_run_returns_safe_metadata_and_writes_no_files(self) -> None:

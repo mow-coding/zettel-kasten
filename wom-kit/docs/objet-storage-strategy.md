@@ -11,6 +11,16 @@ WOM uses `objet` for source/original files stored outside Git.
 
 Cloud providers and APIs often call the technical layer `object storage`. WOM-kit keeps that technical term in command names and provider bindings where it describes S3-compatible storage, buckets, regions, endpoint references, and credentials.
 
+For first personal onboarding, say `local objet store (raw source/original
+files)` on first mention. The recommended local default is:
+
+```text
+C:\Users\<user>\zettel-kasten-<profile_slug>-objets
+```
+
+Remote object storage remains a deferred manual external step unless the user
+explicitly chooses to plan R2, B2, S3, or another provider.
+
 ## Default Layout
 
 For a resolved WOM profile, the v0.2.21 planner proposes:
@@ -37,9 +47,9 @@ Dry-run first:
 ```bash
 archive object-storage <archive-root> --dry-run \
   --provider cloudflare-r2 \
-  --profile-id profile:personal:HongGilDong \
-  --profile-slug HongGilDong \
-  --storage-account-ref storage:account:honggildong \
+  --profile-id profile:personal:username \
+  --profile-slug username \
+  --storage-account-ref storage:account:username \
   --format json
 ```
 
@@ -51,9 +61,9 @@ Approved local metadata write:
 archive object-storage <archive-root> --approve \
   --reviewed-by person:me \
   --provider cloudflare-r2 \
-  --profile-id profile:personal:HongGilDong \
-  --profile-slug HongGilDong \
-  --storage-account-ref storage:account:honggildong \
+  --profile-id profile:personal:username \
+  --profile-slug username \
+  --storage-account-ref storage:account:username \
   --format json
 ```
 

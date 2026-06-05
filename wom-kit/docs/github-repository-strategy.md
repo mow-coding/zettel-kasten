@@ -51,8 +51,11 @@ This repository must not contain:
 ## 2. Private Actual-Use Repository
 
 ```text
-https://github.com/mow-coding/zettel-kasten-private
+https://github.com/<github-owner>/zettel-kasten-<profile_slug>
 ```
+
+For example, if `profile_slug = username`, the default repository name is
+`zettel-kasten-username`.
 
 Visibility:
 
@@ -67,6 +70,9 @@ Purpose:
 - preserve the privacy-first philosophy of the base `zettel-kasten` system.
 
 This repository should be initialized through the onboarding flow, not by manually dumping private files.
+Do not tell a first-use personal WOM user to freely choose a private archive
+repository name. The existing planner defaults to the `zettel-kasten-<profile_slug>`
+rule, and onboarding guidance should surface that rule before any manual GitHub step.
 
 Expected future flow:
 
@@ -89,10 +95,10 @@ WOM-kit v0.2.20 adds a safe planner for profile-scoped GitHub repository setup:
 
 ```bash
 archive github-repo <archive-root> --dry-run \
-  --profile-id profile:personal:HongGilDong \
-  --profile-slug HongGilDong \
+  --profile-id profile:personal:username \
+  --profile-slug username \
   --github-owner example-user \
-  --github-account-ref github:account:honggildong \
+  --github-account-ref github:account:username \
   --format json
 ```
 

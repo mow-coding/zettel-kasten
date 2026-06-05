@@ -509,9 +509,9 @@ Plan objet storage metadata without touching any provider:
 python wom-kit\cli\archive.py object-storage .\tmp-my-archive `
   --dry-run `
   --provider cloudflare-r2 `
-  --profile-id profile:personal:HongGilDong `
-  --profile-slug HongGilDong `
-  --storage-account-ref storage:account:honggildong `
+  --profile-id profile:personal:username `
+  --profile-slug username `
+  --storage-account-ref storage:account:username `
   --format json
 ```
 

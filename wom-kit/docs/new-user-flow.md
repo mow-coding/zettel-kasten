@@ -118,9 +118,44 @@ python wom-kit\cli\archive.py preflight .\archives\personal-life --peer-archive 
 
 Preflight blocks drive roots, whole home folders, system folders, source roots that contain the archive itself, and overlapping personal/team archive roots.
 
+## Flow 1C: Shape The First Personal Archive
+
+Before creating the first archive skeleton, the AI should help the user shape an
+empty archive. It should not invent personal sample memories or fake private
+content. The goal is to choose a safe empty structure from the user's real
+answers.
+
+Ask:
+
+```text
+What part of your life or work should WOM help with first?
+Which source materials should be handled first: PDFs, chats, screenshots, notes, videos, docs, or something else?
+Should this feel more like a private memory room, project workbench, research notebook, or evidence vault?
+What must stay out of Git?
+Do you want a tiny first test or a broader empty structure?
+```
+
+Then show the setup defaults before asking for confirmation:
+
+```text
+profile_slug:        username
+GitHub repo:         zettel-kasten-<profile_slug>              [enforced prefix/default]
+local archive root:  C:\Users\<user>\zettel-kasten-<profile_slug> [recommended default]
+local objet store:   C:\Users\<user>\zettel-kasten-<profile_slug>-objets [recommended default]
+object bucket:       zettel-kasten-<profile_slug>-objets      [deferred manual external step]
+SQLite:              local generated search/index DB          [generated local]
+Neon/Postgres:       remote coordination DB                    [deferred]
+R2/B2/S3:            remote object storage provider            [deferred manual external step]
+```
+
+The enforced GitHub rule is the `zettel-kasten-` prefix, and the default full
+name is `zettel-kasten-<profile_slug>`. Use `local objet store (raw source/original files)` the first time it appears.
+For a tiny first local test, GitHub, Neon/Postgres, and R2/B2/S3 can stay as
+dry-run plans or deferred manual steps.
+
 ## Flow 2: Onboard A New Archive
 
-Start with an onboarding dry-run. Think of it as letting the AI and CLI show the setup plan before anything is created.
+Start with an onboarding dry-run. Think of it as letting the AI and CLI show the setup plan before anything is created. For a first Windows personal archive, the recommended local root is `C:\Users\<user>\zettel-kasten-<profile_slug>`, and the matching local objet store for raw source/original files is `C:\Users\<user>\zettel-kasten-<profile_slug>-objets`.
 
 Docker:
 
@@ -266,17 +301,17 @@ Use profile resolution before assuming the current archive is the target. Then p
 ```powershell
 python wom-kit\cli\archive.py github-repo .\tmp-my-archive `
   --dry-run `
-  --profile-id profile:personal:HongGilDong `
-  --profile-slug HongGilDong `
+  --profile-id profile:personal:username `
+  --profile-slug username `
   --github-owner example-user `
-  --github-account-ref github:account:honggildong `
+  --github-account-ref github:account:username `
   --format json
 ```
 
 The default proposed repository name is:
 
 ```text
-zettel-kasten-HongGilDong
+zettel-kasten-username
 ```
 
 Dry-run writes nothing. Approved mode writes only local `provider-bindings.yml` metadata and a setup receipt:
@@ -285,10 +320,10 @@ Dry-run writes nothing. Approved mode writes only local `provider-bindings.yml` 
 python wom-kit\cli\archive.py github-repo .\tmp-my-archive `
   --approve `
   --reviewed-by person:me `
-  --profile-id profile:personal:HongGilDong `
-  --profile-slug HongGilDong `
+  --profile-id profile:personal:username `
+  --profile-slug username `
   --github-owner example-user `
-  --github-account-ref github:account:honggildong `
+  --github-account-ref github:account:username `
   --format json
 ```
 
@@ -302,16 +337,16 @@ Use profile resolution before assuming the current archive is the target. Then p
 python wom-kit\cli\archive.py object-storage .\tmp-my-archive `
   --dry-run `
   --provider cloudflare-r2 `
-  --profile-id profile:personal:HongGilDong `
-  --profile-slug HongGilDong `
-  --storage-account-ref storage:account:honggildong `
+  --profile-id profile:personal:username `
+  --profile-slug username `
+  --storage-account-ref storage:account:username `
   --format json
 ```
 
 The default proposed bucket/container name is:
 
 ```text
-zettel-kasten-honggildong-objets
+zettel-kasten-username-objets
 ```
 
 The default proposed prefix is:
@@ -327,9 +362,9 @@ python wom-kit\cli\archive.py object-storage .\tmp-my-archive `
   --approve `
   --reviewed-by person:me `
   --provider cloudflare-r2 `
-  --profile-id profile:personal:HongGilDong `
-  --profile-slug HongGilDong `
-  --storage-account-ref storage:account:honggildong `
+  --profile-id profile:personal:username `
+  --profile-slug username `
+  --storage-account-ref storage:account:username `
   --format json
 ```
 

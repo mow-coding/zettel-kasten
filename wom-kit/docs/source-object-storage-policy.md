@@ -73,6 +73,17 @@ Search text -> SQLite/search index
 Human conclusions -> minted zets
 ```
 
+For a first personal WOM setup, show the local folders explicitly:
+
+```text
+local archive root: C:\Users\<user>\zettel-kasten-<profile_slug>
+local objet store:  C:\Users\<user>\zettel-kasten-<profile_slug>-objets
+```
+
+The local archive root is the Git-friendly control plane. The local objet store
+is the raw source/original file store. Remote object storage such as R2, B2, or
+S3 is a deferred manual external step unless the user explicitly chooses it.
+
 In practical terms:
 
 - Git should store zets, schemas, manifests, receipts, and small public-safe examples.
@@ -232,9 +243,9 @@ WOM-kit v0.2.21 adds a dry-run-first setup planner for the technical object stor
 ```bash
 archive object-storage <archive-root> --dry-run \
   --provider cloudflare-r2 \
-  --profile-id profile:personal:HongGilDong \
-  --profile-slug HongGilDong \
-  --storage-account-ref storage:account:honggildong \
+  --profile-id profile:personal:username \
+  --profile-slug username \
+  --storage-account-ref storage:account:username \
   --format json
 ```
 

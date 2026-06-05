@@ -28,6 +28,42 @@ What safe actions are available?
 Are there blockers before I continue?
 ```
 
+## First-Run Personal WOM Onboarding
+
+When an AI runtime helps a beginner create the first personal WOM archive, it
+must start with a short archive-shaping conversation before it suggests folder
+creation, sample content, repository creation, source scanning, or minting.
+
+Ask:
+
+```text
+What part of your life or work should WOM help with first?
+Which source materials should be handled first?
+Should this feel more like a private memory room, project workbench, research notebook, or evidence vault?
+What must stay out of Git?
+Do you want a tiny first test or a broader empty structure?
+```
+
+Then show the canonical path before asking the user to decide:
+
+```text
+profile_slug:        username
+GitHub repo:         zettel-kasten-<profile_slug>              [enforced prefix/default]
+local archive root:  C:\Users\<user>\zettel-kasten-<profile_slug> [recommended default]
+local objet store:   C:\Users\<user>\zettel-kasten-<profile_slug>-objets [recommended default]
+object bucket:       zettel-kasten-<profile_slug>-objets      [deferred manual external step]
+SQLite:              local generated search/index DB          [generated local]
+Neon/Postgres:       remote coordination DB                    [deferred]
+R2/B2/S3:            remote object storage provider            [deferred manual external step]
+```
+
+The enforced GitHub rule is the `zettel-kasten-` prefix, and the default full
+name is `zettel-kasten-<profile_slug>`. The AI should call the second path
+`local objet store (raw source/original files)` on first mention. It should not provide free-form repo name examples,
+invent personal memories, create fake private content, upload source files,
+store provider secrets, or imply that Neon/Postgres or R2/B2/S3 is needed for a
+tiny first local test.
+
 ## Profile Registry Commands
 
 CLI:
