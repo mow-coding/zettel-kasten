@@ -24,6 +24,40 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## Current Safe Process And Upgrade Check
+
+Today, WOM-kit relies on release notes, backups, `archive doctor --strict`, and
+human review for real archive upgrades.
+
+The following read-only check is available:
+
+```text
+archive upgrade-check <archive-root> --dry-run --format json
+```
+
+It reports doctor, recovery-plan, restore-drill, and upgrade-readiness signals.
+It writes nothing, returns `would_change: []`, does not run migration commands,
+does not call providers, and is not a migration engine.
+The top-level `ok` means the check ran; use `upgrade_readiness.status`
+(`ready`, `warnings`, or `blocked`) to decide whether a real upgrade is blocked,
+needs more review, or is ready for manual review.
+
+Use a sandbox copy or backup before testing a real archive upgrade:
+
+1. Copy or back up the private archive control plane.
+2. Confirm the object manifests and local objet store are preserved.
+3. Read the target release note.
+4. Run `archive upgrade-check <archive-root> --dry-run --format json`.
+5. Run `archive doctor --strict`.
+6. Rebuild generated search with `archive index`.
+7. Run a small `archive search` smoke test.
+8. Apply any available migration dry-run before a real migration.
+9. Commit private archive changes only after reviewing outputs and receipts.
+
+For project-folder work, remember that temporary intake staging is not the
+archive of record. Preserve originals as objets, source maps, manifests, zets,
+and receipts before any cleanup.
+
 ## Public Versions
 
 | Version | Status | Upgrade note |

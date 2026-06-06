@@ -9541,6 +9541,9 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn(".archive-local/", gitignore)
             self.assertIn("*.kdbx", gitignore)
             self.assertIn("credentials.json", gitignore)
+            self.assertIn("/collab/", gitignore)
+            self.assertIn("/.mow-harness/", gitignore)
+            self.assertNotIn("/AGENTS.md", gitignore)
             self.assertIn("**/db/archive-index.sqlite", gitignore)
 
     def test_init_writes_archive_identity(self) -> None:
@@ -9654,6 +9657,11 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["doctor"]["warnings"], 0)
             self.assertTrue((archive_root / "archive.yml").is_file())
             self.assertTrue((archive_root / "provider-bindings.yml").is_file())
+            gitignore = (archive_root / ".gitignore").read_text(encoding="utf-8")
+            self.assertIn("profiles/local/", gitignore)
+            self.assertIn("/collab/", gitignore)
+            self.assertIn("/.mow-harness/", gitignore)
+            self.assertNotIn("/AGENTS.md", gitignore)
 
             provider_data = archive_cli.load_yaml((archive_root / "provider-bindings.yml").read_text(encoding="utf-8"))
             enabled = {
@@ -11170,6 +11178,225 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["dry_run"])
             self.assertFalse(target.exists())
             self.assertFalse((archive_root / "receipts" / "recovery").exists())
+
+    def test_project_intake_plan_dry_run_counts_only_and_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            staged = Path(tmp) / "archive-objets" / "intake" / "alpha-project"
+            staged.mkdir(parents=True)
+            (staged / "private-file-name.md").write_text("SUPER_SECRET_BODY", encoding="utf-8")
+            (staged / "client-private-folder-name").mkdir()
+            before_archive = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+            before_staged = sorted(path.relative_to(staged).as_posix() for path in staged.rglob("*"))
+
+            code, output = self.run_cli(
+                ["project-intake-plan", str(archive_root), "--staged-folder", str(staged), "--dry-run", "--format", "json"]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["action"], "archive_project_intake_plan")
+            self.assertEqual(result["would_change"], [])
+            self.assertTrue(result["follows_staging_convention"])
+            self.assertEqual(result["folder_summary"]["top_level_file_count"], 1)
+            self.assertEqual(result["folder_summary"]["top_level_dir_count"], 1)
+            self.assertEqual(result["folder_summary"]["top_level_other_count"], 0)
+            self.assertFalse(result["folder_summary"]["entry_names_included"])
+            self.assertFalse(result["folder_summary"]["file_bodies_read"])
+            self.assertFalse(result["folder_summary"]["content_hashes_calculated"])
+            self.assertFalse(result["folder_summary"]["extension_histogram_included"])
+            self.assertNotIn("extension_histogram", result["folder_summary"])
+            self.assertFalse(result["privacy_guards"]["recursive_scan"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            self.assertGreaterEqual(len(result["next_session_questions"]), 5)
+            self.assertTrue(any("1 top-level file" in item for item in result["next_session_questions"]))
+            self.assertTrue(any("temporary staged-folder cleanup" in item for item in result["next_session_questions"]))
+            self.assertNotIn("SUPER_SECRET_BODY", output)
+            self.assertNotIn("private-file-name.md", output)
+            self.assertNotIn("client-private-folder-name", output)
+            after_archive = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+            after_staged = sorted(path.relative_to(staged).as_posix() for path in staged.rglob("*"))
+            self.assertEqual(after_archive, before_archive)
+            self.assertEqual(after_staged, before_staged)
+
+    def test_project_intake_plan_requires_dry_run(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        staged = archive_root
+
+        code, output = self.run_cli(["project-intake-plan", str(archive_root), "--staged-folder", str(staged)])
+
+        self.assertEqual(code, 1)
+        self.assertIn("requires --dry-run", output)
+
+    def test_project_intake_plan_blocks_missing_archive_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            missing_archive = Path(tmp) / "missing-archive"
+            staged = Path(tmp) / "archive-objets" / "intake" / "alpha-project"
+            staged.mkdir(parents=True)
+
+            code, output = self.run_cli(
+                ["project-intake-plan", str(missing_archive), "--staged-folder", str(staged), "--dry-run"]
+            )
+
+            self.assertEqual(code, 1)
+            self.assertIn("Archive root does not exist or is not a directory", output)
+
+    def test_project_intake_plan_blocks_missing_staged_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            missing_staged = Path(tmp) / "archive-objets" / "intake" / "missing-project"
+
+            code, output = self.run_cli(
+                ["project-intake-plan", str(archive_root), "--staged-folder", str(missing_staged), "--dry-run"]
+            )
+
+            self.assertEqual(code, 1)
+            self.assertIn("Staged folder does not exist", output)
+
+    def test_project_intake_plan_blocks_non_directory_staged_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            staged_file = Path(tmp) / "not-a-folder.txt"
+            staged_file.write_text("not a folder", encoding="utf-8")
+
+            code, output = self.run_cli(
+                ["project-intake-plan", str(archive_root), "--staged-folder", str(staged_file), "--dry-run"]
+            )
+
+            self.assertEqual(code, 1)
+            self.assertIn("Staged folder is not a directory", output)
+
+    def test_project_intake_plan_reports_non_recommended_staging_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            staged = Path(tmp) / "desktop-copy"
+            staged.mkdir()
+
+            code, output = self.run_cli(
+                ["project-intake-plan", str(archive_root), "--staged-folder", str(staged), "--dry-run", "--format", "json"]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertFalse(result["follows_staging_convention"])
+            self.assertEqual(result["staging_convention"]["status"], "outside_recommended_shape")
+            self.assertTrue(result["warnings"])
+            self.assertTrue(any("restage" in action.lower() for action in result["next_safe_actions"]))
+
+    def test_upgrade_check_dry_run_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            code, output = self.run_cli(["upgrade-check", str(archive_root), "--dry-run", "--format", "json"])
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["action"], "archive_upgrade_check")
+            self.assertEqual(result["would_change"], [])
+            self.assertIn("upgrade_readiness", result)
+            self.assertIn("migration_honesty", result)
+            self.assertFalse(result["migration_honesty"]["guarantees_safe_upgrade"])
+            self.assertFalse(result["upgrade_policy"]["real_archive_rewrite"])
+            self.assertFalse(result["upgrade_policy"]["provider_calls"])
+            self.assertFalse(result["upgrade_policy"]["object_store_operations"])
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+            self.assertEqual(after, before)
+
+    def test_upgrade_check_requires_dry_run(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+
+        code, output = self.run_cli(["upgrade-check", str(archive_root)])
+
+        self.assertEqual(code, 1)
+        self.assertIn("requires --dry-run", output)
+
+    def test_upgrade_check_reports_restore_drill_gap_as_warning_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+
+            code, output = self.run_cli(["upgrade-check", str(archive_root), "--dry-run", "--format", "json"])
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertIsNone(result["restore_drill"]["latest_successful"])
+            self.assertFalse(result["restore_drill"]["recency"]["has_successful_receipt"])
+            self.assertFalse(result["restore_drill"]["recency"]["has_recent_drill"])
+            self.assertIn("no successful restore-drill", result["restore_drill"]["recency"]["latest_receipt_note"])
+            self.assertEqual(result["upgrade_readiness"]["status"], "warnings")
+            self.assertFalse(result["upgrade_readiness"]["ready_for_manual_upgrade_review"])
+            self.assertTrue(any(item["code"] == "restore_drill_recommended" for item in result["findings"]))
+            self.assertIn("would_change", result)
+
+    def test_upgrade_check_require_restore_drill_blocks_missing_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+
+            code, output = self.run_cli(
+                ["upgrade-check", str(archive_root), "--dry-run", "--require-restore-drill", "--format", "json"]
+            )
+
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["restore_drill"]["required"])
+            self.assertEqual(result["upgrade_readiness"]["status"], "blocked")
+            self.assertFalse(result["upgrade_readiness"]["ready_for_manual_upgrade_review"])
+            self.assertTrue(
+                any(
+                    item["code"] == "restore_drill_required"
+                    and "real upgrade readiness review" in item["message"]
+                    for item in result["findings"]
+                )
+            )
+            self.assertEqual(result["would_change"], [])
+
+    def test_upgrade_check_reports_ready_after_restore_drill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            target = Path(tmp) / "restore-copy"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            restore_code, restore_output = self.run_cli(
+                [
+                    "restore-drill",
+                    str(archive_root),
+                    "--target",
+                    str(target),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(restore_code, 0, restore_output)
+
+            code, output = self.run_cli(
+                ["upgrade-check", str(archive_root), "--dry-run", "--require-restore-drill", "--format", "json"]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertIsNotNone(result["restore_drill"]["latest_successful"])
+            self.assertTrue(result["restore_drill"]["recency"]["has_successful_receipt"])
+            self.assertTrue(result["restore_drill"]["recency"]["has_recent_drill"])
+            self.assertEqual(result["upgrade_readiness"]["status"], "ready")
+            self.assertTrue(result["upgrade_readiness"]["ready_for_manual_upgrade_review"])
+            self.assertEqual(result["warnings"], [])
+            self.assertEqual(result["would_change"], [])
 
     def test_restore_drill_approve_copies_valid_archive_and_unblocks_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

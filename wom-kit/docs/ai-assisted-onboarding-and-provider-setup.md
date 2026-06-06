@@ -179,6 +179,8 @@ profile_slug:        username
 GitHub repo:         zettel-kasten-<profile_slug>              [enforced prefix/default]
 local archive root:  C:\Users\<user>\zettel-kasten-<profile_slug> [recommended default]
 local objet store:   C:\Users\<user>\zettel-kasten-<profile_slug>-objets [recommended default]
+project intake staging:
+                    C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug> [temporary per project session]
 object bucket:       zettel-kasten-<profile_slug>-objets      [deferred manual external step]
 SQLite:              local generated search/index DB          [generated local]
 Neon/Postgres:       remote coordination DB                    [deferred]
@@ -193,6 +195,11 @@ canonical default before any manual GitHub step.
 stores zets, source maps, manifests, specs, and receipts. It should not be
 presented as the default place for private raw documents, videos, photos, or
 large binary originals.
+
+`project intake staging` means a temporary one-project-folder working area for a
+future [project intake session](project-intake-session.md). It is not the
+archive of record. The durable records are objets, manifests, source maps,
+drafts, minted zets, and receipts.
 
 Do now:
 
@@ -210,6 +217,23 @@ Defer:
 - upload/sync,
 - source import,
 - minting.
+
+### Optional MOW Harness Layer
+
+MOW should work without MOW Harness.
+
+For complex or high-risk sessions, the user may choose to run MOW Harness as an
+optional coordination layer for Codex + Claude style work:
+
+```text
+https://github.com/mow-coding/mow-harness
+```
+
+Use it for sealed steps, mailbox coordination, brakes, status, and review
+discipline. Do not treat local harness folders such as `collab/` or
+`.mow-harness/` as the archive of record. If a harness discussion creates
+durable insight, summarize or mint that insight deliberately through normal WOM
+records.
 
 ### Stage 1: Local Environment Check
 
@@ -306,6 +330,11 @@ external_web
 ```
 
 Each source world should first be registered, then scanned in metadata-first dry-run mode.
+
+For an existing project folder, prefer a
+[project intake session](project-intake-session.md): put one folder in the
+temporary intake staging path, inspect it with the user, and only then decide
+which items become objets, source map entries, drafts, or minted zets.
 
 ### Stage 6: Provider Connections
 

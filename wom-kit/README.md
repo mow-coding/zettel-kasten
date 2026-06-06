@@ -85,6 +85,7 @@ docs/phase-2-quickstart.md
 docs/security-hardening.md
 docs/security-audit-2026-05-21.md
 docs/new-user-flow.md
+docs/project-intake-session.md
 docs/source-maps.md
 docs/platform-support.md
 docs/server-blueprint.md
@@ -133,6 +134,9 @@ object-storage
 
 source-intake
   Classify one source/objet locator before draft creation. Dry-run only; returns safe source refs without reading bodies, hashing, copying, uploading, importing, OCR, transcription, extraction, or provider API calls.
+
+project-intake-plan
+  Plan one staged project folder intake session. Dry-run only; reports top-level counts, next session questions, staging-convention status, and would_change: [] without reading file bodies, exposing child names, hashing, copying, uploading, drafting, minting, or deleting.
 
 block-header
   Preview a derived block header for one draft or canonical zet. Dry-run only; reads the zet file, derives refs/hashes/provenance/policy/receipt metadata, and writes nothing.
@@ -422,6 +426,8 @@ This file is a rebuildable map, not the archive itself. The durable archive stil
 `archive mint-zet --dry-run` checks the minting gate using `minting_rules` in `zettel-kasten/zettel-rules.yml`, with legacy `promotion_rules` as a v0.2 fallback. It reports blockers, warnings, missing human-review items, near duplicates, the proposed canonical path, the proposed mint receipt path, and the proposed draft snapshot path. It writes nothing. `archive mint-zettel` remains a v0.2 compatibility alias.
 
 `archive source-intake --dry-run` is the safe classification step before drafting from a source/objet. It accepts exactly one locator, returns `source_refs_for_draft`, reports object storage context, and writes nothing. It does not read file bodies, hash, copy, upload, import, OCR, transcribe, extract, call provider APIs, create drafts, or mint.
+
+`archive project-intake-plan --dry-run` is the safe planning step before a user and AI inspect one staged project folder together. It reports only top-level counts, staging-convention status, concrete next-session questions, and `would_change: []`. It does not expose child names, read file bodies, recurse through the folder, hash, copy, upload, import, create drafts, mint, or delete the staged folder.
 
 `archive create-draft --source-intake-plan <json-file>` consumes a successful source-intake dry-run JSON file, validates that it is metadata-only and blocker-free, then merges safe `source_refs_for_draft` into draft `source_refs`. The plan file path is not stored in frontmatter, and WOM-kit does not follow local paths inside the plan.
 

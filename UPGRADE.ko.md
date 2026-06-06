@@ -24,6 +24,42 @@ MAJOR upgrade -> protocol/schema breaking change
 
 아카이브는 사용자의 기억입니다. 조용히 몰래 다시 쓰면 안 됩니다.
 
+## 현재 안전 절차와 upgrade-check
+
+현재 WOM-kit은 실제 archive 업그레이드에서 release note, backup,
+`archive doctor --strict`, human review를 기준으로 삼습니다.
+
+아래 read-only 점검 명령을 사용할 수 있습니다.
+
+```text
+archive upgrade-check <archive-root> --dry-run --format json
+```
+
+이 명령은 doctor, recovery-plan, restore-drill, upgrade readiness 신호를
+보고합니다. 파일을 쓰지 않고 `would_change: []`를 반환하며, migration
+command를 실행하지 않고, provider를 호출하지 않으며, migration engine도
+아닙니다.
+top-level `ok`는 점검이 실행됐다는 뜻입니다. 실제 upgrade가 막혔는지,
+검토가 더 필요한지, manual review 단계로 넘어갈 수 있는지는
+`upgrade_readiness.status`(`ready`, `warnings`, `blocked`)를 확인합니다.
+
+실제 archive를 바로 바꾸지 말고 sandbox copy 또는 backup으로 먼저
+확인합니다.
+
+1. private archive control plane을 복사하거나 백업합니다.
+2. object manifest와 local objet store가 보존되어 있는지 확인합니다.
+3. 대상 release note를 읽습니다.
+4. `archive upgrade-check <archive-root> --dry-run --format json`을 실행합니다.
+5. `archive doctor --strict`를 실행합니다.
+6. `archive index`로 generated search를 다시 만듭니다.
+7. 작은 `archive search` smoke test를 실행합니다.
+8. migration dry-run이 있다면 실제 migration 전에 먼저 실행합니다.
+9. 출력과 receipt를 검토한 뒤에만 private archive 변경을 commit합니다.
+
+project folder 작업에서는 temporary intake staging이 archive of record가
+아니라는 점을 기억합니다. cleanup 전에 원본을 objet, source map, manifest,
+zet, receipt로 보존해야 합니다.
+
 ## 공개 버전
 
 | Version | Status | Upgrade note |

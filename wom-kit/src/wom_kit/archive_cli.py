@@ -19,6 +19,8 @@ Commands:
           Plan object storage metadata for WOM objets.
   source-intake
           Plan safe source/objet refs before draft creation.
+  project-intake-plan
+          Plan one staged project folder intake session without writing files.
   block-header
           Preview the derived block header for one draft or canonical zet.
   projection-plan
@@ -97,6 +99,8 @@ Commands:
           Show host-native and Docker mount guidance for registered sources.
   recovery-plan
           Show backup/restore readiness without writing files.
+  upgrade-check
+          Check upgrade readiness without writing files.
   restore-drill
           Plan or run a local restore drill before real data pilot.
   pilot-plan
@@ -3258,6 +3262,97 @@ def command_recovery_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_upgrade_check(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("Upgrade check is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        archive_root = Path(args.archive_root)
+        diagnostics = [item.as_dict() for item in Doctor(archive_root).run()]
+        result = archive_services.upgrade_check(
+            archive_root,
+            diagnostics=diagnostics,
+            require_restore_drill=args.require_restore_drill,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_upgrade_check_result(result, args.format)
+    return 0 if result["upgrade_readiness"]["status"] != "blocked" else 1
+
+
+def print_upgrade_check_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    state = result["upgrade_readiness"]["status"]
+    print(f"Upgrade check dry-run {state}.")
+    print(f"Archive: {result['archive_id']}")
+    print(f"Doctor: {result['doctor']['errors']} error(s), {result['doctor']['warnings']} warning(s)")
+    latest_restore = result["restore_drill"]["latest_successful"]
+    if latest_restore:
+        print(f"Latest restore drill: {latest_restore['receipt_path']}")
+    else:
+        print("Latest restore drill: none")
+    print("Safety model: read-only advisor; no migration engine, provider calls, or object-store operations.")
+    print(f"Ready for manual upgrade review: {str(result['upgrade_readiness']['ready_for_manual_upgrade_review']).lower()}")
+    if result["blockers"]:
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result["warnings"]:
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    print("Next safe actions:")
+    for action in result["next_safe_actions"]:
+        print(f"- {action}")
+
+
+def command_project_intake_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("Project intake planning is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.project_intake_plan(Path(args.archive_root), Path(args.staged_folder))
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_project_intake_plan_result(result, args.format)
+    return 0
+
+
+def print_project_intake_plan_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    summary = result["folder_summary"]
+    print("Project intake plan dry-run ready.")
+    print(f"Archive: {result['archive_id']}")
+    print(f"Staged folder: {result['staged_folder']}")
+    print(
+        "Top-level summary: "
+        f"{summary['top_level_file_count']} file(s), "
+        f"{summary['top_level_dir_count']} folder(s), "
+        f"{summary['top_level_other_count']} other item(s)."
+    )
+    convention = "yes" if result["follows_staging_convention"] else "no"
+    print(f"Follows staging convention: {convention}")
+    print("Writes: none (would_change: [])")
+    if result["warnings"]:
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    print("Next session questions:")
+    for question in result["next_session_questions"]:
+        print(f"- {question}")
+    print("Next safe actions:")
+    for action in result["next_safe_actions"]:
+        print(f"- {action}")
+
+
 def command_restore_drill(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -3852,6 +3947,10 @@ def write_safe_gitignore(target: Path) -> None:
                 "credentials.json",
                 "token.json",
                 "tmp/",
+                "",
+                "# Local-only collaboration and harness state",
+                "/collab/",
+                "/.mow-harness/",
                 "",
                 "# Generated archive search indexes",
                 "**/db/archive-index.sqlite",
@@ -5076,10 +5175,27 @@ def build_parser() -> argparse.ArgumentParser:
     source_mounts.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     source_mounts.set_defaults(func=command_source_mounts)
 
+    project_intake_plan = subcommands.add_parser(
+        "project-intake-plan",
+        help="Plan one staged project folder intake session without writing files.",
+    )
+    project_intake_plan.add_argument("archive_root", help="Archive root to inspect.")
+    project_intake_plan.add_argument("--staged-folder", required=True, help="One staged project folder to plan.")
+    project_intake_plan.add_argument("--dry-run", action="store_true", help="Required; plan without writing files.")
+    project_intake_plan.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    project_intake_plan.set_defaults(func=command_project_intake_plan)
+
     recovery_plan = subcommands.add_parser("recovery-plan", help="Show local backup and restore readiness without writing files.")
     recovery_plan.add_argument("archive_root", help="Archive root to inspect.")
     recovery_plan.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     recovery_plan.set_defaults(func=command_recovery_plan)
+
+    upgrade_check = subcommands.add_parser("upgrade-check", help="Check upgrade readiness without writing files.")
+    upgrade_check.add_argument("archive_root", help="Archive root to inspect.")
+    upgrade_check.add_argument("--dry-run", action="store_true", help="Required; report readiness without writing files.")
+    upgrade_check.add_argument("--require-restore-drill", action="store_true", help="Block if no successful restore drill receipt is present.")
+    upgrade_check.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    upgrade_check.set_defaults(func=command_upgrade_check)
 
     restore_drill = subcommands.add_parser("restore-drill", help="Plan or run a local restore drill for the archive control plane.")
     restore_drill.add_argument("archive_root", help="Archive root to copy from.")

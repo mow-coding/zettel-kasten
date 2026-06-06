@@ -15491,6 +15491,292 @@ def recovery_plan(archive_root: Path | str) -> dict[str, Any]:
     }
 
 
+def upgrade_check(
+    archive_root: Path | str,
+    *,
+    diagnostics: list[dict[str, Any]] | None = None,
+    require_restore_drill: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    recovery = recovery_plan(root)
+    preflight = preflight_check(
+        root,
+        diagnostics=diagnostics,
+        require_restore_drill=require_restore_drill,
+    )
+    latest_restore = preflight["restore_drill"]["latest_successful"]
+    findings = list(preflight["findings"])
+    warnings = list(preflight["warnings"])
+    blockers = list(preflight["blockers"])
+
+    upgrade_restore_required_message = "A successful restore-drill receipt is required before a real upgrade readiness review."
+    for finding in findings:
+        if finding.get("code") == "restore_drill_required":
+            original = str(finding.get("message") or "")
+            finding["message"] = upgrade_restore_required_message
+            blockers = [upgrade_restore_required_message if item == original else item for item in blockers]
+
+    if latest_restore is None and not require_restore_drill:
+        message = "No successful restore-drill receipt found; run one on a sandbox copy before a real upgrade."
+        findings.append(
+            {
+                "severity": "WARN",
+                "code": "restore_drill_recommended",
+                "message": message,
+                "path": RESTORE_DRILL_RECEIPTS_DIR,
+            }
+        )
+        warnings.append(message)
+
+    upgrade_policy = {
+        "read_only": True,
+        "migration_engine": "not_implemented",
+        "release_note_review_required": True,
+        "sandbox_copy_required_before_real_upgrade": True,
+        "real_archive_rewrite": False,
+        "provider_calls": False,
+        "object_store_operations": False,
+        "recommended_windows_sandbox": r"C:\Users\<user>\zettel-kasten-upgrade-sandbox",
+    }
+    next_safe_actions = [
+        "Read the target release note in wom-kit/docs/releases/.",
+        "Run archive doctor --strict on the archive or sandbox copy.",
+        "Use archive restore-drill --dry-run against a disposable sandbox target before any real upgrade.",
+        "Run migration commands in dry-run mode first when available.",
+        "Commit private archive changes only after reviewing generated outputs and receipts.",
+    ]
+    if latest_restore is None:
+        next_safe_actions.insert(2, "Create or verify a sandbox copy before approving any restore-drill receipt.")
+
+    readiness_status = "ready"
+    if blockers:
+        readiness_status = "blocked"
+    elif warnings:
+        readiness_status = "warnings"
+    restore_drill_recency = {
+        "has_successful_receipt": latest_restore is not None,
+        "has_recent_drill": latest_restore is not None,
+        "receipt_path": latest_restore.get("receipt_path") if latest_restore else None,
+        "reviewed_at": latest_restore.get("reviewed_at") if latest_restore else None,
+        "target_root": latest_restore.get("target_root") if latest_restore else None,
+        "status": latest_restore.get("status") if latest_restore else None,
+        "latest_receipt_note": (
+            f"latest successful restore drill receipt: {latest_restore.get('receipt_path')}"
+            if latest_restore
+            else "no successful restore-drill receipt found"
+        ),
+    }
+    migration_honesty = {
+        "migration_engine_available": False,
+        "migration_commands_run": False,
+        "provider_calls": False,
+        "object_store_operations": False,
+        "guarantees_safe_upgrade": False,
+        "summary": "upgrade-check reports readiness signals only; it does not perform or guarantee migration safety.",
+    }
+    return {
+        "ok": True,
+        "dry_run": True,
+        "action": "archive_upgrade_check",
+        "archive_root": str(root),
+        "archive_id": archive_id,
+        "doctor": preflight["doctor"],
+        "restore_drill": {
+            "required": require_restore_drill,
+            "latest_successful": latest_restore,
+            "recency": restore_drill_recency,
+        },
+        "recovery_plan": {
+            "action": recovery["action"],
+            "local_only": recovery["local_only"],
+            "external_api_called": recovery["external_api_called"],
+            "secret_values_required": recovery["secret_values_required"],
+            "control_plane_units": recovery["control_plane_units"],
+            "excluded_from_restore_copy": recovery["excluded_from_restore_copy"],
+            "does_not_copy": recovery["does_not_copy"],
+            "source_summary": recovery["source_summary"],
+            "provider_summary": recovery["provider_summary"],
+        },
+        "upgrade_policy": upgrade_policy,
+        "migration_honesty": migration_honesty,
+        "upgrade_readiness": {
+            "status": readiness_status,
+            "ready_for_manual_upgrade_review": readiness_status == "ready",
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+        },
+        "findings": findings,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "next_safe_actions": unique_preserve_order(next_safe_actions),
+        "would_change": [],
+    }
+
+
+def project_intake_plan(archive_root: Path | str, staged_folder: Path | str) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    staged = Path(staged_folder).expanduser().resolve()
+    if not staged.exists():
+        raise ArchiveServiceError(f"Staged folder does not exist: {staged}")
+    if not staged.is_dir():
+        raise ArchiveServiceError(f"Staged folder is not a directory: {staged}")
+
+    folder_summary = summarize_project_intake_folder(staged)
+    staging_convention = project_intake_staging_convention(root, staged)
+    warnings: list[str] = []
+    if not staging_convention["follows_staging_convention"]:
+        warnings.append(
+            "Staged folder is outside the recommended local objet intake shape: "
+            r"C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug>."
+        )
+
+    return {
+        "ok": True,
+        "dry_run": True,
+        "action": "archive_project_intake_plan",
+        "archive_root": str(root),
+        "archive_id": archive_id,
+        "staged_folder": str(staged),
+        "follows_staging_convention": staging_convention["follows_staging_convention"],
+        "staging_convention": staging_convention,
+        "folder_summary": folder_summary,
+        "privacy_guards": {
+            "top_level_only": True,
+            "recursive_scan": False,
+            "entry_names_included": False,
+            "file_bodies_read": False,
+            "content_hashes_calculated": False,
+            "extension_histogram_included": False,
+            "provider_calls": False,
+            "writes": False,
+        },
+        "session_plan": project_intake_session_plan(),
+        "next_session_questions": project_intake_next_session_questions(folder_summary, staging_convention),
+        "next_safe_actions": project_intake_next_safe_actions(staging_convention),
+        "blockers": [],
+        "warnings": warnings,
+        "would_change": [],
+    }
+
+
+def summarize_project_intake_folder(staged_folder: Path) -> dict[str, Any]:
+    files = 0
+    dirs = 0
+    other = 0
+    for child in staged_folder.iterdir():
+        if child.is_symlink():
+            other += 1
+        elif child.is_file():
+            files += 1
+        elif child.is_dir():
+            dirs += 1
+        else:
+            other += 1
+
+    return {
+        "exists": True,
+        "is_dir": True,
+        "top_level_file_count": files,
+        "top_level_dir_count": dirs,
+        "top_level_other_count": other,
+        "top_level_entry_count": files + dirs + other,
+        "recursive_scan": False,
+        "entry_names_included": False,
+        "file_bodies_read": False,
+        "content_hashes_calculated": False,
+        "extension_histogram_included": False,
+    }
+
+
+def project_intake_staging_convention(archive_root: Path, staged_folder: Path) -> dict[str, Any]:
+    expected_intake_root = (archive_root.parent / f"{archive_root.name}-objets" / "intake").resolve()
+    follows = staged_folder.parent == expected_intake_root and staged_folder.name != "intake"
+    status = "matches_recommended_shape" if follows else "outside_recommended_shape"
+    return {
+        "follows_staging_convention": follows,
+        "status": status,
+        "recommended_shape": r"C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug>",
+        "recommended_objet_store_suffix": "-objets",
+        "recommended_intake_folder_name": "intake",
+        "requires_one_project_folder": True,
+    }
+
+
+def project_intake_session_plan() -> list[dict[str, Any]]:
+    return [
+        {
+            "step": "confirm_single_project_scope",
+            "goal": "Confirm this staged folder is exactly one project for one intake session.",
+            "writes": False,
+        },
+        {
+            "step": "classify_top_level_groups",
+            "goal": "Discuss which visible groups are originals, notes, generated outputs, or noise before any capture.",
+            "writes": False,
+        },
+        {
+            "step": "choose_preservation_targets",
+            "goal": "Select originals that should later be preserved as objets, with private or sensitive items flagged first.",
+            "writes": False,
+        },
+        {
+            "step": "draft_zets_gradually",
+            "goal": "Create zets gradually from reviewed sources instead of bulk-minting the whole folder.",
+            "writes": False,
+        },
+        {
+            "step": "verify_before_cleanup",
+            "goal": "Delete the temporary staged folder only after objets, zets, provenance, receipts, and doctor checks pass.",
+            "writes": False,
+        },
+    ]
+
+
+def project_intake_next_session_questions(
+    folder_summary: dict[str, Any],
+    staging_convention: dict[str, Any],
+) -> list[str]:
+    count_sentence = (
+        f"This staged folder has {folder_summary['top_level_file_count']} top-level file(s), "
+        f"{folder_summary['top_level_dir_count']} top-level folder(s), "
+        f"and {folder_summary['top_level_other_count']} other top-level item(s)."
+    )
+    if staging_convention["follows_staging_convention"]:
+        convention_sentence = "It appears to follow the recommended local objet intake staging shape."
+    else:
+        convention_sentence = "It does not appear to follow the recommended local objet intake staging shape."
+
+    return [
+        "Confirm the scope: is this one staged folder the single project you want to intake in this session?",
+        (
+            f"{count_sentence} Which groups should be treated as originals to preserve as objets, "
+            "working notes to draft from, generated outputs, or noise?"
+        ),
+        f"{convention_sentence} Should we keep this staging location for the session, or restage it before capture work?",
+        "Which originals must be preserved as objets before any zet is drafted from them?",
+        "Which private or sensitive areas need redaction, deferral, or explicit review before they appear in any zet?",
+        "What evidence should exist before temporary staged-folder cleanup can be approved later?",
+    ]
+
+
+def project_intake_next_safe_actions(staging_convention: dict[str, Any]) -> list[str]:
+    actions = [
+        "Review this dry-run plan with the user before running source-intake, create-draft, scan-source, or mint-zet.",
+        "Run archive doctor --strict before approving any later write step.",
+        "Inspect one project folder with the user; do not bulk-classify, bulk-upload, bulk-mint, or delete the staged folder.",
+        "Preserve originals as objets only after explicit review and approval in a later capability.",
+        "Keep staged-folder cleanup as the final verified step, not part of this planner.",
+    ]
+    if not staging_convention["follows_staging_convention"]:
+        actions.insert(
+            1,
+            r"Restage the folder under C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug> before capture if you want the recommended path.",
+        )
+    return actions
+
+
 def restore_drill_dry_run(archive_root: Path | str, target: Path | str) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     target_path = Path(target).expanduser().resolve()

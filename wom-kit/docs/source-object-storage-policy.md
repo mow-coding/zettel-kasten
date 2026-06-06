@@ -78,11 +78,17 @@ For a first personal WOM setup, show the local folders explicitly:
 ```text
 local archive root: C:\Users\<user>\zettel-kasten-<profile_slug>
 local objet store:  C:\Users\<user>\zettel-kasten-<profile_slug>-objets
+project intake staging:
+                    C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug>
 ```
 
 The local archive root is the Git-friendly control plane. The local objet store
 is the raw source/original file store. Remote object storage such as R2, B2, or
 S3 is a deferred manual external step unless the user explicitly chooses it.
+
+The project intake staging folder is temporary. Use it for one
+[project intake session](project-intake-session.md) at a time. It is not the
+archive of record.
 
 In practical terms:
 
@@ -91,6 +97,9 @@ In practical terms:
 - Derived OCR/transcription/extraction text should be stored with provenance and review status.
 - SQLite/search indexes may store extracted text for search, but indexes are rebuildable.
 - zets should cite original objets through `object_id`, not by embedding the file itself.
+- A staged project folder may be removed only after preservation, manifests or
+  source maps, zets or explicit deferrals, receipts, and `archive doctor
+  --strict` have been reviewed.
 
 ## 4. File-Type Guidance
 
