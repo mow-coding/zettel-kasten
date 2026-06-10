@@ -12,6 +12,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import stat
 import unicodedata
 from datetime import date, datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -18705,6 +18706,8 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
     object_count = 0
     view_count = 0
     source_map_count = 0
+    edge_count = 0
+    facet_count = 0
     conn = sqlite3.connect(db_path)
     try:
         conn.executescript(
@@ -18740,10 +18743,25 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
               scan_status TEXT,
               source_json TEXT
             );
+            CREATE TABLE IF NOT EXISTS edges (
+              from_id TEXT,
+              to_id TEXT,
+              edge_type TEXT
+            );
+            CREATE INDEX IF NOT EXISTS edges_from ON edges(from_id);
+            CREATE INDEX IF NOT EXISTS edges_to ON edges(to_id);
+            CREATE TABLE IF NOT EXISTS zettel_facets (
+              zettel_id TEXT,
+              facet_key TEXT,
+              facet_value TEXT
+            );
+            CREATE INDEX IF NOT EXISTS facets_key_value ON zettel_facets(facet_key, facet_value);
             DELETE FROM zettels;
             DELETE FROM objects;
             DELETE FROM views;
             DELETE FROM source_map_entries;
+            DELETE FROM edges;
+            DELETE FROM zettel_facets;
             """
         )
 
@@ -18771,6 +18789,27 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
                 ),
             )
             zettel_count += 1
+            # Edges and facets are content: a redacted zettel's outgoing references and
+            # facet values are suppressed like its body. (Inbound edges TO a redacted
+            # zettel are filtered at query time.)
+            if not redacted:
+                from_id = str(frontmatter.get("id") or "")
+                if from_id:
+                    for ref in collect_referenced_zets(frontmatter):
+                        conn.execute(
+                            "INSERT INTO edges(from_id, to_id, edge_type) VALUES (?, ?, ?)",
+                            (from_id, ref["id"], ref.get("edge_type")),
+                        )
+                        edge_count += 1
+                    facets = frontmatter.get("facets")
+                    if isinstance(facets, dict):
+                        for facet_key, facet_value in facets.items():
+                            if isinstance(facet_value, (str, int, float, bool)):
+                                conn.execute(
+                                    "INSERT INTO zettel_facets(zettel_id, facet_key, facet_value) VALUES (?, ?, ?)",
+                                    (from_id, str(facet_key), str(facet_value)),
+                                )
+                                facet_count += 1
 
         manifest_path = root / "objects" / "manifests" / "files.jsonl"
         if manifest_path.is_file():
@@ -18859,7 +18898,214 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
         "objects": object_count,
         "views": view_count,
         "source_map_entries": source_map_count,
+        "edges": edge_count,
+        "facets": facet_count,
     }
+
+
+def view_zets(
+    archive_root: Path | str,
+    *,
+    view_id: str | None = None,
+    facets: dict[str, str] | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Execute a saved view's facet filters (or ad-hoc facet filters) against the index.
+
+    This makes the filters already written in views/*.yml actually run. Filters are
+    ANDed; only `facets.<key>` filters are supported — any other filter key is a
+    blocker rather than being silently ignored (a silently-ignored filter would return
+    a BROADER set than the view declared). Redacted zettels are never returned.
+    """
+    root = require_existing_archive_root(archive_root)
+    if bool(view_id) == bool(facets):
+        raise ArchiveServiceError("Provide exactly one of view_id or facets.")
+    db_path = root / INDEX_RELATIVE_PATH
+    if not db_path.is_file():
+        raise ArchiveServiceError("Archive index is missing. Run archive index first.")
+    limit = max(1, min(int(limit), 500))
+    blockers: list[str] = []
+    resolved_name: str | None = None
+
+    wanted: dict[str, str] = {}
+    if facets:
+        wanted = {str(key): str(value) for key, value in facets.items()}
+    else:
+        view_filters: dict[str, Any] | None = None
+        views_root = root / "views"
+        if views_root.is_dir():
+            for view_path in safe_archive_glob(views_root, "*.yml", root):
+                try:
+                    doc = load_yaml(view_path.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                if not isinstance(doc, dict):
+                    continue
+                candidates = [doc] + [item for item in doc.get("saved_views") or [] if isinstance(item, dict)]
+                for candidate in candidates:
+                    if str(candidate.get("id") or "") == view_id:
+                        raw_filters = candidate.get("filters")
+                        view_filters = raw_filters if isinstance(raw_filters, dict) else {}
+                        resolved_name = str(candidate.get("name") or "") or None
+                        break
+                if view_filters is not None:
+                    break
+        if view_filters is None:
+            raise ArchiveServiceError(f"View not found: {view_id}")
+        for raw_key, raw_value in view_filters.items():
+            key = str(raw_key)
+            if not key.startswith("facets."):
+                blockers.append(f"view filter key not supported: {key}")
+                continue
+            wanted[key.split(".", 1)[1]] = str(raw_value)
+
+    if blockers:
+        return {
+            "ok": False,
+            "view_id": view_id,
+            "view_name": resolved_name,
+            "filters": wanted,
+            "count": 0,
+            "zettels": [],
+            "blockers": blockers,
+            "warnings": [],
+        }
+
+    sql = [
+        "SELECT zettel_id, title, status, kind, path FROM zettels",
+        "WHERE zettel_id IS NOT NULL AND coalesce(status, '') != 'redacted'",
+    ]
+    params: list[Any] = []
+    for key, value in wanted.items():
+        sql.append(
+            "AND EXISTS (SELECT 1 FROM zettel_facets f WHERE f.zettel_id = zettels.zettel_id"
+            " AND f.facet_key = ? AND f.facet_value = ?)"
+        )
+        params.extend([key, value])
+    sql.append("ORDER BY path LIMIT ?")
+    params.append(limit)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(" ".join(sql), params).fetchall()
+    finally:
+        conn.close()
+    zettels = [
+        {
+            "id": row["zettel_id"],
+            "title": row["title"],
+            "status": row["status"],
+            "kind": row["kind"],
+            "path": row["path"],
+        }
+        for row in rows
+    ]
+    return {
+        "ok": True,
+        "view_id": view_id,
+        "view_name": resolved_name,
+        "filters": wanted,
+        "count": len(zettels),
+        "zettels": zettels,
+        "blockers": [],
+        "warnings": [],
+    }
+
+
+def get_related_zets(
+    archive_root: Path | str,
+    zettel_id: str,
+    *,
+    depth: int = 1,
+    edge_types: list[str] | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Bidirectional related-zet retrieval over the indexed typed edges.
+
+    Backlinks are the point: "what supersedes / derives-from / references THIS zet" is
+    answered by the reverse direction, which raw frontmatter (forward refs only) cannot do.
+    Redaction floor: a redacted zettel is never returned as a neighbor, and its outgoing
+    edges were never indexed.
+    """
+    root = require_existing_archive_root(archive_root)
+    zettel_id = str(zettel_id or "").strip()
+    if not zettel_id.startswith("zet_"):
+        raise ArchiveServiceError("zettel_id must be a zet_ id.")
+    db_path = root / INDEX_RELATIVE_PATH
+    if not db_path.is_file():
+        raise ArchiveServiceError("Archive index is missing. Run archive index first.")
+    depth = max(1, min(int(depth), 3))
+    limit = max(1, min(int(limit), 500))
+    wanted_types = {str(value) for value in edge_types} if edge_types else None
+
+    related: list[dict[str, Any]] = []
+    visited: set[str] = {zettel_id}
+    frontier: set[str] = {zettel_id}
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        # Parity with read_zettel/block_header_preview: a redacted zettel is not a valid
+        # query subject; return an empty related set rather than exposing its neighborhood.
+        subject = conn.execute(
+            "SELECT status FROM zettels WHERE zettel_id = ?", (zettel_id,)
+        ).fetchone()
+        if subject is not None and (subject["status"] or "") == "redacted":
+            return {"zettel_id": zettel_id, "depth": depth, "count": 0, "related": [], "truncated": False}
+        for hop in range(1, depth + 1):
+            next_frontier: set[str] = set()
+            for current in sorted(frontier):
+                rows = conn.execute(
+                    """
+                    SELECT to_id AS other, edge_type, 'out' AS direction FROM edges WHERE from_id = ?
+                    UNION ALL
+                    SELECT from_id AS other, edge_type, 'in' AS direction FROM edges WHERE to_id = ?
+                    ORDER BY other, direction
+                    """,
+                    (current, current),
+                ).fetchall()
+                for row in rows:
+                    other = str(row["other"] or "")
+                    if not other or other in visited:
+                        continue
+                    if wanted_types is not None and (row["edge_type"] or "") not in wanted_types:
+                        continue
+                    zettel_row = conn.execute(
+                        "SELECT title, status, kind, path FROM zettels WHERE zettel_id = ?",
+                        (other,),
+                    ).fetchone()
+                    if zettel_row is not None and (zettel_row["status"] or "") == "redacted":
+                        # Privacy floor: traversal must never walk into a redacted zettel.
+                        visited.add(other)
+                        continue
+                    visited.add(other)
+                    next_frontier.add(other)
+                    related.append(
+                        {
+                            "id": other,
+                            "edge_type": row["edge_type"],
+                            "direction": row["direction"],
+                            "hop": hop,
+                            "via": current if hop > 1 else None,
+                            "exists": zettel_row is not None,
+                            "title": zettel_row["title"] if zettel_row is not None else None,
+                            "status": zettel_row["status"] if zettel_row is not None else None,
+                            "kind": zettel_row["kind"] if zettel_row is not None else None,
+                            "path": zettel_row["path"] if zettel_row is not None else None,
+                        }
+                    )
+                    if len(related) > limit:
+                        # Collected one past the limit only to KNOW more exists; drop it and
+                        # report truncated. Hitting exactly `limit` with nothing left is NOT
+                        # truncation (off-by-one fix).
+                        related.pop()
+                        return {"zettel_id": zettel_id, "depth": depth, "count": len(related), "related": related, "truncated": True}
+            frontier = next_frontier
+            if not frontier:
+                break
+    finally:
+        conn.close()
+    return {"zettel_id": zettel_id, "depth": depth, "count": len(related), "related": related, "truncated": False}
 
 
 def search_archive(archive_root: Path | str, query: str, limit: int = 20) -> dict[str, Any]:
@@ -19375,3 +19621,913 @@ def unique_preserve_order(values: list[str]) -> list[str]:
 
 def drop_none_values(value: dict[str, Any]) -> dict[str, Any]:
     return {key: item for key, item in value.items() if item is not None}
+
+
+OBJET_CAPTURE_RECEIPTS_DIR = "receipts/objet-capture"
+OBJET_CAPTURE_SELECTION_ACTION = "local_objet_capture_approved"
+OBJET_CAPTURE_RECEIPT_SCHEMA = "wom-kit/objet-capture-receipt/v0.2"
+OBJET_CAPTURE_REQUIRED_PRIVACY_GUARDS = (
+    "no_full_content_capture",
+    "no_automatic_minting",
+    "no_bulk_import",
+    "requires_per_item_approval",
+    "staged_folder_cleanup_last",
+)
+OBJET_CAPTURE_INTERNAL_PREFIXES = ("objects", "receipts", "source-maps", "zettels", "views", "anchors", "db")
+OBJET_CAPTURE_RESERVED_DEVICE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{index}" for index in range(1, 10)}
+    | {f"lpt{index}" for index in range(1, 10)}
+)
+OBJET_CAPTURE_LOGICAL_KEY_RE = re.compile(r"^objects/sha256/[0-9a-f]{2}/[0-9a-f]{64}$")
+# Fixed map so the recorded mime is reproducible across machines; the OS/registry-backed
+# mimetypes module would make identical bytes yield different manifest records.
+OBJET_CAPTURE_MIME_BY_EXTENSION = {
+    ".csv": "text/csv",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".gif": "image/gif",
+    ".html": "text/html",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".json": "application/json",
+    ".jsonl": "application/x-ndjson",
+    ".md": "text/markdown",
+    ".mp3": "audio/mpeg",
+    ".mp4": "video/mp4",
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".txt": "text/plain",
+    ".wav": "audio/x-wav",
+    ".webp": "image/webp",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".yaml": "text/yaml",
+    ".yml": "text/yaml",
+    ".zip": "application/zip",
+}
+OBJET_CAPTURE_MAGIC_SIGNATURES = (
+    (b"%PDF", "application/pdf"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF8", "image/gif"),
+    (b"PK\x03\x04", "application/zip"),
+)
+
+
+def target_looks_external_live_never_touch(target: Path) -> bool:
+    # Duplicated from tools/check_artifact_hygiene.py: wom_kit must never import tools/.
+    parts = [part.lower() for part in target.resolve().parts]
+    if any("zettel-kasten-basoon" in part or part == "basoon" for part in parts):
+        return True
+    if any(part.startswith("zettel-kasten-") for part in parts):
+        return True
+    if any(part.endswith("-objets") for part in parts):
+        return True
+    return False
+
+
+def objet_capture_sandbox_blockers(root: Path) -> list[str]:
+    if target_looks_external_live_never_touch(root):
+        return ["external_live_never_touch"]
+    if (root / ".wom-sandbox").is_file():
+        return []
+    archive_yml = root / "archive.yml"
+    if archive_yml.is_file():
+        # The marker must be the TOP-LEVEL environment value; a raw line scan would also match
+        # the phrase nested in another mapping or block scalar and silently mark a live archive
+        # capturable. Malformed YAML counts as no-marker (fail closed).
+        try:
+            data = load_yaml(archive_yml.read_text(encoding="utf-8"))
+        except Exception:
+            data = None
+        if isinstance(data, dict) and data.get("environment") == "sandbox":
+            return []
+    return ["sandbox_marker_required"]
+
+
+def objet_capture_refusal(blocked_by: str, *, dry_run: bool) -> dict[str, Any]:
+    # Blocker-only on refusal: no item provenance, filenames, or receipt paths may be echoed.
+    return {
+        "ok": False,
+        "dry_run": dry_run,
+        "lifecycle_action": "objet_capture_plan" if dry_run else "objet_capture",
+        "blocked_by": blocked_by,
+        "items": [],
+        "blockers": [blocked_by],
+        "warnings": [],
+    }
+
+
+def objet_capture_deterministic_mime(filename: str, head: bytes) -> str:
+    mime = OBJET_CAPTURE_MIME_BY_EXTENSION.get(PurePosixPath(filename).suffix.lower())
+    if mime:
+        return mime
+    for signature, signature_mime in OBJET_CAPTURE_MAGIC_SIGNATURES:
+        if head.startswith(signature):
+            return signature_mime
+    return "application/octet-stream"
+
+
+def objet_capture_path_chain_blockers(root: Path, relative: str) -> list[str]:
+    # Reject a symlink/junction/reparse point on ANY component, not just the final one;
+    # resolve_archive_relative_path follows links so containment alone cannot catch this.
+    current = root
+    for part in PurePosixPath(relative).parts:
+        current = current / part
+        try:
+            entry_stat = os.lstat(current)
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return ["source_unreadable"]
+        if stat.S_ISLNK(entry_stat.st_mode):
+            return ["symlink_not_allowed"]
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if reparse_flag and getattr(entry_stat, "st_file_attributes", 0) & reparse_flag:
+            return ["symlink_not_allowed"]
+    return []
+
+
+def objet_capture_envelope_blockers(selection: dict[str, Any], archive_id: str) -> list[str]:
+    blockers: list[str] = []
+    if selection.get("action") != OBJET_CAPTURE_SELECTION_ACTION:
+        blockers.append("selection_action_invalid")
+    items = selection.get("items")
+    if not isinstance(items, list) or not items or any(not isinstance(item, dict) for item in items):
+        blockers.append("selection_items_invalid")
+        items = []
+    guards = selection.get("privacy_guards")
+    if not isinstance(guards, dict) or any(
+        guards.get(key) is not True for key in OBJET_CAPTURE_REQUIRED_PRIVACY_GUARDS
+    ):
+        blockers.append("privacy_guards_invalid")
+    if str(selection.get("archive_id") or "") != archive_id:
+        blockers.append("archive_id_mismatch")
+    item_ids = [str(item.get("item_id") or "") for item in items]
+    if items and (len(item_ids) != len(set(item_ids)) or any(not value for value in item_ids)):
+        blockers.append("duplicate_selection_target")
+    staged_keys: list[str] = []
+    for item in items:
+        try:
+            staged_keys.append(normalize_archive_relative_path(str(item.get("staged_path") or "")))
+        except ArchivePathError:
+            continue
+    if len(staged_keys) != len(set(staged_keys)):
+        blockers.append("duplicate_selection_target")
+    return unique_preserve_order(blockers)
+
+
+def objet_capture_intake_evidence_blockers(root: Path, item: dict[str, Any]) -> list[str]:
+    # The selection never carries inline evidence; it must point at a PERSISTED
+    # source-intake plan JSON under receipts/sources/ (the source-intake --dry-run
+    # output saved to disk in a prior, separately-gated phase).
+    raw_receipt_path = str(item.get("source_intake_receipt_path") or "")
+    raw_plan_sha = str(item.get("source_intake_plan_sha256") or "")
+    if not raw_receipt_path or not raw_plan_sha:
+        return ["source_intake_evidence_invalid"]
+    try:
+        normalized = normalize_archive_relative_path(raw_receipt_path)
+        receipt_path = resolve_archive_relative_path(root, normalized)
+    except ArchivePathError:
+        return ["source_intake_evidence_invalid"]
+    if not normalized.startswith("receipts/sources/") or not receipt_path.is_file():
+        return ["source_intake_evidence_invalid"]
+    try:
+        plan = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ["source_intake_evidence_invalid"]
+    if not isinstance(plan, dict):
+        return ["source_intake_evidence_invalid"]
+    gate_blockers: list[str] = []
+    prepare_source_intake_plan_for_draft(plan, gate_blockers)
+    if gate_blockers:
+        return ["source_intake_evidence_invalid"]
+    if sha256_json_value(plan) != raw_plan_sha:
+        return ["source_intake_plan_sha256_mismatch"]
+    return []
+
+
+def objet_capture_canonical_record_ids(records: list[dict[str, Any]]) -> set[str]:
+    # A record counts as canonical only when its logical_key IS the content-addressed
+    # path for its own object_id; legacy objects/sample/ records must not satisfy
+    # "canonical record present" or the classifier would skip the canonical append.
+    canonical: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        object_id = str(record.get("object_id") or "").lower()
+        if not object_id.startswith("sha256:"):
+            continue
+        digest = object_id.split(":", 1)[1]
+        if str(record.get("logical_key") or "") == f"objects/sha256/{digest[:2]}/{digest}":
+            canonical.add(object_id)
+    return canonical
+
+
+def _objet_capture_fsync_dir(path: Path) -> None:
+    if os.name == "nt":
+        # Windows cannot fsync a directory handle via os.open/os.fsync; directory-entry
+        # durability after os.replace is a documented residual risk on this platform
+        # (same class as the documented O_NOFOLLOW residual).
+        return
+    try:
+        dir_fd = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+
+
+def _objet_capture_sha256_and_head_fd(fd: int) -> tuple[str, bytes]:
+    os.lseek(fd, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    head = b""
+    while True:
+        chunk = os.read(fd, 1024 * 1024)
+        if not chunk:
+            break
+        if not head:
+            head = chunk[:16]
+        digest.update(chunk)
+    return digest.hexdigest(), head
+
+
+class _ObjetCaptureManifestLock:
+    def __init__(self, root: Path) -> None:
+        manifests_dir = archive_internal_path(root, "objects/manifests")
+        manifests_dir.mkdir(parents=True, exist_ok=True)
+        self._path = manifests_dir / ".files.jsonl.lock"
+        self._handle: Any = None
+
+    def __enter__(self) -> "_ObjetCaptureManifestLock":
+        self._handle = open(self._path, "a+b")
+        if os.name == "nt":
+            import msvcrt
+
+            self._handle.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(self._handle.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    continue
+        else:
+            import fcntl
+
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc_info: Any) -> bool:
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                self._handle.seek(0)
+                msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._handle.close()
+        return False
+
+
+def _objet_capture_manifest_needs_leading_newline(manifest_path: Path) -> bool:
+    if not manifest_path.is_file() or manifest_path.stat().st_size == 0:
+        return False
+    with manifest_path.open("rb") as handle:
+        handle.seek(-1, os.SEEK_END)
+        return handle.read(1) != b"\n"
+
+
+def _objet_capture_process_item(
+    root: Path,
+    item: dict[str, Any],
+    *,
+    approve: bool,
+    canonical_ids: set[str],
+    appended_this_run: set[str],
+    captured_at: str,
+    reviewed_by: str | None,
+    selection: dict[str, Any],
+    selection_sha256: str,
+    manifest_appender: Any,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "item_id": str(item.get("item_id") or ""),
+        "object_id": None,
+        "logical_key": None,
+        "planned_action": None,
+        "action": None,
+        "size_bytes": None,
+        "mime": None,
+        "source_staged_path": None,
+        "original_filename": None,
+        "approved_object_id": str(item.get("approved_object_id") or ""),
+        "source_intake_plan_sha256": str(item.get("source_intake_plan_sha256") or ""),
+        "stored_sha256_verified": False,
+        "manifest_record_appended": False,
+        "blockers": [],
+        "warnings": [],
+    }
+
+    def block(code: str) -> dict[str, Any]:
+        result["blockers"].append(code)
+        result["planned_action"] = "blocked"
+        result["action"] = "blocked"
+        return result
+
+    if item.get("approved") is not True:
+        return block("item_not_approved")
+    if item.get("input_kind") != "local_path":
+        return block("unsupported_input_kind")
+
+    raw_staged = str(item.get("staged_path") or "")
+    try:
+        normalized = normalize_archive_relative_path(raw_staged)
+        src = resolve_archive_relative_path(root, normalized)
+    except ArchivePathError:
+        return block("unsafe_staged_path")
+    result["source_staged_path"] = normalized
+    result["original_filename"] = PurePosixPath(normalized).name
+
+    first_segment = normalized.split("/", 1)[0].lower()
+    if first_segment in OBJET_CAPTURE_INTERNAL_PREFIXES:
+        return block("unsafe_staged_path")
+    for part in PurePosixPath(normalized).parts:
+        if part.split(".", 1)[0].lower() in OBJET_CAPTURE_RESERVED_DEVICE_NAMES:
+            return block("reserved_device_name")
+    if not is_path_within_root(src, root):
+        return block("unsafe_staged_path")
+    if target_looks_external_live_never_touch(src):
+        return block("resolved_path_never_touch")
+    chain_blockers = objet_capture_path_chain_blockers(root, normalized)
+    if chain_blockers:
+        return block(chain_blockers[0])
+
+    unresolved = root.joinpath(*PurePosixPath(normalized).parts)
+    try:
+        entry_stat = os.lstat(unresolved)
+    except FileNotFoundError:
+        return block("source_missing")
+    except OSError:
+        return block("source_unreadable")
+    if stat.S_ISDIR(entry_stat.st_mode):
+        return block("staged_path_is_directory")
+    if not stat.S_ISREG(entry_stat.st_mode):
+        return block("special_file_not_allowed")
+
+    open_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(str(unresolved), open_flags)
+    except OSError:
+        return block("source_unreadable")
+    try:
+        fd_stat = os.fstat(fd)
+        if not stat.S_ISREG(fd_stat.st_mode):
+            return block("special_file_not_allowed")
+        size_bytes = fd_stat.st_size
+        try:
+            digest, head = _objet_capture_sha256_and_head_fd(fd)
+        except OSError:
+            return block("source_unreadable")
+        object_id = f"sha256:{digest}"
+        mime = objet_capture_deterministic_mime(unresolved.name, head)
+        result["object_id"] = object_id
+        result["size_bytes"] = size_bytes
+        result["mime"] = mime
+        if size_bytes == 0:
+            result["warnings"].append("zero_byte_file")
+
+        commitment_blockers: list[str] = []
+        approved_object_id = normalize_object_id(str(item.get("approved_object_id") or ""), commitment_blockers)
+        if commitment_blockers or approved_object_id != object_id:
+            return block("approved_content_mismatch")
+
+        evidence_blockers = objet_capture_intake_evidence_blockers(root, item)
+        if evidence_blockers:
+            return block(evidence_blockers[0])
+
+        expected_size = item.get("expected_size_bytes")
+        if expected_size is not None:
+            if isinstance(expected_size, bool) or not isinstance(expected_size, int):
+                return block("expected_size_invalid")
+            if expected_size != size_bytes:
+                if approve:
+                    return block("expected_size_mismatch")
+                result["warnings"].append("expected_size_mismatch")
+        expected_mime = item.get("expected_mime")
+        if expected_mime is not None:
+            if not isinstance(expected_mime, str):
+                return block("expected_mime_invalid")
+            if expected_mime != mime:
+                if approve:
+                    return block("expected_mime_mismatch")
+                result["warnings"].append("expected_mime_mismatch")
+
+        logical_key = f"objects/sha256/{digest[:2]}/{digest}"
+        if not OBJET_CAPTURE_LOGICAL_KEY_RE.match(logical_key):
+            return block("dest_equals_source")
+        dest = archive_internal_path(root, logical_key)
+        result["logical_key"] = logical_key
+        if target_looks_external_live_never_touch(dest):
+            return block("resolved_path_never_touch")
+        dest_chain_blockers = objet_capture_path_chain_blockers(root, logical_key)
+        if dest_chain_blockers:
+            return block(dest_chain_blockers[0])
+        if dest.resolve() == src.resolve():
+            return block("dest_equals_source")
+
+        canonical_present = object_id in canonical_ids
+        if object_id in appended_this_run:
+            # An earlier item this run already planned/published this object: dry-run must
+            # predict the same intra-run collapse apply performs, so both modes short-circuit.
+            planned = "skip_already_present"
+        elif dest.is_file():
+            if sha256_path(dest) != digest:
+                result["planned_action"] = "dest_collision"
+                result["action"] = "dest_collision"
+                result["blockers"].append("dest_collision")
+                return result
+            planned = "skip_already_present" if canonical_present else "repair_append"
+        else:
+            planned = "re_materialize" if canonical_present else "capture"
+        result["planned_action"] = planned
+        if planned in ("capture", "repair_append", "re_materialize"):
+            appended_this_run.add(object_id)
+        if not approve:
+            return result
+
+        if planned in ("capture", "re_materialize"):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dest.parent / (dest.name + ".part-" + secrets.token_hex(8))
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                with tmp.open("wb") as out_handle:
+                    while True:
+                        chunk = os.read(fd, 1024 * 1024)
+                        if not chunk:
+                            break
+                        out_handle.write(chunk)
+                    out_handle.flush()
+                    os.fsync(out_handle.fileno())
+                if sha256_path(tmp) != digest:
+                    tmp.unlink(missing_ok=True)
+                    return block("lossless_verification_failed")
+                _objet_capture_fsync_dir(dest.parent)
+                os.replace(tmp, dest)
+                _objet_capture_fsync_dir(dest.parent)
+                if sha256_path(dest) != digest:
+                    dest.unlink(missing_ok=True)
+                    return block("lossless_verification_failed")
+                result["stored_sha256_verified"] = True
+            except OSError:
+                tmp.unlink(missing_ok=True)
+                return block("source_unreadable")
+
+        if planned in ("capture", "repair_append"):
+            record = {
+                "object_id": object_id,
+                "sha256": digest,
+                "logical_key": logical_key,
+                "mime": mime,
+                "size_bytes": size_bytes,
+                "locations": [{"provider": "local", "path": logical_key, "availability": "available"}],
+                "provenance": {
+                    "created_in": f"archive:{selection.get('archive_id')}",
+                    "source": "b4_local_objet_capture",
+                    "captured_at": captured_at,
+                    "captured_by": reviewed_by,
+                    "original_filename": result["original_filename"],
+                    "source_staged_path": normalized,
+                    "approved_object_id": object_id,
+                    "source_intake_receipt_path": str(item.get("source_intake_receipt_path") or ""),
+                    "source_intake_plan_sha256": str(item.get("source_intake_plan_sha256") or ""),
+                    "selection_manifest_id": str(selection.get("manifest_id") or ""),
+                    "selection_manifest_sha256": selection_sha256,
+                },
+            }
+            try:
+                manifest_appender(record)
+            except OSError:
+                # Bytes may already be durable; surface a clean per-item blocker so the
+                # always-written receipt records the unreferenced publish (a re-run repairs it).
+                return block("manifest_append_failed")
+            result["manifest_record_appended"] = True
+
+        result["action"] = {
+            "capture": "captured",
+            "repair_append": "repair_appended",
+            "re_materialize": "re_materialized",
+            "skip_already_present": "skip_already_present",
+        }[planned]
+        return result
+    finally:
+        os.close(fd)
+
+
+def _objet_capture_write_receipt(root: Path, receipt: dict[str, Any], captured_at: str) -> str:
+    receipts_dir = archive_internal_path(root, OBJET_CAPTURE_RECEIPTS_DIR)
+    receipts_dir.mkdir(parents=True, exist_ok=True)
+    timestamp_compact = re.sub(r"[^0-9TZ]", "", captured_at)
+    while True:
+        capture_id = f"{timestamp_compact}-{secrets.token_hex(6)}"
+        receipt_path = receipts_dir / f"{capture_id}.json"
+        receipt["receipt_id"] = f"receipt:objet-capture:{capture_id}"
+        try:
+            with receipt_path.open("x", encoding="utf-8") as handle:
+                handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+        except FileExistsError:
+            continue
+        except OSError:
+            receipt_path.unlink(missing_ok=True)
+            raise
+        return f"{OBJET_CAPTURE_RECEIPTS_DIR}/{capture_id}.json"
+
+
+def _objet_capture_run(
+    archive_root: Path | str,
+    selection_path: Path | str,
+    *,
+    approve: bool,
+    reviewed_by: str | None,
+) -> dict[str, Any]:
+    root = Path(archive_root).resolve()
+    sandbox_blockers = objet_capture_sandbox_blockers(root)
+    if sandbox_blockers:
+        return objet_capture_refusal(sandbox_blockers[0], dry_run=not approve)
+    root = require_existing_archive_root(root)
+    archive_id = read_archive_id(root)
+    captured_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    try:
+        selection_raw = json.loads(Path(selection_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        selection_raw = None
+    if not isinstance(selection_raw, dict):
+        return {
+            "ok": False,
+            "dry_run": not approve,
+            "lifecycle_action": "objet_capture_plan" if not approve else "objet_capture",
+            "archive_id": archive_id,
+            "items": [],
+            "blockers": ["selection_manifest_unreadable"],
+            "warnings": [],
+        }
+    selection = selection_raw
+    selection_sha256 = sha256_json_value(selection)
+    envelope_blockers = objet_capture_envelope_blockers(selection, archive_id)
+    base_output = {
+        "dry_run": not approve,
+        "lifecycle_action": "objet_capture_plan" if not approve else "objet_capture",
+        "archive_id": archive_id,
+        "selection_manifest_id": str(selection.get("manifest_id") or ""),
+        "selection_manifest_sha256": selection_sha256,
+    }
+    if envelope_blockers:
+        return {"ok": False, **base_output, "items": [], "blockers": envelope_blockers, "warnings": []}
+
+    items_sorted = sorted(selection["items"], key=lambda item: str(item.get("item_id") or ""))
+    appended_this_run: set[str] = set()
+    item_results: list[dict[str, Any]] = []
+    aborted = False
+
+    if approve:
+        # Pre-flight the receipt directory BEFORE any byte/manifest write: the always-receipt
+        # audit guarantee is only meaningful if the receipt is known writable up front.
+        try:
+            archive_internal_path(root, OBJET_CAPTURE_RECEIPTS_DIR).mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return {"ok": False, **base_output, "items": [], "blockers": ["receipts_dir_unavailable"], "warnings": []}
+        manifest_path = archive_internal_path(root, "objects/manifests/files.jsonl")
+        receipt_path_value: str | None = None
+        with _ObjetCaptureManifestLock(root):
+            canonical_ids = objet_capture_canonical_record_ids(load_manifest_records(root))
+            manifest_handle: Any = None
+            try:
+                for item in items_sorted:
+
+                    def manifest_appender(record: dict[str, Any]) -> None:
+                        nonlocal manifest_handle
+                        if manifest_handle is None:
+                            needs_newline = _objet_capture_manifest_needs_leading_newline(manifest_path)
+                            manifest_handle = manifest_path.open("a", encoding="utf-8", newline="\n")
+                            if needs_newline:
+                                manifest_handle.write("\n")
+                        manifest_handle.write(
+                            json.dumps(record, ensure_ascii=False, default=str, separators=(",", ":")) + "\n"
+                        )
+
+                    try:
+                        item_results.append(
+                            _objet_capture_process_item(
+                                root,
+                                item,
+                                approve=True,
+                                canonical_ids=canonical_ids,
+                                appended_this_run=appended_this_run,
+                                captured_at=captured_at,
+                                reviewed_by=reviewed_by,
+                                selection=selection,
+                                selection_sha256=selection_sha256,
+                                manifest_appender=manifest_appender,
+                            )
+                        )
+                    except Exception:
+                        aborted = True
+                        raise
+            finally:
+                if manifest_handle is not None:
+                    manifest_handle.flush()
+                    os.fsync(manifest_handle.fileno())
+                    manifest_handle.close()
+                summary = objet_capture_summary(item_results, approve=True)
+                run_blockers = unique_preserve_order(
+                    [code for entry in item_results for code in entry["blockers"]]
+                )
+                receipt = {
+                    "receipt_id": None,
+                    "schema": OBJET_CAPTURE_RECEIPT_SCHEMA,
+                    "dry_run": False,
+                    "ok": not run_blockers and not aborted,
+                    "aborted": aborted,
+                    "archive_id": archive_id,
+                    "selection_manifest_id": str(selection.get("manifest_id") or ""),
+                    "selection_manifest_sha256": selection_sha256,
+                    "reviewed_by": reviewed_by,
+                    "captured_at": captured_at,
+                    "items": item_results,
+                    "summary": summary,
+                    "blockers": run_blockers,
+                    "warnings": unique_preserve_order(
+                        [code for entry in item_results for code in entry["warnings"]]
+                    ),
+                }
+                receipt_path_value = _objet_capture_write_receipt(root, receipt, captured_at)
+        run_blockers = unique_preserve_order([code for entry in item_results for code in entry["blockers"]])
+        return {
+            "ok": not run_blockers and not aborted,
+            **base_output,
+            "aborted": aborted,
+            "reviewed_by": reviewed_by,
+            "captured_at": captured_at,
+            "items": item_results,
+            "receipt_path": receipt_path_value,
+            "summary": objet_capture_summary(item_results, approve=True),
+            "blockers": run_blockers,
+            "warnings": unique_preserve_order([code for entry in item_results for code in entry["warnings"]]),
+        }
+
+    canonical_ids = objet_capture_canonical_record_ids(load_manifest_records(root))
+    for item in items_sorted:
+        item_results.append(
+            _objet_capture_process_item(
+                root,
+                item,
+                approve=False,
+                canonical_ids=canonical_ids,
+                appended_this_run=appended_this_run,
+                captured_at=captured_at,
+                reviewed_by=None,
+                selection=selection,
+                selection_sha256=selection_sha256,
+                manifest_appender=lambda record: None,
+            )
+        )
+    run_blockers = unique_preserve_order([code for entry in item_results for code in entry["blockers"]])
+    planned_writes: list[str] = []
+    for entry in item_results:
+        if entry["planned_action"] in ("capture", "re_materialize") and entry["logical_key"]:
+            planned_writes.append(entry["logical_key"])
+        if entry["planned_action"] in ("capture", "repair_append"):
+            planned_writes.append("objects/manifests/files.jsonl (+1 line)")
+    timestamp_compact = re.sub(r"[^0-9TZ]", "", captured_at)
+    return {
+        "ok": not run_blockers,
+        **base_output,
+        "items": item_results,
+        "proposed_receipt_path": f"{OBJET_CAPTURE_RECEIPTS_DIR}/{timestamp_compact}-{secrets.token_hex(6)}.json",
+        "planned_writes": planned_writes,
+        "summary": objet_capture_summary(item_results, approve=False),
+        "blockers": run_blockers,
+        "warnings": unique_preserve_order([code for entry in item_results for code in entry["warnings"]]),
+        "would_change": planned_writes,
+    }
+
+
+def objet_capture_summary(item_results: list[dict[str, Any]], *, approve: bool) -> dict[str, int]:
+    counts = {"capture": 0, "repair_append": 0, "re_materialize": 0, "skip_already_present": 0, "blocked": 0}
+    for entry in item_results:
+        planned = entry.get("planned_action")
+        if planned in ("blocked", "dest_collision"):
+            counts["blocked"] += 1
+        elif planned in counts:
+            counts[planned] += 1
+    if approve:
+        return {
+            "captured": counts["capture"],
+            "repair_appended": counts["repair_append"],
+            "re_materialized": counts["re_materialize"],
+            "skipped": counts["skip_already_present"],
+            "blocked": counts["blocked"],
+        }
+    return {
+        "would_capture": counts["capture"],
+        "would_repair_append": counts["repair_append"],
+        "would_re_materialize": counts["re_materialize"],
+        "would_skip": counts["skip_already_present"],
+        "blocked": counts["blocked"],
+    }
+
+
+def staged_cleanup_check(
+    archive_root: Path | str,
+    staged_folder: str,
+    *,
+    deferred_path: Path | str | None = None,
+) -> dict[str, Any]:
+    """Report-only G2 deletion-safety verifier for a staged intake folder.
+
+    Answers "is every file in this staged folder preserved as an objet (or explicitly
+    deferred), so the folder could be cleaned up?" It NEVER deletes, moves, or writes
+    anything; cleanup itself stays a manual human action after this report plus the
+    doctor/hygiene checks listed in next_safe_actions.
+    """
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    try:
+        normalized = normalize_archive_relative_path(staged_folder)
+        staged_root = resolve_archive_relative_path(root, normalized)
+    except ArchivePathError:
+        return _staged_cleanup_abort(archive_id, ["unsafe_staged_folder"])
+    if normalized.split("/", 1)[0].lower() in OBJET_CAPTURE_INTERNAL_PREFIXES:
+        return _staged_cleanup_abort(archive_id, ["unsafe_staged_folder"])
+    if not is_path_within_root(staged_root, root):
+        return _staged_cleanup_abort(archive_id, ["unsafe_staged_folder"])
+    if objet_capture_path_chain_blockers(root, normalized):
+        return _staged_cleanup_abort(archive_id, ["unsafe_staged_folder"])
+    if not staged_root.is_dir():
+        return _staged_cleanup_abort(archive_id, ["staged_folder_missing"])
+
+    deferred: set[str] = set()
+    if deferred_path is not None:
+        try:
+            deferred_doc = json.loads(Path(deferred_path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return _staged_cleanup_abort(archive_id, ["deferred_list_unreadable"])
+        raw_deferred = deferred_doc.get("deferred") if isinstance(deferred_doc, dict) else None
+        if not isinstance(raw_deferred, list) or any(not isinstance(value, str) for value in raw_deferred):
+            return _staged_cleanup_abort(archive_id, ["deferred_list_invalid"])
+        deferred = {value.replace("\\", "/").strip("/") for value in raw_deferred}
+
+    canonical_ids = objet_capture_canonical_record_ids(load_manifest_records(root))
+    referencing: dict[str, int] = {}
+    for zettel_path in iter_zettel_paths(root):
+        try:
+            frontmatter, _body = split_zettel_text(zettel_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, yaml.YAMLError, ArchiveServiceError):
+            # A malformed/unreadable note reduces reference accuracy at worst; it must never
+            # abort the deletion-safety verdict for an unrelated staged folder.
+            continue
+        for ref in collect_referenced_objets(json_safe(frontmatter)):
+            ref_blockers: list[str] = []
+            ref_id = normalize_object_id(str(ref.get("value") or ref.get("object_id") or ""), ref_blockers)
+            if not ref_blockers and ref_id:
+                referencing[ref_id] = referencing.get(ref_id, 0) + 1
+
+    files: list[dict[str, Any]] = []
+    counts = {"preserved": 0, "deferred": 0, "not_preserved": 0, "unsafe": 0}
+    # A deletion-safety verifier MUST fail closed on any enumeration it cannot complete:
+    # pathlib.rglob silently swallows per-directory OSError (Windows MAX_PATH, permission
+    # denied), which would hide an only-copy file and yield a false safe_to_cleanup. os.walk
+    # with onerror surfaces every such failure as a hard blocker instead.
+    staged_files: list[Path] = []
+
+    def _on_walk_error(error: OSError) -> None:
+        blockers.append("staged_tree_unreadable")
+
+    for dirpath, _dirnames, filenames in os.walk(staged_root, onerror=_on_walk_error):
+        for filename in filenames:
+            staged_files.append(Path(dirpath) / filename)
+        # also capture symlinked subdirectories as unsafe (os.walk does not descend symlinks)
+        for dirname in _dirnames:
+            sub = Path(dirpath) / dirname
+            if sub.is_symlink():
+                staged_files.append(sub)
+    for path in sorted(staged_files):
+        if path.is_symlink() or objet_capture_path_chain_blockers(
+            root, f"{normalized}/{path.relative_to(staged_root).as_posix()}"
+        ):
+            counts["unsafe"] += 1
+            files.append(
+                {
+                    "path": path.relative_to(staged_root).as_posix(),
+                    "status": "unsafe_symlink",
+                    "object_id": None,
+                    "preserved_bytes_verified": False,
+                    "manifest_record_present": False,
+                    "referencing_zets": 0,
+                }
+            )
+            continue
+        if not path.is_file():
+            continue
+        relative = path.relative_to(staged_root).as_posix()
+        try:
+            digest = sha256_path(path)
+        except OSError:
+            counts["unsafe"] += 1
+            files.append(
+                {
+                    "path": relative,
+                    "status": "unreadable",
+                    "object_id": None,
+                    "preserved_bytes_verified": False,
+                    "manifest_record_present": False,
+                    "referencing_zets": 0,
+                }
+            )
+            continue
+        object_id = f"sha256:{digest}"
+        dest = archive_internal_path(root, f"objects/sha256/{digest[:2]}/{digest}")
+        # FALSE-SAFE is the fatal failure mode here: a "safe to clean up" verdict for a
+        # file whose stored copy is absent, corrupted, or unreferenced would let the only
+        # copy be deleted. So preservation requires ALL THREE: dest exists, stored bytes
+        # re-hash to the same digest, and a canonical manifest record exists.
+        bytes_verified = dest.is_file() and sha256_path(dest) == digest
+        record_present = object_id in canonical_ids
+        if bytes_verified and record_present:
+            status = "preserved"
+        elif relative in deferred:
+            status = "deferred"
+        else:
+            status = "not_preserved"
+        counts[status if status in counts else "not_preserved"] += 1
+        files.append(
+            {
+                "path": relative,
+                "status": status,
+                "object_id": object_id,
+                "preserved_bytes_verified": bytes_verified,
+                "manifest_record_present": record_present,
+                "referencing_zets": referencing.get(object_id, 0),
+            }
+        )
+
+    if not files:
+        warnings.append("staged_folder_empty")
+    safe_to_cleanup = counts["not_preserved"] == 0 and counts["unsafe"] == 0 and not blockers
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "staged_cleanup_check",
+        "archive_id": archive_id,
+        "staged_folder": normalized,
+        "safe_to_cleanup": safe_to_cleanup,
+        "deletion_performed": False,
+        "files": files,
+        "summary": counts,
+        "next_safe_actions": [
+            "Run archive doctor --strict and resolve any errors before cleanup.",
+            "Run wom-kit/tools/check_artifact_hygiene.py and resolve unresolved blockers.",
+            "Cleanup is a manual, human-approved deletion; this tool never deletes.",
+        ],
+        "blockers": blockers,
+        "warnings": warnings,
+        "would_change": [],
+    }
+
+
+def _staged_cleanup_abort(archive_id: str, blockers: list[str]) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "dry_run": True,
+        "lifecycle_action": "staged_cleanup_check",
+        "archive_id": archive_id,
+        "safe_to_cleanup": False,
+        "deletion_performed": False,
+        "files": [],
+        "summary": {"preserved": 0, "deferred": 0, "not_preserved": 0, "unsafe": 0},
+        "blockers": blockers,
+        "warnings": [],
+        "would_change": [],
+    }
+
+
+def objet_capture_dry_run(archive_root: Path | str, selection_path: Path | str) -> dict[str, Any]:
+    return _objet_capture_run(archive_root, selection_path, approve=False, reviewed_by=None)
+
+
+def objet_capture_apply(
+    archive_root: Path | str,
+    selection_path: Path | str,
+    *,
+    reviewed_by: str,
+) -> dict[str, Any]:
+    return _objet_capture_run(archive_root, selection_path, approve=True, reviewed_by=reviewed_by)

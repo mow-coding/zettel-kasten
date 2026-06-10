@@ -4,7 +4,9 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
-## Unreleased - Frontmatter v0.3 compatibility migration
+## v0.3.2 - 2026-06-11
+
+Frontmatter migration, redaction hardening, and the local capture spine.
 
 Added:
 
@@ -13,15 +15,27 @@ Added:
 - lossless handling for clean object-shaped `provenance.source` values by relocating them to `source_refs`,
 - manual-review blockers for ambiguous or unsafe source values,
 - doctor compatibility output and migration hints for legacy frontmatter failures,
-- v0.3 zettel-rules guidance for required `provenance` and `visibility` subfields.
+- v0.3 zettel-rules guidance for required `provenance` and `visibility` subfields,
+- approval-gated CLI `archive objet-capture <archive-root> --selection <manifest> --dry-run|--approve --reviewed-by <actor>` capturing approved staged files into the local content-addressed objet store (`objects/sha256/<2>/<64>`) with manifest records and always-written capture receipts,
+- report-only CLI `archive staged-cleanup-check <archive-root> --staged <folder> --dry-run` verifying every staged file is preserved or explicitly deferred before any manual cleanup; fails closed on unenumerable trees and never deletes,
+- read-only CLI `archive related-zets <archive-root> --zettel-id <id>` with bidirectional typed-edge traversal (backlinks), depth 1-3, cycle safety, and edge-type filters,
+- read-only CLI `archive view-zets <archive-root> --view-id <id> | --facet key=value ...` executing saved-view facet filters from `views/*.yml`,
+- typed edges and zettel facets in the disposable search index,
+- report-only artifact hygiene checker and six-class file-lifecycle baseline doc,
+- an end-to-end test proving the full loop: stage -> capture -> draft -> mint -> cleanup-safe.
+
+Privacy:
+
+- redacted-zettel content suppression is now enforced across search, the on-disk index, `list-zettels`, `read-zettel`, block-header previews, projection previews, related-zets, and view-zets, with regression tests per surface.
 
 Compatibility:
 
 - the v0.3.1 frontmatter schema is unchanged,
-- `--dry-run` writes no files,
-- `--approve` rewrites only archive-contained Markdown zettel frontmatter under `inbox/` and `zettels/`,
+- `--dry-run` writes no files anywhere; approve paths rewrite only reviewed targets,
 - archives authored from older v0.2-draft rules should run the migration dry-run before strict v0.3 validation,
-- basoon/live archives, provider sync, objet cleanup, public git actions, and schema redesign are not part of this patch.
+- the objet-capture write path refuses archives without an explicit sandbox marker,
+- run `archive index` once to pick up edges and facets,
+- basoon/live archives, provider sync, staged-original deletion, MCP write tools, ZET transport, and schema redesign are not part of this release.
 
 ## v0.3.1 - 2026-06-04
 
