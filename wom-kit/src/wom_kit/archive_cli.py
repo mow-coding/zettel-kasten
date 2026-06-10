@@ -126,7 +126,7 @@ import sqlite3
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -749,6 +749,7 @@ class Doctor:
         if not isinstance(data, dict):
             self.error("zettel_frontmatter_invalid", "Zettel frontmatter must be a YAML object.", path)
             return
+        self._warn_unquoted_yaml_timestamps(data, path)
         self._check_schema(data, "zettel-frontmatter.schema.json", path)
 
         for field in REQUIRED_ZETTEL_FIELDS:
@@ -1136,6 +1137,26 @@ class Doctor:
             data = self._load_yaml_file(path, missing_ok=True)
             if isinstance(data, dict):
                 self._check_schema(data, schema_name, path)
+
+    def _warn_unquoted_yaml_timestamps(self, data: Any, path: Path, data_path: str = "$") -> None:
+        # YAML 1.1 parses an unquoted ISO timestamp into a datetime object. Our own schema
+        # validator deliberately accepts that as a string, but external JSON Schema
+        # validators do not — so the hand-authored file is silently non-portable. Warn with
+        # the field path so authors quote their timestamps.
+        if isinstance(data, (datetime, date)):
+            self.warn(
+                "zettel_frontmatter_unquoted_timestamp",
+                f"{data_path} is an unquoted YAML timestamp; quote it (e.g. \"2026-06-11T10:00:00+09:00\") "
+                "so external schema validators read a string.",
+                path,
+            )
+            return
+        if isinstance(data, dict):
+            for key, value in data.items():
+                self._warn_unquoted_yaml_timestamps(value, path, f"{data_path}.{key}")
+        elif isinstance(data, list):
+            for index, value in enumerate(data):
+                self._warn_unquoted_yaml_timestamps(value, path, f"{data_path}[{index}]")
 
     def _check_schema(self, data: Any, schema_name: str, path: Path) -> None:
         for issue in validate_schema(data, schema_name):
@@ -4448,6 +4469,11 @@ def build_parser() -> argparse.ArgumentParser:
     validate = subcommands.add_parser("validate", help="Run strict archive validation.")
     validate.add_argument("archive_root", nargs="?", default=".", help="Archive root to validate.")
     validate.add_argument("--allow-warnings", action="store_true", help="Do not fail when only warnings are present.")
+    validate.add_argument(
+        "--strict",
+        action="store_true",
+        help="Accepted for parity with doctor: validate already treats warnings as failing unless --allow-warnings.",
+    )
     validate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     validate.set_defaults(func=command_validate)
 
@@ -5600,7 +5626,22 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _harden_std_streams() -> None:
+    # Narrow console encodings (e.g. Korean Windows cp949) must never crash CLI output:
+    # unencodable characters are replaced instead of raising UnicodeEncodeError. The
+    # stream encoding itself is kept so consoles keep rendering their native charset.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (OSError, ValueError):
+            continue
+
+
 def main(argv: list[str] | None = None) -> int:
+    _harden_std_streams()
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))

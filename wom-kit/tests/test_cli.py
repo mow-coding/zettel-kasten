@@ -14850,6 +14850,76 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(capped["count"], 2)
             self.assertTrue(capped["truncated"])
 
+    def _write_unquoted_timestamp_zettel(self, archive_root: Path) -> None:
+        (archive_root / "inbox").mkdir(exist_ok=True)
+        (archive_root / "inbox" / "zet_20260611_ts.md").write_text(
+            "---\nid: zet_20260611_ts\ntitle: timestamp probe\n"
+            "created_at: 2026-06-11T10:00:00+09:00\nupdated_at: 2026-06-11T10:00:00+09:00\n"
+            "archive_id: archive:personal:capture\nstatus: draft\nkind: note\nfacets: {}\nassets: []\nedges: []\n"
+            "provenance:\n  created_by: person:t\n  created_in: archive:personal:capture\n  source: test\n  derived_from: []\n"
+            "visibility:\n  scope: private\n  allowed_archives: []\n  source_visibility: private\n---\n\nBody.\n",
+            encoding="utf-8",
+        )
+
+    def test_doctor_warns_on_unquoted_yaml_timestamps(self) -> None:
+        # F2/F3 from the v0.3.2 upgrade feedback: an unquoted ISO timestamp YAML-parses to a
+        # datetime; internally tolerated, but external schema validators reject it. doctor
+        # must surface it instead of passing silently.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            self._write_unquoted_timestamp_zettel(archive_root)
+            code, output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 0, output)
+            diagnostics = json.loads(output)
+            timestamp_warnings = [
+                item for item in diagnostics if item["code"] == "zettel_frontmatter_unquoted_timestamp"
+            ]
+            self.assertGreaterEqual(len(timestamp_warnings), 2, "created_at and updated_at must both warn")
+            self.assertIn("$.created_at", json.dumps(timestamp_warnings))
+            code, output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(code, 1, output)
+            quoted = (archive_root / "inbox" / "zet_20260611_ts.md").read_text(encoding="utf-8")
+            quoted = quoted.replace("created_at: 2026", 'created_at: "2026').replace("+09:00\nupdated_at", '+09:00"\nupdated_at')
+            quoted = quoted.replace("updated_at: 2026", 'updated_at: "2026').replace("+09:00\narchive_id", '+09:00"\narchive_id')
+            (archive_root / "inbox" / "zet_20260611_ts.md").write_text(quoted, encoding="utf-8")
+            code, output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(code, 0, output)
+
+    def test_validate_fails_on_timestamp_warning_and_accepts_strict_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            self._write_unquoted_timestamp_zettel(archive_root)
+            code, output = self.run_cli(["validate", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 1, f"validate fails on warnings by default: {output}")
+            code, output = self.run_cli(["validate", str(archive_root), "--strict", "--format", "json"])
+            self.assertEqual(code, 1, f"--strict must be an accepted flag (doctor parity): {output}")
+            code, output = self.run_cli(["validate", str(archive_root), "--allow-warnings", "--format", "json"])
+            self.assertEqual(code, 0, output)
+
+    def test_cli_output_survives_narrow_console_encoding(self) -> None:
+        # F1 from the v0.3.2 upgrade feedback: a cp949 stdout must never crash on characters
+        # outside the codepage (e.g. emoji/snowman in titles); they are replaced instead.
+        import os as os_module
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            self._write_edge_zettel(archive_root, "zet_20260611_snow", title="Snowman ☃ probe")
+            code, output = self.run_cli(["index", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 0, output)
+            env = dict(os_module.environ)
+            env.pop("PYTHONUTF8", None)
+            env["PYTHONIOENCODING"] = "cp949"
+            result = subprocess.run(
+                [sys.executable, str(KIT_ROOT / "cli" / "archive.py"), "search", str(archive_root), "snowman"],
+                capture_output=True,
+                env=env,
+            )
+            stderr_text = result.stderr.decode("utf-8", errors="replace")
+            self.assertEqual(result.returncode, 0, stderr_text)
+            self.assertNotIn("UnicodeEncodeError", stderr_text)
+            self.assertIn(b"Found", result.stdout)
+
     def test_objet_capture_hygiene_classifier_and_gitignore_recognize_store(self) -> None:
         import importlib.util
 

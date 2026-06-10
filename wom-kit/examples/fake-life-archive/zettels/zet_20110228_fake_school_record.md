@@ -1,8 +1,8 @@
 ---
 id: zet_20110228_fake_school_record
 title: Fake Seoul Gilwon Elementary report card
-created_at: 2011-02-28T09:00:00+09:00
-updated_at: 2026-05-19T12:00:00+09:00
+created_at: "2011-02-28T09:00:00+09:00"
+updated_at: "2026-05-19T12:00:00+09:00"
 archive_id: archive:personal:fake-life
 status: canonical
 kind: record_note
@@ -34,7 +34,7 @@ visibility:
 promotion:
   stage: promoted
   reviewed_by: person:fake-user
-  reviewed_at: 2026-05-19T12:00:00+09:00
+  reviewed_at: "2026-05-19T12:00:00+09:00"
   checklist_version: zettel-promotion/v0.2
 ---
 

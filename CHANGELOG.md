@@ -4,6 +4,15 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## Unreleased
+
+Fixes from v0.3.2 upgrade field feedback (basoon operator):
+
+- CLI output no longer crashes on console encodings that cannot represent a character (e.g. emoji on a Korean Windows cp949 console); unencodable characters are replaced,
+- doctor now warns (`zettel_frontmatter_unquoted_timestamp`) when frontmatter contains an unquoted YAML timestamp, with the field path and a quoting hint; `doctor --strict` and `validate` treat it as failing,
+- `validate` accepts `--strict` for parity with doctor (validate already fails on warnings unless `--allow-warnings`),
+- added `wom-kit/docs/validation-surface.md` documenting what doctor, validate, and preflight each guarantee, including the YAML timestamp policy.
+
 ## v0.3.2 - 2026-06-11
 
 Frontmatter migration, redaction hardening, and the local capture spine.
