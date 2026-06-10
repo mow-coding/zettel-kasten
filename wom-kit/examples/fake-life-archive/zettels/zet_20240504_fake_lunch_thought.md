@@ -1,8 +1,8 @@
 ---
 id: zet_20240504_fake_lunch_thought
 title: Fake thought while eating alone
-created_at: 2024-05-04T12:30:00+09:00
-updated_at: 2026-05-19T12:00:00+09:00
+created_at: "2024-05-04T12:30:00+09:00"
+updated_at: "2026-05-19T12:00:00+09:00"
 archive_id: archive:personal:fake-life
 status: canonical
 kind: permanent_note
@@ -29,7 +29,7 @@ visibility:
 promotion:
   stage: promoted
   reviewed_by: person:fake-user
-  reviewed_at: 2026-05-19T12:00:00+09:00
+  reviewed_at: "2026-05-19T12:00:00+09:00"
   checklist_version: zettel-promotion/v0.2
 ---
 

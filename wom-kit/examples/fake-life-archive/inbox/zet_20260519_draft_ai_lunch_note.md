@@ -1,8 +1,8 @@
 ---
 id: zet_20260519_draft_ai_lunch_note
 title: Draft AI lunch note
-created_at: 2026-05-19T12:10:00+09:00
-updated_at: 2026-05-19T12:10:00+09:00
+created_at: "2026-05-19T12:10:00+09:00"
+updated_at: "2026-05-19T12:10:00+09:00"
 archive_id: archive:personal:fake-life
 status: draft
 kind: fleeting_capture
