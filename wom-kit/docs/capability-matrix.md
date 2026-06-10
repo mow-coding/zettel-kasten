@@ -24,6 +24,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Capability | Status in current working tree | Write behavior | Notes |
 | --- | --- | --- | --- |
 | Archive doctor | `implemented local command` | read-only | `archive doctor` checks archive structure, schema, manifest, receipt, and lifecycle consistency. |
+| Archive frontmatter migration | `approval-gated write` | dry-run previews first; CLI approve rewrites zettel frontmatter only | `archive migrate --target frontmatter-v0.3` aligns older v0.2-draft-authored zettel frontmatter with the current v0.3 schema. Ambiguous or unsafe source values block for manual review. |
 | Mint lifecycle | `approval-gated write` | CLI approve writes canonical zet, receipt, and draft snapshot | Dry-run previews first. Minting is private archive memory, not public posting. |
 | Delegate lifecycle | `approval-gated write` | CLI approve writes delegate receipt only | MCP delegate checks remain dry-run. Real external transport is not implemented. |
 | Attest lifecycle preview | `read-only preview` | none | `attest-zet --dry-run` previews delegated receipt review without writing attestation records. |

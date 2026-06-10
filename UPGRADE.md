@@ -42,6 +42,39 @@ The top-level `ok` means the check ran; use `upgrade_readiness.status`
 (`ready`, `warnings`, or `blocked`) to decide whether a real upgrade is blocked,
 needs more review, or is ready for manual review.
 
+## Frontmatter v0.3 Migration
+
+The current v0.3 frontmatter contract requires these nested fields:
+
+```text
+provenance.created_by
+provenance.created_in
+provenance.source
+provenance.derived_from
+visibility.scope
+visibility.allowed_archives
+visibility.source_visibility
+```
+
+If an archive was authored from older `wom-kit/zettel-kasten-rules/v0.2-draft`
+guidance, run the migration preview before strict v0.3 validation:
+
+```text
+archive migrate <archive-root> --target frontmatter-v0.3 --dry-run --format json
+```
+
+After reviewing the planned per-field changes on a backup or sandbox copy, apply
+the migration with:
+
+```text
+archive migrate <archive-root> --target frontmatter-v0.3 --approve --format json
+```
+
+The migration is dry-run-first. It only rewrites archive-contained Markdown
+zettel frontmatter under `inbox/` and `zettels/`. Clean legacy source objects
+are preserved in `source_refs`; ambiguous, unsafe, secret-like, or external path
+values block for manual review instead of being guessed.
+
 Use a sandbox copy or backup before testing a real archive upgrade:
 
 1. Copy or back up the private archive control plane.
@@ -138,7 +171,15 @@ What changed:
 - added `wom-kit/docs/shared-update-route-preview.md`,
 - updated version metadata to `0.3.1`.
 
-No private archive migration is required.
+The route-preview command itself requires no provider, transport, or
+shared-update record migration. Archives authored from older v0.2-draft
+frontmatter rules should run:
+
+```text
+archive migrate <archive-root> --target frontmatter-v0.3 --dry-run
+```
+
+before strict v0.3 validation.
 
 The new command is read-only and dry-run only. It writes no files and only points a human toward an existing canonical command surface. It does not expose an MCP write/apply/approve tool and does not create real ZET transport, keys, feed updates, trust/import/acceptance, attestations, signatures, anchors, public proofs, provider sync, projection writes, queues/workers, wallet/key custody, payment/staking/consensus/blockchain, tokens, model training, backpropagation, or full-auto behavior.
 
@@ -155,7 +196,15 @@ What changed:
 - added `wom-kit/docs/shared-update-attestation-review-write.md`,
 - updated version metadata to `0.3.0`.
 
-No private archive migration is required.
+The shared-update attestation/review command itself requires no provider,
+transport, or shared-update record migration. Archives authored from older
+v0.2-draft frontmatter rules should run:
+
+```text
+archive migrate <archive-root> --target frontmatter-v0.3 --dry-run
+```
+
+before strict v0.3 validation.
 
 The new command writes only a local shared update attestation/review record and matching receipt. It does not expose an MCP write/apply tool and does not create real ZET transport, keys, feed updates, trust/import/acceptance, signatures, anchors, public proofs, provider sync, projection writes, queues/workers, wallet/key custody, payment/staking/consensus/blockchain, tokens, model training, backpropagation, or full-auto behavior.
 

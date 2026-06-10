@@ -101,6 +101,8 @@ Commands:
           Show backup/restore readiness without writing files.
   upgrade-check
           Check upgrade readiness without writing files.
+  migrate
+          Dry-run or approve a frontmatter compatibility migration.
   restore-drill
           Plan or run a local restore drill before real data pilot.
   pilot-plan
@@ -128,7 +130,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import archive_services
+from . import __version__, archive_services
 from .paths import (
     ArchivePathError,
     archive_relative_path,
@@ -270,14 +272,24 @@ class Diagnostic:
     code: str
     message: str
     path: str | None = None
+    hint: str | None = None
+    suggested_command: str | None = None
+    compatibility_target: str | None = None
 
     def as_dict(self) -> dict[str, str | None]:
-        return {
+        data = {
             "severity": self.severity,
             "code": self.code,
             "message": self.message,
             "path": self.path,
         }
+        if self.hint is not None:
+            data["hint"] = self.hint
+        if self.suggested_command is not None:
+            data["suggested_command"] = self.suggested_command
+        if self.compatibility_target is not None:
+            data["compatibility_target"] = self.compatibility_target
+        return data
 
 
 class Doctor:
@@ -297,6 +309,10 @@ class Doctor:
             return self.diagnostics
 
         self.info("archive_root", f"Inspecting archive root: {self.archive_root}", self.archive_root)
+        self.info(
+            "doctor_version_compatibility",
+            f"release v{__version__} / schema {archive_services.FRONTMATTER_V03_TARGET} / compatible? yes",
+        )
         self._check_symlink_boundaries()
         self._check_required_structure()
         self._check_v02_recommendations()
@@ -320,8 +336,27 @@ class Doctor:
         self._check_local_profile_and_secret_safety()
         return self.diagnostics
 
-    def error(self, code: str, message: str, path: Path | str | None = None) -> None:
-        self.diagnostics.append(Diagnostic("ERROR", code, message, self._display_path(path)))
+    def error(
+        self,
+        code: str,
+        message: str,
+        path: Path | str | None = None,
+        *,
+        hint: str | None = None,
+        suggested_command: str | None = None,
+        compatibility_target: str | None = None,
+    ) -> None:
+        self.diagnostics.append(
+            Diagnostic(
+                "ERROR",
+                code,
+                message,
+                self._display_path(path),
+                hint,
+                suggested_command,
+                compatibility_target,
+            )
+        )
 
     def warn(self, code: str, message: str, path: Path | str | None = None) -> None:
         self.diagnostics.append(Diagnostic("WARN", code, message, self._display_path(path)))
@@ -1104,7 +1139,37 @@ class Doctor:
 
     def _check_schema(self, data: Any, schema_name: str, path: Path) -> None:
         for issue in validate_schema(data, schema_name):
-            self.error(issue.code, f"{schema_name}: {issue.message}", path)
+            if self._is_actionable_frontmatter_v03_issue(schema_name, issue.data_path):
+                self.error(
+                    issue.code,
+                    f"{schema_name}: {issue.message}",
+                    path,
+                    hint=(
+                        "This zettel looks like legacy frontmatter for the current v0.3 contract. "
+                        "Run the migration dry-run before editing by hand."
+                    ),
+                    suggested_command=archive_services.FRONTMATTER_V03_MIGRATION_COMMAND,
+                    compatibility_target=archive_services.FRONTMATTER_V03_TARGET,
+                )
+            else:
+                self.error(issue.code, f"{schema_name}: {issue.message}", path)
+
+    def _is_actionable_frontmatter_v03_issue(self, schema_name: str, data_path: str) -> bool:
+        if schema_name != "zettel-frontmatter.schema.json":
+            return False
+        actionable_paths = {
+            "$.facets",
+            "$.assets",
+            "$.edges",
+            "$.provenance",
+            "$.provenance.created_in",
+            "$.provenance.source",
+            "$.provenance.derived_from",
+            "$.visibility",
+            "$.visibility.allowed_archives",
+            "$.visibility.source_visibility",
+        }
+        return data_path in actionable_paths
 
     def _check_local_profile_and_secret_safety(self) -> None:
         self._check_gitignore_secret_patterns()
@@ -1325,6 +1390,46 @@ def command_validate(args: argparse.Namespace) -> int:
         print("Validation passed." if ok else "Validation failed.")
 
     return 0 if ok else 1
+
+
+def command_migrate(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.migrate_frontmatter_v03(
+            Path(args.archive_root),
+            target=args.target,
+            dry_run=bool(args.dry_run),
+            approve=bool(args.approve),
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        action = "dry-run" if result["dry_run"] else "approved write"
+        print(f"Frontmatter migration {action}: {result['target']}")
+        print(f"Archive: {result['archive_id']}")
+        print(f"Files scanned: {result['files_scanned']}")
+        print(f"Files with planned changes: {result['files_with_changes']}")
+        if result["blocked"]:
+            print("Manual review required before migration can be approved.")
+            for blocker in result["blockers"]:
+                print(f"- {blocker['path']} {blocker['field']}: {blocker['message']}")
+        for item in result["would_change"]:
+            if not item["changes"]:
+                continue
+            print(f"\n{item['path']}")
+            for change in item["changes"]:
+                print(f"- {change['action']} {change['field']}")
+        if result["files_written"]:
+            print("\nFiles written:")
+            for path in result["files_written"]:
+                print(f"- {path}")
+        if not result["would_change"]:
+            print("No frontmatter changes needed.")
+
+    return 0 if result["ok"] else 1
 
 
 def command_profile_list(args: argparse.Namespace) -> int:
@@ -4101,6 +4206,12 @@ def print_diagnostics(diagnostics: list[Diagnostic], errors: list[Diagnostic], w
     for item in diagnostics:
         location = f" [{item.path}]" if item.path else ""
         print(f"{item.severity}: {item.code}: {item.message}{location}")
+        if item.hint:
+            print(f"  hint: {item.hint}")
+        if item.suggested_command:
+            print(f"  suggested_command: {item.suggested_command}")
+        if item.compatibility_target:
+            print(f"  compatibility_target: {item.compatibility_target}")
     print(f"\nSummary: {len(errors)} error(s), {len(warnings)} warning(s).")
 
 
@@ -4219,6 +4330,14 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--allow-warnings", action="store_true", help="Do not fail when only warnings are present.")
     validate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     validate.set_defaults(func=command_validate)
+
+    migrate = subcommands.add_parser("migrate", help="Dry-run or approve a frontmatter compatibility migration.")
+    migrate.add_argument("archive_root", help="Archive root to migrate.")
+    migrate.add_argument("--target", required=True, choices=[archive_services.FRONTMATTER_V03_TARGET], help="Migration target.")
+    migrate.add_argument("--dry-run", action="store_true", help="Preview frontmatter changes without writing files.")
+    migrate.add_argument("--approve", action="store_true", help="Apply the reviewed frontmatter changes.")
+    migrate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    migrate.set_defaults(func=command_migrate)
 
     profile_list_parser = subcommands.add_parser(
         "profile-list",
