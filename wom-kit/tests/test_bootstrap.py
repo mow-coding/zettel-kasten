@@ -32,7 +32,7 @@ class BootstrapTests(unittest.TestCase):
         merged_env = os.environ.copy()
         if env:
             merged_env.update(env)
-        return subprocess.run(command, cwd=KIT_ROOT, capture_output=True, text=True, encoding="utf-8", env=merged_env)
+        return subprocess.run(command, cwd=KIT_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace", env=merged_env)
 
     def assert_no_baseline_created(self, env_before: str | None, archives_existed_before: bool) -> None:
         env_path = KIT_ROOT / ".env"

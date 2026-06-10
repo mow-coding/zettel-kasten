@@ -70,7 +70,7 @@ fi
 
 archive_root_abs() {
   case "$1" in
-    /*)
+    /*|[A-Za-z]:/*|[A-Za-z]:\\*)
       printf '%s\n' "$1"
       ;;
     *)
@@ -100,7 +100,15 @@ validate_archive_root() {
       ;;
   esac
   project_trimmed=$(printf '%s\n' "$PROJECT_ROOT" | sed 's:/*$::')
-  if [ "$trimmed" = "$project_trimmed" ]; then
+  # Canonicalize the candidate when it exists so equivalent paths in different
+  # forms (e.g. C:/x vs /c/x under git-bash, symlinks, trailing slashes, ..)
+  # are caught by the repository-root guard. This only ever adds rejections.
+  candidate_canon="$trimmed"
+  if [ -d "$candidate" ]; then
+    canon=$(CDPATH= cd -- "$candidate" 2>/dev/null && pwd) \
+      && candidate_canon=$(printf '%s\n' "$canon" | sed 's:/*$::')
+  fi
+  if [ "$trimmed" = "$project_trimmed" ] || [ "$candidate_canon" = "$project_trimmed" ]; then
     echo "Archive root must not be the repository root: $candidate" >&2
     exit 1
   fi

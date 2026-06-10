@@ -10900,6 +10900,132 @@ class ArchiveCliTests(unittest.TestCase):
             source_result = json.loads(source_output)
             self.assertTrue(any(item["type"] == "source_map" for item in source_result["results"]))
 
+    def test_search_excludes_redacted_zettels_and_never_leaks_their_body(self) -> None:
+        # Privacy regression guard: a status='redacted' zettel must never be matched on or
+        # surfaced (body/frontmatter/title) by search; draft/canonical/archived stay searchable.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            archive_id = archive_services.read_archive_id(archive_root)
+            secret = "Zqx9RedactedSecretMarker7788"
+            visible = "Zqx9VisibleArchivedMarker7788"
+
+            def write_zettel(zid: str, status: str, marker: str) -> None:
+                frontmatter = {
+                    "id": zid,
+                    "title": f"{status} probe {marker}",
+                    "created_at": "2026-06-08T10:00:00+09:00",
+                    "updated_at": "2026-06-08T10:00:00+09:00",
+                    "archive_id": archive_id,
+                    "status": status,
+                    "kind": "note",
+                    "facets": {},
+                    "assets": [],
+                    "edges": [],
+                    "provenance": {
+                        "created_by": "person:test",
+                        "created_in": archive_id,
+                        "source": "test",
+                        "derived_from": [],
+                    },
+                    "visibility": {"scope": "private", "allowed_archives": [], "source_visibility": "private"},
+                }
+                (archive_root / "zettels" / f"{zid}.md").write_text(
+                    "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\nBody contains " + marker + " text.\n",
+                    encoding="utf-8",
+                )
+
+            write_zettel("zet_20260608_redacted_probe", "redacted", secret)
+            write_zettel("zet_20260608_archived_probe", "archived", visible)
+
+            index_code, index_output = self.run_cli(["index", str(archive_root), "--format", "json"])
+            self.assertEqual(index_code, 0, index_output)
+
+            # 0. Defense in depth: the redacted plaintext must not even be written into the disposable index file.
+            index_bytes = (archive_root / "db" / "archive-index.sqlite").read_bytes()
+            self.assertNotIn(secret.encode("utf-8"), index_bytes, "redacted body must not be stored in the index")
+            # The visible (non-redacted) marker should be present in the index.
+            self.assertIn(visible.encode("utf-8"), index_bytes, "non-redacted content should be indexed normally")
+
+            # 1. The redacted body is not searchable and its content never appears in any output.
+            code, output = self.run_cli(["search", str(archive_root), secret, "--format", "json"])
+            self.assertEqual(code, 0, output)
+            secret_result = json.loads(output)
+            self.assertEqual(secret_result["count"], 0, "redacted zettel body must not be searchable")
+            # The output JSON echoes the query term itself, so assert specifically that no RESULT
+            # row carries the redacted content (the actual leak channel).
+            self.assertEqual(secret_result["results"], [], "redacted zettel must not appear in results")
+            self.assertNotIn(secret, json.dumps(secret_result["results"]), "redacted body must never leak via results")
+
+            # 2. Even matching the status word / title fragment must not surface the redacted zettel.
+            code, output = self.run_cli(["search", str(archive_root), "redacted probe", "--format", "json"])
+            self.assertEqual(code, 0, output)
+            self.assertNotIn(secret, output)
+            self.assertNotIn("zet_20260608_redacted_probe", output)
+
+            # 3. A non-redacted (archived) zettel stays searchable -> the filter is not over-broad.
+            code, output = self.run_cli(["search", str(archive_root), visible, "--format", "json"])
+            self.assertEqual(code, 0, output)
+            visible_result = json.loads(output)
+            self.assertGreaterEqual(visible_result["count"], 1, "non-redacted zettels must remain searchable")
+            self.assertTrue(
+                any(visible in json.dumps(item) for item in visible_result["results"]),
+                "the archived zettel should be returned",
+            )
+
+    def test_redacted_zettel_suppressed_across_all_read_surfaces(self) -> None:
+        # Systemic redaction guard: list_zettels / read_zettel / block_header_preview /
+        # zet_projection_plan_preview must each suppress a status='redacted' zettel's content.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            archive_id = archive_services.read_archive_id(archive_root)
+            secret = "Zzz9RedactedAcrossSurfaces5566"
+            zid = "zet_20260608_redacted_surfaces"
+            frontmatter = {
+                "id": zid,
+                "title": f"top secret {secret}",
+                "created_at": "2026-06-08T10:00:00+09:00",
+                "updated_at": "2026-06-08T10:00:00+09:00",
+                "archive_id": archive_id,
+                "status": "redacted",
+                "kind": "note",
+                "facets": {"domain": secret},
+                "assets": [],
+                "edges": [],
+                "provenance": {"created_by": "person:test", "created_in": archive_id, "source": "test", "derived_from": []},
+                "visibility": {"scope": "private", "allowed_archives": [], "source_visibility": "private"},
+            }
+            (archive_root / "zettels" / f"{zid}.md").write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\nBody with " + secret + " inside.\n",
+                encoding="utf-8",
+            )
+
+            # list_zettels: the redacted zettel is still listed (existence) but its content is suppressed.
+            listed = archive_services.list_zettels(archive_root, status="all", limit=500)
+            entry = next((z for z in listed["zettels"] if z.get("id") == zid), None)
+            self.assertIsNotNone(entry, "redacted zettel should still be listed by id")
+            self.assertEqual(entry["status"], "redacted")
+            self.assertIsNone(entry["title"], "redacted title must be suppressed")
+            self.assertEqual(entry["visibility"], {})
+            self.assertNotIn(secret, json.dumps(listed), "no redacted content may leak via list_zettels")
+
+            # read_zettel: returns a redacted sentinel with no body/frontmatter content.
+            read = archive_services.read_zettel(archive_root, zettel_id=zid)
+            self.assertTrue(read.get("redacted"))
+            self.assertEqual(read["body"], "")
+            self.assertNotIn(secret, json.dumps(read), "no redacted content may leak via read_zettel")
+
+            # block_header_preview: blocked + content suppressed.
+            bh = archive_services.block_header_preview(archive_root, zettel_id=zid, dry_run=True)
+            self.assertFalse(bh["ok"])
+            self.assertNotIn(secret, json.dumps(bh), "no redacted content may leak via block_header_preview")
+
+            # zet_projection_plan_preview: blocked + content suppressed.
+            proj = archive_services.zet_projection_plan_preview(
+                archive_root, zet_ref=zid, surface="static_site", dry_run=True
+            )
+            self.assertFalse(proj["ok"])
+            self.assertNotIn(secret, json.dumps(proj), "no redacted content may leak via projection preview")
+
     def test_sources_cli_lists_registered_sources(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         code, output = self.run_cli(["sources", str(archive_root), "--format", "json"])
@@ -13211,6 +13337,196 @@ class ArchiveCliTests(unittest.TestCase):
             }
             self.assertIn("views/homebase.yml", missing_paths)
             self.assertNotIn("views\\homebase.yml", missing_paths)
+
+    def test_migrate_frontmatter_v03_dry_run_and_approve_are_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:migrate-test")
+            self.assertEqual(init_code, 0, init_output)
+            zettel_path = archive_root / "inbox" / "zet_20260607_legacy_frontmatter.md"
+            legacy_frontmatter = {
+                "id": "zet_20260607_legacy_frontmatter",
+                "title": "Legacy frontmatter",
+                "created_at": "2026-06-07T10:00:00+09:00",
+                "updated_at": "2026-06-07T10:00:00+09:00",
+                "archive_id": "archive:personal:migrate-test",
+                "status": "draft",
+                "kind": "fleeting_capture",
+                "provenance": {
+                    "created_by": "person:test",
+                    "source": "manual note",
+                },
+                "visibility": {
+                    "scope": "private",
+                },
+            }
+            zettel_path.write_text(
+                "---\n" + archive_cli.dump_yaml(legacy_frontmatter) + "---\n\nLegacy body.\n",
+                encoding="utf-8",
+            )
+            original_text = zettel_path.read_text(encoding="utf-8")
+
+            dry_code, dry_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "frontmatter-v0.3", "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(dry_code, 0, dry_output)
+            dry_result = json.loads(dry_output)
+            self.assertTrue(dry_result["dry_run"])
+            self.assertEqual(dry_result["files_with_changes"], 1)
+            self.assertEqual(dry_result["files_written"], [])
+            self.assertEqual(zettel_path.read_text(encoding="utf-8"), original_text)
+
+            approve_code, approve_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "frontmatter-v0.3", "--approve", "--format", "json"]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            approve_result = json.loads(approve_output)
+            self.assertEqual(approve_result["files_written"], ["inbox/zet_20260607_legacy_frontmatter.md"])
+
+            migrated_frontmatter, _body = archive_services.split_zettel_text(zettel_path.read_text(encoding="utf-8"))
+            self.assertEqual(migrated_frontmatter["facets"], {})
+            self.assertEqual(migrated_frontmatter["assets"], [])
+            self.assertEqual(migrated_frontmatter["edges"], [])
+            self.assertEqual(migrated_frontmatter["provenance"]["created_in"], "archive:personal:migrate-test")
+            self.assertEqual(migrated_frontmatter["provenance"]["derived_from"], [])
+            self.assertEqual(migrated_frontmatter["visibility"]["allowed_archives"], [])
+            self.assertEqual(migrated_frontmatter["visibility"]["source_visibility"], "private")
+
+            second_code, second_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "frontmatter-v0.3", "--approve", "--format", "json"]
+            )
+            self.assertEqual(second_code, 0, second_output)
+            second_result = json.loads(second_output)
+            self.assertEqual(second_result["files_with_changes"], 0)
+            self.assertEqual(second_result["files_written"], [])
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_migrate_frontmatter_v03_relocates_clean_source_object_losslessly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:source-object")
+            self.assertEqual(init_code, 0, init_output)
+            source_object = {"type": "object_manifest", "value": "object:fake-source", "note": {"id": "fake-001"}}
+            zettel_path = archive_root / "inbox" / "zet_20260607_source_object.md"
+            frontmatter = {
+                "id": "zet_20260607_source_object",
+                "title": "Source object",
+                "created_at": "2026-06-07T10:00:00+09:00",
+                "updated_at": "2026-06-07T10:00:00+09:00",
+                "archive_id": "archive:personal:source-object",
+                "status": "draft",
+                "kind": "source_note",
+                "facets": {},
+                "assets": [],
+                "edges": [],
+                "provenance": {
+                    "created_by": "person:test",
+                    "created_in": "archive:personal:source-object",
+                    "source": source_object,
+                    "derived_from": [],
+                },
+                "visibility": {
+                    "scope": "private",
+                    "allowed_archives": [],
+                    "source_visibility": "private",
+                },
+            }
+            zettel_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\nBody.\n", encoding="utf-8")
+
+            code, output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "frontmatter-v0.3", "--approve", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            migrated_frontmatter, _body = archive_services.split_zettel_text(zettel_path.read_text(encoding="utf-8"))
+            canonical_source = json.dumps(source_object, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            self.assertEqual(migrated_frontmatter["provenance"]["source"], "legacy_provenance_source")
+            self.assertIn(
+                {
+                    "type": "legacy_provenance_source",
+                    "value": canonical_source,
+                    "role": "legacy_provenance_source",
+                },
+                migrated_frontmatter["source_refs"],
+            )
+
+    def test_migrate_frontmatter_v03_blocks_ambiguous_source_object_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:block-source")
+            self.assertEqual(init_code, 0, init_output)
+            zettel_path = archive_root / "inbox" / "zet_20260607_block_source.md"
+            frontmatter = {
+                "id": "zet_20260607_block_source",
+                "title": "Blocked source",
+                "created_at": "2026-06-07T10:00:00+09:00",
+                "updated_at": "2026-06-07T10:00:00+09:00",
+                "archive_id": "archive:personal:block-source",
+                "status": "draft",
+                "kind": "source_note",
+                "facets": {},
+                "assets": [],
+                "edges": [],
+                "provenance": {
+                    "created_by": "person:test",
+                    "created_in": "archive:personal:block-source",
+                    "source": {"notes": ["unstructured private source note"]},
+                    "derived_from": [],
+                },
+                "visibility": {
+                    "scope": "private",
+                    "allowed_archives": [],
+                    "source_visibility": "private",
+                },
+            }
+            zettel_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\nBody.\n", encoding="utf-8")
+            original_text = zettel_path.read_text(encoding="utf-8")
+
+            code, output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "frontmatter-v0.3", "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertTrue(result["blocked"])
+            self.assertEqual(zettel_path.read_text(encoding="utf-8"), original_text)
+
+    def test_doctor_legacy_frontmatter_json_includes_migration_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:doctor-hint")
+            self.assertEqual(init_code, 0, init_output)
+            zettel_path = archive_root / "inbox" / "zet_20260607_doctor_hint.md"
+            frontmatter = {
+                "id": "zet_20260607_doctor_hint",
+                "title": "Doctor hint",
+                "created_at": "2026-06-07T10:00:00+09:00",
+                "updated_at": "2026-06-07T10:00:00+09:00",
+                "archive_id": "archive:personal:doctor-hint",
+                "status": "draft",
+                "kind": "fleeting_capture",
+                "provenance": {
+                    "created_by": "person:test",
+                    "source": "legacy note",
+                },
+                "visibility": {
+                    "scope": "private",
+                },
+            }
+            zettel_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\nBody.\n", encoding="utf-8")
+
+            code, output = self.run_cli(["doctor", str(archive_root), "--json"])
+            self.assertEqual(code, 1)
+            diagnostics = json.loads(output)
+            hinted = [
+                item
+                for item in diagnostics
+                if item.get("compatibility_target") == "frontmatter-v0.3"
+            ]
+            self.assertTrue(hinted)
+            self.assertTrue(
+                all("archive migrate <archive-root> --target frontmatter-v0.3 --dry-run" == item.get("suggested_command") for item in hinted)
+            )
 
     def test_doctor_flags_posix_local_absolute_paths_inside_zettels(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

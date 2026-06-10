@@ -54,6 +54,13 @@ The local objet store is the raw source/original file store.
 The project intake staging folder is temporary. It is the place where one project
 folder is reviewed before its durable records are created.
 
+Use the artifact hygiene baseline when deciding what can be kept, rebuilt,
+deferred, or cleaned:
+
+```text
+wom-kit/docs/artifact-hygiene.md
+```
+
 ## 3. Archive Of Record
 
 The staged folder is not the archive of record.
@@ -84,6 +91,7 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Source registration | `archive add-source` | Can write source binding metadata only after approval. |
 | Source scan | `archive scan-source` | Metadata-first; approved mode writes source maps and receipts. |
 | Session planning | `archive project-intake-plan --dry-run` | Plans one staged project folder session; counts only; writes nothing. |
+| Artifact hygiene | `wom-kit/tools/check_artifact_hygiene.py` | Report-only artifact classification and generated `.gitignore` checks; never cleans files. |
 | Per-item intake | `archive source-intake --dry-run` | Classifies exactly one locator; reads no bodies and writes nothing. |
 | Drafting | `archive create-draft --dry-run` | Previews an inbox draft; approved write is separate from minting. |
 | Minting | `archive mint-zet --dry-run` / `--approve` | Mints only after explicit approval and writes receipts/snapshots. |
@@ -125,6 +133,7 @@ The staged project folder may be removed only after verification that:
 - manifests/source maps/receipts exist for preserved items,
 - intended zets are minted or explicitly left as drafts/deferred work,
 - provenance links zets back to source refs or object ids,
+- report-only artifact hygiene review has no unresolved blockers,
 - `archive doctor --strict` passes,
 - the user approves cleanup.
 

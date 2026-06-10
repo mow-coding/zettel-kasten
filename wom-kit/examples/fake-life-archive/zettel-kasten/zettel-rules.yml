@@ -1,4 +1,4 @@
-schema_version: wom-kit/zettel-kasten-rules/v0.2-draft
+schema_version: wom-kit/zettel-kasten-rules/v0.3
 zettel_kasten_id: zettel-kasten:wom-kit:base
 status: draft
 description: >
@@ -81,6 +81,21 @@ draft_rules:
   recommended_frontmatter:
     - kind
     - promotion
+  required_frontmatter_subfields:
+    provenance:
+      - created_by
+      - created_in
+      - source
+      - derived_from
+    visibility:
+      - scope
+      - allowed_archives
+      - source_visibility
+  frontmatter_migration:
+    target: frontmatter-v0.3
+    dry_run_command: archive migrate <archive-root> --target frontmatter-v0.3 --dry-run
+    approve_command: archive migrate <archive-root> --target frontmatter-v0.3 --approve
+    safety: dry-run first; approve only after reviewing the planned field changes.
   allowed_draft_traits:
     - rough_language
     - uncertainty

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import hashlib
 import fnmatch
 import mimetypes
@@ -971,6 +972,12 @@ REQUIRED_ZETTEL_FIELDS = [
     "provenance",
     "visibility",
 ]
+FRONTMATTER_V03_TARGET = "frontmatter-v0.3"
+FRONTMATTER_V03_MIGRATION_COMMAND = (
+    "archive migrate <archive-root> --target frontmatter-v0.3 --dry-run"
+)
+FRONTMATTER_V03_LEGACY_REF_TYPE = "legacy_provenance_source"
+FRONTMATTER_V03_LEGACY_REF_ROLE = "legacy_provenance_source"
 
 
 class ArchiveServiceError(Exception):
@@ -1060,6 +1067,21 @@ def list_zettels(archive_root: Path | str, status: str = "canonical", limit: int
 def zettel_summary(path: Path, archive_root: Path, expected_status: str) -> dict[str, Any]:
     frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
     frontmatter = json_safe(frontmatter)
+    if frontmatter.get("status") == "redacted":
+        # Privacy: a redacted zettel still appears in listings (so its existence is known), but its
+        # content-bearing fields (title/kind/facets/visibility) are suppressed.
+        return {
+            "path": archive_relative_path(path, archive_root),
+            "id": frontmatter.get("id"),
+            "title": None,
+            "status": "redacted",
+            "kind": None,
+            "created_at": frontmatter.get("created_at"),
+            "updated_at": frontmatter.get("updated_at"),
+            "facets": {},
+            "visibility": {},
+            "redacted": True,
+        }
     return {
         "path": archive_relative_path(path, archive_root),
         "id": frontmatter.get("id"),
@@ -1086,6 +1108,15 @@ def read_zettel(
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
     frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
     frontmatter = json_safe(frontmatter)
+    if frontmatter.get("status") == "redacted":
+        # Privacy: a redacted zettel's body and frontmatter are suppressed on read; only its id and
+        # redacted status are returned so callers can see it exists without exposing the content.
+        return {
+            "path": archive_relative_path(path, root),
+            "frontmatter": {"id": frontmatter.get("id"), "status": "redacted"},
+            "body": "",
+            "redacted": True,
+        }
     return {
         "path": archive_relative_path(path, root),
         "frontmatter": frontmatter,
@@ -9750,6 +9781,13 @@ def block_header_preview(
         except (ArchiveServiceError, OSError, UnicodeError) as exc:
             blockers.append(str(exc))
 
+    if frontmatter.get("status") == "redacted":
+        # Privacy: never preview/expose a redacted zettel's header; block and suppress its content
+        # so nothing below (title, referenced refs, header_preview) can leak it.
+        blockers.append("Cannot generate a block header for a redacted zettel.")
+        frontmatter = {"id": frontmatter.get("id"), "status": "redacted"}
+        body = ""
+
     resolved_zettel_id = str(frontmatter.get("id") or zettel_id or "")
     title = frontmatter.get("title")
     status = frontmatter.get("status")
@@ -9862,6 +9900,12 @@ def zet_projection_plan_preview(
             )
         except (ArchiveServiceError, OSError, UnicodeError):
             blockers.append("Referenced zet could not be resolved inside the archive.")
+
+    if frontmatter.get("status") == "redacted":
+        # Privacy: never project/expose a redacted zettel; block and suppress its content.
+        blockers.append("Cannot project a redacted zettel.")
+        frontmatter = {"id": frontmatter.get("id"), "status": "redacted"}
+        body = ""
 
     title = safe_projection_scalar(frontmatter.get("title"))
     status = safe_projection_scalar(frontmatter.get("status"))
@@ -18706,6 +18750,11 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
         for path in iter_zettel_paths(root):
             frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
             frontmatter = json_safe(frontmatter)
+            zettel_status = frontmatter.get("status")
+            # Privacy/defense-in-depth: a 'redacted' zettel's plaintext (title/body/frontmatter) must
+            # never be written into the disposable on-disk index. path/id/status/kind are kept so the row
+            # stays countable + filterable; search additionally excludes redacted rows entirely.
+            redacted = zettel_status == "redacted"
             conn.execute(
                 """
                 INSERT OR REPLACE INTO zettels(path, zettel_id, title, status, kind, body, frontmatter_json)
@@ -18714,11 +18763,11 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
                 (
                     archive_relative_path(path, root),
                     frontmatter.get("id"),
-                    frontmatter.get("title"),
-                    frontmatter.get("status"),
+                    "" if redacted else frontmatter.get("title"),
+                    zettel_status,
                     frontmatter.get("kind"),
-                    body,
-                    json.dumps(frontmatter, ensure_ascii=False, default=str),
+                    "" if redacted else body,
+                    "" if redacted else json.dumps(frontmatter, ensure_ascii=False, default=str),
                 ),
             )
             zettel_count += 1
@@ -18831,13 +18880,20 @@ def search_archive(archive_root: Path | str, query: str, limit: int = 20) -> dic
             """
             SELECT path, zettel_id, title, status, kind, body, frontmatter_json
             FROM zettels
-            WHERE lower(coalesce(zettel_id, '') || ' ' || coalesce(title, '') || ' ' || coalesce(status, '') || ' ' ||
+            -- Privacy: a 'redacted' zettel's content is deliberately suppressed; it must never be
+            -- matched on or surfaced (body/frontmatter) by search. draft/canonical/archived stay searchable.
+            WHERE coalesce(status, '') != 'redacted'
+              AND lower(coalesce(zettel_id, '') || ' ' || coalesce(title, '') || ' ' || coalesce(status, '') || ' ' ||
                         coalesce(kind, '') || ' ' || coalesce(body, '') || ' ' || coalesce(frontmatter_json, '')) LIKE ?
             ORDER BY path
             LIMIT ?
             """,
             (like, limit),
         ):
+            if (row["status"] or "") == "redacted":
+                # Defense in depth: redacted zettels are already excluded in SQL above; this guard
+                # guarantees their body can never be emitted even if the query is later modified.
+                continue
             results.append(
                 {
                     "type": "zettel",
@@ -18971,6 +19027,310 @@ def read_archive_config(archive_root: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ArchiveServiceError("archive.yml is not a readable object.")
     return data
+
+
+def migrate_frontmatter_v03(
+    archive_root: Path | str,
+    *,
+    target: str,
+    dry_run: bool,
+    approve: bool,
+) -> dict[str, Any]:
+    if target != FRONTMATTER_V03_TARGET:
+        raise ArchiveServiceError(f"Unsupported migration target: {target}")
+    if dry_run == approve:
+        raise ArchiveServiceError("archive migrate requires exactly one of --dry-run or --approve.")
+
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    plans: list[dict[str, Any]] = []
+    blockers: list[dict[str, Any]] = []
+    files_scanned = 0
+
+    for path in iter_zettel_paths(root):
+        files_scanned += 1
+        plan = frontmatter_v03_migration_plan_for_path(path, root, archive_id)
+        if plan["blockers"]:
+            blockers.extend(plan["blockers"])
+        if plan["changes"] or plan["blockers"]:
+            plans.append(plan)
+
+    ok = not blockers
+    files_written: list[str] = []
+    if approve and ok:
+        for plan in plans:
+            if not plan["changes"]:
+                continue
+            path = root / plan["path"]
+            if not is_path_within_root(path, root):
+                raise ArchiveServiceError(f"Migration target escaped archive root: {plan['path']}")
+            write_text_atomic(path, str(plan["new_text"]))
+            files_written.append(str(plan["path"]))
+
+    return {
+        "ok": ok,
+        "lifecycle_action": "frontmatter_v03_migration",
+        "target": FRONTMATTER_V03_TARGET,
+        "dry_run": bool(dry_run),
+        "approved": bool(approve),
+        "archive_id": archive_id,
+        "files_scanned": files_scanned,
+        "files_with_changes": sum(1 for plan in plans if plan["changes"]),
+        "files_written": files_written,
+        "blocked": bool(blockers),
+        "blockers": blockers,
+        "warnings": [],
+        "would_change": [
+            {
+                "path": plan["path"],
+                "changes": plan["changes"],
+                "manual_review_required": bool(plan["blockers"]),
+                "blockers": plan["blockers"],
+            }
+            for plan in plans
+        ],
+    }
+
+
+def frontmatter_v03_migration_plan_for_path(path: Path, archive_root: Path, archive_id: str) -> dict[str, Any]:
+    relative_path = archive_relative_path(path, archive_root)
+    text = path.read_text(encoding="utf-8")
+    match = FRONTMATTER_RE.match(text)
+    changes: list[dict[str, Any]] = []
+    blockers: list[dict[str, Any]] = []
+
+    if not match:
+        return {
+            "path": relative_path,
+            "changes": changes,
+            "blockers": [
+                frontmatter_v03_blocker(relative_path, "$", "missing_frontmatter", "Zettel has no YAML frontmatter.")
+            ],
+            "new_text": text,
+        }
+
+    frontmatter_text = match.group(1)
+    loaded = load_yaml(frontmatter_text)
+    if not isinstance(loaded, dict):
+        return {
+            "path": relative_path,
+            "changes": changes,
+            "blockers": [
+                frontmatter_v03_blocker(relative_path, "$", "invalid_frontmatter", "Zettel frontmatter is not an object.")
+            ],
+            "new_text": text,
+        }
+
+    frontmatter = copy.deepcopy(json_safe(loaded))
+    for field in ("id", "title", "created_at", "updated_at", "archive_id", "status"):
+        if not str(frontmatter.get(field) or "").strip():
+            blockers.append(
+                frontmatter_v03_blocker(
+                    relative_path,
+                    f"$.{field}",
+                    "manual_identity_or_time_required",
+                    f"Required identity/time/archive field is missing: {field}.",
+                )
+            )
+
+    if "facets" not in frontmatter:
+        frontmatter["facets"] = {}
+        changes.append(frontmatter_v03_change("$.facets", "add", None, {}))
+    elif not isinstance(frontmatter.get("facets"), dict):
+        blockers.append(frontmatter_v03_blocker(relative_path, "$.facets", "manual_review_required", "facets must be an object."))
+
+    if "assets" not in frontmatter:
+        frontmatter["assets"] = []
+        changes.append(frontmatter_v03_change("$.assets", "add", None, []))
+    elif not isinstance(frontmatter.get("assets"), list):
+        blockers.append(frontmatter_v03_blocker(relative_path, "$.assets", "manual_review_required", "assets must be an array."))
+
+    if "edges" not in frontmatter:
+        frontmatter["edges"] = []
+        changes.append(frontmatter_v03_change("$.edges", "add", None, []))
+    elif not isinstance(frontmatter.get("edges"), list):
+        blockers.append(frontmatter_v03_blocker(relative_path, "$.edges", "manual_review_required", "edges must be an array."))
+
+    provenance = frontmatter.get("provenance")
+    if not isinstance(provenance, dict):
+        blockers.append(frontmatter_v03_blocker(relative_path, "$.provenance", "manual_review_required", "provenance must be an object."))
+    else:
+        migrate_frontmatter_v03_provenance(relative_path, frontmatter, provenance, archive_id, changes, blockers)
+
+    visibility = frontmatter.get("visibility")
+    if not isinstance(visibility, dict):
+        blockers.append(frontmatter_v03_blocker(relative_path, "$.visibility", "manual_review_required", "visibility must be an object."))
+    else:
+        migrate_frontmatter_v03_visibility(relative_path, visibility, changes, blockers)
+
+    body = text[match.end() :]
+    new_text = "---\n" + dump_yaml(frontmatter) + "---\n" + body
+    return {"path": relative_path, "changes": changes, "blockers": blockers, "new_text": new_text}
+
+
+def migrate_frontmatter_v03_provenance(
+    relative_path: str,
+    frontmatter: dict[str, Any],
+    provenance: dict[str, Any],
+    archive_id: str,
+    changes: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    if not str(provenance.get("created_by") or "").strip():
+        blockers.append(
+            frontmatter_v03_blocker(
+                relative_path,
+                "$.provenance.created_by",
+                "manual_identity_or_time_required",
+                "provenance.created_by is missing.",
+            )
+        )
+    if "created_in" not in provenance:
+        provenance["created_in"] = archive_id
+        changes.append(frontmatter_v03_change("$.provenance.created_in", "add", None, archive_id))
+    elif not str(provenance.get("created_in") or "").strip():
+        blockers.append(
+            frontmatter_v03_blocker(
+                relative_path,
+                "$.provenance.created_in",
+                "manual_identity_or_time_required",
+                "provenance.created_in is empty.",
+            )
+        )
+
+    if "derived_from" not in provenance:
+        provenance["derived_from"] = []
+        changes.append(frontmatter_v03_change("$.provenance.derived_from", "add", None, []))
+    elif not isinstance(provenance.get("derived_from"), list):
+        blockers.append(
+            frontmatter_v03_blocker(
+                relative_path,
+                "$.provenance.derived_from",
+                "manual_review_required",
+                "provenance.derived_from must be an array.",
+            )
+        )
+
+    if "source" not in provenance or provenance.get("source") is None:
+        blockers.append(
+            frontmatter_v03_blocker(
+                relative_path,
+                "$.provenance.source",
+                "manual_review_required",
+                "provenance.source is missing.",
+            )
+        )
+        return
+    source = provenance.get("source")
+    if isinstance(source, str):
+        if not source.strip():
+            blockers.append(frontmatter_v03_blocker(relative_path, "$.provenance.source", "manual_review_required", "provenance.source is empty."))
+        return
+
+    if not frontmatter_v03_source_object_is_clean(source):
+        blockers.append(
+            frontmatter_v03_blocker(
+                relative_path,
+                "$.provenance.source",
+                "manual_review_required",
+                "Object-shaped provenance.source is ambiguous or contains unsafe values; review before migration.",
+            )
+        )
+        return
+
+    source_refs = frontmatter.get("source_refs")
+    if source_refs is None:
+        source_refs = []
+        frontmatter["source_refs"] = source_refs
+        changes.append(frontmatter_v03_change("$.source_refs", "add", None, []))
+    if not isinstance(source_refs, list):
+        blockers.append(frontmatter_v03_blocker(relative_path, "$.source_refs", "manual_review_required", "source_refs must be an array."))
+        return
+
+    canonical_value = json.dumps(json_safe(source), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    source_ref = {
+        "type": FRONTMATTER_V03_LEGACY_REF_TYPE,
+        "value": canonical_value,
+        "role": FRONTMATTER_V03_LEGACY_REF_ROLE,
+    }
+    if not any(isinstance(item, dict) and item.get("type") == source_ref["type"] and item.get("value") == canonical_value for item in source_refs):
+        source_refs.append(source_ref)
+        changes.append(frontmatter_v03_change("$.source_refs[]", "append", None, source_ref))
+    provenance["source"] = FRONTMATTER_V03_LEGACY_REF_TYPE
+    changes.append(frontmatter_v03_change("$.provenance.source", "replace", source, FRONTMATTER_V03_LEGACY_REF_TYPE))
+
+
+def migrate_frontmatter_v03_visibility(
+    relative_path: str,
+    visibility: dict[str, Any],
+    changes: list[dict[str, Any]],
+    blockers: list[dict[str, Any]],
+) -> None:
+    scope = visibility.get("scope")
+    if not isinstance(scope, str) or not scope.strip():
+        blockers.append(
+            frontmatter_v03_blocker(
+                relative_path,
+                "$.visibility.scope",
+                "manual_review_required",
+                "visibility.scope is missing.",
+            )
+        )
+    if "allowed_archives" not in visibility:
+        visibility["allowed_archives"] = []
+        changes.append(frontmatter_v03_change("$.visibility.allowed_archives", "add", None, []))
+    elif not isinstance(visibility.get("allowed_archives"), list):
+        blockers.append(
+            frontmatter_v03_blocker(
+                relative_path,
+                "$.visibility.allowed_archives",
+                "manual_review_required",
+                "visibility.allowed_archives must be an array.",
+            )
+        )
+    if "source_visibility" not in visibility:
+        inferred = scope.strip() if isinstance(scope, str) and scope.strip() else "private"
+        visibility["source_visibility"] = inferred
+        changes.append(frontmatter_v03_change("$.visibility.source_visibility", "add", None, inferred))
+    elif not isinstance(visibility.get("source_visibility"), str) or not visibility.get("source_visibility").strip():
+        blockers.append(
+            frontmatter_v03_blocker(
+                relative_path,
+                "$.visibility.source_visibility",
+                "manual_review_required",
+                "visibility.source_visibility is empty.",
+            )
+        )
+
+
+def frontmatter_v03_source_object_is_clean(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if not any(key in value for key in ("type", "value", "id", "ref", "source_id", "object_id")):
+        return False
+    serialized = json.dumps(json_safe(value), ensure_ascii=False, sort_keys=True, default=str)
+    if contains_forbidden_location_reference(serialized) or DRAFT_SECRET_VALUE_RE.search(serialized):
+        return False
+    return all(frontmatter_v03_scalar_tree_is_clean(item) for item in value.values())
+
+
+def frontmatter_v03_scalar_tree_is_clean(value: Any) -> bool:
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and frontmatter_v03_scalar_tree_is_clean(item) for key, item in value.items())
+    if isinstance(value, list):
+        return all(frontmatter_v03_scalar_tree_is_clean(item) for item in value)
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        text = str(value)
+        return not (contains_forbidden_location_reference(text) or DRAFT_SECRET_VALUE_RE.search(text))
+    return False
+
+
+def frontmatter_v03_change(field: str, action: str, before: Any, after: Any) -> dict[str, Any]:
+    return {"field": field, "action": action, "before": json_safe(before), "after": json_safe(after)}
+
+
+def frontmatter_v03_blocker(path: str, field: str, code: str, message: str) -> dict[str, str]:
+    return {"path": path, "field": field, "code": code, "message": message}
 
 
 def sha256_path(path: Path) -> str:

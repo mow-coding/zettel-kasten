@@ -4,6 +4,25 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## Unreleased - Frontmatter v0.3 compatibility migration
+
+Added:
+
+- CLI `archive migrate <archive-root> --target frontmatter-v0.3 --dry-run --format json`,
+- approve-gated `archive migrate <archive-root> --target frontmatter-v0.3 --approve --format json`,
+- lossless handling for clean object-shaped `provenance.source` values by relocating them to `source_refs`,
+- manual-review blockers for ambiguous or unsafe source values,
+- doctor compatibility output and migration hints for legacy frontmatter failures,
+- v0.3 zettel-rules guidance for required `provenance` and `visibility` subfields.
+
+Compatibility:
+
+- the v0.3.1 frontmatter schema is unchanged,
+- `--dry-run` writes no files,
+- `--approve` rewrites only archive-contained Markdown zettel frontmatter under `inbox/` and `zettels/`,
+- archives authored from older v0.2-draft rules should run the migration dry-run before strict v0.3 validation,
+- basoon/live archives, provider sync, objet cleanup, public git actions, and schema redesign are not part of this patch.
+
 ## v0.3.1 - 2026-06-04
 
 Shared update route preview.
@@ -19,7 +38,8 @@ Added:
 
 Compatibility:
 
-- no private archive migration is required,
+- the route-preview command itself requires no provider, transport, or shared-update record migration,
+- archives authored from older v0.2-draft frontmatter rules may still need `archive migrate <archive-root> --target frontmatter-v0.3 --dry-run` before strict v0.3 validation,
 - the command is dry-run only and writes no files,
 - the command reuses `zet_shared_update_record_review_preview` before returning a route pointer,
 - MCP exposes no shared-update route write/apply/approve tool for this boundary,
@@ -41,7 +61,8 @@ Added:
 
 Compatibility:
 
-- no private archive migration is required,
+- the shared-update attestation/review command itself requires no provider, transport, or shared-update record migration,
+- archives authored from older v0.2-draft frontmatter rules may still need `archive migrate <archive-root> --target frontmatter-v0.3 --dry-run` before strict v0.3 validation,
 - MCP exposes no write/apply sibling tool for this boundary,
 - the write reuses `zet_shared_update_record_review_preview` before recording anything,
 - body text, local absolute paths, provider URLs, tokens, secrets, and unsafe values are not echoed or persisted,

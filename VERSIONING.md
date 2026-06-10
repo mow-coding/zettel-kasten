@@ -91,6 +91,16 @@ When a future version changes the archive format, the project should provide:
 
 The archive should never silently rewrite a user's memory.
 
+For the current v0.3 frontmatter contract, the schema stays unchanged, but older
+v0.2-draft authoring guidance may have produced zettels without required nested
+`provenance` and `visibility` subfields. Use:
+
+```text
+archive migrate <archive-root> --target frontmatter-v0.3 --dry-run
+```
+
+before approving any frontmatter rewrite.
+
 ## 7. Current Version
 
 Current public baseline:
