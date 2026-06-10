@@ -13743,6 +13743,1134 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("$.actions", output)
 
 
+class ObjetCaptureTests(unittest.TestCase):
+    maxDiff = None
+
+    def run_cli(self, args: list[str]) -> tuple[int, str]:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer), redirect_stderr(buffer):
+            code = archive_cli.main(args)
+        return code, buffer.getvalue()
+
+    def _sandbox(self, tmp: str, archive_id: str = "archive:personal:capture") -> Path:
+        archive_root = Path(tmp) / "capture-archive"
+        code, output = self.run_cli(
+            [
+                "init",
+                str(archive_root),
+                "--type",
+                "personal",
+                "--archive-id",
+                archive_id,
+                "--principal-id",
+                "person:test",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        (archive_root / ".wom-sandbox").write_text("sandbox\n", encoding="utf-8")
+        (archive_root / "staging" / "incoming").mkdir(parents=True, exist_ok=True)
+        return archive_root
+
+    def _stage(self, archive_root: Path, name: str, data: bytes) -> tuple[str, str]:
+        staged = archive_root / "staging" / "incoming" / name
+        staged.write_bytes(data)
+        return f"staging/incoming/{name}", hashlib.sha256(data).hexdigest()
+
+    def _plan(self, archive_root: Path, name: str = "plan") -> tuple[str, str]:
+        plan = {
+            "ok": True,
+            "dry_run": True,
+            "lifecycle_action": "source_intake_plan",
+            "blockers": [],
+            "content_access": dict(archive_services.SOURCE_INTAKE_CONTENT_ACCESS_EXPECTATIONS),
+            "source_refs_for_draft": [],
+        }
+        plan_dir = archive_root / "receipts" / "sources"
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        relative = f"receipts/sources/{name}.source-intake-plan.json"
+        (archive_root / Path(relative)).write_text(json.dumps(plan), encoding="utf-8")
+        return relative, archive_services.sha256_json_value(plan)
+
+    def _item(
+        self,
+        staged_path: str,
+        digest: str,
+        plan_path: str,
+        plan_sha: str,
+        item_id: str = "item",
+        **overrides: Any,
+    ) -> dict[str, Any]:
+        item = {
+            "item_id": item_id,
+            "approved": True,
+            "input_kind": "local_path",
+            "staged_path": staged_path,
+            "approved_object_id": f"sha256:{digest}",
+            "source_intake_receipt_path": plan_path,
+            "source_intake_plan_sha256": plan_sha,
+        }
+        item.update(overrides)
+        return item
+
+    def _selection(
+        self,
+        tmp: str,
+        archive_id: str,
+        items: list[dict[str, Any]],
+        **overrides: Any,
+    ) -> Path:
+        selection = {
+            "manifest_id": "approved:local-objet-capture:test",
+            "schema": "wom-kit/b4-selection/v0.2",
+            "action": "local_objet_capture_approved",
+            "archive_id": archive_id,
+            "items": items,
+            "privacy_guards": {key: True for key in archive_services.OBJET_CAPTURE_REQUIRED_PRIVACY_GUARDS},
+        }
+        selection.update(overrides)
+        path = Path(tmp) / "selection.json"
+        path.write_text(json.dumps(selection), encoding="utf-8")
+        return path
+
+    def _simple_capture_setup(self, tmp: str, data: bytes = b"objet bytes\n") -> tuple[Path, Path, str]:
+        archive_root = self._sandbox(tmp)
+        staged_path, digest = self._stage(archive_root, "note.txt", data)
+        plan_path, plan_sha = self._plan(archive_root)
+        selection = self._selection(
+            tmp, "archive:personal:capture", [self._item(staged_path, digest, plan_path, plan_sha)]
+        )
+        return archive_root, selection, digest
+
+    def _inventory(self, root: Path) -> dict[str, tuple[int, int]]:
+        entries: dict[str, tuple[int, int]] = {}
+        for path in sorted(root.rglob("*")):
+            if path.is_file():
+                file_stat = path.stat()
+                entries[str(path.relative_to(root))] = (file_stat.st_size, file_stat.st_mtime_ns)
+        return entries
+
+    def test_objet_capture_dry_run_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, digest = self._simple_capture_setup(tmp)
+            before = self._inventory(archive_root)
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertTrue(result["ok"], result)
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["items"][0]["planned_action"], "capture")
+            self.assertIn("proposed_receipt_path", result)
+            self.assertEqual(self._inventory(archive_root), before, "dry-run must not write anything")
+            self.assertFalse(list(archive_root.rglob("*.part-*")))
+
+    def test_objet_capture_dry_run_xor_approve_required(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, _ = self._simple_capture_setup(tmp)
+            base = ["objet-capture", str(archive_root), "--selection", str(selection)]
+            code, output = self.run_cli(base + ["--dry-run", "--approve"])
+            self.assertEqual(code, 1, output)
+            code, output = self.run_cli(base)
+            self.assertEqual(code, 1, output)
+            code, output = self.run_cli(base + ["--approve"])
+            self.assertEqual(code, 1, output)
+            self.assertIn("--reviewed-by", output)
+
+    def test_objet_capture_apply_stores_bytes_content_addressed_and_lossless(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data = b"lossless objet payload"
+            archive_root, selection, digest = self._simple_capture_setup(tmp, data)
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertTrue(result["ok"], result)
+            entry = result["items"][0]
+            self.assertEqual(entry["action"], "captured")
+            self.assertTrue(entry["stored_sha256_verified"])
+            self.assertEqual(entry["object_id"], f"sha256:{digest}")
+            dest = archive_root / "objects" / "sha256" / digest[:2] / digest
+            self.assertTrue(dest.is_file())
+            self.assertEqual(dest.read_bytes(), data, "stored bytes must be byte-identical")
+            self.assertEqual(archive_services.sha256_path(dest), digest)
+
+    def test_objet_capture_appends_one_schema_shaped_manifest_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, digest = self._simple_capture_setup(tmp)
+            archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            lines = [line for line in manifest_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            records = [json.loads(line) for line in lines]
+            captured = [r for r in records if r.get("object_id") == f"sha256:{digest}"]
+            self.assertEqual(len(captured), 1, "exactly one manifest record for the captured objet")
+            record = captured[0]
+            for key in ("object_id", "sha256", "logical_key", "locations", "provenance"):
+                self.assertIn(key, record)
+            self.assertEqual(record["logical_key"], f"objects/sha256/{digest[:2]}/{digest}")
+            self.assertEqual(record["locations"][0]["provider"], "local")
+            self.assertEqual(record["mime"], "text/plain")
+            self.assertEqual(record["provenance"]["source"], "b4_local_objet_capture")
+
+    def test_objet_capture_writes_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, _ = self._simple_capture_setup(tmp)
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            receipt_path = archive_root / Path(result["receipt_path"])
+            self.assertTrue(receipt_path.is_file())
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertTrue(receipt["ok"])
+            self.assertFalse(receipt["aborted"])
+            self.assertEqual(receipt["summary"]["captured"], 1)
+            self.assertEqual(receipt["reviewed_by"], "person:test")
+            self.assertTrue(str(receipt["selection_manifest_sha256"]).startswith("sha256:"))
+
+    def test_objet_capture_idempotent_rerun_skips(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, digest = self._simple_capture_setup(tmp)
+            archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_before = manifest_path.read_bytes()
+            dest = archive_root / "objects" / "sha256" / digest[:2] / digest
+            mtime_before = dest.stat().st_mtime_ns
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["items"][0]["action"], "skip_already_present")
+            self.assertEqual(result["summary"]["skipped"], 1)
+            self.assertEqual(manifest_path.read_bytes(), manifest_before, "no new manifest line on rerun")
+            self.assertEqual(dest.stat().st_mtime_ns, mtime_before, "no byte rewrite on rerun")
+
+    def test_objet_capture_repair_appends_missing_manifest_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data = b"repair me"
+            archive_root, selection, digest = self._simple_capture_setup(tmp, data)
+            dest = archive_root / "objects" / "sha256" / digest[:2] / digest
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["items"][0]["action"], "repair_appended")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            lines = [line for line in manifest_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(len([l for l in lines if digest in l]), 1)
+
+    def test_objet_capture_dedup_identical_content_two_items_same_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data = b"identical twins"
+            archive_root = self._sandbox(tmp)
+            first_path, digest = self._stage(archive_root, "a.txt", data)
+            second_path, _ = self._stage(archive_root, "b.txt", data)
+            plan_path, plan_sha = self._plan(archive_root)
+            selection = self._selection(
+                tmp,
+                "archive:personal:capture",
+                [
+                    self._item(first_path, digest, plan_path, plan_sha, item_id="a"),
+                    self._item(second_path, digest, plan_path, plan_sha, item_id="b"),
+                ],
+            )
+            dry = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertEqual(
+                sorted(entry["planned_action"] for entry in dry["items"]),
+                ["capture", "skip_already_present"],
+                "dry-run must predict the same intra-run collapse apply performs",
+            )
+            self.assertEqual(dry["summary"], {"would_capture": 1, "would_repair_append": 0, "would_re_materialize": 0, "would_skip": 1, "blocked": 0})
+            self.assertEqual(len([w for w in dry["planned_writes"] if digest in w]), 1)
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertTrue(result["ok"], result)
+            actions = sorted(entry["action"] for entry in result["items"])
+            self.assertEqual(actions, ["captured", "skip_already_present"])
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            lines = [line for line in manifest_path.read_text(encoding="utf-8").splitlines() if digest in line]
+            self.assertEqual(len(lines), 1, "one objet, one manifest record for identical content")
+
+    def test_objet_capture_re_materialize_record_present_dest_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, digest = self._simple_capture_setup(tmp)
+            archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            dest = archive_root / "objects" / "sha256" / digest[:2] / digest
+            dest.unlink()
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_before = manifest_path.read_bytes()
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["items"][0]["action"], "re_materialized")
+            self.assertTrue(dest.is_file())
+            self.assertEqual(manifest_path.read_bytes(), manifest_before, "re-materialize must not re-append")
+
+    def test_objet_capture_zero_byte_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, digest = self._simple_capture_setup(tmp, b"")
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertTrue(result["ok"], result)
+            self.assertIn("zero_byte_file", result["items"][0]["warnings"])
+            self.assertEqual(digest, hashlib.sha256(b"").hexdigest())
+            self.assertTrue((archive_root / "objects" / "sha256" / digest[:2] / digest).is_file())
+
+    def test_objet_capture_blocks_missing_source_and_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            plan_path, plan_sha = self._plan(archive_root)
+            fake_digest = hashlib.sha256(b"x").hexdigest()
+            (archive_root / "staging" / "incoming" / "subdir").mkdir()
+            selection = self._selection(
+                tmp,
+                "archive:personal:capture",
+                [
+                    self._item("staging/incoming/absent.txt", fake_digest, plan_path, plan_sha, item_id="absent"),
+                    self._item("staging/incoming/subdir", fake_digest, plan_path, plan_sha, item_id="dir"),
+                ],
+            )
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertFalse(result["ok"])
+            by_id = {entry["item_id"]: entry for entry in result["items"]}
+            self.assertIn("source_missing", by_id["absent"]["blockers"])
+            self.assertIn("staged_path_is_directory", by_id["dir"]["blockers"])
+
+    def test_objet_capture_rejects_symlink_in_path_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, _, _ = self._simple_capture_setup(tmp)
+            link = archive_root / "staging" / "incoming" / "link.txt"
+            try:
+                link.symlink_to(archive_root / "staging" / "incoming" / "note.txt")
+            except OSError:
+                self.skipTest("symlink creation not permitted in this environment")
+            data = (archive_root / "staging" / "incoming" / "note.txt").read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            plan_path, plan_sha = self._plan(archive_root, "link-plan")
+            selection = self._selection(
+                tmp,
+                "archive:personal:capture",
+                [self._item("staging/incoming/link.txt", digest, plan_path, plan_sha)],
+            )
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertFalse(result["ok"])
+            self.assertIn("symlink_not_allowed", result["items"][0]["blockers"])
+
+    def test_objet_capture_rejects_traversal_internal_and_reserved_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            plan_path, plan_sha = self._plan(archive_root)
+            fake_digest = hashlib.sha256(b"x").hexdigest()
+            cases = {
+                "traversal": "../secret.txt",
+                "manifest": "objects/manifests/files.jsonl",
+                "store": f"objects/sha256/{fake_digest[:2]}/{fake_digest}",
+                "device": "staging/incoming/CON",
+            }
+            selection = self._selection(
+                tmp,
+                "archive:personal:capture",
+                [
+                    self._item(path, fake_digest, plan_path, plan_sha, item_id=item_id)
+                    for item_id, path in cases.items()
+                ],
+            )
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertFalse(result["ok"])
+            by_id = {entry["item_id"]: entry for entry in result["items"]}
+            self.assertIn("unsafe_staged_path", by_id["traversal"]["blockers"])
+            self.assertIn("unsafe_staged_path", by_id["manifest"]["blockers"])
+            self.assertIn("unsafe_staged_path", by_id["store"]["blockers"])
+            self.assertIn("reserved_device_name", by_id["device"]["blockers"])
+
+    def test_objet_capture_dest_collision_blocks_item_not_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            colliding_path, colliding_digest = self._stage(archive_root, "collide.txt", b"victim content")
+            healthy_path, healthy_digest = self._stage(archive_root, "healthy.txt", b"healthy content")
+            plan_path, plan_sha = self._plan(archive_root)
+            wrong_dest = archive_root / "objects" / "sha256" / colliding_digest[:2] / colliding_digest
+            wrong_dest.parent.mkdir(parents=True, exist_ok=True)
+            wrong_dest.write_bytes(b"DIFFERENT bytes already at the digest path")
+            selection = self._selection(
+                tmp,
+                "archive:personal:capture",
+                [
+                    self._item(colliding_path, colliding_digest, plan_path, plan_sha, item_id="collide"),
+                    self._item(healthy_path, healthy_digest, plan_path, plan_sha, item_id="healthy"),
+                ],
+            )
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertFalse(result["ok"])
+            by_id = {entry["item_id"]: entry for entry in result["items"]}
+            self.assertEqual(by_id["collide"]["action"], "dest_collision")
+            self.assertEqual(by_id["healthy"]["action"], "captured", "healthy item must still capture")
+            self.assertEqual(
+                wrong_dest.read_bytes(),
+                b"DIFFERENT bytes already at the digest path",
+                "colliding dest must not be overwritten",
+            )
+
+    def test_objet_capture_refuses_without_sandbox_marker_and_reads_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, _ = self._simple_capture_setup(tmp)
+            (archive_root / ".wom-sandbox").unlink()
+            with patch.object(
+                archive_services, "_objet_capture_sha256_and_head_fd", side_effect=AssertionError("must not read")
+            ), patch.object(
+                archive_services, "load_manifest_records", side_effect=AssertionError("must not read")
+            ):
+                for runner in (
+                    lambda: archive_services.objet_capture_dry_run(archive_root, selection),
+                    lambda: archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test"),
+                ):
+                    result = runner()
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["blocked_by"], "sandbox_marker_required")
+                    self.assertEqual(result["items"], [], "refusal output must be blocker-only")
+                    self.assertNotIn("proposed_receipt_path", result)
+            self.assertFalse(list(archive_root.rglob("*.part-*")))
+            self.assertFalse((archive_root / "receipts" / "objet-capture").exists())
+
+    def test_objet_capture_sandbox_marker_requires_top_level_yaml_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, _ = self._simple_capture_setup(tmp)
+            (archive_root / ".wom-sandbox").unlink()
+            archive_yml = archive_root / "archive.yml"
+            original = archive_yml.read_text(encoding="utf-8")
+
+            # A NESTED occurrence of the phrase must NOT satisfy the marker (fail closed).
+            archive_yml.write_text(
+                original + "\nops_notes:\n  deploy_target:\n    environment: sandbox\n", encoding="utf-8"
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["blocked_by"], "sandbox_marker_required")
+
+            # The TOP-LEVEL declaration does satisfy it.
+            archive_yml.write_text(original + "\nenvironment: sandbox\n", encoding="utf-8")
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertTrue(result["ok"], result)
+
+    def test_objet_capture_invalid_expected_size_type_blocks_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            staged_path, digest = self._stage(archive_root, "note.txt", b"typed content")
+            plan_path, plan_sha = self._plan(archive_root)
+            item = self._item(staged_path, digest, plan_path, plan_sha, expected_size_bytes="big")
+            selection = self._selection(tmp, "archive:personal:capture", [item])
+            # Must be a clean per-item blocker (no traceback) in both modes.
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(result["ok"])
+            self.assertIn("expected_size_invalid", result["items"][0]["blockers"])
+            code, output = self.run_cli(
+                [
+                    "objet-capture",
+                    str(archive_root),
+                    "--selection",
+                    str(selection),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1, output)
+            parsed = json.loads(output)
+            self.assertIn("expected_size_invalid", parsed["items"][0]["blockers"])
+
+    def test_objet_capture_refuses_blocklisted_name_even_with_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            blocklisted_parent = Path(tmp) / "store-objets"
+            blocklisted_parent.mkdir()
+            archive_root = blocklisted_parent / "archive"
+            archive_root.mkdir()
+            (archive_root / ".wom-sandbox").write_text("sandbox\n", encoding="utf-8")
+            selection = Path(tmp) / "selection.json"
+            selection.write_text("{}", encoding="utf-8")
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["blocked_by"], "external_live_never_touch")
+
+    def test_objet_capture_never_deletes_staged_original(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data = b"original must survive"
+            archive_root, selection, _ = self._simple_capture_setup(tmp, data)
+            staged = archive_root / "staging" / "incoming" / "note.txt"
+            mtime_before = staged.stat().st_mtime_ns
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertTrue(result["ok"], result)
+            self.assertTrue(staged.is_file())
+            self.assertEqual(staged.read_bytes(), data)
+            self.assertEqual(staged.stat().st_mtime_ns, mtime_before)
+
+    def test_objet_capture_invalid_source_intake_evidence_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            staged_path, digest = self._stage(archive_root, "note.txt", b"evidence test")
+            plan_path, plan_sha = self._plan(archive_root)
+            bad_plan = {
+                "ok": True,
+                "dry_run": True,
+                "lifecycle_action": "source_intake_plan",
+                "blockers": [],
+                "content_access": {
+                    **archive_services.SOURCE_INTAKE_CONTENT_ACCESS_EXPECTATIONS,
+                    "content_read": True,
+                },
+                "source_refs_for_draft": [],
+            }
+            bad_relative = "receipts/sources/bad.source-intake-plan.json"
+            (archive_root / Path(bad_relative)).write_text(json.dumps(bad_plan), encoding="utf-8")
+            selection = self._selection(
+                tmp,
+                "archive:personal:capture",
+                [
+                    self._item(
+                        staged_path,
+                        digest,
+                        bad_relative,
+                        archive_services.sha256_json_value(bad_plan),
+                        item_id="bad-access",
+                    ),
+                    self._item(
+                        staged_path,
+                        digest,
+                        "receipts/sources/missing.source-intake-plan.json",
+                        plan_sha,
+                        item_id="missing-receipt",
+                        staged_path_dup_guard="x",
+                    ),
+                ],
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(result["ok"])
+            self.assertIn("duplicate_selection_target", result["blockers"])
+
+            selection = self._selection(
+                tmp,
+                "archive:personal:capture",
+                [
+                    self._item(
+                        staged_path,
+                        digest,
+                        bad_relative,
+                        archive_services.sha256_json_value(bad_plan),
+                        item_id="bad-access",
+                    )
+                ],
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(result["ok"])
+            self.assertIn("source_intake_evidence_invalid", result["items"][0]["blockers"])
+
+            tampered_sha = "sha256:" + "0" * 64
+            selection = self._selection(
+                tmp,
+                "archive:personal:capture",
+                [self._item(staged_path, digest, plan_path, tampered_sha, item_id="tampered")],
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(result["ok"])
+            self.assertIn("source_intake_plan_sha256_mismatch", result["items"][0]["blockers"])
+
+    def test_objet_capture_approved_content_mismatch_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            staged_path, _ = self._stage(archive_root, "note.txt", b"actual bytes")
+            plan_path, plan_sha = self._plan(archive_root)
+            wrong_digest = hashlib.sha256(b"different approved bytes").hexdigest()
+            selection = self._selection(
+                tmp,
+                "archive:personal:capture",
+                [self._item(staged_path, wrong_digest, plan_path, plan_sha)],
+            )
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertFalse(result["ok"])
+            self.assertIn("approved_content_mismatch", result["items"][0]["blockers"])
+            self.assertFalse((archive_root / "objects" / "sha256").exists(), "no bytes may be copied on mismatch")
+
+    def test_objet_capture_expected_metadata_hard_under_approve(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data = b"sized content"
+            archive_root = self._sandbox(tmp)
+            staged_path, digest = self._stage(archive_root, "note.txt", data)
+            plan_path, plan_sha = self._plan(archive_root)
+            item = self._item(staged_path, digest, plan_path, plan_sha, expected_size_bytes=len(data) + 5)
+            selection = self._selection(tmp, "archive:personal:capture", [item])
+            dry = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertIn("expected_size_mismatch", dry["items"][0]["warnings"], "warning under dry-run")
+            self.assertNotIn("expected_size_mismatch", dry["items"][0]["blockers"])
+            applied = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertFalse(applied["ok"])
+            self.assertIn("expected_size_mismatch", applied["items"][0]["blockers"], "hard gate under approve")
+
+    def test_objet_capture_envelope_and_item_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, digest = self._simple_capture_setup(tmp)
+            staged_path = "staging/incoming/note.txt"
+            plan_path, plan_sha = self._plan(archive_root, "gate-plan")
+
+            wrong_action = self._selection(
+                tmp, "archive:personal:capture", [self._item(staged_path, digest, plan_path, plan_sha)],
+                action="bulk_import",
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, wrong_action)
+            self.assertFalse(result["ok"])
+            self.assertIn("selection_action_invalid", result["blockers"])
+
+            bad_guard = self._selection(
+                tmp, "archive:personal:capture", [self._item(staged_path, digest, plan_path, plan_sha)],
+                privacy_guards={key: True for key in archive_services.OBJET_CAPTURE_REQUIRED_PRIVACY_GUARDS} | {"no_bulk_import": False},
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, bad_guard)
+            self.assertFalse(result["ok"])
+            self.assertIn("privacy_guards_invalid", result["blockers"])
+
+            wrong_archive = self._selection(
+                tmp, "archive:personal:someone-else", [self._item(staged_path, digest, plan_path, plan_sha)]
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, wrong_archive)
+            self.assertFalse(result["ok"])
+            self.assertIn("archive_id_mismatch", result["blockers"])
+
+            duplicate_ids = self._selection(
+                tmp,
+                "archive:personal:capture",
+                [
+                    self._item(staged_path, digest, plan_path, plan_sha, item_id="dup"),
+                    self._item(staged_path, digest, plan_path, plan_sha, item_id="dup"),
+                ],
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, duplicate_ids)
+            self.assertFalse(result["ok"])
+            self.assertIn("duplicate_selection_target", result["blockers"])
+
+            unapproved = self._selection(
+                tmp, "archive:personal:capture",
+                [self._item(staged_path, digest, plan_path, plan_sha, approved=False)],
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, unapproved)
+            self.assertFalse(result["ok"])
+            self.assertIn("item_not_approved", result["items"][0]["blockers"])
+
+            wrong_kind = self._selection(
+                tmp, "archive:personal:capture",
+                [self._item(staged_path, digest, plan_path, plan_sha, input_kind="provider_ref")],
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, wrong_kind)
+            self.assertFalse(result["ok"])
+            self.assertIn("unsupported_input_kind", result["items"][0]["blockers"])
+
+    def test_objet_capture_fresh_archive_without_manifests_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, digest = self._simple_capture_setup(tmp)
+            manifests_dir = archive_root / "objects" / "manifests"
+            if manifests_dir.exists():
+                shutil.rmtree(manifests_dir)
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertTrue(result["ok"], result)
+            self.assertTrue((manifests_dir / "files.jsonl").is_file())
+
+    def test_objet_capture_cli_roundtrip_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, digest = self._simple_capture_setup(tmp)
+            code, output = self.run_cli(
+                [
+                    "objet-capture",
+                    str(archive_root),
+                    "--selection",
+                    str(selection),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["dry_run"])
+            code, output = self.run_cli(
+                [
+                    "objet-capture",
+                    str(archive_root),
+                    "--selection",
+                    str(selection),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["items"][0]["action"], "captured")
+
+    def _captured_sandbox(self, tmp: str) -> tuple[Path, str, str]:
+        archive_root, selection, digest = self._simple_capture_setup(tmp)
+        result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+        self.assertTrue(result["ok"], result)
+        return archive_root, digest, "staging/incoming"
+
+    def test_staged_cleanup_check_all_captured_is_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, digest, staged = self._captured_sandbox(tmp)
+            result = archive_services.staged_cleanup_check(archive_root, staged)
+            self.assertTrue(result["ok"], result)
+            self.assertTrue(result["safe_to_cleanup"])
+            self.assertFalse(result["deletion_performed"])
+            entry = result["files"][0]
+            self.assertEqual(entry["status"], "preserved")
+            self.assertTrue(entry["preserved_bytes_verified"])
+            self.assertTrue(entry["manifest_record_present"])
+
+    def test_staged_cleanup_check_uncaptured_file_blocks_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, digest, staged = self._captured_sandbox(tmp)
+            (archive_root / "staging" / "incoming" / "uncaptured.txt").write_bytes(b"never captured")
+            result = archive_services.staged_cleanup_check(archive_root, staged)
+            self.assertFalse(result["safe_to_cleanup"], "an unpreserved file must block cleanup")
+            by_path = {entry["path"]: entry for entry in result["files"]}
+            self.assertEqual(by_path["uncaptured.txt"]["status"], "not_preserved")
+            self.assertEqual(by_path["note.txt"]["status"], "preserved")
+
+    def test_staged_cleanup_check_deferred_file_counts_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, digest, staged = self._captured_sandbox(tmp)
+            (archive_root / "staging" / "incoming" / "later.txt").write_bytes(b"deliberately deferred")
+            deferred_path = Path(tmp) / "deferred.json"
+            deferred_path.write_text(json.dumps({"deferred": ["later.txt"]}), encoding="utf-8")
+            result = archive_services.staged_cleanup_check(archive_root, staged, deferred_path=deferred_path)
+            self.assertTrue(result["safe_to_cleanup"], result)
+            by_path = {entry["path"]: entry for entry in result["files"]}
+            self.assertEqual(by_path["later.txt"]["status"], "deferred")
+
+    def test_staged_cleanup_check_detects_corrupted_store_copy(self) -> None:
+        # FALSE-SAFE guard: if the stored objet is corrupted, cleanup must NOT be safe.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, digest, staged = self._captured_sandbox(tmp)
+            dest = archive_root / "objects" / "sha256" / digest[:2] / digest
+            dest.write_bytes(b"CORRUPTED store copy")
+            result = archive_services.staged_cleanup_check(archive_root, staged)
+            self.assertFalse(result["safe_to_cleanup"])
+            self.assertEqual(result["files"][0]["status"], "not_preserved")
+            self.assertFalse(result["files"][0]["preserved_bytes_verified"])
+
+    def test_staged_cleanup_check_requires_dry_run_and_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, digest, staged = self._captured_sandbox(tmp)
+            code, output = self.run_cli(
+                ["staged-cleanup-check", str(archive_root), "--staged", staged, "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertIn("--dry-run", output)
+            before = self._inventory(archive_root)
+            code, output = self.run_cli(
+                ["staged-cleanup-check", str(archive_root), "--staged", staged, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            self.assertTrue(json.loads(output)["safe_to_cleanup"])
+            self.assertEqual(self._inventory(archive_root), before, "report-only command must write nothing")
+
+    def test_staged_cleanup_check_rejects_internal_or_escaping_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, digest, staged = self._captured_sandbox(tmp)
+            for bad in ("objects/manifests", "../outside", "receipts"):
+                result = archive_services.staged_cleanup_check(archive_root, bad)
+                self.assertFalse(result["ok"], bad)
+                self.assertIn("unsafe_staged_folder", result["blockers"])
+                self.assertFalse(result["safe_to_cleanup"])
+
+    def test_full_spine_stage_capture_draft_mint_cleanup(self) -> None:
+        # The executor's end-to-end loop: stage a file -> capture it as an objet ->
+        # draft a zet referencing the objet -> mint it canonical -> verify the staged
+        # folder is safe to clean up and the objet is referenced by archive memory.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "spine-archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            (archive_root / ".wom-sandbox").write_text("sandbox\n", encoding="utf-8")
+            (archive_root / "staging" / "incoming").mkdir(parents=True, exist_ok=True)
+            archive_id = archive_services.read_archive_id(archive_root)
+
+            data = b"A real captured source document for the full spine test.\n"
+            staged_rel, digest = (
+                f"staging/incoming/spine-doc.txt",
+                hashlib.sha256(data).hexdigest(),
+            )
+            (archive_root / "staging" / "incoming" / "spine-doc.txt").write_bytes(data)
+            plan_rel, plan_sha = self._plan(archive_root, "spine-plan")
+            selection = self._selection(
+                tmp, archive_id, [self._item(staged_rel, digest, plan_rel, plan_sha, item_id="spine")]
+            )
+
+            # 1. capture
+            captured = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertTrue(captured["ok"], captured)
+            object_id = f"sha256:{digest}"
+
+            # 2. source-intake ref for the captured objet
+            code, output = self.run_cli(
+                ["source-intake", str(archive_root), "--dry-run", "--object-id", object_id, "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            ref = json.loads(output)["source_refs_for_draft"][0]
+            self.assertEqual(ref["value"], object_id)
+
+            # 3. draft referencing the objet
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Spine test zet",
+                    "--body",
+                    "# Spine test zet\n\nMinted from a captured objet in the full-loop test.",
+                    "--source-ref",
+                    f"{ref['type']}:{ref['value']}",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            draft_rel = json.loads(output)["path"]
+
+            # 4. promote + mint canonical
+            draft_path = archive_root / draft_rel
+            match = archive_cli.FRONTMATTER_RE.match(draft_path.read_text(encoding="utf-8"))
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            body = draft_path.read_text(encoding="utf-8")[match.end():].lstrip()
+            frontmatter["kind"] = "permanent_note"
+            frontmatter["facets"] = {"domain": "test"}
+            frontmatter["promotion"] = {
+                "stage": "promotion_candidate",
+                "ready_for_promotion": True,
+                "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
+            }
+            draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+            code, output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    draft_rel,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--allow-warnings",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+
+            # 5. cleanup verifier: staged folder is now provably safe to clean up
+            result = archive_services.staged_cleanup_check(archive_root, "staging/incoming")
+            self.assertTrue(result["safe_to_cleanup"], result)
+            entry = result["files"][0]
+            self.assertEqual(entry["status"], "preserved")
+            self.assertGreaterEqual(
+                entry["referencing_zets"], 1, "the minted zet must reference the captured objet"
+            )
+
+    def _write_edge_zettel(
+        self,
+        archive_root: Path,
+        zettel_id: str,
+        *,
+        status: str = "canonical",
+        edges: list[dict[str, Any]] | None = None,
+        title: str | None = None,
+    ) -> None:
+        frontmatter = {
+            "id": zettel_id,
+            "title": title or f"Title of {zettel_id}",
+            "status": status,
+            "kind": "note",
+            "edges": edges or [],
+        }
+        folder = archive_root / "zettels"
+        folder.mkdir(exist_ok=True)
+        (folder / f"{zettel_id}.md").write_text(
+            "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\nBody.\n", encoding="utf-8"
+        )
+
+    def _edge_graph_archive(self, tmp: str) -> Path:
+        archive_root = self._sandbox(tmp, "archive:personal:edges")
+        # a <- supersedes - b <- derived_from - c ; redacted r -> a ; d -> r
+        self._write_edge_zettel(archive_root, "zet_20260610_a")
+        self._write_edge_zettel(
+            archive_root, "zet_20260610_b", edges=[{"type": "supersedes", "target": "zet_20260610_a"}]
+        )
+        self._write_edge_zettel(
+            archive_root, "zet_20260610_c", edges=[{"type": "derived_from", "target": "zet_20260610_b"}]
+        )
+        self._write_edge_zettel(
+            archive_root,
+            "zet_20260610_r",
+            status="redacted",
+            title="REDACTED SECRET TITLE",
+            edges=[{"type": "references", "target": "zet_20260610_a"}],
+        )
+        self._write_edge_zettel(
+            archive_root, "zet_20260610_d", edges=[{"type": "references", "target": "zet_20260610_r"}]
+        )
+        code, output = self.run_cli(["index", str(archive_root), "--format", "json"])
+        self.assertEqual(code, 0, output)
+        index_result = json.loads(output)
+        # redacted zet_r's OUTGOING edge must not be indexed: b->a, c->b, d->r = 3
+        self.assertEqual(index_result["edges"], 3)
+        return archive_root
+
+    def test_related_zets_backlink_reverse_direction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._edge_graph_archive(tmp)
+            result = archive_services.get_related_zets(archive_root, "zet_20260610_a")
+            by_id = {entry["id"]: entry for entry in result["related"]}
+            self.assertIn("zet_20260610_b", by_id, "the BACKLINK (who supersedes me) must be found")
+            self.assertEqual(by_id["zet_20260610_b"]["direction"], "in")
+            self.assertEqual(by_id["zet_20260610_b"]["edge_type"], "supersedes")
+            self.assertEqual(by_id["zet_20260610_b"]["title"], "Title of zet_20260610_b")
+
+    def test_related_zets_both_directions_and_depth(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._edge_graph_archive(tmp)
+            result = archive_services.get_related_zets(archive_root, "zet_20260610_b")
+            by_id = {entry["id"]: entry for entry in result["related"]}
+            self.assertEqual(by_id["zet_20260610_a"]["direction"], "out")
+            self.assertEqual(by_id["zet_20260610_c"]["direction"], "in")
+            deep = archive_services.get_related_zets(archive_root, "zet_20260610_a", depth=2)
+            deep_ids = {entry["id"]: entry for entry in deep["related"]}
+            self.assertIn("zet_20260610_c", deep_ids, "depth 2 must reach c via b")
+            self.assertEqual(deep_ids["zet_20260610_c"]["hop"], 2)
+            self.assertEqual(deep_ids["zet_20260610_c"]["via"], "zet_20260610_b")
+
+    def test_related_zets_redaction_floor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._edge_graph_archive(tmp)
+            # a's neighbors: redacted r referenced a, but r's outgoing edge was never indexed.
+            result = archive_services.get_related_zets(archive_root, "zet_20260610_a", depth=3)
+            self.assertNotIn("zet_20260610_r", {e["id"] for e in result["related"]})
+            self.assertNotIn("REDACTED SECRET TITLE", json.dumps(result))
+            # d points AT the redacted zet: the inbound-edge row exists but the neighbor is filtered.
+            result = archive_services.get_related_zets(archive_root, "zet_20260610_d")
+            self.assertEqual(result["count"], 0, "a redacted neighbor must never be returned")
+            self.assertNotIn("REDACTED SECRET TITLE", json.dumps(result))
+
+    def test_related_zets_cycle_terminates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:cycle")
+            self._write_edge_zettel(
+                archive_root, "zet_20260610_x", edges=[{"type": "references", "target": "zet_20260610_y"}]
+            )
+            self._write_edge_zettel(
+                archive_root, "zet_20260610_y", edges=[{"type": "references", "target": "zet_20260610_x"}]
+            )
+            code, output = self.run_cli(["index", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 0, output)
+            result = archive_services.get_related_zets(archive_root, "zet_20260610_x", depth=3)
+            self.assertEqual(result["count"], 1, "a 2-cycle must terminate with one neighbor")
+            self.assertEqual(result["related"][0]["id"], "zet_20260610_y")
+
+    def test_related_zets_requires_index_and_valid_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:noindex")
+            code, output = self.run_cli(
+                ["related-zets", str(archive_root), "--zettel-id", "zet_20260610_a", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertIn("index", output.lower())
+            with self.assertRaises(archive_services.ArchiveServiceError):
+                archive_services.get_related_zets(archive_root, "not-a-zet-id")
+
+    def test_related_zets_cli_roundtrip_with_edge_type_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._edge_graph_archive(tmp)
+            code, output = self.run_cli(
+                [
+                    "related-zets",
+                    str(archive_root),
+                    "--zettel-id",
+                    "zet_20260610_b",
+                    "--edge-type",
+                    "supersedes",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            ids = {entry["id"] for entry in result["related"]}
+            self.assertEqual(ids, {"zet_20260610_a"}, "edge-type filter must drop the derived_from neighbor")
+
+    def _facet_archive(self, tmp: str) -> Path:
+        archive_root = self._sandbox(tmp, "archive:personal:facets")
+        def write(zid: str, status: str, facets: dict[str, Any]) -> None:
+            frontmatter = {"id": zid, "title": f"Title {zid}", "status": status, "kind": "note", "facets": facets}
+            (archive_root / "zettels").mkdir(exist_ok=True)
+            (archive_root / "zettels" / f"{zid}.md").write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\nBody.\n", encoding="utf-8"
+            )
+        write("zet_20260610_edu1", "canonical", {"domain": "education", "record_type": "memory"})
+        write("zet_20260610_edu2", "canonical", {"domain": "education", "record_type": "thought"})
+        write("zet_20260610_work", "canonical", {"domain": "work", "record_type": "memory"})
+        write("zet_20260610_red", "redacted", {"domain": "education", "record_type": "memory"})
+        views_dir = archive_root / "views"
+        views_dir.mkdir(exist_ok=True)
+        (views_dir / "test-views.yml").write_text(
+            archive_cli.dump_yaml(
+                {
+                    "id": "view.test.top",
+                    "name": "Top View",
+                    "filters": {"facets.domain": "education"},
+                    "saved_views": [
+                        {
+                            "id": "view.test.edu-memory",
+                            "name": "Education Memories",
+                            "filters": {"facets.domain": "education", "facets.record_type": "memory"},
+                        },
+                        {
+                            "id": "view.test.unsupported",
+                            "name": "Unsupported Filter",
+                            "filters": {"status": "canonical"},
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        code, output = self.run_cli(["index", str(archive_root), "--format", "json"])
+        self.assertEqual(code, 0, output)
+        index_result = json.loads(output)
+        # redacted zet's facets must NOT be indexed: edu1(2) + edu2(2) + work(2) = 6
+        self.assertEqual(index_result["facets"], 6)
+        return archive_root
+
+    def test_view_zets_facet_query_ands_filters_and_excludes_redacted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._facet_archive(tmp)
+            result = archive_services.view_zets(
+                archive_root, facets={"domain": "education", "record_type": "memory"}
+            )
+            self.assertTrue(result["ok"], result)
+            ids = {entry["id"] for entry in result["zettels"]}
+            self.assertEqual(ids, {"zet_20260610_edu1"}, "AND filters + redacted excluded")
+            self.assertNotIn("zet_20260610_red", json.dumps(result))
+
+    def test_view_zets_executes_saved_view(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._facet_archive(tmp)
+            result = archive_services.view_zets(archive_root, view_id="view.test.edu-memory")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["view_name"], "Education Memories")
+            self.assertEqual({e["id"] for e in result["zettels"]}, {"zet_20260610_edu1"})
+            top = archive_services.view_zets(archive_root, view_id="view.test.top")
+            self.assertEqual({e["id"] for e in top["zettels"]}, {"zet_20260610_edu1", "zet_20260610_edu2"})
+
+    def test_view_zets_unsupported_filter_blocks_not_silently_broadens(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._facet_archive(tmp)
+            result = archive_services.view_zets(archive_root, view_id="view.test.unsupported")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["zettels"], [])
+            self.assertTrue(any("not supported" in blocker for blocker in result["blockers"]))
+
+    def test_view_zets_cli_roundtrip_and_argument_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._facet_archive(tmp)
+            code, output = self.run_cli(
+                ["view-zets", str(archive_root), "--facet", "domain=work", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            self.assertEqual({e["id"] for e in json.loads(output)["zettels"]}, {"zet_20260610_work"})
+            code, output = self.run_cli(["view-zets", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 1, output)
+            code, output = self.run_cli(
+                ["view-zets", str(archive_root), "--view-id", "view.test.top", "--facet", "domain=work"]
+            )
+            self.assertEqual(code, 1, output)
+            code, output = self.run_cli(["view-zets", str(archive_root), "--view-id", "view.missing"])
+            self.assertEqual(code, 1, output)
+            self.assertIn("View not found", output)
+
+    def test_staged_cleanup_check_fails_closed_on_unenumerable_tree(self) -> None:
+        # A deletion-safety verifier must NEVER report safe when it cannot fully enumerate
+        # the staged tree (Windows MAX_PATH, permission denied). os.walk's onerror -> blocker.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, digest, staged = self._captured_sandbox(tmp)
+            real_walk = archive_services.os.walk
+
+            def exploding_walk(top, *args, **kwargs):
+                onerror = kwargs.get("onerror")
+                for entry in real_walk(top, *args, **kwargs):
+                    yield entry
+                if onerror is not None:
+                    onerror(OSError("simulated unreadable subtree"))
+
+            with patch.object(archive_services.os, "walk", exploding_walk):
+                result = archive_services.staged_cleanup_check(archive_root, staged)
+            self.assertFalse(result["safe_to_cleanup"], "an un-enumerable tree must fail closed")
+            self.assertFalse(result["ok"])
+            self.assertIn("staged_tree_unreadable", result["blockers"])
+
+    def test_staged_cleanup_check_survives_malformed_yaml_note(self) -> None:
+        # A YAML typo in some unrelated note must not abort the deletion-safety verdict.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, digest, staged = self._captured_sandbox(tmp)
+            (archive_root / "zettels").mkdir(exist_ok=True)
+            (archive_root / "zettels" / "broken.md").write_text(
+                '---\ntitle: "unterminated\nedges: [a: b: c]\n---\n\nBody.\n', encoding="utf-8"
+            )
+            result = archive_services.staged_cleanup_check(archive_root, staged)
+            self.assertTrue(result["safe_to_cleanup"], result)
+            code, output = self.run_cli(
+                ["staged-cleanup-check", str(archive_root), "--staged", staged, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+
+    def test_staged_cleanup_check_cli_handles_malformed_archive_yml_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, digest, staged = self._captured_sandbox(tmp)
+            (archive_root / "archive.yml").write_text("archive_id: archive:x\nbad: [1, 2\n", encoding="utf-8")
+            code, output = self.run_cli(
+                ["staged-cleanup-check", str(archive_root), "--staged", staged, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertIn("Staged cleanup check failed", output)
+
+    def test_related_zets_redacted_subject_returns_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._edge_graph_archive(tmp)
+            result = archive_services.get_related_zets(archive_root, "zet_20260610_r")
+            self.assertEqual(result["count"], 0, "a redacted subject must expose no neighborhood")
+            self.assertEqual(result["related"], [])
+
+    def test_related_zets_truncated_flag_is_exact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:trunc")
+            edges = [{"type": "references", "target": f"zet_20260610_n{i}"} for i in range(3)]
+            self._write_edge_zettel(archive_root, "zet_20260610_hub", edges=edges)
+            for i in range(3):
+                self._write_edge_zettel(archive_root, f"zet_20260610_n{i}")
+            code, output = self.run_cli(["index", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 0, output)
+            # exactly 3 neighbors, limit 3 -> NOT truncated (nothing dropped)
+            exact = archive_services.get_related_zets(archive_root, "zet_20260610_hub", limit=3)
+            self.assertEqual(exact["count"], 3)
+            self.assertFalse(exact["truncated"], "exactly-limit results must not be flagged truncated")
+            # limit 2 -> truncated, exactly 2 returned
+            capped = archive_services.get_related_zets(archive_root, "zet_20260610_hub", limit=2)
+            self.assertEqual(capped["count"], 2)
+            self.assertTrue(capped["truncated"])
+
+    def test_objet_capture_hygiene_classifier_and_gitignore_recognize_store(self) -> None:
+        import importlib.util
+
+        tool_path = KIT_ROOT / "tools" / "check_artifact_hygiene.py"
+        spec = importlib.util.spec_from_file_location("check_artifact_hygiene", tool_path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["check_artifact_hygiene"] = module
+        try:
+            spec.loader.exec_module(module)
+            digest = hashlib.sha256(b"x").hexdigest()
+            observation = module.classify_artifact(f"objects/sha256/{digest[:2]}/{digest}")
+            self.assertEqual(observation.category, module.DURABLE_ARCHIVE_RECORD)
+        finally:
+            sys.modules.pop("check_artifact_hygiene", None)
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "gitignore-target"
+            target.mkdir()
+            archive_cli.write_safe_gitignore(target)
+            self.assertIn("objects/sha256/", (target / ".gitignore").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()
 

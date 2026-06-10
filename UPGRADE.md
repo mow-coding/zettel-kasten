@@ -157,6 +157,44 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.1` To `v0.3.2`
+
+This release ships the frontmatter v0.3 compatibility migration, the local objet
+capture spine, and consistent redacted-zettel suppression.
+
+What changed:
+
+- added approval-gated CLI `archive migrate <archive-root> --target frontmatter-v0.3 --dry-run|--approve --format json`,
+- added approval-gated CLI `archive objet-capture <archive-root> --selection <manifest> --dry-run|--approve --reviewed-by <actor>` writing content-addressed objets, manifest records, and capture receipts into sandbox-marked archives only,
+- added report-only CLI `archive staged-cleanup-check <archive-root> --staged <folder> --dry-run`,
+- added read-only CLI `archive related-zets` (typed-edge backlinks) and `archive view-zets` (facet view execution),
+- indexed typed edges and zettel facets in the disposable search index,
+- enforced redacted-zettel content suppression across search, the index, list-zettels, read-zettel, block-header previews, projection previews, related-zets, and view-zets,
+- added the report-only artifact hygiene checker and file-lifecycle baseline,
+- updated version metadata to `0.3.2`.
+
+Archives authored under v0.3.1 rules need no frontmatter changes; the v0.3.1
+schema is unchanged. Archives authored from older v0.2-draft frontmatter rules
+should run:
+
+```text
+archive migrate <archive-root> --target frontmatter-v0.3 --dry-run
+```
+
+before strict v0.3 validation, and apply only after reviewing the plan on a
+backup or sandbox copy.
+
+Rebuild the local search index once to pick up edges and facets:
+
+```text
+archive index <archive-root>
+```
+
+The objet-capture write path refuses archives without an explicit sandbox marker
+(`.wom-sandbox` file or top-level `environment: sandbox`). This release does not
+touch live archives, providers, ZET transport, MCP write tools, or the v0.3.1
+schema itself.
+
 ## From `v0.3.0` To `v0.3.1`
 
 This is a compatible read-only route-preview release.

@@ -147,7 +147,7 @@ def classify_artifact(relative_path: str) -> ArtifactObservation:
     }
     if lower in durable_exact:
         return ArtifactObservation(path, DURABLE_ARCHIVE_RECORD, "archive control or placeholder record")
-    for prefix in ("zettels", "objects/manifests", "source-maps", "receipts", "views"):
+    for prefix in ("zettels", "objects/manifests", "objects/sha256", "source-maps", "receipts", "views"):
         if starts_with_path(path, prefix):
             return ArtifactObservation(path, DURABLE_ARCHIVE_RECORD, "archive memory, manifest, source map, receipt, or view")
 

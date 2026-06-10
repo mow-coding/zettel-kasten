@@ -2778,6 +2778,61 @@ def command_index(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_view_zets(args: argparse.Namespace) -> int:
+    facets: dict[str, str] = {}
+    for raw in args.facet or []:
+        if "=" not in raw:
+            print(f"--facet expects key=value, got: {raw}", file=sys.stderr)
+            return 1
+        key, value = raw.split("=", 1)
+        facets[key.strip()] = value.strip()
+    if bool(args.view_id) == bool(facets):
+        print("Provide exactly one of --view-id or --facet.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.view_zets(
+            Path(args.archive_root),
+            view_id=args.view_id,
+            facets=facets or None,
+            limit=args.limit,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        label = result.get("view_name") or result.get("view_id") or "facet query"
+        print(f"{label}: {result['count']} zet(s)")
+        for item in result["zettels"]:
+            print(f"  {item['id']}\t{item['status']}\t{item['title'] or ''}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+    return 0 if result.get("ok") else 1
+
+
+def command_related_zets(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.get_related_zets(
+            Path(args.archive_root),
+            args.zettel_id,
+            depth=args.depth,
+            edge_types=args.edge_type or None,
+            limit=args.limit,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Related zets for {result['zettel_id']}: {result['count']}")
+        for item in result["related"]:
+            arrow = "->" if item["direction"] == "out" else "<-"
+            print(f"  {arrow} {item['id']} ({item['edge_type'] or 'untyped'}, hop {item['hop']}) {item['title'] or ''}")
+    return 0
+
+
 def command_search(args: argparse.Namespace) -> int:
     try:
         result = archive_services.search_archive(Path(args.archive_root), args.query, limit=args.limit)
@@ -2863,6 +2918,68 @@ def command_import_workpack(args: argparse.Namespace) -> int:
         for warning in result["warnings"]:
             print(f"- {warning}")
     return 0 if result["ok"] else 1
+
+
+def command_staged_cleanup_check(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("staged-cleanup-check is report-only; pass --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.staged_cleanup_check(
+            Path(args.archive_root),
+            args.staged,
+            deferred_path=Path(args.deferred) if args.deferred else None,
+        )
+    except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError, yaml.YAMLError) as exc:
+        print(f"Staged cleanup check failed: {exc}", file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        for entry in result.get("files", []):
+            print(f"{entry['path']}: {entry['status']}")
+        print(f"safe_to_cleanup: {result.get('safe_to_cleanup')}")
+        for action in result.get("next_safe_actions", []):
+            print(f"- {action}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+    return 0 if result.get("ok") else 1
+
+
+def command_objet_capture(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("Objet capture requires --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("Objet capture requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+
+    try:
+        if args.dry_run:
+            result = archive_services.objet_capture_dry_run(Path(args.archive_root), Path(args.selection))
+        else:
+            result = archive_services.objet_capture_apply(
+                Path(args.archive_root),
+                Path(args.selection),
+                reviewed_by=args.reviewed_by,
+            )
+    except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError) as exc:
+        print(f"Objet capture failed: {exc}", file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        for entry in result.get("items", []):
+            print(f"{entry.get('item_id')}: {entry.get('action') or entry.get('planned_action')}")
+        summary = result.get("summary") or {}
+        print("Summary: " + ", ".join(f"{key}={value}" for key, value in summary.items()))
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+    return 0 if result.get("ok") else 1
 
 
 def command_import_external(args: argparse.Namespace) -> int:
@@ -4060,6 +4177,9 @@ def write_safe_gitignore(target: Path) -> None:
                 "# Generated archive search indexes",
                 "**/db/archive-index.sqlite",
                 "",
+                "# Local content-addressed objet byte store (manifests/receipts stay tracked)",
+                "objects/sha256/",
+                "",
             ]
         ),
         encoding="utf-8",
@@ -5111,6 +5231,29 @@ def build_parser() -> argparse.ArgumentParser:
     index.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     index.set_defaults(func=command_index)
 
+    view_zets_parser = subcommands.add_parser(
+        "view-zets",
+        help="Execute a saved view's facet filters (views/*.yml) or ad-hoc --facet filters against the index.",
+    )
+    view_zets_parser.add_argument("archive_root", help="Archive root to inspect.")
+    view_zets_parser.add_argument("--view-id", help="Saved view id from views/*.yml (top-level or saved_views).")
+    view_zets_parser.add_argument("--facet", action="append", help="Ad-hoc facet filter key=value (repeatable, ANDed).")
+    view_zets_parser.add_argument("--limit", type=int, default=50, help="Maximum zets to return.")
+    view_zets_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    view_zets_parser.set_defaults(func=command_view_zets)
+
+    related = subcommands.add_parser(
+        "related-zets",
+        help="List zets related to one zet via typed edges, both directions (backlinks included).",
+    )
+    related.add_argument("archive_root", help="Archive root to inspect.")
+    related.add_argument("--zettel-id", required=True, help="The zet id to find related zets for.")
+    related.add_argument("--depth", type=int, default=1, help="Traversal depth (1-3, default 1).")
+    related.add_argument("--edge-type", action="append", help="Filter to specific edge types (repeatable).")
+    related.add_argument("--limit", type=int, default=100, help="Maximum related zets to return.")
+    related.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    related.set_defaults(func=command_related_zets)
+
     search = subcommands.add_parser("search", help="Search the generated local SQLite search index.")
     search.add_argument("archive_root", help="Archive root to search.")
     search.add_argument("query", help="Search query.")
@@ -5148,6 +5291,29 @@ def build_parser() -> argparse.ArgumentParser:
     import_workpack.add_argument("--counterparty-fingerprint", help="Expected sender public key fingerprint for trust-gated workpacks.")
     import_workpack.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     import_workpack.set_defaults(func=command_import_workpack)
+
+    staged_cleanup = subcommands.add_parser(
+        "staged-cleanup-check",
+        help="Report-only G2 verifier: is every staged file preserved as an objet (or deferred) so cleanup would be safe?",
+    )
+    staged_cleanup.add_argument("archive_root", help="Archive root containing the staged folder.")
+    staged_cleanup.add_argument("--staged", required=True, help="Archive-relative staged folder to verify.")
+    staged_cleanup.add_argument("--deferred", help="Optional JSON file: {\"deferred\": [staged-relative paths]} explicitly deferred from capture.")
+    staged_cleanup.add_argument("--dry-run", action="store_true", help="Required: this command is report-only and never deletes.")
+    staged_cleanup.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    staged_cleanup.set_defaults(func=command_staged_cleanup_check)
+
+    objet_capture = subcommands.add_parser(
+        "objet-capture",
+        help="Dry-run or approve capturing selected staged files into the local content-addressed objet store.",
+    )
+    objet_capture.add_argument("archive_root", help="Sandbox archive root (requires a .wom-sandbox marker).")
+    objet_capture.add_argument("--selection", required=True, help="B4 selection manifest JSON path.")
+    objet_capture.add_argument("--dry-run", action="store_true", help="Preview the capture plan without writing files.")
+    objet_capture.add_argument("--approve", action="store_true", help="Capture bytes, append manifest records, write a receipt.")
+    objet_capture.add_argument("--reviewed-by", help="Reviewer id required for approved capture.")
+    objet_capture.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    objet_capture.set_defaults(func=command_objet_capture)
 
     import_external = subcommands.add_parser("import-external", help="Import Notion or Google Drive exports as inbox drafts.")
     import_external.add_argument("archive_root", help="Target archive root.")
