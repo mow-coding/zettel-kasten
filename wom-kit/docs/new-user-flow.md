@@ -391,7 +391,8 @@ This is a local consistency check only. It reads provider metadata and
 `receipts/providers/*.json`, reports missing or mismatched setup receipts, and
 writes nothing. It does not call GitHub, call storage providers, create
 repositories, create buckets, configure remotes, upload files, sync files, copy
-source files, or hash file bodies.
+source files, or hash file bodies. MCP exposes the same read-only check as
+`provider_setup_status`.
 
 ## Flow 3: AI Creates Drafts
 

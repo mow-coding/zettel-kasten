@@ -186,6 +186,18 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "provider_setup_status",
+        "description": "Check local provider setup metadata and receipts. Read-only; never calls providers, creates repos or buckets, uploads, syncs, pushes, hashes, OAuth, or writes files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "human_artifact_store_plan",
         "description": "Plan a user-facing human artifact surface. Read-only; never creates notes, publishes posts, uploads files, starts OAuth, calls providers, mints, or runs ZET transport.",
         "inputSchema": {
@@ -1179,6 +1191,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_github_repository_setup_plan(arguments)
     if name == "object_storage_setup_plan":
         return tool_object_storage_setup_plan(arguments)
+    if name == "provider_setup_status":
+        return tool_provider_setup_status(arguments)
     if name == "human_artifact_store_plan":
         return tool_human_artifact_store_plan(arguments)
     if name == "project_intake_plan":
@@ -1428,6 +1442,15 @@ def tool_object_storage_setup_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"object_storage_setup_plan: {state}.", result)
+
+
+def tool_provider_setup_status(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("provider_setup_status is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(archive_services.provider_setup_status, archive_root)
+    state = str(result.get("status") or ("passed" if result["ok"] else "blocked"))
+    return tool_success_result(f"provider_setup_status: {state}.", result)
 
 
 def tool_human_artifact_store_plan(arguments: dict[str, Any]) -> dict[str, Any]:
