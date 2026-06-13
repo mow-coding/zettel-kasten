@@ -1,6 +1,6 @@
 # Human Artifact Store Contract
 
-Status: Unreleased planning-preview command
+Status: v0.3.7 planning-preview command
 
 WOM-kit separates three storage roles:
 

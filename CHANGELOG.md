@@ -8,7 +8,7 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## v0.3.7 - 2026-06-13
 
-- Added optional `archive objet-capture --project-intake-receipt <receipt>` context validation, and matching selection-manifest support via `project_intake_receipt_path`, so reviewed project-intake decisions can gate capture planning before staged bytes are read; added a fake-archive roundtrip regression for plan -> decisions -> status -> source-intake -> objet-capture.
+- Added optional `archive objet-capture --project-intake-receipt <receipt>` context validation, and matching selection-manifest support via `project_intake_receipt_path`, so reviewed project-intake decisions can gate capture planning before staged bytes are read; added fake-archive roundtrip regressions for plan -> decisions -> status -> source-intake -> create-draft/mint metadata and plan -> decisions -> status -> source-intake -> objet-capture.
 - Added read-only CLI/MCP human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces, keeping raw data, human-facing artifacts, and system/AI artifacts separate without provider calls, note writes, publishing, uploads, minting, cleanup, or ZET transport.
 - Added per-item `item_status` values to derived-text batch dry-run/apply output so large JSONL captures can distinguish ready, skipped, blocked, and written rows at a glance.
 - Clarified the project-intake migration spine from project planning through source-intake, objet-capture, derived-text registration, drafting, minting, and cleanup verification; documented the local-only intent behind collaboration/runtime `.gitignore` guardrails.
