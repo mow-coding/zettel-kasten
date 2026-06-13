@@ -17037,6 +17037,118 @@ def project_intake_decision_template_safe_actions(from_receipt: bool, complete: 
     return actions
 
 
+def project_intake_item_plan(
+    archive_root: Path | str,
+    *,
+    receipt: str,
+    local_path: Path | str,
+    source_role: str = SOURCE_INTAKE_DEFAULT_ROLE,
+    title: str | None = None,
+    mime: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    if not dry_run:
+        raise ArchiveServiceError("project-intake-item-plan is dry-run only.")
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    status = project_intake_status(root, receipt, dry_run=True)
+    source_plan = source_intake_plan(
+        root,
+        local_path=Path(local_path),
+        source_role=source_role,
+        title=title,
+        mime=mime,
+        redact_local_paths=True,
+        project_intake_receipt=receipt,
+    )
+    blockers = unique_preserve_order(
+        [
+            *[str(item) for item in status.get("blockers", [])],
+            *[str(item) for item in source_plan.get("blockers", [])],
+        ]
+    )
+    warnings = unique_preserve_order(
+        [
+            *[str(item) for item in status.get("warnings", [])],
+            *[str(item) for item in source_plan.get("warnings", [])],
+        ]
+    )
+    command_parts = [
+        "archive",
+        "source-intake",
+        "<archive-root>",
+        "--dry-run",
+        "--local-path",
+        "<selected-local-path>",
+        "--project-intake-receipt",
+        str(status.get("receipt_path") or "<project-intake-receipt>"),
+        "--redact-local-paths",
+        "--format",
+        "json",
+    ]
+    if source_role != SOURCE_INTAKE_DEFAULT_ROLE:
+        command_parts.extend(["--source-role", source_role])
+    if title:
+        command_parts.extend(["--title", "<human-reviewed-title>"])
+    if mime:
+        command_parts.extend(["--mime", "<mime-type>"])
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "action": "archive_project_intake_item_plan",
+        "archive_id": archive_id,
+        "state": "blocked" if blockers else "ready_for_source_intake_dry_run",
+        "receipt_path": status.get("receipt_path"),
+        "project_intake_context": source_plan.get("project_intake_context"),
+        "selected_item_plan": {
+            "input_kind": source_plan.get("input_kind"),
+            "source_kind": source_plan.get("source_kind"),
+            "source_role": source_role,
+            "objet_status": source_plan.get("objet_status"),
+            "source_metadata": source_plan.get("source_metadata"),
+            "source_refs_for_draft": source_plan.get("source_refs_for_draft"),
+            "draft_provenance_suggestions": source_plan.get("draft_provenance_suggestions"),
+            "content_access": source_plan.get("content_access"),
+        },
+        "source_intake_preview": source_plan,
+        "command_guidance": {
+            "source_intake_dry_run": " ".join(command_parts),
+            "save_source_intake_plan_before_capture": True,
+            "capture_requires_persisted_source_intake_plan": True,
+            "capture_requires_separate_selection_manifest": True,
+            "selection_manifest_generated": False,
+            "automatic_execution_authorized": False,
+        },
+        "privacy_guards": {
+            "local_paths_redacted": True,
+            "decision_values_included": False,
+            "staged_entry_names_listed": False,
+            "file_bodies_read": False,
+            "content_hashes_calculated": False,
+            "provider_calls": False,
+            "writes": False,
+        },
+        "next_safe_actions": project_intake_item_plan_safe_actions(bool(blockers)),
+        "would_change": [],
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+
+def project_intake_item_plan_safe_actions(blocked: bool) -> list[str]:
+    if blocked:
+        return [
+            "Fix the receipt or selected-file blocker before continuing.",
+            "Do not run capture, drafting, minting, provider sync, or cleanup from a blocked item plan.",
+        ]
+    return [
+        "Save the source-intake dry-run JSON as a receipt/source evidence file before capture.",
+        "Use objet-capture only with a separately reviewed selection manifest.",
+        "Keep drafting, minting, provider sync, and cleanup as separate approval gates.",
+    ]
+
+
 def safe_project_intake_actor_id(value: str | None) -> str | None:
     if value is None:
         return None

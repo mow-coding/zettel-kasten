@@ -27,6 +27,8 @@ Commands:
           Return the next human-review question for a project intake session.
   project-intake-decision-template
           Build a next-question decision JSON template without writing files.
+  project-intake-item-plan
+          Preview the next dry-run commands for one selected intake item.
   block-header
           Preview the derived block header for one draft or canonical zet.
   projection-plan
@@ -4139,6 +4141,55 @@ def print_project_intake_decision_template_result(result: dict[str, Any], output
             print(f"- {action}")
 
 
+def command_project_intake_item_plan(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.project_intake_item_plan(
+            Path(args.archive_root),
+            receipt=args.receipt,
+            local_path=Path(args.local_path),
+            source_role=args.source_role,
+            title=args.title,
+            mime=args.mime,
+            dry_run=args.dry_run,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_project_intake_item_plan_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def print_project_intake_item_plan_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"Project intake item plan dry-run {result.get('state') or 'unknown'}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Receipt: {result.get('receipt_path') or '-'}")
+    selected = result.get("selected_item_plan") if isinstance(result.get("selected_item_plan"), dict) else {}
+    print(f"Input kind: {selected.get('input_kind') or '-'}")
+    print(f"Source kind: {selected.get('source_kind') or '-'}")
+    print(f"Objet status: {selected.get('objet_status') or '-'}")
+    guidance = result.get("command_guidance") if isinstance(result.get("command_guidance"), dict) else {}
+    if guidance.get("source_intake_dry_run"):
+        print("Next dry-run command:")
+        print(guidance["source_intake_dry_run"])
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
+
+
 def command_restore_drill(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -6242,6 +6293,20 @@ def build_parser() -> argparse.ArgumentParser:
     project_intake_decision_template.add_argument("--dry-run", action="store_true", help="Required; template only.")
     project_intake_decision_template.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     project_intake_decision_template.set_defaults(func=command_project_intake_decision_template)
+
+    project_intake_item_plan = subcommands.add_parser(
+        "project-intake-item-plan",
+        help="Preview the source-intake dry-run route for one selected project intake item.",
+    )
+    project_intake_item_plan.add_argument("archive_root", help="Archive root to inspect.")
+    project_intake_item_plan.add_argument("--receipt", required=True, help="Archive-relative project intake decisions receipt.")
+    project_intake_item_plan.add_argument("--local-path", required=True, help="One local file selected by the human for item planning.")
+    project_intake_item_plan.add_argument("--source-role", default=archive_services.SOURCE_INTAKE_DEFAULT_ROLE, help="Source role for later draft provenance.")
+    project_intake_item_plan.add_argument("--title", help="Optional non-secret human-reviewed title.")
+    project_intake_item_plan.add_argument("--mime", help="Optional MIME type.")
+    project_intake_item_plan.add_argument("--dry-run", action="store_true", help="Required; preview only.")
+    project_intake_item_plan.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    project_intake_item_plan.set_defaults(func=command_project_intake_item_plan)
 
     recovery_plan = subcommands.add_parser("recovery-plan", help="Show local backup and restore readiness without writing files.")
     recovery_plan.add_argument("archive_root", help="Archive root to inspect.")

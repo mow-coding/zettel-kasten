@@ -643,6 +643,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("project_intake_status", tool_names)
             self.assertIn("project_intake_next_question", tool_names)
             self.assertIn("project_intake_decision_template", tool_names)
+            self.assertIn("project_intake_item_plan", tool_names)
             self.assertIn("source_intake_plan", tool_names)
             self.assertIn("create_draft_zettel", tool_names)
             self.assertIn("block_header_check", tool_names)
@@ -1856,11 +1857,40 @@ class McpServerTests(unittest.TestCase):
                 self.assertNotIn("One project only", next_template_dump)
                 self.assertNotIn('"yes"', next_template_dump)
 
-                source_response = self.send(
+                item_plan_response = self.send(
                     process,
                     {
                         "jsonrpc": "2.0",
                         "id": 8,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "project_intake_item_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "receipt": receipt_path,
+                                "local_path": str(staged / "private-file-name.md"),
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(item_plan_response["result"]["isError"])
+                item_plan = item_plan_response["result"]["structuredContent"]
+                self.assertTrue(item_plan["ok"])
+                self.assertEqual(item_plan["receipt_path"], receipt_path)
+                self.assertEqual(item_plan["selected_item_plan"]["input_kind"], "local_path")
+                self.assertEqual(item_plan["selected_item_plan"]["source_metadata"]["local_path"], "<redacted-local-path>")
+                self.assertIn("<selected-local-path>", item_plan["command_guidance"]["source_intake_dry_run"])
+                self.assertFalse(item_plan["command_guidance"]["selection_manifest_generated"])
+                self.assertFalse(item_plan["privacy_guards"]["file_bodies_read"])
+                item_plan_dump = json.dumps(item_plan)
+                self.assertNotIn("private-file-name.md", item_plan_dump)
+                self.assertNotIn("SUPER_SECRET_BODY", item_plan_dump)
+
+                source_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 9,
                         "method": "tools/call",
                         "params": {
                             "name": "source_intake_plan",
@@ -1882,7 +1912,7 @@ class McpServerTests(unittest.TestCase):
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": 9,
+                        "id": 10,
                         "method": "tools/call",
                         "params": {
                             "name": "project_intake_plan",
@@ -1900,7 +1930,7 @@ class McpServerTests(unittest.TestCase):
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": 10,
+                        "id": 11,
                         "method": "tools/call",
                         "params": {
                             "name": "project_intake_next_question",

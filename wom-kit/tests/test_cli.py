@@ -12347,6 +12347,82 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn("One project only", output)
             self.assertNotIn('"yes"', output)
 
+    def test_project_intake_item_plan_previews_one_selected_file_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            staged = Path(tmp) / "archive-objets" / "intake" / "alpha-project"
+            staged.mkdir(parents=True)
+            selected = staged / "private-file-name.md"
+            selected.write_text("SUPER_SECRET_BODY", encoding="utf-8")
+            decisions_path = Path(tmp) / "decisions.json"
+            decisions_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/project-intake-decisions/v0.1",
+                        "session_id": "alpha-project-20260613",
+                        "decisions": [
+                            {
+                                "checklist_id": "scope.single_project",
+                                "answer": "yes",
+                                "notes": "One project only.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            approve_code, approve_output = self.run_cli(
+                [
+                    "project-intake-decisions",
+                    str(archive_root),
+                    "--decisions",
+                    str(decisions_path),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            receipt_path = json.loads(approve_output)["receipt_path"]
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "project-intake-item-plan",
+                    str(archive_root),
+                    "--receipt",
+                    receipt_path,
+                    "--local-path",
+                    str(selected),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["action"], "archive_project_intake_item_plan")
+            self.assertEqual(result["state"], "ready_for_source_intake_dry_run")
+            self.assertEqual(result["receipt_path"], receipt_path)
+            self.assertEqual(result["selected_item_plan"]["input_kind"], "local_path")
+            self.assertEqual(result["selected_item_plan"]["source_metadata"]["local_path"], "<redacted-local-path>")
+            self.assertFalse(result["selected_item_plan"]["content_access"]["content_read"])
+            self.assertFalse(result["selected_item_plan"]["content_access"]["full_hash_calculated"])
+            self.assertIn("<selected-local-path>", result["command_guidance"]["source_intake_dry_run"])
+            self.assertFalse(result["command_guidance"]["selection_manifest_generated"])
+            self.assertFalse(result["command_guidance"]["automatic_execution_authorized"])
+            self.assertFalse(result["privacy_guards"]["file_bodies_read"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn(str(selected), output)
+            self.assertNotIn("private-file-name.md", output)
+            self.assertNotIn("SUPER_SECRET_BODY", output)
+
     def test_project_intake_next_question_requires_dry_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "archive"

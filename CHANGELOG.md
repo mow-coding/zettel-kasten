@@ -18,6 +18,10 @@ This project uses semantic versioning for public compatibility checkpoints.
   MCP `project_intake_decision_template` to produce the next answer's decision
   JSON shape without filling answer values, echoing previous answers, approving
   receipts, or writing files.
+- Added read-only CLI `archive project-intake-item-plan --dry-run` and MCP
+  `project_intake_item_plan` to preview the next source-intake dry-run route for
+  one human-selected file while redacting local paths and avoiding capture,
+  drafting, minting, uploads, cleanup, or selection-manifest generation.
 
 ## v0.3.7 - 2026-06-13
 
