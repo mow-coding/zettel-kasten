@@ -1775,6 +1775,43 @@ def command_object_storage(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_human_artifact_store(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("human-artifact-store is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.human_artifact_store_plan(
+            Path(args.archive_root),
+            surface_kind=args.surface_kind,
+            surface_ref=args.surface_ref,
+            role=args.role,
+            dry_run=args.dry_run,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result["ok"] else "blocked"
+        surface = result["surface"]
+        print(f"Human artifact store plan {state}.")
+        print(f"Archive: {result['archive_id']}")
+        print(f"Surface: {surface.get('surface_kind') or '-'}")
+        print(f"Role: {surface.get('role') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_source_intake(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("Source intake is dry-run only in v0.2.22. Use --dry-run.", file=sys.stderr)
@@ -5063,6 +5100,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     object_storage.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     object_storage.set_defaults(func=command_object_storage)
+
+    human_artifact_store = subcommands.add_parser(
+        "human-artifact-store",
+        help="Plan a user-facing note/workspace/publication surface without calling providers.",
+    )
+    human_artifact_store.add_argument("archive_root", help="Archive root to plan for.")
+    human_artifact_store.add_argument("--dry-run", action="store_true", help="Preview the surface contract without writing files.")
+    human_artifact_store.add_argument(
+        "--surface-kind",
+        choices=sorted(archive_services.HUMAN_ARTIFACT_SURFACE_KINDS),
+        required=True,
+        help="User-facing app/surface kind to plan for.",
+    )
+    human_artifact_store.add_argument("--surface-ref", help="Optional safe app-level label/ref; never pass a URL, email, path, or token.")
+    human_artifact_store.add_argument(
+        "--role",
+        choices=sorted(archive_services.HUMAN_ARTIFACT_ROLES),
+        default=archive_services.HUMAN_ARTIFACT_DEFAULT_ROLE,
+        help="Role this app should play in the archive model.",
+    )
+    human_artifact_store.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    human_artifact_store.set_defaults(func=command_human_artifact_store)
 
     source_intake = subcommands.add_parser(
         "source-intake",

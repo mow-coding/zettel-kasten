@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.6 project intake decision recording checkpoint
+Status: Unreleased after v0.3.6 project intake decision recording checkpoint
 Date: 2026-06-13
-Version: v0.3.6, released
+Version: working tree after v0.3.6
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -41,6 +41,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Profile wallet preview | `read-only preview` | none | Wallet-ready identity model only. No keys, signing, or blockchain calls. |
 | GitHub repository setup plan | `approval-gated write` | CLI approve writes local provider metadata/receipt only | Does not create a repository, configure remotes, push, call GitHub APIs, or run OAuth. |
 | Objet storage setup plan | `approval-gated write` | CLI approve writes local provider metadata/receipt only | Does not create buckets, upload, sync, copy files, hash source files, or call provider APIs. |
+| Human artifact store plan | `read-only preview` | none | `archive human-artifact-store --dry-run` plans a user-facing surface such as WordPress, Joplin, Notion, Obsidian, Evernote, or generic Markdown/workspace. It keeps raw data, human-readable artifacts, and system/AI artifacts separate, and performs no provider calls, OAuth, note writes, post publishing, uploads, minting, cleanup, or ZET transport. |
 | Source intake planner | `read-only preview` | none | Metadata-only classification before draft creation. Optional `--project-intake-receipt` validates a decisions receipt as session context only. It does not import, copy, upload, OCR, transcribe, hash file bodies, or treat the receipt as automatic execution approval. |
 | Project intake planner | `read-only preview` | none | `archive project-intake-plan --dry-run` plans one staged folder session with top-level counts, human review checklist, suggested classification labels, and a draft decision-record template. It does not include entry names, read bodies, recurse, classify automatically, write, upload, mint, or clean. |
 | Project intake decision recording | `approval-gated write` | dry-run validates first; CLI approve writes one local receipt | `archive project-intake-decisions` records human-reviewed checklist decisions under `receipts/project-intake/`. It does not run source intake, capture objets, derive text, create drafts, mint zets, call providers, or clean staged folders. |

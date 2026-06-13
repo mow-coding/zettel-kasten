@@ -123,6 +123,22 @@ ZET_PROJECTION_SURFACE_KINDS = {
 }
 ZET_PROJECTION_VISIBILITIES = {"private", "team", "public", "unknown"}
 ZET_PROJECTION_FORMATS = {"metadata_only", "safe_html_summary", "plain_text_summary"}
+HUMAN_ARTIFACT_SURFACE_KINDS = {
+    "wordpress",
+    "joplin",
+    "notion",
+    "obsidian",
+    "evernote",
+    "generic_markdown",
+    "generic_workspace",
+}
+HUMAN_ARTIFACT_ROLES = {
+    "human_artifact_store",
+    "projection_surface",
+    "source_export",
+    "working_note_store",
+}
+HUMAN_ARTIFACT_DEFAULT_ROLE = "human_artifact_store"
 ZET_SHARED_UPDATE_RECORD_EXPECTED_KIND = "zet_shared_update_record_preview"
 ZET_SHARED_UPDATE_REVIEW_INDEX_MAX_LIMIT = 100
 ZET_SHARED_UPDATE_ATTESTATION_REVIEW_DECISIONS = {"attest", "needs_more_review", "reject"}
@@ -10005,6 +10021,180 @@ def zet_projection_plan_preview(
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
+
+
+def human_artifact_store_plan(
+    archive_root: Path | str,
+    *,
+    surface_kind: str | None,
+    surface_ref: str | None = None,
+    role: str = HUMAN_ARTIFACT_DEFAULT_ROLE,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("human-artifact-store is dry-run only; pass --dry-run.")
+
+    normalized_surface = str(surface_kind or "").strip().lower().replace("-", "_")
+    if normalized_surface not in HUMAN_ARTIFACT_SURFACE_KINDS:
+        blockers.append(
+            "surface_kind must be one of: " + ", ".join(sorted(HUMAN_ARTIFACT_SURFACE_KINDS)) + "."
+        )
+        normalized_surface = None
+
+    normalized_role = str(role or HUMAN_ARTIFACT_DEFAULT_ROLE).strip().lower().replace("-", "_")
+    if normalized_role not in HUMAN_ARTIFACT_ROLES:
+        blockers.append("role must be one of: " + ", ".join(sorted(HUMAN_ARTIFACT_ROLES)) + ".")
+        normalized_role = HUMAN_ARTIFACT_DEFAULT_ROLE
+
+    normalized_ref = str(surface_ref or "").strip()
+    if normalized_ref and not safe_human_artifact_surface_ref(normalized_ref):
+        blockers.append("surface_ref must be a safe label/ref, not a URL, email, token, secret, or path.")
+        normalized_ref = None
+
+    if normalized_surface == "wordpress" and normalized_role in {"human_artifact_store", "working_note_store"}:
+        warnings.append("WordPress is usually a projection/publication surface; confirm this role before adapter work.")
+    if normalized_surface in {"joplin", "obsidian", "evernote"} and normalized_role == "projection_surface":
+        warnings.append("Note apps are usually working human artifact stores; projection role is operator-declared only.")
+    if normalized_surface == "notion" and normalized_role == "source_export":
+        warnings.append("Notion export intake is separate from future Notion workspace note writes.")
+
+    contract = human_artifact_surface_contract(normalized_surface)
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "human_artifact_store_plan",
+        "archive_id": archive_id,
+        "surface": {
+            "surface_kind": normalized_surface,
+            "surface_ref": normalized_ref or None,
+            "role": normalized_role,
+            "role_status": "operator_declared_not_verified",
+        },
+        "three_store_model": {
+            "raw_data_store": "source/original files and objets stay separate from human notes.",
+            "human_artifact_store": "user-facing notes, reports, handoffs, diagrams, and reviewed readable artifacts.",
+            "system_ai_artifact_store": "manifests, source maps, receipts, indexes, hashes, and version history stay outside the app unless explicitly mirrored.",
+        },
+        "adapter_contract": contract,
+        "required_system_ai_artifacts": [
+            "surface binding with safe refs only",
+            "human artifact record or receipt for any future write",
+            "source refs back to WOM objets, source maps, zets, or receipts",
+            "local mirror or exported artifact path when the app cannot be the canonical archive",
+            "human review marker before treating a note/report as reviewed evidence",
+        ],
+        "next_safe_actions": [
+            "choose the intended role for this surface",
+            "identify safe app-level refs without secrets or local absolute paths",
+            "decide which human artifact templates are allowed",
+            "design a receipt before any create/update/publish adapter",
+            "keep provider calls and deletes closed until an approval-gated adapter exists",
+        ],
+        "closed_scope_gates": [
+            "provider API call",
+            "OAuth or token flow",
+            "note creation",
+            "note update",
+            "note delete",
+            "binary attachment",
+            "WordPress publishing",
+            "Notion/Joplin/Obsidian/Evernote sync",
+            "projection receipt write",
+            "ZET transport",
+            "minting",
+            "automatic cleanup",
+        ],
+        "external_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "note_created": False,
+            "note_updated": False,
+            "note_deleted": False,
+            "post_published": False,
+            "files_uploaded": False,
+            "files_synced": False,
+            "projection_receipt_created": False,
+            "zet_transport_performed": False,
+            "minted": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def human_artifact_surface_contract(surface_kind: str | None) -> dict[str, Any]:
+    base = {
+        "list": "future_adapter_required",
+        "read": "future_adapter_required",
+        "write": "future_adapter_required",
+        "update": "future_adapter_required",
+        "delete": "not_assumed",
+        "attach_binaries": "not_assumed",
+        "body_format": "unknown",
+        "citation_links": "future_contract_required",
+        "cited_by_links": "future_contract_required",
+        "template_capture_command": "future_contract_required",
+        "stable_external_ref": "future_contract_required",
+        "canonical_archive_status": "not_canonical_wom_archive",
+    }
+    by_surface = {
+        "wordpress": {
+            "body_format": "html_or_blocks_future",
+            "typical_role": "projection_surface",
+            "best_for": ["selected reports", "public/private publication surfaces"],
+            "special_boundary": "Posting is not minting, and a post URL is not canonical zet identity.",
+        },
+        "joplin": {
+            "body_format": "markdown_future",
+            "typical_role": "working_note_store",
+            "best_for": ["living notes", "handoffs", "diagrams", "human citation links"],
+            "special_boundary": "Human-readable note links are not source maps, manifests, or receipts by themselves.",
+        },
+        "notion": {
+            "body_format": "pages_or_blocks_future",
+            "typical_role": "human_artifact_store",
+            "best_for": ["workspace notes", "databases", "team review artifacts"],
+            "special_boundary": "Notion export intake and Notion workspace writes are separate roles.",
+        },
+        "obsidian": {
+            "body_format": "markdown_future",
+            "typical_role": "working_note_store",
+            "best_for": ["local markdown vaults", "wiki-style links"],
+            "special_boundary": "Vault files can mirror human artifacts, but WOM receipts/indexes remain separate.",
+        },
+        "evernote": {
+            "body_format": "note_body_future",
+            "typical_role": "human_artifact_store",
+            "best_for": ["legacy note collections", "reviewed human-readable notes"],
+            "special_boundary": "Imported or mirrored notes need explicit WOM source refs before use.",
+        },
+        "generic_markdown": {
+            "body_format": "markdown_future",
+            "typical_role": "working_note_store",
+            "best_for": ["local mirrors", "portable readable artifacts"],
+            "special_boundary": "Markdown files are not enough without manifests, refs, and receipts.",
+        },
+        "generic_workspace": {
+            "body_format": "workspace_native_future",
+            "typical_role": "human_artifact_store",
+            "best_for": ["user-selected apps", "future custom SaaS surfaces"],
+            "special_boundary": "The app role must be declared before adapter behavior is trusted.",
+        },
+    }
+    result = dict(base)
+    if surface_kind in by_surface:
+        result.update(by_surface[surface_kind])
+    return result
+
+
+def safe_human_artifact_surface_ref(value: str) -> bool:
+    return safe_source_intake_ref(value)
 
 
 def zet_shared_update_record_review_preview(

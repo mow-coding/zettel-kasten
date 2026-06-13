@@ -86,6 +86,7 @@ docs/security-hardening.md
 docs/security-audit-2026-05-21.md
 docs/new-user-flow.md
 docs/project-intake-session.md
+docs/human-artifact-store-contract.md
 docs/source-maps.md
 docs/platform-support.md
 docs/server-blueprint.md
@@ -131,6 +132,9 @@ github-repo
 
 object-storage
   Plan object storage setup for WOM objets. Dry-run writes nothing. Approved mode writes only local provider metadata and a setup receipt; it does not create buckets, upload, sync, copy, hash, or import source files.
+
+human-artifact-store
+  Plan a user-facing note/workspace/publication surface such as WordPress, Joplin, Notion, Obsidian, Evernote, or generic Markdown. Dry-run only; writes nothing, calls no providers, creates no notes, publishes no posts, and keeps system/AI artifacts separate from human-readable artifacts.
 
 source-intake
   Classify one source/objet locator before draft creation. Dry-run only; returns safe source refs without reading bodies, hashing, copying, uploading, importing, OCR, transcription, extraction, or provider API calls. It can optionally validate a project-intake decisions receipt as session context only.
@@ -461,6 +465,8 @@ The first implemented vocabulary is deliberately small: `derivation_kind` is one
 `archive source-intake --project-intake-receipt <receipt> --dry-run` can carry that reviewed session receipt into a one-locator metadata plan. The receipt must pass the same status check, and the resulting `project_intake_context` includes only receipt path, session id, reviewer metadata, decision hash, checklist coverage, and readiness. It does not include answer values and does not approve source capture, draft creation, minting, provider calls, or cleanup.
 
 `archive objet-capture --project-intake-receipt <receipt> --dry-run|--approve` can carry the same reviewed session receipt into an explicit capture selection. A selection manifest may also include `project_intake_receipt_path`; if both are present they must match. Invalid or tampered intake receipts block before staged bytes are read. The context is recorded in the capture result and approved capture receipt, but it still does not approve drafting, minting, provider calls, or cleanup.
+
+`archive human-artifact-store --surface-kind <kind> --dry-run` previews the contract for a user-facing human artifact app or surface. Supported kinds are `wordpress`, `joplin`, `notion`, `obsidian`, `evernote`, `generic_markdown`, and `generic_workspace`. The command keeps three roles separate: raw/original data, human-readable artifacts, and system/AI artifacts such as manifests, source maps, receipts, indexes, hashes, and version history. It writes nothing, calls no providers, starts no OAuth, creates or updates no notes, publishes no posts, uploads no files, mints no zets, and runs no ZET transport.
 
 `archive create-draft --source-intake-plan <json-file>` consumes a successful source-intake dry-run JSON file, validates that it is metadata-only and blocker-free, then merges safe `source_refs_for_draft` into draft `source_refs`. The plan file path is not stored in frontmatter, and WOM-kit does not follow local paths inside the plan.
 
