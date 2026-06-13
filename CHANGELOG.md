@@ -26,6 +26,11 @@ This project uses semantic versioning for public compatibility checkpoints.
   to validate a reviewed `source-intake --dry-run` JSON file and preserve the
   redacted plan under `receipts/sources/` for later capture evidence without
   reading file bodies, calculating content hashes, or calling providers.
+- Added read-only CLI `archive prehashed-objet-ledger --dry-run` to preview
+  already-hashed external content-addressed ledgers, including Notion
+  source-export ledgers, without echoing row values, reading blob bytes,
+  registering manifests, or claiming that `objet-capture` can skip byte
+  verification today.
 
 ## v0.3.7 - 2026-06-13
 

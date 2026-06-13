@@ -17,6 +17,8 @@ Commands:
           Plan GitHub repository metadata for a WOM profile.
   object-storage
           Plan object storage metadata for WOM objets.
+  prehashed-objet-ledger
+          Preview an already-hashed external objet ledger without reading blob bytes.
   source-intake
           Plan safe source/objet refs before draft creation.
   source-intake-record
@@ -1820,6 +1822,53 @@ def command_human_artifact_store(args: argparse.Namespace) -> int:
             for warning in result["warnings"]:
                 print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
+
+
+def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("prehashed-objet-ledger is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.prehashed_objet_ledger_preview(
+            Path(args.archive_root),
+            Path(args.ledger),
+            store_kind=args.store_kind,
+            sha256_field=args.sha256_field,
+            size_field=args.size_field,
+            dry_run=args.dry_run,
+            max_rows=args.max_rows,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_prehashed_objet_ledger_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def print_prehashed_objet_ledger_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    state = "passed" if result.get("ok") else "blocked"
+    ledger = result.get("ledger") if isinstance(result.get("ledger"), dict) else {}
+    print(f"Prehashed objet ledger preview {state}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Store kind: {result.get('store_kind') or '-'}")
+    print(f"Rows: {ledger.get('row_count', 0)}")
+    print(f"Valid objects: {ledger.get('valid_object_count', 0)}")
+    print(f"Invalid rows: {ledger.get('invalid_row_count', 0)}")
+    print(f"Duplicate sha256 rows: {ledger.get('duplicate_sha256_count', 0)}")
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
 
 
 def command_source_intake(args: argparse.Namespace) -> int:
@@ -5402,6 +5451,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     human_artifact_store.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     human_artifact_store.set_defaults(func=command_human_artifact_store)
+
+    prehashed_objet_ledger = subcommands.add_parser(
+        "prehashed-objet-ledger",
+        help="Preview an already-hashed external objet ledger without reading blob bytes.",
+    )
+    prehashed_objet_ledger.add_argument("archive_root", help="Archive root to plan for.")
+    prehashed_objet_ledger.add_argument("--ledger", required=True, help="UTF-8 JSONL ledger with sha256 and byte-size fields.")
+    prehashed_objet_ledger.add_argument(
+        "--store-kind",
+        choices=sorted(archive_services.PREHASHED_OBJET_LEDGER_STORE_KINDS),
+        default="generic_content_addressed_store",
+        help="External store context for the preview.",
+    )
+    prehashed_objet_ledger.add_argument("--sha256-field", default="sha256", help="JSONL field containing sha256 or sha256:<hex>.")
+    prehashed_objet_ledger.add_argument("--size-field", default="bytes", help="JSONL field containing byte size.")
+    prehashed_objet_ledger.add_argument("--max-rows", type=int, default=100000, help="Maximum rows to inspect.")
+    prehashed_objet_ledger.add_argument("--dry-run", action="store_true", help="Required; preview only.")
+    prehashed_objet_ledger.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    prehashed_objet_ledger.set_defaults(func=command_prehashed_objet_ledger)
 
     source_intake = subcommands.add_parser(
         "source-intake",

@@ -52,3 +52,6 @@ The command returns the contract that a future adapter must satisfy before WOM-k
 - which future writes require explicit human approval and receipts.
 
 This is intentionally conservative. A useful human note is not automatically a source map, manifest, receipt, index entry, or trusted system memory. Future app-specific adapters must preserve that separation.
+
+For a concrete Notion source-export example, see
+[Notion Source Export Three-Store Example](notion-source-export-three-store-example.md).

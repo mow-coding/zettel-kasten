@@ -1499,6 +1499,67 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertTrue(any("surface_ref" in blocker for blocker in result["blockers"]))
 
+    def test_prehashed_objet_ledger_preview_counts_without_echoing_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            ledger = Path(tmp) / "retrieval-ledger.jsonl"
+            sha_a = "a" * 64
+            sha_b = "sha256:" + ("b" * 64)
+            ledger.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "sha256": sha_a,
+                                "bytes": 12,
+                                "filename": "private-notion-export-name.pdf",
+                                "url": "https://example.com/private",
+                            }
+                        ),
+                        json.dumps({"sha256": sha_b, "bytes": "5", "path": "LOCAL_DEVICE_PLACEHOLDER\\secret\\file.bin"}),
+                        json.dumps({"sha256": sha_a, "bytes": 12}),
+                        json.dumps({"sha256": "not-a-sha", "bytes": 7}),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "prehashed-objet-ledger",
+                    str(archive_root),
+                    "--ledger",
+                    str(ledger),
+                    "--store-kind",
+                    "notion_source_export",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "prehashed_objet_ledger_preview")
+            self.assertEqual(result["store_kind"], "notion_source_export")
+            self.assertEqual(result["ledger"]["row_count"], 4)
+            self.assertEqual(result["ledger"]["valid_object_count"], 3)
+            self.assertEqual(result["ledger"]["unique_sha256_count"], 2)
+            self.assertEqual(result["ledger"]["duplicate_sha256_count"], 1)
+            self.assertEqual(result["ledger"]["invalid_row_count"], 1)
+            self.assertEqual(result["ledger"]["total_declared_bytes"], 29)
+            self.assertFalse(result["current_capability"]["objet_capture_can_import_prehashed_external_store_without_rehashing"])
+            self.assertFalse(result["privacy_guards"]["row_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["blob_bytes_read"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(ledger), output)
+            self.assertNotIn("private-notion-export-name.pdf", output)
+            self.assertNotIn("https://example.com/private", output)
+            self.assertNotIn("LOCAL_DEVICE_PLACEHOLDER", output)
+
     def test_object_storage_invalid_provider_bucket_slug_and_secret_refs_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
