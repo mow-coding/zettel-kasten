@@ -14053,6 +14053,125 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(result["provider_change_plan"]["status"], "manual_required")
         self.assertTrue(any(item["provider"] == "neon" for item in result["providers"]))
 
+    def test_provider_status_cli_checks_setup_receipts_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:provider-status")
+            self.assertEqual(init_code, 0, init_output)
+
+            github_code, github_output = self.run_cli(
+                [
+                    "github-repo",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "reviewer:test",
+                    "--profile-id",
+                    "person:test",
+                    "--profile-slug",
+                    "status",
+                    "--github-owner",
+                    "example-owner",
+                    "--github-account-ref",
+                    "github:account:test",
+                    "--repo-name",
+                    "zettel-kasten-provider-status",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(github_code, 0, github_output)
+
+            storage_code, storage_output = self.run_cli(
+                [
+                    "object-storage",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "reviewer:test",
+                    "--provider",
+                    "cloudflare-r2",
+                    "--profile-id",
+                    "person:test",
+                    "--profile-slug",
+                    "status",
+                    "--storage-account-ref",
+                    "storage:account:test",
+                    "--bucket-name",
+                    "zettel-kasten-provider-status-objets",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(storage_code, 0, storage_output)
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(["provider-status", str(archive_root), "--dry-run", "--format", "json"])
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["action"], "provider_setup_status")
+            self.assertEqual(result["status"], "ready")
+            self.assertEqual(result["checked_binding_count"], 2)
+            self.assertEqual(result["would_change"], [])
+            self.assertFalse(any(result["external_actions"].values()))
+
+            statuses = {
+                (item["provider"], item.get("provider_kind")): item
+                for item in result["providers"]
+                if item["setup_managed"]
+            }
+            self.assertEqual(statuses[("github", None)]["status"], "metadata_and_receipt_present")
+            self.assertEqual(statuses[("object_storage", "cloudflare-r2")]["status"], "metadata_and_receipt_present")
+            self.assertEqual(result["orphan_receipts"], [])
+
+    def test_provider_status_cli_blocks_missing_setup_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:provider-missing")
+            self.assertEqual(init_code, 0, init_output)
+
+            storage_code, storage_output = self.run_cli(
+                [
+                    "object-storage",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "reviewer:test",
+                    "--provider",
+                    "cloudflare-r2",
+                    "--profile-id",
+                    "person:test",
+                    "--profile-slug",
+                    "missing",
+                    "--storage-account-ref",
+                    "storage:account:test",
+                    "--bucket-name",
+                    "zettel-kasten-provider-missing-objets",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(storage_code, 0, storage_output)
+            storage_result = json.loads(storage_output)
+            (archive_root / storage_result["receipt_path"]).unlink()
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(["provider-status", str(archive_root), "--dry-run", "--format", "json"])
+            self.assertEqual(code, 1, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn("Missing provider setup receipt", "\n".join(result["blockers"]))
+            managed = [item for item in result["providers"] if item["setup_managed"]]
+            self.assertEqual(len(managed), 1)
+            self.assertEqual(managed[0]["status"], "metadata_without_receipt")
+
     def test_doctor_validates_ownership_transfer_receipt_examples(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         code, output = self.run_cli(["doctor", str(archive_root), "--strict"])
