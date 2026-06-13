@@ -93,20 +93,23 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Session planning | `archive project-intake-plan --dry-run` | Plans one staged project folder session; counts only; writes nothing. |
 | Artifact hygiene | `wom-kit/tools/check_artifact_hygiene.py` | Report-only artifact classification and generated `.gitignore` checks; never cleans files. |
 | Per-item intake | `archive source-intake --dry-run` | Classifies exactly one locator; reads no bodies and writes nothing. |
+| Local objet capture | `archive objet-capture --dry-run|--approve` | Captures explicitly approved staged originals into the local content-addressed store for sandbox-marked archives; never deletes staged originals. |
+| Derived text capture | `archive derive-text capture --dry-run|--approve` | Registers already extracted UTF-8 text for an existing `object_id`; single-file and JSONL batch input are supported. |
 | Drafting | `archive create-draft --dry-run` | Previews an inbox draft; approved write is separate from minting. |
 | Minting | `archive mint-zet --dry-run` / `--approve` | Mints only after explicit approval and writes receipts/snapshots. |
+| Cleanup verification | `archive staged-cleanup-check --dry-run` | Reports whether staged files are preserved, deferred, or unsafe to remove; never deletes. |
 | Index | `archive index` / `archive search` | Generated SQLite index; rebuildable local search. |
 
 These primitives now include a first dry-run session planner, but they still do
-not form a full intake/capture/draft/mint/cleanup workflow.
+not form a full human-guided intake/capture/draft/mint/cleanup workflow.
 
 ## 5. Planned Surfaces
 
 These surfaces are planned, not currently available:
 
 - an approved project intake session executor after the planner,
-- local objet capture for selected staged originals,
-- a final deletion-safety verifier for staged folders,
+- a conversational intake checklist that asks the user how to classify each important item,
+- a joined executor that carries reviewed choices across source-intake, objet capture, derived text capture, draft creation, minting, and cleanup verification,
 - automatic remote object-storage upload.
 
 Until those exist, docs and agents must describe them as planned capabilities,

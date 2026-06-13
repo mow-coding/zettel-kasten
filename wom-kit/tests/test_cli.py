@@ -9548,6 +9548,74 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("objects/sha256/", gitignore)
             self.assertIn("objects/derived-text/sha256/", gitignore)
 
+    def test_repair_gitignore_dry_run_and_approve_add_missing_patterns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:gitignore-repair")
+            self.assertEqual(init_code, 0, init_output)
+            gitignore_path = archive_root / ".gitignore"
+            kept_lines = [
+                line
+                for line in gitignore_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+                not in {
+                    "objects/sha256/",
+                    "objects/derived-text/sha256/",
+                    "/collab/",
+                    "/.mow-harness/",
+                    "**/db/archive-index.sqlite",
+                }
+            ]
+            gitignore_path.write_text("\n".join(kept_lines) + "\n", encoding="utf-8")
+            before = gitignore_path.read_text(encoding="utf-8")
+
+            code, output = self.run_cli(["repair-gitignore", str(archive_root), "--dry-run", "--format", "json"])
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["action"], "would_append_patterns")
+            self.assertIn("objects/derived-text/sha256/", result["missing_patterns"])
+            self.assertIn("/collab/", result["missing_patterns"])
+            self.assertEqual(gitignore_path.read_text(encoding="utf-8"), before)
+
+            code, output = self.run_cli(
+                [
+                    "repair-gitignore",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            approved = json.loads(output)
+            self.assertEqual(approved["action"], "append_patterns")
+            self.assertEqual(approved["changed_paths"], [".gitignore"])
+            repaired = gitignore_path.read_text(encoding="utf-8")
+            self.assertIn("objects/sha256/", repaired)
+            self.assertIn("objects/derived-text/sha256/", repaired)
+            self.assertIn("/collab/", repaired)
+            self.assertIn("/.mow-harness/", repaired)
+            self.assertIn("**/db/archive-index.sqlite", repaired)
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_repair_gitignore_cli_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:gitignore-gates")
+            self.assertEqual(init_code, 0, init_output)
+
+            code, output = self.run_cli(["repair-gitignore", str(archive_root)])
+            self.assertEqual(code, 1, output)
+            self.assertIn("--dry-run or --approve", output)
+
+            code, output = self.run_cli(["repair-gitignore", str(archive_root), "--approve"])
+            self.assertEqual(code, 1, output)
+            self.assertIn("--reviewed-by", output)
+
     def test_init_writes_archive_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "personal-archive"
@@ -15187,6 +15255,161 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(second["action"], "skip_already_present")
             self.assertEqual(manifest.read_bytes(), manifest_before)
             self.assertEqual(stored.stat().st_mtime_ns, stored_mtime)
+
+    def test_derive_text_capture_manifest_dry_run_writes_nothing_and_simulates_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-batch-dry")
+            source_object_id = self._derived_text_source_object(archive_root)
+            texts = Path(tmp) / "texts"
+            texts.mkdir()
+            text_file = texts / "derived.txt"
+            text_file.write_text("Repeated derived text.\n", encoding="utf-8")
+            manifest = Path(tmp) / "derived-text-ledger.jsonl"
+            rows = [
+                {
+                    "item_id": "first",
+                    "source_object_id": source_object_id,
+                    "text_file": "texts/derived.txt",
+                    "derivation_kind": "parser",
+                    "tool_name": "fake-parser",
+                    "tool_version": "1.0.0",
+                    "review_status": "unreviewed",
+                    "born_digital": True,
+                },
+                {
+                    "item_id": "duplicate",
+                    "source_object_id": source_object_id,
+                    "text_file": "texts/derived.txt",
+                    "derivation_kind": "parser",
+                    "tool_name": "fake-parser",
+                    "tool_version": "1.0.0",
+                    "review_status": "unreviewed",
+                    "born_digital": True,
+                },
+            ]
+            manifest.write_text(
+                "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+            before = self._inventory(archive_root)
+
+            result = archive_services.derived_text_capture_manifest_dry_run(archive_root, manifest)
+
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["summary"]["would_capture"], 1)
+            self.assertEqual(result["summary"]["would_skip"], 1)
+            self.assertEqual(result["items"][0]["planned_action"], "capture")
+            self.assertEqual(result["items"][1]["planned_action"], "skip_already_present")
+            self.assertNotIn(str(tmp), json.dumps(result), "batch output must not echo local text paths")
+            self.assertEqual(self._inventory(archive_root), before, "manifest dry-run must not write archive files")
+
+    def test_derive_text_capture_manifest_apply_processes_multiple_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-batch-apply")
+            source_one = self._derived_text_source_object(archive_root, b"source one")
+            source_two = self._derived_text_source_object(archive_root, b"source two")
+            texts = Path(tmp) / "texts"
+            texts.mkdir()
+            (texts / "one.txt").write_text("Batch text one marker.\n", encoding="utf-8")
+            (texts / "two.txt").write_text("Batch text two marker.\n", encoding="utf-8")
+            manifest = Path(tmp) / "derived-text-ledger.jsonl"
+            rows = [
+                {
+                    "item_id": "one",
+                    "source_object_id": source_one,
+                    "text_file": "texts/one.txt",
+                    "derivation_kind": "parser",
+                    "tool_name": "fake-parser",
+                    "tool_version": "1.0.0",
+                    "review_status": "human_corrected",
+                    "language": "en",
+                    "born_digital": True,
+                },
+                {
+                    "item_id": "two",
+                    "source_object_id": source_two,
+                    "text_file": "texts/two.txt",
+                    "derivation_kind": "ocr",
+                    "tool_name": "fake-ocr",
+                    "tool_version": "2.0.0",
+                    "review_status": "unreviewed",
+                    "confidence": 0.88,
+                },
+            ]
+            manifest.write_text(
+                "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+
+            result = archive_services.derived_text_capture_manifest_apply(
+                archive_root,
+                manifest,
+                reviewed_by="person:test",
+            )
+
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["summary"]["captured"], 2)
+            self.assertEqual(result["summary"]["blocked"], 0)
+            self.assertEqual([item["action"] for item in result["items"]], ["captured", "captured"])
+            derived_manifest = archive_root / archive_services.DERIVED_TEXT_MANIFEST_RELATIVE_PATH
+            lines = [json.loads(line) for line in derived_manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(len(lines), 2)
+            receipts = list((archive_root / "receipts" / "derived-text-capture").glob("*.json"))
+            self.assertEqual(len(receipts), 2)
+            self.assertNotIn(str(tmp), derived_manifest.read_text(encoding="utf-8"))
+
+    def test_derive_text_capture_manifest_cli_and_bad_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-batch-cli")
+            source_object_id = self._derived_text_source_object(archive_root)
+            text_file = Path(tmp) / "derived.txt"
+            text_file.write_text("CLI batch text.\n", encoding="utf-8")
+            manifest = Path(tmp) / "derived-text-ledger.jsonl"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "item_id": "cli-row",
+                        "source_object_id": source_object_id,
+                        "text_file": str(text_file),
+                        "derivation_kind": "parser",
+                        "tool_name": "fake-parser",
+                        "tool_version": "1.0.0",
+                        "review_status": "unreviewed",
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                ["derive-text", "capture", str(archive_root), "--from-manifest", str(manifest), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["summary"]["would_capture"], 1)
+            self.assertNotIn(str(tmp), output)
+
+            code, output = self.run_cli(
+                [
+                    "derive-text",
+                    "capture",
+                    str(archive_root),
+                    "--from-manifest",
+                    str(manifest),
+                    "--text-file",
+                    str(text_file),
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertIn("--from-manifest", output)
+
+            bad_manifest = Path(tmp) / "bad-derived-text-ledger.jsonl"
+            bad_manifest.write_text("{}\n", encoding="utf-8")
+            result = archive_services.derived_text_capture_manifest_dry_run(archive_root, bad_manifest)
+            self.assertFalse(result["ok"], result)
+            self.assertIn("source_object_id_missing", result["blockers"])
 
     def test_derive_text_capture_blocks_missing_source_and_cli_gates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

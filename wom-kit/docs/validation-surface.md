@@ -1,4 +1,4 @@
-# Validation Surface: What doctor, validate, and preflight Each Guarantee
+# Validation Surface: What doctor, validate, repair, and preflight Each Guarantee
 
 Status: reference
 Date: 2026-06-11
@@ -7,13 +7,15 @@ Field feedback from the v0.3.2 upgrade asked a fair question: "which command
 guarantees what?" This document is the answer. It describes the current
 behavior of the shipped code, not an aspiration.
 
-## The three commands
+## The commands
 
 | Command | What it runs | Failing condition | Notes |
 | --- | --- | --- | --- |
 | `archive doctor <root>` | The full Doctor walk (below) | any ERROR | warnings are reported but do not fail |
 | `archive doctor <root> --strict` | same | any ERROR **or any WARN** | the strict gate for real use |
 | `archive validate <root>` | the same Doctor walk | any ERROR **or any WARN** (strict by default) | `--allow-warnings` relaxes; `--strict` is accepted for doctor parity and changes nothing |
+| `archive repair-gitignore <root> --dry-run` | missing WOM-kit safe `.gitignore` pattern planner | never writes | previews missing local-only/generated-store ignore patterns |
+| `archive repair-gitignore <root> --approve --reviewed-by <actor>` | approved `.gitignore` pattern append | missing approval or archive errors | appends missing safe defaults only; does not rewrite or delete existing entries |
 | `archive preflight <root>` | Doctor + readiness gates | per its own readiness report | adds Docker/runtime, source-map, and restore-drill readiness signals on top of diagnostics |
 
 The Doctor walk checks: archive structure and symlink boundaries, zettel
@@ -71,6 +73,7 @@ must treat cleanup as approved only when `safe_to_cleanup` is `true`.
 
 ## What none of these commands do
 
-No command in this surface rewrites, migrates, deletes, or uploads anything.
-Doctor/validate/preflight are read-only. Frontmatter rewriting is exclusively
-`archive migrate --approve` after its dry-run.
+Doctor/validate/preflight are read-only. `repair-gitignore --approve` appends
+missing `.gitignore` safety patterns only; it does not delete, clean, inspect
+source bodies, upload, or sync. Frontmatter rewriting is exclusively `archive
+migrate --approve` after its dry-run.

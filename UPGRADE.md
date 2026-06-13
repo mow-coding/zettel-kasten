@@ -95,7 +95,8 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.4` | current public pre-release | `wom-kit/docs/releases/v0.3.4.md` |
+| `v0.3.5` | current public pre-release | `wom-kit/docs/releases/v0.3.5.md` |
+| `v0.3.4` | superseded public pre-release | `wom-kit/docs/releases/v0.3.4.md` |
 | `v0.3.3` | superseded public pre-release | `wom-kit/docs/releases/v0.3.3.md` |
 | `v0.3.2` | superseded public pre-release | `wom-kit/docs/releases/v0.3.2.md` |
 | `v0.3.1` | superseded public pre-release | `wom-kit/docs/releases/v0.3.1.md` |
@@ -159,6 +160,27 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.4` To `v0.3.5`
+
+This release is a compatible field-feedback fast-follow for derived-text
+registration and local archive hygiene.
+
+What changed:
+
+- added CLI `archive derive-text capture <archive-root> --from-manifest <jsonl> --dry-run|--approve --reviewed-by <actor>` for batch registration of already extracted UTF-8 derived text,
+- batch manifests are JSONL: each line uses `source_object_id`, `text_file`, `derivation_kind`, `tool_name`, `tool_version`, and `review_status`, with optional `item_id`, `model_name`, `model_version`, `confidence`, `language`, and `born_digital`,
+- relative `text_file` values resolve from the JSONL manifest location, and archive records do not store the local text file path,
+- added CLI `archive repair-gitignore <archive-root> --dry-run|--approve --reviewed-by <actor>` to append missing WOM-kit safe `.gitignore` patterns while preserving existing entries,
+- removed private dogfood archive identifiers from public guardrail code and docs while keeping generic live-archive and local `*-objets` protections,
+- updated version metadata to `0.3.5`.
+
+No frontmatter or manifest migration is required for v0.3.4 users.
+
+`repair-gitignore` does not delete or rewrite existing `.gitignore` entries,
+clean files, inspect source file bodies, upload, sync, or call provider APIs.
+`derive-text capture --from-manifest` still does not run OCR, ASR, parsers, LLM
+vision, provider APIs, drafting, or minting.
 
 ## From `v0.3.3` To `v0.3.4`
 
