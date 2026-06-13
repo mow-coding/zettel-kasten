@@ -21,6 +21,8 @@ Commands:
           Plan safe source/objet refs before draft creation.
   project-intake-plan
           Plan one staged project folder intake session without writing files.
+  project-intake-staging-guide
+          Show where to stage one project before a project intake session.
   project-intake-next-question
           Return the next human-review question for a project intake session.
   block-header
@@ -3895,6 +3897,42 @@ def print_project_intake_plan_result(result: dict[str, Any], output_format: str)
         print(f"- {action}")
 
 
+def command_project_intake_staging_guide(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.project_intake_staging_guide(
+            Path(args.archive_root),
+            project_slug=args.project_slug,
+            dry_run=args.dry_run,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_project_intake_staging_guide_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def print_project_intake_staging_guide_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print("Project intake staging guide dry-run.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    paths = result.get("recommended_paths") if isinstance(result.get("recommended_paths"), dict) else {}
+    print(f"Objet store: {paths.get('objet_store_root') or '-'}")
+    print(f"Intake root: {paths.get('intake_root') or '-'}")
+    print(f"Staged project folder: {paths.get('staged_project_folder') or '-'}")
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
+
+
 def command_project_intake_decisions(args: argparse.Namespace) -> int:
     try:
         result = archive_services.project_intake_decisions(
@@ -6088,6 +6126,16 @@ def build_parser() -> argparse.ArgumentParser:
     source_mounts.add_argument("archive_root", help="Archive root to inspect.")
     source_mounts.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     source_mounts.set_defaults(func=command_source_mounts)
+
+    project_intake_staging_guide = subcommands.add_parser(
+        "project-intake-staging-guide",
+        help="Show where to stage one project folder before a project intake session.",
+    )
+    project_intake_staging_guide.add_argument("archive_root", help="Archive root to inspect.")
+    project_intake_staging_guide.add_argument("--project-slug", required=True, help="Lowercase ASCII project slug for the staged folder.")
+    project_intake_staging_guide.add_argument("--dry-run", action="store_true", help="Required; path guidance only.")
+    project_intake_staging_guide.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    project_intake_staging_guide.set_defaults(func=command_project_intake_staging_guide)
 
     project_intake_plan = subcommands.add_parser(
         "project-intake-plan",

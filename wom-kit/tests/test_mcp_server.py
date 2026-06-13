@@ -639,6 +639,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("provider_setup_status", tool_names)
             self.assertIn("human_artifact_store_plan", tool_names)
             self.assertIn("project_intake_plan", tool_names)
+            self.assertIn("project_intake_staging_guide", tool_names)
             self.assertIn("project_intake_status", tool_names)
             self.assertIn("project_intake_next_question", tool_names)
             self.assertIn("source_intake_plan", tool_names)
@@ -1678,11 +1679,33 @@ class McpServerTests(unittest.TestCase):
 
             process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
             try:
-                plan_response = self.send(
+                guide_response = self.send(
                     process,
                     {
                         "jsonrpc": "2.0",
                         "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "project_intake_staging_guide",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "project_slug": "alpha-project",
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(guide_response["result"]["isError"])
+                guide = guide_response["result"]["structuredContent"]
+                self.assertTrue(guide["ok"])
+                self.assertEqual(guide["action"], "archive_project_intake_staging_guide")
+                self.assertTrue(guide["recommended_paths"]["staged_project_folder"].endswith("alpha-project"))
+                self.assertFalse(guide["path_policy"]["create_directories"])
+
+                plan_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
                         "method": "tools/call",
                         "params": {
                             "name": "project_intake_plan",
@@ -1708,7 +1731,7 @@ class McpServerTests(unittest.TestCase):
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": 2,
+                        "id": 3,
                         "method": "tools/call",
                         "params": {
                             "name": "project_intake_next_question",
@@ -1733,7 +1756,7 @@ class McpServerTests(unittest.TestCase):
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": 3,
+                        "id": 4,
                         "method": "tools/call",
                         "params": {
                             "name": "project_intake_status",
@@ -1758,7 +1781,7 @@ class McpServerTests(unittest.TestCase):
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": 4,
+                        "id": 5,
                         "method": "tools/call",
                         "params": {
                             "name": "project_intake_next_question",
@@ -1783,7 +1806,7 @@ class McpServerTests(unittest.TestCase):
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": 5,
+                        "id": 6,
                         "method": "tools/call",
                         "params": {
                             "name": "source_intake_plan",
@@ -1805,7 +1828,7 @@ class McpServerTests(unittest.TestCase):
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": 6,
+                        "id": 7,
                         "method": "tools/call",
                         "params": {
                             "name": "project_intake_plan",
@@ -1823,7 +1846,7 @@ class McpServerTests(unittest.TestCase):
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": 7,
+                        "id": 8,
                         "method": "tools/call",
                         "params": {
                             "name": "project_intake_next_question",
