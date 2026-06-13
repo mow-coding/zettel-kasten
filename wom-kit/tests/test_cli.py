@@ -14312,6 +14312,33 @@ class ObjetCaptureTests(unittest.TestCase):
         (archive_root / Path(relative)).write_text(json.dumps(plan), encoding="utf-8")
         return relative, archive_services.sha256_json_value(plan)
 
+    def _project_intake_receipt(self, tmp: str, archive_root: Path) -> str:
+        decisions_path = Path(tmp) / "project-intake-decisions.json"
+        decisions_path.write_text(
+            json.dumps(
+                {
+                    "schema": "wom-kit/project-intake-decisions/v0.1",
+                    "session_id": "alpha-project-20260613",
+                    "decisions": [
+                        {
+                            "checklist_id": "scope.single_project",
+                            "answer": "yes",
+                            "notes": "One project only.",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = archive_services.project_intake_decisions(
+            archive_root,
+            decisions_path,
+            approve=True,
+            reviewed_by="person:test",
+        )
+        self.assertTrue(result["ok"], result)
+        return str(result["receipt_path"])
+
     def _item(
         self,
         staged_path: str,
@@ -14381,6 +14408,85 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertIn("proposed_receipt_path", result)
             self.assertEqual(self._inventory(archive_root), before, "dry-run must not write anything")
             self.assertFalse(list(archive_root.rglob("*.part-*")))
+
+    def test_objet_capture_dry_run_accepts_project_intake_receipt_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, _ = self._simple_capture_setup(tmp)
+            receipt_path = self._project_intake_receipt(tmp, archive_root)
+            before = self._inventory(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "objet-capture",
+                    str(archive_root),
+                    "--selection",
+                    str(selection),
+                    "--project-intake-receipt",
+                    receipt_path,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            context = result["project_intake_context"]
+            self.assertTrue(context["provided"])
+            self.assertTrue(context["ok"])
+            self.assertEqual(context["receipt_path"], receipt_path)
+            self.assertEqual(context["session_id"], "alpha-project-20260613")
+            self.assertFalse(context["decision_values_included"])
+            self.assertFalse(context["automatic_execution_authorized"])
+            self.assertNotIn("One project only", output)
+            self.assertNotIn('"answer"', output)
+            self.assertEqual(self._inventory(archive_root), before, "dry-run must not write anything")
+
+    def test_objet_capture_apply_records_project_intake_receipt_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, _ = self._simple_capture_setup(tmp)
+            receipt_path = self._project_intake_receipt(tmp, archive_root)
+
+            result = archive_services.objet_capture_apply(
+                archive_root,
+                selection,
+                reviewed_by="person:test",
+                project_intake_receipt=receipt_path,
+            )
+
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["project_intake_context"]["receipt_path"], receipt_path)
+            capture_receipt = json.loads((archive_root / result["receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(capture_receipt["project_intake_context"]["receipt_path"], receipt_path)
+            self.assertFalse(capture_receipt["project_intake_context"]["decision_values_included"])
+            self.assertFalse(capture_receipt["project_intake_context"]["automatic_execution_authorized"])
+
+    def test_objet_capture_blocks_invalid_project_intake_receipt_before_reading_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, _ = self._simple_capture_setup(tmp)
+            receipt_path = self._project_intake_receipt(tmp, archive_root)
+            receipt_file = archive_root / receipt_path
+            receipt = json.loads(receipt_file.read_text(encoding="utf-8"))
+            receipt["decisions"][0]["answer"] = "changed after approval"
+            receipt_file.write_text(json.dumps(receipt), encoding="utf-8")
+
+            with patch.object(
+                archive_services,
+                "_objet_capture_sha256_and_head_fd",
+                side_effect=AssertionError("must not read staged bytes"),
+            ):
+                result = archive_services.objet_capture_dry_run(
+                    archive_root,
+                    selection,
+                    project_intake_receipt=receipt_path,
+                )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["items"], [])
+            self.assertIn("project_intake_receipt_invalid", result["blockers"])
+            self.assertTrue(result["project_intake_context"]["provided"])
+            self.assertFalse(result["project_intake_context"]["ok"])
 
     def test_objet_capture_dry_run_xor_approve_required(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

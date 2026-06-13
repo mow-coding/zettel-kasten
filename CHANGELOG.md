@@ -6,6 +6,8 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+- Added optional `archive objet-capture --project-intake-receipt <receipt>` context validation, and matching selection-manifest support via `project_intake_receipt_path`, so reviewed project-intake decisions can gate capture planning before staged bytes are read.
+
 ## v0.3.6 - 2026-06-13
 
 - Added optional `archive source-intake --project-intake-receipt <receipt>` context validation so one-item metadata dry-runs can carry a reviewed project-intake session receipt without echoing answer text or granting automatic execution authority.
