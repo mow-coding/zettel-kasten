@@ -14393,6 +14393,59 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertEqual(result["items"][0]["action"], "captured")
 
+    def test_objet_capture_plan_sha_roundtrips_real_source_intake_producer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:producer-plan")
+            staged_rel, digest = self._stage(archive_root, "producer.txt", b"producer plan bytes\n")
+            archive_id = archive_services.read_archive_id(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--local-path",
+                    str(archive_root / staged_rel),
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            plan = json.loads(output)
+            plan_rel = "receipts/sources/producer.source-intake-plan.json"
+            (archive_root / plan_rel).write_text(json.dumps(plan), encoding="utf-8")
+            plan_sha = archive_services.sha256_json_value(plan)
+
+            selection = self._selection(
+                tmp,
+                archive_id,
+                [self._item(staged_rel, digest, plan_rel, plan_sha, item_id="producer")],
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["items"][0]["planned_action"], "capture")
+            self.assertEqual(result["summary"]["would_capture"], 1)
+
+            applied = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertTrue(applied["ok"], applied)
+            self.assertEqual(applied["items"][0]["action"], "captured")
+            captured_path = archive_root / "objects" / "sha256" / digest[:2] / digest
+            self.assertTrue(captured_path.is_file())
+            self.assertEqual(captured_path.read_bytes(), b"producer plan bytes\n")
+
+            tampered = dict(plan)
+            tampered["source_role"] = "citation"
+            tampered_rel = "receipts/sources/tampered.source-intake-plan.json"
+            (archive_root / tampered_rel).write_text(json.dumps(tampered), encoding="utf-8")
+            bad_selection = self._selection(
+                tmp,
+                archive_id,
+                [self._item(staged_rel, digest, tampered_rel, plan_sha, item_id="tampered")],
+            )
+            bad = archive_services.objet_capture_dry_run(archive_root, bad_selection)
+            self.assertFalse(bad["ok"], bad)
+            self.assertIn("source_intake_plan_sha256_mismatch", json.dumps(bad))
+
     def _captured_sandbox(self, tmp: str) -> tuple[Path, str, str]:
         archive_root, selection, digest = self._simple_capture_setup(tmp)
         result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
@@ -14420,6 +14473,11 @@ class ObjetCaptureTests(unittest.TestCase):
             by_path = {entry["path"]: entry for entry in result["files"]}
             self.assertEqual(by_path["uncaptured.txt"]["status"], "not_preserved")
             self.assertEqual(by_path["note.txt"]["status"], "preserved")
+            code, output = self.run_cli(
+                ["staged-cleanup-check", str(archive_root), "--staged", staged, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 1, "unsafe cleanup verdict must exit nonzero")
+            self.assertFalse(json.loads(output)["safe_to_cleanup"])
 
     def test_staged_cleanup_check_deferred_file_counts_safe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -14761,6 +14819,66 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertEqual(result["zettels"], [])
             self.assertTrue(any("not supported" in blocker for blocker in result["blockers"]))
+
+    def test_view_zets_list_facet_contains_scalar_filter_and_excludes_redacted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:listfacets")
+
+            def write(zid: str, status: str, facets: dict[str, Any]) -> None:
+                frontmatter = {"id": zid, "title": f"Title {zid}", "status": status, "kind": "note", "facets": facets}
+                (archive_root / "zettels").mkdir(exist_ok=True)
+                (archive_root / "zettels" / f"{zid}.md").write_text(
+                    "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\nBody.\n", encoding="utf-8"
+                )
+
+            write("zet_20260610_alpha", "canonical", {"tags": ["alpha", "beta"], "domain": "test"})
+            write("zet_20260610_beta", "canonical", {"tags": ["beta"], "domain": "test"})
+            write("zet_20260610_red", "redacted", {"tags": ["alpha"], "domain": "test"})
+            views_dir = archive_root / "views"
+            views_dir.mkdir(exist_ok=True)
+            (views_dir / "list.yml").write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "id": "view.test.alpha",
+                        "name": "Alpha",
+                        "filters": {"facets.tags": "alpha", "facets.domain": "test"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            code, output = self.run_cli(["index", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 0, output)
+            self.assertEqual(json.loads(output)["facets"], 5)
+            result = archive_services.view_zets(archive_root, facets={"tags": "alpha", "domain": "test"})
+            self.assertTrue(result["ok"], result)
+            self.assertEqual({entry["id"] for entry in result["zettels"]}, {"zet_20260610_alpha"})
+            saved = archive_services.view_zets(archive_root, view_id="view.test.alpha")
+            self.assertEqual({entry["id"] for entry in saved["zettels"]}, {"zet_20260610_alpha"})
+            code, output = self.run_cli(
+                ["view-zets", str(archive_root), "--view-id", "view.test.alpha", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            self.assertEqual({entry["id"] for entry in json.loads(output)["zettels"]}, {"zet_20260610_alpha"})
+            self.assertNotIn("zet_20260610_red", json.dumps(result))
+
+    def test_view_zets_list_filter_value_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._facet_archive(tmp)
+            views_dir = archive_root / "views"
+            (views_dir / "list-filter.yml").write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "id": "view.test.list-filter",
+                        "name": "List Filter",
+                        "filters": {"facets.domain": ["education", "work"]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = archive_services.view_zets(archive_root, view_id="view.test.list-filter")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["zettels"], [])
+            self.assertTrue(any("filter value list not supported" in blocker for blocker in result["blockers"]))
 
     def test_view_zets_cli_roundtrip_and_argument_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
