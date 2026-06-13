@@ -466,6 +466,9 @@ The first implemented vocabulary is deliberately small: `derivation_kind` is one
 
 `archive objet-capture --project-intake-receipt <receipt> --dry-run|--approve` can carry the same reviewed session receipt into an explicit capture selection. A selection manifest may also include `project_intake_receipt_path`; if both are present they must match. Invalid or tampered intake receipts block before staged bytes are read. The context is recorded in the capture result and approved capture receipt, but it still does not approve drafting, minting, provider calls, or cleanup.
 
+For external project migrations, the intended manual spine is:
+`project-intake-plan -> project-intake-decisions -> project-intake-status -> source-intake --project-intake-receipt -> objet-capture --project-intake-receipt -> derive-text capture when text already exists -> create-draft --source-intake-plan -> mint-zet after approval -> staged-cleanup-check`. This is not one automatic bulk importer; every arrow is still a review boundary.
+
 `archive human-artifact-store --surface-kind <kind> --dry-run` previews the contract for a user-facing human artifact app or surface. Supported kinds are `wordpress`, `joplin`, `notion`, `obsidian`, `evernote`, `generic_markdown`, and `generic_workspace`. The command keeps three roles separate: raw/original data, human-readable artifacts, and system/AI artifacts such as manifests, source maps, receipts, indexes, hashes, and version history. It writes nothing, calls no providers, starts no OAuth, creates or updates no notes, publishes no posts, uploads no files, mints no zets, and runs no ZET transport.
 
 MCP exposes the same read-only preview as `human_artifact_store_plan`.

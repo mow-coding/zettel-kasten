@@ -77,3 +77,9 @@ Doctor/validate/preflight are read-only. `repair-gitignore --approve` appends
 missing `.gitignore` safety patterns only; it does not delete, clean, inspect
 source bodies, upload, or sync. Frontmatter rewriting is exclusively `archive
 migrate --approve` after its dry-run.
+
+`repair-gitignore` includes local collaboration/runtime guardrails such as
+`/collab/` and `/.mow-harness/` because those folders can contain prompts,
+mailbox state, coordination logs, or local-only secrets when an archive is
+operated from a larger AI workspace. The patterns are harmless when the folders
+do not exist.

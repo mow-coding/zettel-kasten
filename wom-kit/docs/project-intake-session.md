@@ -34,6 +34,23 @@ temporary staged project folder
 
 It is not a silent bulk importer.
 
+The current safe spine is intentionally step-by-step:
+
+```text
+project-intake-plan
+-> project-intake-decisions
+-> project-intake-status
+-> source-intake --project-intake-receipt
+-> objet-capture --project-intake-receipt
+-> derive-text capture when external text already exists
+-> create-draft --source-intake-plan
+-> mint-zet after explicit approval
+-> staged-cleanup-check before any manual deletion
+```
+
+Each arrow is a review boundary. The project-intake receipt is session evidence,
+not automatic permission to import, capture, draft, mint, upload, or clean.
+
 The AI should not classify a whole folder, mint zets, upload originals, or delete
 staged files without explicit review gates.
 
