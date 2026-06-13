@@ -14488,6 +14488,62 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertTrue(result["project_intake_context"]["provided"])
             self.assertFalse(result["project_intake_context"]["ok"])
 
+    def test_project_intake_to_objet_capture_spine_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            staged_path, digest = self._stage(archive_root, "roundtrip.txt", b"roundtrip source\n")
+            staged_folder = archive_root / "staging" / "incoming"
+
+            intake_plan = archive_services.project_intake_plan(archive_root, staged_folder)
+            self.assertTrue(intake_plan["ok"], intake_plan)
+            self.assertEqual(intake_plan["folder_summary"]["top_level_file_count"], 1)
+
+            project_receipt = self._project_intake_receipt(tmp, archive_root)
+            status = archive_services.project_intake_status(archive_root, project_receipt, dry_run=True)
+            self.assertTrue(status["ok"], status)
+            self.assertEqual(status["checklist_coverage"]["answered_count"], 1)
+
+            source_plan = archive_services.source_intake_plan(
+                archive_root,
+                local_path=archive_root / staged_path,
+                project_intake_receipt=project_receipt,
+            )
+            self.assertTrue(source_plan["ok"], source_plan)
+            self.assertEqual(source_plan["project_intake_context"]["receipt_path"], project_receipt)
+            self.assertFalse(source_plan["project_intake_context"]["automatic_execution_authorized"])
+
+            source_plan_relative = "receipts/sources/roundtrip.source-intake-plan.json"
+            source_plan_path = archive_root / source_plan_relative
+            source_plan_path.parent.mkdir(parents=True, exist_ok=True)
+            source_plan_path.write_text(json.dumps(source_plan), encoding="utf-8")
+            selection = self._selection(
+                tmp,
+                "archive:personal:capture",
+                [
+                    self._item(
+                        staged_path,
+                        digest,
+                        source_plan_relative,
+                        archive_services.sha256_json_value(source_plan),
+                    )
+                ],
+                project_intake_receipt_path=project_receipt,
+            )
+
+            dry = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertTrue(dry["ok"], dry)
+            self.assertEqual(dry["project_intake_context"]["receipt_path"], project_receipt)
+            self.assertEqual(dry["items"][0]["planned_action"], "capture")
+
+            captured = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertTrue(captured["ok"], captured)
+            self.assertEqual(captured["project_intake_context"]["receipt_path"], project_receipt)
+            self.assertEqual(captured["items"][0]["action"], "captured")
+            capture_receipt = json.loads((archive_root / captured["receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(capture_receipt["project_intake_context"]["receipt_path"], project_receipt)
+            self.assertFalse(capture_receipt["project_intake_context"]["decision_values_included"])
+            self.assertFalse(capture_receipt["project_intake_context"]["automatic_execution_authorized"])
+
     def test_objet_capture_dry_run_xor_approve_required(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root, selection, _ = self._simple_capture_setup(tmp)
