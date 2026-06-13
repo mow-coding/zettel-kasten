@@ -12047,8 +12047,35 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("privacy.sensitive_items", result["checklist_coverage"]["missing_checklist_ids"])
             self.assertEqual(result["would_change"], [])
             self.assertFalse(result["privacy_guards"]["decision_values_echoed"])
+            prompt_ids = [item["checklist_id"] for item in result["next_review_prompts"]]
+            self.assertNotIn("scope.single_project", prompt_ids)
+            self.assertIn("privacy.sensitive_items", prompt_ids)
+            privacy_prompt = next(
+                item for item in result["next_review_prompts"] if item["checklist_id"] == "privacy.sensitive_items"
+            )
+            self.assertIn("Which areas must stay private", privacy_prompt["question"])
+            self.assertEqual(privacy_prompt["answer_type"], "freeform_review_notes")
+            self.assertEqual(
+                privacy_prompt["decision_record_hint"]["response_placeholder"],
+                "<human-reviewed response>",
+            )
+            self.assertFalse(privacy_prompt["decision_values_included"])
             self.assertNotIn("One project only", output)
             self.assertNotIn('"answer"', output)
+
+            text_code, text_output = self.run_cli(
+                [
+                    "project-intake-status",
+                    str(archive_root),
+                    "--receipt",
+                    receipt_path,
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(text_code, 0, text_output)
+            self.assertIn("Next review prompts:", text_output)
+            self.assertIn("privacy.sensitive_items: Which areas must stay private", text_output)
+            self.assertNotIn("One project only", text_output)
 
     def test_project_intake_status_blocks_tampered_receipt_hash(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

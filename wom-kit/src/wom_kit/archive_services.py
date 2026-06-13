@@ -16297,8 +16297,8 @@ def project_intake_next_safe_actions(staging_convention: dict[str, Any]) -> list
     return actions
 
 
-def project_intake_known_checklist_ids() -> set[str]:
-    return {
+def project_intake_checklist_order() -> list[str]:
+    return [
         "scope.single_project",
         "staging.location",
         "groups.visible_classification",
@@ -16306,7 +16306,78 @@ def project_intake_known_checklist_ids() -> set[str]:
         "preservation.originals",
         "drafting.zet_candidates",
         "cleanup.evidence_gate",
+    ]
+
+
+def project_intake_known_checklist_ids() -> set[str]:
+    return set(project_intake_checklist_order())
+
+
+def project_intake_status_prompt_catalog() -> dict[str, dict[str, Any]]:
+    return {
+        "scope.single_project": {
+            "question": "Is this still exactly one project or life/work bundle for this intake session?",
+            "answer_type": "yes_no_or_split",
+            "required_before": ["source-intake", "objet-capture", "create-draft", "mint-zet"],
+        },
+        "staging.location": {
+            "question": "Will this staged folder stay where it is, be restaged, or be deferred before capture work?",
+            "answer_type": "continue_restage_or_defer",
+            "required_before": ["objet-capture", "staged-cleanup-check"],
+        },
+        "groups.visible_classification": {
+            "question": "Which visible groups should be labeled as originals, working notes, generated outputs, sensitive review items, deferred items, or noise?",
+            "answer_type": "classification_labels",
+            "allowed_labels": [item["label"] for item in project_intake_classification_labels()],
+            "required_before": ["objet-capture", "create-draft"],
+        },
+        "privacy.sensitive_items": {
+            "question": "Which areas must stay private, be redacted, or be reviewed before they appear in any zet or derived text?",
+            "answer_type": "freeform_review_notes",
+            "required_before": ["create-draft", "mint-zet"],
+        },
+        "preservation.originals": {
+            "question": "Which originals must be preserved as objets before any drafting or cleanup?",
+            "answer_type": "selected_items_or_groups",
+            "required_before": ["create-draft", "staged-cleanup-check"],
+        },
+        "drafting.zet_candidates": {
+            "question": "Which reviewed materials should become inbox drafts, and which should remain source-only?",
+            "answer_type": "draft_defer_or_source_only",
+            "required_before": ["create-draft", "mint-zet"],
+        },
+        "cleanup.evidence_gate": {
+            "question": "What evidence must exist before this temporary staged folder can be considered safe for later cleanup?",
+            "answer_type": "evidence_checklist",
+            "required_before": ["manual-cleanup"],
+        },
     }
+
+
+def project_intake_next_review_prompts(missing_ids: list[str]) -> list[dict[str, Any]]:
+    catalog = project_intake_status_prompt_catalog()
+    prompts: list[dict[str, Any]] = []
+    for checklist_id in missing_ids:
+        item = catalog.get(checklist_id)
+        if item is None:
+            continue
+        prompt = {
+            "checklist_id": checklist_id,
+            "question": item["question"],
+            "answer_type": item["answer_type"],
+            "required_before": item["required_before"],
+            "decision_record_hint": {
+                "checklist_id": checklist_id,
+                "response_placeholder": "<human-reviewed response>",
+                "notes_placeholder": "<optional review notes>",
+            },
+            "decision_values_included": False,
+            "writes": False,
+        }
+        if "allowed_labels" in item:
+            prompt["allowed_labels"] = item["allowed_labels"]
+        prompts.append(prompt)
+    return prompts
 
 
 def safe_project_intake_actor_id(value: str | None) -> str | None:
@@ -16725,15 +16796,7 @@ def project_intake_status(
         else:
             blockers.append("Project intake decision receipt checklist_ids must be a list.")
 
-    checklist_order = [
-        "scope.single_project",
-        "staging.location",
-        "groups.visible_classification",
-        "privacy.sensitive_items",
-        "preservation.originals",
-        "drafting.zet_candidates",
-        "cleanup.evidence_gate",
-    ]
+    checklist_order = project_intake_checklist_order()
     missing_ids = [checklist_id for checklist_id in checklist_order if checklist_id not in set(answered_ids)]
     if blockers:
         readiness_status = "blocked"
@@ -16773,6 +16836,7 @@ def project_intake_status(
             "ready_for_automatic_execution": False,
         },
         "privacy_guards": privacy_guards,
+        "next_review_prompts": project_intake_next_review_prompts(missing_ids),
         "next_safe_actions": project_intake_decision_status_next_actions(blockers, missing_ids),
         "would_change": [],
         "blockers": unique_preserve_order(blockers),
