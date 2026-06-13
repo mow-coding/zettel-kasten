@@ -95,7 +95,9 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.5` | current public pre-release | `wom-kit/docs/releases/v0.3.5.md` |
+| `v0.3.7` | current public pre-release | `wom-kit/docs/releases/v0.3.7.md` |
+| `v0.3.6` | superseded public pre-release | `wom-kit/docs/releases/v0.3.6.md` |
+| `v0.3.5` | superseded public pre-release | `wom-kit/docs/releases/v0.3.5.md` |
 | `v0.3.4` | superseded public pre-release | `wom-kit/docs/releases/v0.3.4.md` |
 | `v0.3.3` | superseded public pre-release | `wom-kit/docs/releases/v0.3.3.md` |
 | `v0.3.2` | superseded public pre-release | `wom-kit/docs/releases/v0.3.2.md` |
