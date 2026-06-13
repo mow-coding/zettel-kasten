@@ -6,6 +6,7 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+- Added optional `archive source-intake --project-intake-receipt <receipt>` context validation so one-item metadata dry-runs can carry a reviewed project-intake session receipt without echoing answer text or granting automatic execution authority.
 - Added `archive project-intake-status --receipt <receipt> --dry-run` to review checklist coverage and receipt integrity without echoing recorded answer text or authorizing automatic execution.
 - Added `archive project-intake-decisions --dry-run|--approve --reviewed-by <actor>` to validate and record human-reviewed project intake checklist answers as a local receipt without echoing answer text or running capture/draft/mint/cleanup steps.
 - Extended `archive project-intake-plan --dry-run` with a human review checklist, classification labels, and a draft decision-record template while preserving the no-names/no-bodies privacy boundary.

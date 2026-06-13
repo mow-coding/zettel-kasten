@@ -1801,6 +1801,7 @@ def command_source_intake(args: argparse.Namespace) -> int:
             title=args.title,
             mime=args.mime,
             redact_local_paths=args.redact_local_paths,
+            project_intake_receipt=args.project_intake_receipt,
         )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
@@ -5095,6 +5096,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     source_intake.add_argument("--title", help="Non-secret label for the source.")
     source_intake.add_argument("--mime", help="Optional MIME label; no content sniffing is performed.")
+    source_intake.add_argument(
+        "--project-intake-receipt",
+        help="Optional project-intake decisions receipt to validate as session context only.",
+    )
     source_intake.add_argument(
         "--redact-local-paths",
         dest="redact_local_paths",

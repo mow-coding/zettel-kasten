@@ -17767,6 +17767,7 @@ def source_intake_plan(
     title: str | None = None,
     mime: str | None = None,
     redact_local_paths: bool = True,
+    project_intake_receipt: str | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_config = read_archive_config(root)
@@ -17818,6 +17819,12 @@ def source_intake_plan(
         input_kind=input_kind,
         source_role=role,
         object_storage_context=object_storage_context(root),
+    )
+    result_body["project_intake_context"] = source_intake_project_intake_context(
+        root,
+        project_intake_receipt,
+        blockers,
+        warnings,
     )
 
     if input_kind == "local_path":
@@ -17940,6 +17947,11 @@ def source_intake_empty_body(
         "source_refs_for_draft": [],
         "objet_ref": {},
         "provider_object_ref": {},
+        "project_intake_context": {
+            "provided": False,
+            "decision_values_included": False,
+            "automatic_execution_authorized": False,
+        },
         "object_storage_context": object_storage_context,
         "content_access": {
             "metadata_only": True,
@@ -17958,6 +17970,46 @@ def source_intake_empty_body(
         "warnings": [],
         "next_safe_actions": [],
         "would_change": [],
+    }
+
+
+def source_intake_project_intake_context(
+    archive_root: Path,
+    receipt: str | None,
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    if not receipt:
+        return {
+            "provided": False,
+            "decision_values_included": False,
+            "automatic_execution_authorized": False,
+        }
+    try:
+        status = project_intake_status(archive_root, receipt, dry_run=True)
+    except (ArchiveServiceError, OSError):
+        blockers.append("project_intake_receipt could not be reviewed safely.")
+        return {
+            "provided": True,
+            "ok": False,
+            "decision_values_included": False,
+            "automatic_execution_authorized": False,
+        }
+    if not status.get("ok"):
+        blockers.append("project_intake_receipt must pass project-intake-status --dry-run before source-intake uses it.")
+    warnings.extend(str(item) for item in status.get("warnings", []) if isinstance(item, str))
+    return {
+        "provided": True,
+        "ok": bool(status.get("ok")),
+        "receipt_path": status.get("receipt_path"),
+        "session_id": status.get("session_id"),
+        "reviewed_by": status.get("reviewed_by"),
+        "reviewed_at": status.get("reviewed_at"),
+        "decision_sha256": status.get("decision_sha256"),
+        "checklist_coverage": status.get("checklist_coverage"),
+        "readiness": status.get("readiness"),
+        "decision_values_included": False,
+        "automatic_execution_authorized": False,
     }
 
 
@@ -18293,6 +18345,9 @@ def set_manifest_object_intake_result(
 def source_intake_next_safe_actions(result: dict[str, Any]) -> list[str]:
     status = result.get("objet_status")
     actions = ["create-draft --dry-run with source_refs_for_draft", "mint only through separate human approval"]
+    project_context = result.get("project_intake_context") if isinstance(result.get("project_intake_context"), dict) else {}
+    if project_context.get("provided"):
+        actions.insert(0, "treat project_intake_context as session evidence only, not automatic execution approval")
     if status == "manifested":
         return actions
     if status == "candidate_unmanifested":
