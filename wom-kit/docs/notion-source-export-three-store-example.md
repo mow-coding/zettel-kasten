@@ -105,6 +105,8 @@ This second command only checks ledger shape and counts. It does not read blob
 bytes, register object manifests, call Notion, upload, sync, draft, mint, or
 clean.
 
+MCP exposes the same read-only preview as `prehashed_objet_ledger_preview`.
+
 ## Current Boundary
 
 Today, `objet-capture` still verifies bytes from staged local files. It does

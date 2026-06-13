@@ -217,6 +217,27 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "prehashed_objet_ledger_preview",
+        "description": "Preview an already-hashed external content-addressed objet ledger. Read-only; never echoes row values, reads blob bytes, registers manifests, writes, uploads, or calls providers.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "ledger": {"type": "string", "description": "UTF-8 JSONL ledger path."},
+                "store_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.PREHASHED_OBJET_LEDGER_STORE_KINDS),
+                    "default": "generic_content_addressed_store",
+                },
+                "sha256_field": {"type": "string", "default": "sha256"},
+                "size_field": {"type": "string", "default": "bytes"},
+                "max_rows": {"type": "integer", "default": 100000},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "ledger"],
+        },
+    },
+    {
         "name": "project_intake_plan",
         "description": "Plan one staged project folder intake session. Read-only; returns human review questions and never reads bodies, recurses, writes, uploads, drafts, mints, or cleans.",
         "inputSchema": {
@@ -1255,6 +1276,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_provider_setup_status(arguments)
     if name == "human_artifact_store_plan":
         return tool_human_artifact_store_plan(arguments)
+    if name == "prehashed_objet_ledger_preview":
+        return tool_prehashed_objet_ledger_preview(arguments)
     if name == "project_intake_plan":
         return tool_project_intake_plan(arguments)
     if name == "project_intake_staging_guide":
@@ -1535,6 +1558,25 @@ def tool_human_artifact_store_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"human_artifact_store_plan: {state}.", result)
+
+
+def tool_prehashed_objet_ledger_preview(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("prehashed_objet_ledger_preview is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    ledger = require_path_arg(arguments, "ledger")
+    result = call_service(
+        archive_services.prehashed_objet_ledger_preview,
+        archive_root,
+        ledger,
+        store_kind=optional_string_arg(arguments, "store_kind") or "generic_content_addressed_store",
+        sha256_field=optional_string_arg(arguments, "sha256_field") or "sha256",
+        size_field=optional_string_arg(arguments, "size_field") or "bytes",
+        dry_run=True,
+        max_rows=int(arguments.get("max_rows", 100000)),
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"prehashed_objet_ledger_preview: {state}.", result)
 
 
 def tool_project_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:
