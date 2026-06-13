@@ -133,7 +133,7 @@ object-storage
   Plan object storage setup for WOM objets. Dry-run writes nothing. Approved mode writes only local provider metadata and a setup receipt; it does not create buckets, upload, sync, copy, hash, or import source files.
 
 source-intake
-  Classify one source/objet locator before draft creation. Dry-run only; returns safe source refs without reading bodies, hashing, copying, uploading, importing, OCR, transcription, extraction, or provider API calls.
+  Classify one source/objet locator before draft creation. Dry-run only; returns safe source refs without reading bodies, hashing, copying, uploading, importing, OCR, transcription, extraction, or provider API calls. It can optionally validate a project-intake decisions receipt as session context only.
 
 derive-text capture
   Register an already extracted UTF-8 text file as a provenance-aware derived text record for one existing object_id. Dry-run previews first; approved mode stores the text body, appends objects/manifests/derived-text.jsonl, and writes a receipt. It does not run OCR, ASR, parser, LLM vision, provider APIs, drafting, or minting.
@@ -457,6 +457,8 @@ The first implemented vocabulary is deliberately small: `derivation_kind` is one
 `archive project-intake-decisions --decisions <json-file> --dry-run|--approve` is the first persistence step after that conversation. The JSON file must use `schema: wom-kit/project-intake-decisions/v0.1`, include a safe `session_id`, and contain reviewed `decisions` keyed by the checklist ids from `project-intake-plan`. Dry-run reads and validates the decision file but prints only counts, checklist ids, a decision hash, blockers, warnings, and the proposed receipt path. Approved mode also requires `--reviewed-by <actor>` and writes `receipts/project-intake/*.project-intake-decisions.json`. It records the reviewed answers as local archive evidence but still does not inspect staged file bodies, run source-intake, capture objets, derive text, create drafts, mint zets, call providers, or approve cleanup.
 
 `archive project-intake-status --receipt <receipt> --dry-run` reads one approved project-intake decision receipt and reports whether the receipt is intact, which checklist ids are answered, which ids are still missing, and what the next safe actions are. It does not echo the recorded answer values and never turns the receipt into automatic execution authority.
+
+`archive source-intake --project-intake-receipt <receipt> --dry-run` can carry that reviewed session receipt into a one-locator metadata plan. The receipt must pass the same status check, and the resulting `project_intake_context` includes only receipt path, session id, reviewer metadata, decision hash, checklist coverage, and readiness. It does not include answer values and does not approve source capture, draft creation, minting, provider calls, or cleanup.
 
 `archive create-draft --source-intake-plan <json-file>` consumes a successful source-intake dry-run JSON file, validates that it is metadata-only and blocker-free, then merges safe `source_refs_for_draft` into draft `source_refs`. The plan file path is not stored in frontmatter, and WOM-kit does not follow local paths inside the plan.
 

@@ -1756,6 +1756,131 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["objet_status"], "blocked")
             self.assertTrue(any("does not resolve" in blocker for blocker in result["blockers"]))
 
+    def test_source_intake_can_attach_project_intake_receipt_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            object_id = "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            decisions_path = Path(tmp) / "decisions.json"
+            decisions_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/project-intake-decisions/v0.1",
+                        "session_id": "alpha-project-20260613",
+                        "decisions": [
+                            {
+                                "checklist_id": "scope.single_project",
+                                "answer": "yes",
+                                "notes": "One project only.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            approve_code, approve_output = self.run_cli(
+                [
+                    "project-intake-decisions",
+                    str(archive_root),
+                    "--decisions",
+                    str(decisions_path),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            receipt_path = json.loads(approve_output)["receipt_path"]
+
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--object-id",
+                    object_id,
+                    "--project-intake-receipt",
+                    receipt_path,
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["objet_status"], "manifested")
+            self.assertEqual(result["source_refs_for_draft"][0]["value"], object_id)
+            context = result["project_intake_context"]
+            self.assertTrue(context["provided"])
+            self.assertTrue(context["ok"])
+            self.assertEqual(context["receipt_path"], receipt_path)
+            self.assertEqual(context["session_id"], "alpha-project-20260613")
+            self.assertFalse(context["decision_values_included"])
+            self.assertFalse(context["automatic_execution_authorized"])
+            self.assertIn("scope.single_project", context["checklist_coverage"]["answered_checklist_ids"])
+            self.assertTrue(any("session evidence only" in action for action in result["next_safe_actions"]))
+            self.assertNotIn("One project only", output)
+            self.assertNotIn('"answer"', output)
+
+    def test_source_intake_blocks_invalid_project_intake_receipt_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            object_id = "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            decisions_path = Path(tmp) / "decisions.json"
+            decisions_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/project-intake-decisions/v0.1",
+                        "session_id": "alpha-project-20260613",
+                        "decisions": [{"checklist_id": "scope.single_project", "answer": "yes"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            approve_code, approve_output = self.run_cli(
+                [
+                    "project-intake-decisions",
+                    str(archive_root),
+                    "--decisions",
+                    str(decisions_path),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            receipt_relative = json.loads(approve_output)["receipt_path"]
+            receipt_path = archive_root / receipt_relative
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt["decisions"][0]["answer"] = "changed after approval"
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--object-id",
+                    object_id,
+                    "--project-intake-receipt",
+                    receipt_relative,
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["objet_status"], "blocked")
+            self.assertFalse(result["project_intake_context"]["ok"])
+            self.assertTrue(any("project_intake_receipt must pass" in blocker for blocker in result["blockers"]))
+            self.assertNotIn("changed after approval", output)
+
     def test_source_intake_source_map_item_resolves_to_draft_ready_refs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
