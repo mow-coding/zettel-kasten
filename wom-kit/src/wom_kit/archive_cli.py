@@ -3945,6 +3945,10 @@ def print_project_intake_status_result(result: dict[str, Any], output_format: st
         print("Missing:")
         for checklist_id in coverage["missing_checklist_ids"]:
             print(f"- {checklist_id}")
+    if result.get("next_review_prompts"):
+        print("Next review prompts:")
+        for prompt in result["next_review_prompts"]:
+            print(f"- {prompt.get('checklist_id')}: {prompt.get('question')}")
     print("Writes: none")
     if result.get("blockers"):
         print("Blockers:")
