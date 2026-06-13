@@ -3568,6 +3568,42 @@ def command_providers(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_provider_status(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("provider-status is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.provider_setup_status(Path(args.archive_root))
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result["ok"] else "blocked"
+        print(f"Provider setup status dry-run {state}.")
+        print(f"Archive: {result['archive_id']}")
+        print(f"Status: {result['status']}")
+        print(f"Bindings checked: {result['checked_binding_count']} of {result['binding_count']}")
+        print(f"Receipts: {result['receipt_count']} in {result['receipt_dir']}")
+        for provider in result["providers"]:
+            marker = provider.get("receipt_path") or provider.get("expected_receipt_path") or "-"
+            print(f"- {provider['provider']}: {provider['status']} ({marker})")
+        for orphan in result["orphan_receipts"]:
+            print(f"- receipt: {orphan['status']} ({orphan['receipt_path']})")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result["ok"] else 1
+
+
 def command_sources(args: argparse.Namespace) -> int:
     try:
         result = archive_services.list_sources(Path(args.archive_root))
@@ -5930,6 +5966,15 @@ def build_parser() -> argparse.ArgumentParser:
     providers.add_argument("archive_root", help="Archive root to inspect.")
     providers.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     providers.set_defaults(func=command_providers)
+
+    provider_status = subcommands.add_parser(
+        "provider-status",
+        help="Dry-run check local provider setup metadata and receipts without calling providers.",
+    )
+    provider_status.add_argument("archive_root", help="Archive root to inspect.")
+    provider_status.add_argument("--dry-run", action="store_true", help="Required. Read provider metadata and receipts only.")
+    provider_status.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    provider_status.set_defaults(func=command_provider_status)
 
     sources = subcommands.add_parser("sources", help="Inspect source bindings and source map status.")
     sources.add_argument("archive_root", help="Archive root to inspect.")

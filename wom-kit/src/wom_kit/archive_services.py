@@ -866,6 +866,22 @@ PROVIDER_REFERENCE_URLS = {
     "keepassxc": "https://keepassxc.org/docs/",
 }
 GITHUB_REPOSITORY_SETUP_RECEIPTS_DIR = "receipts/providers"
+PROVIDER_SETUP_RECEIPTS_DIR = "receipts/providers"
+PROVIDER_SETUP_STATUS_EXTERNAL_ACTION_KEYS = {
+    "github_api_called",
+    "github_repository_created",
+    "gh_cli_called",
+    "git_remote_configured",
+    "git_push_performed",
+    "provider_api_called",
+    "bucket_created",
+    "files_uploaded",
+    "sync_started",
+    "files_copied",
+    "files_hashed",
+    "source_content_imported",
+    "oauth_started",
+}
 GITHUB_REPOSITORY_DEFAULT_VISIBILITY = "private"
 GITHUB_REPOSITORY_DEFAULT_REMOTE_PROTOCOL = "ssh"
 GITHUB_REPOSITORY_NAME_PREFIX = "zettel-kasten-"
@@ -13512,6 +13528,319 @@ def provider_bindings_summary(archive_root: Path | str) -> dict[str, Any]:
         "providers": providers,
         "provider_change_plan": change_plan,
     }
+
+
+def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    provider_path = archive_internal_path(root, "provider-bindings.yml")
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    bindings_doc = load_provider_bindings(root)
+    if bindings_doc.get("archive_id") and bindings_doc.get("archive_id") != archive_id:
+        blockers.append("provider-bindings.yml archive_id must match archive.yml archive_id.")
+
+    bindings = provider_bindings_list(bindings_doc)
+    receipt_entries = load_provider_setup_receipts(root, blockers)
+    receipts_by_key: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for entry in receipt_entries:
+        key = provider_setup_receipt_key(entry["receipt"])
+        if key is None:
+            blockers.append(f"Provider setup receipt is not recognizable: {entry['path']}.")
+            continue
+        receipts_by_key.setdefault(key, []).append(entry)
+
+    checked_keys: set[tuple[str, str, str]] = set()
+    provider_statuses: list[dict[str, Any]] = []
+    external_actions = {key: False for key in sorted(PROVIDER_SETUP_STATUS_EXTERNAL_ACTION_KEYS)}
+
+    for binding in bindings:
+        status = provider_setup_status_for_binding(
+            binding,
+            archive_id=archive_id,
+            receipts_by_key=receipts_by_key,
+            checked_keys=checked_keys,
+            external_actions=external_actions,
+        )
+        provider_statuses.append(status)
+        blockers.extend(status.get("blockers") or [])
+        warnings.extend(status.get("warnings") or [])
+
+    orphan_receipts: list[dict[str, Any]] = []
+    for key, entries in receipts_by_key.items():
+        if key in checked_keys:
+            continue
+        for entry in entries:
+            orphan = {
+                "status": "receipt_without_binding",
+                "provider": entry["receipt"].get("provider"),
+                "provider_kind": entry["receipt"].get("provider_kind"),
+                "receipt_path": entry["path"],
+                "resource": entry["receipt"].get("resource") if isinstance(entry["receipt"].get("resource"), dict) else {},
+                "blockers": ["Provider setup receipt has no matching setup-managed provider binding."],
+                "warnings": [],
+            }
+            orphan_receipts.append(orphan)
+            blockers.extend(orphan["blockers"])
+            merge_provider_setup_external_actions(external_actions, entry["receipt"])
+
+    managed_count = sum(1 for item in provider_statuses if item.get("setup_managed") is True)
+    action_performed = any(external_actions.values())
+    if action_performed:
+        blockers.append("A provider setup receipt reports an external provider action; expected metadata-only local setup receipts.")
+    if blockers:
+        status = "blocked"
+    elif managed_count:
+        status = "ready"
+    else:
+        status = "not_configured"
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "action": "provider_setup_status",
+        "archive_id": archive_id,
+        "status": status,
+        "provider_bindings_path": "provider-bindings.yml",
+        "bindings_present": provider_path.is_file(),
+        "binding_count": len(bindings),
+        "checked_binding_count": managed_count,
+        "receipt_count": len(receipt_entries),
+        "receipt_dir": PROVIDER_SETUP_RECEIPTS_DIR,
+        "providers": provider_statuses,
+        "orphan_receipts": orphan_receipts,
+        "external_actions": external_actions,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+        "next_safe_actions": provider_setup_next_safe_actions(status, managed_count),
+    }
+
+
+def load_provider_setup_receipts(root: Path, blockers: list[str]) -> list[dict[str, Any]]:
+    receipt_root = archive_internal_path(root, PROVIDER_SETUP_RECEIPTS_DIR)
+    if not receipt_root.is_dir():
+        return []
+
+    entries: list[dict[str, Any]] = []
+    for path in sorted(receipt_root.glob("*.json"), key=lambda item: item.name):
+        relative = path.relative_to(root).as_posix()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            blockers.append(f"Provider setup receipt could not be read as JSON: {relative} ({exc}).")
+            continue
+        if not isinstance(data, dict):
+            blockers.append(f"Provider setup receipt must be a JSON object: {relative}.")
+            continue
+        entries.append({"path": relative, "receipt": json_safe(data)})
+    return entries
+
+
+def provider_setup_status_for_binding(
+    binding: dict[str, Any],
+    *,
+    archive_id: str,
+    receipts_by_key: dict[tuple[str, str, str], list[dict[str, Any]]],
+    checked_keys: set[tuple[str, str, str]],
+    external_actions: dict[str, bool],
+) -> dict[str, Any]:
+    provider = str(binding.get("provider") or "unknown")
+    provider_kind = str(binding.get("provider_kind") or "")
+    binding_id = binding.get("binding_id")
+    enabled = binding.get("enabled") is not False
+    resource = binding.get("resource") if isinstance(binding.get("resource"), dict) else {}
+    expected_receipt = provider_setup_expected_receipt_path(binding)
+    setup_managed = provider_setup_binding_is_managed(binding)
+    result = {
+        "binding_id": binding_id,
+        "provider": provider,
+        "provider_kind": provider_kind or None,
+        "enabled": enabled,
+        "setup_managed": setup_managed,
+        "resource": json_safe(resource),
+        "expected_receipt_path": expected_receipt,
+        "receipt_path": None,
+        "status": "manual_status_untracked",
+        "external_actions": {},
+        "blockers": [],
+        "warnings": [],
+    }
+
+    if not enabled:
+        result["status"] = "disabled_not_checked"
+        return result
+    if not setup_managed:
+        return result
+
+    key = provider_setup_binding_key(binding)
+    if key is None:
+        result["status"] = "metadata_incomplete"
+        result["blockers"].append("Setup-managed provider binding is missing required resource metadata.")
+        return result
+
+    entries = receipts_by_key.get(key, [])
+    if not entries:
+        result["status"] = "metadata_without_receipt"
+        result["blockers"].append(f"Missing provider setup receipt: {expected_receipt}.")
+        return result
+
+    checked_keys.add(key)
+    if len(entries) > 1:
+        result["blockers"].append("Multiple provider setup receipts match this provider binding.")
+
+    entry = entries[0]
+    receipt = entry["receipt"]
+    result["receipt_path"] = entry["path"]
+    result["status"] = "metadata_and_receipt_present"
+    result["external_actions"] = collect_provider_setup_external_actions(receipt)
+    merge_provider_setup_external_actions(external_actions, receipt)
+    result["blockers"].extend(
+        provider_setup_binding_receipt_mismatches(
+            binding,
+            receipt,
+            receipt_path=entry["path"],
+            expected_receipt_path=expected_receipt,
+            archive_id=archive_id,
+        )
+    )
+    if result["blockers"]:
+        result["status"] = "metadata_receipt_mismatch"
+    return result
+
+
+def provider_setup_binding_is_managed(binding: dict[str, Any]) -> bool:
+    provider = str(binding.get("provider") or "")
+    purpose = str(binding.get("purpose") or "")
+    if provider == "github":
+        return purpose == "archive_repository_metadata_and_manual_setup_plan"
+    if provider == "object_storage":
+        return purpose == "objet_storage_metadata_and_manual_setup_plan"
+    return False
+
+
+def provider_setup_binding_key(binding: dict[str, Any]) -> tuple[str, str, str] | None:
+    provider = str(binding.get("provider") or "")
+    resource = binding.get("resource") if isinstance(binding.get("resource"), dict) else {}
+    if provider == "github":
+        owner = str(resource.get("owner") or "").lower()
+        repo = str(resource.get("repo") or "").lower()
+        return ("github", owner, repo) if owner and repo else None
+    if provider == "object_storage":
+        provider_kind = str(binding.get("provider_kind") or "").lower()
+        bucket = str(resource.get("bucket") or "").lower()
+        return ("object_storage", provider_kind, bucket) if provider_kind and bucket else None
+    return None
+
+
+def provider_setup_receipt_key(receipt: dict[str, Any]) -> tuple[str, str, str] | None:
+    provider = str(receipt.get("provider") or "")
+    resource = receipt.get("resource") if isinstance(receipt.get("resource"), dict) else {}
+    if provider == "github":
+        owner = str(resource.get("owner") or "").lower()
+        repo = str(resource.get("repo") or "").lower()
+        return ("github", owner, repo) if owner and repo else None
+    if provider == "object_storage":
+        provider_kind = str(receipt.get("provider_kind") or "").lower()
+        bucket = str(resource.get("bucket") or "").lower()
+        return ("object_storage", provider_kind, bucket) if provider_kind and bucket else None
+    return None
+
+
+def provider_setup_expected_receipt_path(binding: dict[str, Any]) -> str | None:
+    provider = str(binding.get("provider") or "")
+    resource = binding.get("resource") if isinstance(binding.get("resource"), dict) else {}
+    if provider == "github":
+        repo = str(resource.get("repo") or "")
+        return github_provider_setup_receipt_path(repo) if repo else None
+    if provider == "object_storage":
+        bucket = str(resource.get("bucket") or "")
+        return object_storage_provider_setup_receipt_path(bucket) if bucket else None
+    return None
+
+
+def provider_setup_binding_receipt_mismatches(
+    binding: dict[str, Any],
+    receipt: dict[str, Any],
+    *,
+    receipt_path: str,
+    expected_receipt_path: str | None,
+    archive_id: str,
+) -> list[str]:
+    blockers: list[str] = []
+    if receipt.get("archive_id") != archive_id:
+        blockers.append("Provider setup receipt archive_id must match archive.yml archive_id.")
+    if expected_receipt_path and receipt_path != expected_receipt_path:
+        blockers.append(f"Provider setup receipt path mismatch: expected {expected_receipt_path}, found {receipt_path}.")
+    if receipt.get("receipt_path") and receipt.get("receipt_path") != receipt_path:
+        blockers.append("Provider setup receipt_path field must match the receipt file path.")
+
+    binding_resource = binding.get("resource") if isinstance(binding.get("resource"), dict) else {}
+    receipt_resource = receipt.get("resource") if isinstance(receipt.get("resource"), dict) else {}
+    binding_auth = binding.get("auth") if isinstance(binding.get("auth"), dict) else {}
+    receipt_auth = receipt.get("auth") if isinstance(receipt.get("auth"), dict) else {}
+    owner_mapping = binding.get("owner_mapping") if isinstance(binding.get("owner_mapping"), dict) else {}
+
+    for field in ("provider", "provider_kind"):
+        if binding.get(field) and receipt.get(field) and binding.get(field) != receipt.get(field):
+            blockers.append(f"Provider setup receipt {field} must match provider-bindings.yml.")
+    if binding.get("provider") == "github":
+        for field in ("owner", "repo", "visibility", "remote_protocol"):
+            if binding_resource.get(field) != receipt_resource.get(field):
+                blockers.append(f"GitHub provider setup receipt resource.{field} must match provider-bindings.yml.")
+    if binding.get("provider") == "object_storage":
+        for field in ("bucket", "prefix", "visibility", "region", "endpoint_ref"):
+            if binding_resource.get(field) != receipt_resource.get(field):
+                blockers.append(f"Object storage provider setup receipt resource.{field} must match provider-bindings.yml.")
+
+    for field in ("method", "token_env", "account_ref"):
+        if binding_auth.get(field) != receipt_auth.get(field):
+            blockers.append(f"Provider setup receipt auth.{field} must match provider-bindings.yml.")
+    for field in ("profile_id", "profile_slug"):
+        if owner_mapping.get(field) != receipt.get(field):
+            blockers.append(f"Provider setup receipt {field} must match provider-bindings.yml owner_mapping.")
+
+    actions = collect_provider_setup_external_actions(receipt)
+    performed = sorted(key for key, value in actions.items() if value)
+    if performed:
+        blockers.append("Provider setup receipt reports external action(s): " + ", ".join(performed) + ".")
+    return unique_preserve_order(blockers)
+
+
+def collect_provider_setup_external_actions(receipt: dict[str, Any]) -> dict[str, bool]:
+    actions: dict[str, bool] = {}
+    for section_name in ("external_actions", "result"):
+        section = receipt.get(section_name)
+        if not isinstance(section, dict):
+            continue
+        for key, value in section.items():
+            if key in PROVIDER_SETUP_STATUS_EXTERNAL_ACTION_KEYS and isinstance(value, bool):
+                actions[key] = actions.get(key, False) or value
+    return actions
+
+
+def merge_provider_setup_external_actions(target: dict[str, bool], receipt: dict[str, Any]) -> None:
+    for key, value in collect_provider_setup_external_actions(receipt).items():
+        target[key] = target.get(key, False) or value
+
+
+def provider_setup_next_safe_actions(status: str, managed_count: int) -> list[str]:
+    if status == "blocked":
+        return [
+            "Review provider-status blockers before relying on provider metadata.",
+            "Run archive doctor --strict after fixing local provider metadata or receipts.",
+        ]
+    if managed_count:
+        return [
+            "Manually verify the external GitHub repository or object storage bucket in the provider UI.",
+            "Keep real API tokens, URLs, and local account details outside the archive.",
+            "Run archive doctor --strict before any future provider sync design work.",
+        ]
+    return [
+        "Use github-repo --dry-run or object-storage --dry-run to plan local provider metadata.",
+        "Approve only after a human has reviewed the proposed local metadata and receipt path.",
+    ]
 
 
 def load_provider_bindings(archive_root: Path) -> dict[str, Any]:

@@ -175,6 +175,17 @@ search text           -> SQLite/search index
 
 See [Source Object Storage Policy](wom-kit/docs/source-object-storage-policy.md).
 
+For provider setup metadata, WOM-kit can also run a local receipt consistency
+check:
+
+```text
+archive provider-status <archive-root> --dry-run
+```
+
+This checks `provider-bindings.yml` against local provider setup receipts. It
+does not call GitHub, create buckets, upload files, push remotes, or verify live
+provider account state.
+
 ## Text Provenance
 
 Not every text artifact has the same authority.

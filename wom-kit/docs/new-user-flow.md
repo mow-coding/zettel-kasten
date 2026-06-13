@@ -376,6 +376,23 @@ python wom-kit\cli\archive.py object-storage .\tmp-my-archive `
 
 This flow does not create a bucket/container, start OAuth, call provider APIs, upload, sync, copy source files, calculate file hashes, or import source content. Those are separate future/manual steps.
 
+## Flow 2E: Check Local Provider Setup Metadata
+
+After approving GitHub repository or object storage setup metadata, check that
+`provider-bindings.yml` and local setup receipts still agree:
+
+```powershell
+python wom-kit\cli\archive.py provider-status .\tmp-my-archive `
+  --dry-run `
+  --format json
+```
+
+This is a local consistency check only. It reads provider metadata and
+`receipts/providers/*.json`, reports missing or mismatched setup receipts, and
+writes nothing. It does not call GitHub, call storage providers, create
+repositories, create buckets, configure remotes, upload files, sync files, copy
+source files, or hash file bodies.
+
 ## Flow 3: AI Creates Drafts
 
 AI should create draft zettels in `inbox/`.
