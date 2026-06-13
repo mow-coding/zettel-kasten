@@ -16709,6 +16709,151 @@ def project_intake_next_review_prompts(missing_ids: list[str]) -> list[dict[str,
     return prompts
 
 
+def project_intake_prompt_from_checklist_item(item: dict[str, Any]) -> dict[str, Any]:
+    prompt = {
+        "checklist_id": item["id"],
+        "question": item["question"],
+        "answer_type": item["answer_type"],
+        "required_before": item["required_before"],
+        "decision_record_hint": {
+            "checklist_id": item["id"],
+            "response_placeholder": "<human-reviewed response>",
+            "notes_placeholder": "<optional review notes>",
+        },
+        "decision_values_included": False,
+        "writes": False,
+    }
+    if "allowed_labels" in item:
+        prompt["allowed_labels"] = item["allowed_labels"]
+    return prompt
+
+
+def project_intake_next_question(
+    archive_root: Path | str,
+    *,
+    staged_folder: Path | str | None = None,
+    receipt: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    if not dry_run:
+        raise ArchiveServiceError("project-intake-next-question is dry-run only.")
+    if (staged_folder is None and not receipt) or (staged_folder is not None and receipt):
+        raise ArchiveServiceError("Pass exactly one of staged_folder or receipt.")
+
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    review_prompts: list[dict[str, Any]] = []
+    source: dict[str, Any]
+    state = "needs_review"
+    session_id: str | None = None
+
+    if staged_folder is not None:
+        plan = project_intake_plan(root, staged_folder)
+        warnings.extend(plan.get("warnings") or [])
+        review_prompts = [
+            project_intake_prompt_from_checklist_item(item)
+            for item in plan["human_review_checklist"]
+        ]
+        source = {
+            "kind": "staged_folder_plan",
+            "follows_staging_convention": plan["follows_staging_convention"],
+            "folder_summary": plan["folder_summary"],
+            "staged_folder_path_included": False,
+            "entry_names_included": False,
+            "file_bodies_read": False,
+        }
+        state = "needs_first_review"
+    else:
+        assert receipt is not None
+        status = project_intake_status(root, receipt, dry_run=True)
+        blockers.extend(status.get("blockers") or [])
+        warnings.extend(status.get("warnings") or [])
+        review_prompts = status.get("next_review_prompts") or []
+        session_id = status.get("session_id")
+        source = {
+            "kind": "decision_receipt_status",
+            "receipt_path": status.get("receipt_path"),
+            "readiness": status.get("readiness"),
+            "checklist_coverage": status.get("checklist_coverage"),
+            "decision_values_included": False,
+        }
+        if blockers:
+            state = "blocked"
+        elif review_prompts:
+            state = "needs_more_review"
+        else:
+            state = "review_complete"
+
+    selected_prompt = review_prompts[0] if review_prompts else None
+    conversation_turn = None
+    if selected_prompt is not None:
+        conversation_turn = {
+            "checklist_id": selected_prompt["checklist_id"],
+            "ask_user": selected_prompt["question"],
+            "answer_type": selected_prompt["answer_type"],
+            "required_before": selected_prompt["required_before"],
+            "decision_record_hint": selected_prompt["decision_record_hint"],
+            "decision_values_included": False,
+            "writes": False,
+        }
+        if "allowed_labels" in selected_prompt:
+            conversation_turn["allowed_labels"] = selected_prompt["allowed_labels"]
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "action": "archive_project_intake_next_question",
+        "archive_id": archive_id,
+        "state": state,
+        "session_id": session_id,
+        "source": source,
+        "next_question": conversation_turn,
+        "remaining_prompt_count": len(review_prompts),
+        "remaining_checklist_ids": [prompt["checklist_id"] for prompt in review_prompts],
+        "all_remaining_prompts": review_prompts,
+        "privacy_guards": {
+            "decision_values_included": False,
+            "entry_names_included": False,
+            "file_bodies_read": False,
+            "content_hashes_calculated": False,
+            "provider_calls": False,
+            "writes": False,
+        },
+        "decision_file_guidance": {
+            "schema": PROJECT_INTAKE_DECISION_SCHEMA,
+            "session_id": session_id or "<safe-session-id>",
+            "staged_folder_ref": "<optional human-reviewed non-secret reference>",
+            "decision_values_included": False,
+            "write_decisions_with": "project-intake-decisions --dry-run, then --approve after human review",
+        },
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "next_safe_actions": project_intake_next_question_safe_actions(state),
+        "would_change": [],
+    }
+
+
+def project_intake_next_question_safe_actions(state: str) -> list[str]:
+    if state == "blocked":
+        return [
+            "Review the blocker before asking the next intake question.",
+            "Do not run source-intake, capture, drafting, minting, or cleanup from a blocked receipt.",
+        ]
+    if state == "review_complete":
+        return [
+            "Run project-intake-status --dry-run before using the receipt as source-intake or capture context.",
+            "Continue one item at a time with source-intake --project-intake-receipt.",
+            "Keep capture, draft, mint, provider, and cleanup steps separately approved.",
+        ]
+    return [
+        "Ask the user the next_question.ask_user text and record only the human-reviewed response.",
+        "Update a project-intake decisions JSON file outside this command; this command writes nothing.",
+        "Run project-intake-decisions --dry-run before approving any receipt.",
+    ]
+
+
 def safe_project_intake_actor_id(value: str | None) -> str | None:
     if value is None:
         return None

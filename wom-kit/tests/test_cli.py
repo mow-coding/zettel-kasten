@@ -12077,6 +12077,127 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("privacy.sensitive_items: Which areas must stay private", text_output)
             self.assertNotIn("One project only", text_output)
 
+    def test_project_intake_next_question_starts_with_one_safe_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            staged = Path(tmp) / "archive-objets" / "intake" / "alpha-project"
+            staged.mkdir(parents=True)
+            (staged / "private-file-name.md").write_text("SUPER_SECRET_BODY", encoding="utf-8")
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "project-intake-next-question",
+                    str(archive_root),
+                    "--staged-folder",
+                    str(staged),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["action"], "archive_project_intake_next_question")
+            self.assertEqual(result["state"], "needs_first_review")
+            self.assertEqual(result["next_question"]["checklist_id"], "scope.single_project")
+            self.assertIn("Is this staged folder exactly one project", result["next_question"]["ask_user"])
+            self.assertEqual(result["remaining_prompt_count"], 7)
+            self.assertEqual(result["would_change"], [])
+            self.assertFalse(result["privacy_guards"]["file_bodies_read"])
+            self.assertFalse(result["privacy_guards"]["entry_names_included"])
+            self.assertFalse(result["privacy_guards"]["decision_values_included"])
+            self.assertNotIn("private-file-name.md", output)
+            self.assertNotIn("SUPER_SECRET_BODY", output)
+            self.assertNotIn('"answer"', output)
+
+    def test_project_intake_next_question_continues_from_receipt_without_echoing_answers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            decisions_path = Path(tmp) / "decisions.json"
+            decisions_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/project-intake-decisions/v0.1",
+                        "session_id": "alpha-project-20260613",
+                        "decisions": [
+                            {
+                                "checklist_id": "scope.single_project",
+                                "answer": "yes",
+                                "notes": "One project only.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            approve_code, approve_output = self.run_cli(
+                [
+                    "project-intake-decisions",
+                    str(archive_root),
+                    "--decisions",
+                    str(decisions_path),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            receipt_path = json.loads(approve_output)["receipt_path"]
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "project-intake-next-question",
+                    str(archive_root),
+                    "--receipt",
+                    receipt_path,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["state"], "needs_more_review")
+            self.assertEqual(result["session_id"], "alpha-project-20260613")
+            self.assertEqual(result["next_question"]["checklist_id"], "staging.location")
+            self.assertEqual(result["next_question"]["decision_record_hint"]["response_placeholder"], "<human-reviewed response>")
+            self.assertEqual(result["source"]["receipt_path"], receipt_path)
+            self.assertFalse(result["source"]["decision_values_included"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("One project only", output)
+            self.assertNotIn('"answer"', output)
+
+    def test_project_intake_next_question_requires_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            staged = Path(tmp) / "archive-objets" / "intake" / "alpha-project"
+            staged.mkdir(parents=True)
+
+            code, output = self.run_cli(
+                [
+                    "project-intake-next-question",
+                    str(archive_root),
+                    "--staged-folder",
+                    str(staged),
+                ]
+            )
+
+            self.assertEqual(code, 1)
+            self.assertIn("dry-run only", output)
+
     def test_project_intake_status_blocks_tampered_receipt_hash(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "archive"

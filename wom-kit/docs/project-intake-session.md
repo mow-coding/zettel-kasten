@@ -38,8 +38,10 @@ The current safe spine is intentionally step-by-step:
 
 ```text
 project-intake-plan
+-> project-intake-next-question
 -> project-intake-decisions
 -> project-intake-status
+-> project-intake-next-question
 -> source-intake --project-intake-receipt
 -> objet-capture --project-intake-receipt
 -> derive-text capture when external text already exists
@@ -108,6 +110,7 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Source registration | `archive add-source` | Can write source binding metadata only after approval. |
 | Source scan | `archive scan-source` | Metadata-first; approved mode writes source maps and receipts. |
 | Session planning | `archive project-intake-plan --dry-run` / MCP `project_intake_plan` | Plans one staged project folder session with top-level counts, human review checklist, suggested classification labels, and no writes. |
+| Next question | `archive project-intake-next-question --dry-run` / MCP `project_intake_next_question` | Returns exactly one next human-review question for a new staged folder or continuing receipt. It includes placeholders only, does not echo decision values, and writes nothing. |
 | Decision recording | `archive project-intake-decisions --dry-run|--approve` | Validates a user-reviewed checklist JSON file; approved mode writes a local receipt under `receipts/project-intake/` without running capture, drafting, minting, provider calls, or cleanup. |
 | Decision status | `archive project-intake-status --dry-run` / MCP `project_intake_status` | Reviews one approved decisions receipt for checklist coverage and integrity, and returns `next_review_prompts` for missing checklist ids without echoing answer text or authorizing automatic execution. |
 | Artifact hygiene | `wom-kit/tools/check_artifact_hygiene.py` | Report-only artifact classification and generated `.gitignore` checks; never cleans files. |
@@ -120,10 +123,10 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Index | `archive index` / `archive search` | Generated SQLite index; rebuildable local search. |
 
 These primitives now include a dry-run session planner with human review prompts,
-a receipt writer for reviewed answers, a read-only receipt status check, an
-optional source-intake session-context link, missing-question prompts for the
-next human review turn, and draft/mint metadata preservation for that receipt
-evidence. They still do not form a full human-guided
+a one-question-at-a-time prompt surface, a receipt writer for reviewed answers,
+a read-only receipt status check, an optional source-intake session-context
+link, missing-question prompts for the next human review turn, and draft/mint
+metadata preservation for that receipt evidence. They still do not form a full human-guided
 intake/capture/draft/mint/cleanup workflow.
 
 ## 5. Planned Surfaces

@@ -640,6 +640,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("human_artifact_store_plan", tool_names)
             self.assertIn("project_intake_plan", tool_names)
             self.assertIn("project_intake_status", tool_names)
+            self.assertIn("project_intake_next_question", tool_names)
             self.assertIn("source_intake_plan", tool_names)
             self.assertIn("create_draft_zettel", tool_names)
             self.assertIn("block_header_check", tool_names)
@@ -1703,11 +1704,36 @@ class McpServerTests(unittest.TestCase):
                 self.assertNotIn("private-file-name.md", plan_dump)
                 self.assertNotIn("SUPER_SECRET_BODY", plan_dump)
 
-                status_response = self.send(
+                first_question_response = self.send(
                     process,
                     {
                         "jsonrpc": "2.0",
                         "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "project_intake_next_question",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "staged_folder": str(staged),
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(first_question_response["result"]["isError"])
+                first_question = first_question_response["result"]["structuredContent"]
+                self.assertTrue(first_question["ok"])
+                self.assertEqual(first_question["state"], "needs_first_review")
+                self.assertEqual(first_question["next_question"]["checklist_id"], "scope.single_project")
+                first_question_dump = json.dumps(first_question)
+                self.assertNotIn("private-file-name.md", first_question_dump)
+                self.assertNotIn("SUPER_SECRET_BODY", first_question_dump)
+                self.assertNotIn('"answer"', first_question_dump)
+
+                status_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
                         "method": "tools/call",
                         "params": {
                             "name": "project_intake_status",
@@ -1728,11 +1754,36 @@ class McpServerTests(unittest.TestCase):
                 self.assertNotIn("One project only", status_dump)
                 self.assertNotIn('"answer"', status_dump)
 
+                next_question_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 4,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "project_intake_next_question",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "receipt": receipt_path,
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(next_question_response["result"]["isError"])
+                next_question = next_question_response["result"]["structuredContent"]
+                self.assertTrue(next_question["ok"])
+                self.assertEqual(next_question["state"], "needs_more_review")
+                self.assertEqual(next_question["next_question"]["checklist_id"], "staging.location")
+                self.assertEqual(next_question["remaining_prompt_count"], 6)
+                next_question_dump = json.dumps(next_question)
+                self.assertNotIn("One project only", next_question_dump)
+                self.assertNotIn('"answer"', next_question_dump)
+
                 source_response = self.send(
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": 3,
+                        "id": 5,
                         "method": "tools/call",
                         "params": {
                             "name": "source_intake_plan",
@@ -1754,7 +1805,7 @@ class McpServerTests(unittest.TestCase):
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": 4,
+                        "id": 6,
                         "method": "tools/call",
                         "params": {
                             "name": "project_intake_plan",
@@ -1772,10 +1823,10 @@ class McpServerTests(unittest.TestCase):
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": 5,
+                        "id": 7,
                         "method": "tools/call",
                         "params": {
-                            "name": "project_intake_status",
+                            "name": "project_intake_next_question",
                             "arguments": {
                                 "archive_root": str(allowed_archive),
                                 "receipt": receipt_path,
