@@ -19,6 +19,8 @@ Commands:
           Plan object storage metadata for WOM objets.
   source-intake
           Plan safe source/objet refs before draft creation.
+  source-intake-record
+          Record a reviewed source-intake dry-run plan under receipts/sources/.
   project-intake-plan
           Plan one staged project folder intake session without writing files.
   project-intake-staging-guide
@@ -1873,6 +1875,54 @@ def command_source_intake(args: argparse.Namespace) -> int:
             for warning in result["warnings"]:
                 print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
+
+
+def command_source_intake_record(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.source_intake_record(
+            Path(args.archive_root),
+            Path(args.source_intake_plan),
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_source_intake_record_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def print_source_intake_record_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    mode = "dry-run ready" if result.get("dry_run") else "recorded"
+    if not result.get("ok", True):
+        mode = "blocked"
+    print(f"Source intake record {mode}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Plan SHA-256: {result.get('source_intake_plan_sha256') or '-'}")
+    if result.get("plan_path"):
+        print(f"Plan path: {result['plan_path']}")
+    else:
+        print(f"Proposed plan path: {result.get('proposed_plan_path') or '-'}")
+    writes = result.get("files_written") or []
+    if writes:
+        print("Files written:")
+        for path in writes:
+            print(f"- {path}")
+    else:
+        print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
 
 
 def command_list_zettels(args: argparse.Namespace) -> int:
@@ -5409,6 +5459,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     source_intake.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     source_intake.set_defaults(func=command_source_intake)
+
+    source_intake_record = subcommands.add_parser(
+        "source-intake-record",
+        help="Record a reviewed source-intake dry-run plan under receipts/sources/.",
+    )
+    source_intake_record.add_argument("archive_root", help="Archive root to update.")
+    source_intake_record.add_argument("--source-intake-plan", required=True, help="JSON file from source-intake --dry-run.")
+    source_intake_record.add_argument("--dry-run", action="store_true", help="Preview validation without writing files.")
+    source_intake_record.add_argument("--approve", action="store_true", help="Write the reviewed source-intake plan record.")
+    source_intake_record.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
+    source_intake_record.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    source_intake_record.set_defaults(func=command_source_intake_record)
 
     list_zettels = subcommands.add_parser("list-zettels", help="List draft and/or canonical zettels.")
     list_zettels.add_argument("archive_root", help="Archive root to inspect.")

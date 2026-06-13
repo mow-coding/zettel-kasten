@@ -1967,6 +1967,104 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(any("project_intake_receipt must pass" in blocker for blocker in result["blockers"]))
             self.assertNotIn("changed after approval", output)
 
+    def test_source_intake_record_approve_writes_redacted_plan_under_receipts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            selected = Path(tmp) / "incoming" / "private-file-name.md"
+            selected.parent.mkdir(parents=True)
+            selected.write_text("SUPER_SECRET_BODY", encoding="utf-8")
+            plan = archive_services.source_intake_plan(
+                archive_root,
+                local_path=selected,
+                redact_local_paths=True,
+            )
+            self.assertTrue(plan["ok"], plan)
+            plan_path = Path(tmp) / "source-intake-plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "source-intake-record",
+                    str(archive_root),
+                    "--source-intake-plan",
+                    str(plan_path),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(dry_code, 0, dry_output)
+            dry = json.loads(dry_output)
+            self.assertTrue(dry["ok"])
+            self.assertEqual(dry["would_change"], [dry["proposed_plan_path"]])
+            self.assertFalse((archive_root / dry["proposed_plan_path"]).exists())
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "source-intake-record",
+                    str(archive_root),
+                    "--source-intake-plan",
+                    str(plan_path),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(approve_code, 0, approve_output)
+            result = json.loads(approve_output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["plan_path"], dry["proposed_plan_path"])
+            self.assertEqual(result["files_written"], [result["plan_path"]])
+            recorded_path = archive_root / result["plan_path"]
+            self.assertTrue(recorded_path.is_file())
+            recorded = json.loads(recorded_path.read_text(encoding="utf-8"))
+            self.assertEqual(archive_services.sha256_json_value(recorded), result["source_intake_plan_sha256"])
+            self.assertEqual(recorded["source_metadata"]["local_path"], "<redacted-local-path>")
+            self.assertNotIn(str(selected), approve_output)
+            self.assertNotIn("private-file-name.md", approve_output)
+            self.assertNotIn("SUPER_SECRET_BODY", approve_output)
+
+    def test_source_intake_record_blocks_unredacted_local_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            selected = Path(tmp) / "incoming" / "private-file-name.md"
+            selected.parent.mkdir(parents=True)
+            selected.write_text("SUPER_SECRET_BODY", encoding="utf-8")
+            plan = archive_services.source_intake_plan(
+                archive_root,
+                local_path=selected,
+                redact_local_paths=False,
+            )
+            self.assertTrue(plan["ok"], plan)
+            self.assertIn("private-file-name.md", json.dumps(plan))
+            plan_path = Path(tmp) / "source-intake-plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "source-intake-record",
+                    str(archive_root),
+                    "--source-intake-plan",
+                    str(plan_path),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("redact-local-paths" in blocker for blocker in result["blockers"]))
+            self.assertEqual(result["would_change"], [])
+            self.assertFalse((archive_root / result["proposed_plan_path"]).exists())
+            self.assertNotIn(str(selected), output)
+            self.assertNotIn("private-file-name.md", output)
+            self.assertNotIn("SUPER_SECRET_BODY", output)
+
     def test_source_intake_source_map_item_resolves_to_draft_ready_refs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

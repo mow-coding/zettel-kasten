@@ -22,6 +22,10 @@ This project uses semantic versioning for public compatibility checkpoints.
   `project_intake_item_plan` to preview the next source-intake dry-run route for
   one human-selected file while redacting local paths and avoiding capture,
   drafting, minting, uploads, cleanup, or selection-manifest generation.
+- Added approval-gated CLI `archive source-intake-record --dry-run|--approve`
+  to validate a reviewed `source-intake --dry-run` JSON file and preserve the
+  redacted plan under `receipts/sources/` for later capture evidence without
+  reading file bodies, calculating content hashes, or calling providers.
 
 ## v0.3.7 - 2026-06-13
 
