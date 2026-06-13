@@ -638,6 +638,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("object_storage_setup_plan", tool_names)
             self.assertIn("provider_setup_status", tool_names)
             self.assertIn("human_artifact_store_plan", tool_names)
+            self.assertIn("prehashed_objet_ledger_preview", tool_names)
             self.assertIn("project_intake_plan", tool_names)
             self.assertIn("project_intake_staging_guide", tool_names)
             self.assertIn("project_intake_status", tool_names)
@@ -1507,6 +1508,111 @@ class McpServerTests(unittest.TestCase):
                             "arguments": {
                                 "archive_root": str(allowed_archive),
                                 "surface_kind": "joplin",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_prehashed_objet_ledger_preview_tool_writes_nothing_and_respects_allowed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            ledger = allowed_root / "retrieval-ledger.jsonl"
+            ledger.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"sha256": "a" * 64, "bytes": 10, "name": "private-export-name.pdf"}),
+                        json.dumps({"sha256": "sha256:" + ("b" * 64), "bytes": "20"}),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            outside_ledger = outside_root / "retrieval-ledger.jsonl"
+            outside_ledger.parent.mkdir(parents=True, exist_ok=True)
+            outside_ledger.write_text(json.dumps({"sha256": "c" * 64, "bytes": 1}), encoding="utf-8")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "prehashed_objet_ledger_preview",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "ledger": str(ledger),
+                                "store_kind": "notion_source_export",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "prehashed_objet_ledger_preview")
+                self.assertEqual(structured["ledger"]["valid_object_count"], 2)
+                self.assertFalse(structured["privacy_guards"]["row_values_echoed"])
+                self.assertFalse(structured["privacy_guards"]["blob_bytes_read"])
+                self.assertEqual(structured["would_change"], [])
+                structured_dump = json.dumps(structured)
+                self.assertNotIn(str(ledger), structured_dump)
+                self.assertNotIn("private-export-name.pdf", structured_dump)
+
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "prehashed_objet_ledger_preview",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "ledger": str(outside_ledger),
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "prehashed_objet_ledger_preview",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "ledger": str(ledger),
                                 "dry_run": False,
                             },
                         },
