@@ -121,6 +121,11 @@ python wom-kit\cli\archive.py repair-gitignore <archive-root> --approve --review
 `repair-gitignore` does not delete existing `.gitignore` lines, inspect source
 file bodies, clean files, upload, sync, or call provider APIs.
 
+Some safe defaults, such as `/collab/` and `/.mow-harness/`, are defensive
+workspace-root guardrails. They keep local collaboration mailboxes, prompts,
+runtime state, and possible secret-bearing coordination files out of version
+control even when an archive is operated from a larger workspace.
+
 ## 5. Future Cleanup Guidance
 
 A future cleanup or `gc` flow may report items such as:

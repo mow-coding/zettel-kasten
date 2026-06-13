@@ -20867,6 +20867,7 @@ def _derived_text_capture_run(
             "ok": False,
             "dry_run": not approve,
             "lifecycle_action": "derived_text_capture_plan" if not approve else "derived_text_capture",
+            "item_status": "blocked",
             "archive_id": archive_id,
             "source_object_id": normalized_source_object_id or source_object_id,
             "source_object_present": source_record_present,
@@ -20950,6 +20951,11 @@ def _derived_text_capture_run(
         return {
             "ok": not blockers,
             **base_output,
+            "item_status": derived_text_capture_item_status(
+                ok=not blockers,
+                approve=False,
+                planned_action=planned_action if not blockers else "blocked",
+            ),
             "planned_action": planned_action if not blockers else "blocked",
             "proposed_receipt_path": f"{DERIVED_TEXT_CAPTURE_RECEIPTS_DIR}/{timestamp_compact}-{secrets.token_hex(6)}.json",
             "planned_writes": [] if blockers else planned_writes,
@@ -21048,6 +21054,20 @@ def _derived_text_capture_run(
     return {
         "ok": not blockers,
         **base_output,
+        "item_status": derived_text_capture_item_status(
+            ok=not blockers,
+            approve=True,
+            action=(
+                {
+                    "capture": "captured",
+                    "repair_append": "repair_appended",
+                    "re_materialize": "re_materialized",
+                    "skip_already_present": "skip_already_present",
+                }.get(action, action)
+                if not blockers
+                else "blocked"
+            ),
+        ),
         "reviewed_by": reviewed_by,
         "captured_at": captured_at,
         "planned_action": action,
@@ -21134,6 +21154,25 @@ def derived_text_capture_apply(
     )
 
 
+def derived_text_capture_item_status(
+    *,
+    ok: bool,
+    approve: bool,
+    planned_action: str | None = None,
+    action: str | None = None,
+) -> str:
+    if not ok:
+        return "blocked"
+    current = str(action or planned_action or "")
+    if current == "skip_already_present":
+        return "skipped"
+    if approve and current in {"captured", "repair_appended", "re_materialized"}:
+        return "written"
+    if not approve and current in {"capture", "repair_append", "re_materialize"}:
+        return "ready"
+    return current or "unknown"
+
+
 def _derived_text_capture_manifest_item_blocked(
     *,
     archive_id: str,
@@ -21146,6 +21185,7 @@ def _derived_text_capture_manifest_item_blocked(
         "ok": False,
         "dry_run": not approve,
         "lifecycle_action": "derived_text_capture_plan" if not approve else "derived_text_capture",
+        "item_status": "blocked",
         "archive_id": archive_id,
         "manifest_line": line_number,
         "item_id": item_id,
@@ -21336,10 +21376,12 @@ def _derived_text_capture_manifest_run(
             if item_result.get("ok") and derived_text_id and text_logical_key:
                 if derived_text_id in planned_derived_ids:
                     item_result["planned_action"] = "skip_already_present"
+                    item_result["item_status"] = "skipped"
                     item_result["planned_writes"] = []
                     item_result["would_change"] = []
                 elif text_logical_key in planned_text_keys and item_result.get("planned_action") == "capture":
                     item_result["planned_action"] = "repair_append"
+                    item_result["item_status"] = "ready"
                     item_result["planned_writes"] = [f"{DERIVED_TEXT_MANIFEST_RELATIVE_PATH} (+1 line)"]
                     item_result["would_change"] = list(item_result["planned_writes"])
                 if item_result.get("planned_action") in ("capture", "repair_append", "re_materialize"):

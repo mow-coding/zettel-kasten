@@ -15971,7 +15971,9 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(result["summary"]["would_capture"], 1)
             self.assertEqual(result["summary"]["would_skip"], 1)
             self.assertEqual(result["items"][0]["planned_action"], "capture")
+            self.assertEqual(result["items"][0]["item_status"], "ready")
             self.assertEqual(result["items"][1]["planned_action"], "skip_already_present")
+            self.assertEqual(result["items"][1]["item_status"], "skipped")
             self.assertNotIn(str(tmp), json.dumps(result), "batch output must not echo local text paths")
             self.assertEqual(self._inventory(archive_root), before, "manifest dry-run must not write archive files")
 
@@ -16023,6 +16025,7 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(result["summary"]["captured"], 2)
             self.assertEqual(result["summary"]["blocked"], 0)
             self.assertEqual([item["action"] for item in result["items"]], ["captured", "captured"])
+            self.assertEqual([item["item_status"] for item in result["items"]], ["written", "written"])
             derived_manifest = archive_root / archive_services.DERIVED_TEXT_MANIFEST_RELATIVE_PATH
             lines = [json.loads(line) for line in derived_manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
             self.assertEqual(len(lines), 2)
@@ -16081,6 +16084,7 @@ class ObjetCaptureTests(unittest.TestCase):
             bad_manifest.write_text("{}\n", encoding="utf-8")
             result = archive_services.derived_text_capture_manifest_dry_run(archive_root, bad_manifest)
             self.assertFalse(result["ok"], result)
+            self.assertEqual(result["items"][0]["item_status"], "blocked")
             self.assertIn("source_object_id_missing", result["blockers"])
 
     def test_derive_text_capture_blocks_missing_source_and_cli_gates(self) -> None:

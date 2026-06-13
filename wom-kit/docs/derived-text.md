@@ -69,6 +69,20 @@ Relative `text_file` paths are resolved from the JSONL manifest location. The
 archive manifest and derived-text records do not store the local source text
 file path.
 
+Batch dry-run output is itemized. The top-level `items[]` array includes one
+entry per non-empty JSONL line with `manifest_line`, `item_id`, `ok`,
+`item_status`, `planned_action`, `blockers`, and `warnings`.
+
+Read `item_status` as:
+
+- `ready`: the item is valid and would write or repair local derived-text
+  records if approved.
+- `skipped`: the item is already represented by the current batch or archive.
+- `blocked`: the item cannot proceed; inspect that item's `blockers`.
+
+The top-level `summary` counts the same item states, and top-level `blockers`
+deduplicates all item blockers so automation can fail the whole batch safely.
+
 ## What It Writes
 
 Approved capture writes:
