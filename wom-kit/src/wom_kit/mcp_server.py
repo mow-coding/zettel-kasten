@@ -270,6 +270,22 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "project_intake_decision_template",
+        "description": "Build a next-question project-intake decisions JSON template. Read-only; never fills answers, echoes previous answer values, writes decisions, captures, drafts, mints, uploads, or cleans.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "staged_folder": {"type": "string", "description": "One staged project folder for a new intake session."},
+                "receipt": {"type": "string", "description": "Archive-relative project-intake decisions receipt for a continuing session."},
+                "session_id": {"type": "string", "description": "Optional safe session id for the template."},
+                "staged_folder_ref": {"type": "string", "description": "Optional non-secret staged folder reference for the template."},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "source_intake_plan",
         "description": "Plan safe source/objet references before draft creation. Read-only metadata-only dry-run; never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, or calls provider APIs.",
         "inputSchema": {
@@ -1230,6 +1246,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_project_intake_status(arguments)
     if name == "project_intake_next_question":
         return tool_project_intake_next_question(arguments)
+    if name == "project_intake_decision_template":
+        return tool_project_intake_decision_template(arguments)
     if name == "source_intake_plan":
         return tool_source_intake_plan(arguments)
     if name == "archive_init":
@@ -1554,6 +1572,26 @@ def tool_project_intake_next_question(arguments: dict[str, Any]) -> dict[str, An
     )
     state = str(result.get("state") or ("passed" if result["ok"] else "blocked"))
     return tool_success_result(f"project_intake_next_question: {state}.", result)
+
+
+def tool_project_intake_decision_template(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("project_intake_decision_template is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    staged_folder_value = optional_string_arg(arguments, "staged_folder")
+    receipt = optional_string_arg(arguments, "receipt")
+    staged_folder = require_path_arg({"staged_folder": staged_folder_value}, "staged_folder") if staged_folder_value else None
+    result = call_service(
+        archive_services.project_intake_decision_template,
+        archive_root,
+        staged_folder=staged_folder,
+        receipt=receipt,
+        session_id=optional_string_arg(arguments, "session_id"),
+        staged_folder_ref=optional_string_arg(arguments, "staged_folder_ref"),
+        dry_run=True,
+    )
+    state = str(result.get("state") or ("passed" if result["ok"] else "blocked"))
+    return tool_success_result(f"project_intake_decision_template: {state}.", result)
 
 
 def tool_source_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:
