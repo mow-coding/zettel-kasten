@@ -182,9 +182,10 @@ check:
 archive provider-status <archive-root> --dry-run
 ```
 
-This checks `provider-bindings.yml` against local provider setup receipts. It
-does not call GitHub, create buckets, upload files, push remotes, or verify live
-provider account state.
+This CLI command, and the matching MCP `provider_setup_status` tool, check
+`provider-bindings.yml` against local provider setup receipts. They do not call
+GitHub, create buckets, upload files, push remotes, or verify live provider
+account state.
 
 ## Text Provenance
 

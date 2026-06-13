@@ -636,6 +636,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("prompt_boundary_check", tool_names)
             self.assertIn("github_repository_setup_plan", tool_names)
             self.assertIn("object_storage_setup_plan", tool_names)
+            self.assertIn("provider_setup_status", tool_names)
             self.assertIn("human_artifact_store_plan", tool_names)
             self.assertIn("project_intake_plan", tool_names)
             self.assertIn("project_intake_status", tool_names)
@@ -1502,6 +1503,123 @@ class McpServerTests(unittest.TestCase):
                             "arguments": {
                                 "archive_root": str(allowed_archive),
                                 "surface_kind": "joplin",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_provider_setup_status_tool_writes_nothing_and_respects_allowed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+
+            github_result = archive_services.approve_github_repository_setup_plan(
+                allowed_archive,
+                reviewed_by="person:mcp",
+                profile_id="profile:personal:mcp",
+                profile_slug="mcp",
+                github_owner="example-owner",
+                github_account_ref="github:account:mcp",
+                repo_name="zettel-kasten-mcp-status",
+            )
+            self.assertTrue(github_result["ok"], github_result)
+            storage_result = archive_services.approve_object_storage_setup_plan(
+                allowed_archive,
+                reviewed_by="person:mcp",
+                provider="cloudflare-r2",
+                profile_id="profile:personal:mcp",
+                profile_slug="mcp",
+                storage_account_ref="storage:account:mcp",
+                bucket_name="zettel-kasten-mcp-status-objets",
+            )
+            self.assertTrue(storage_result["ok"], storage_result)
+
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "provider_setup_status",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"])
+                self.assertTrue(structured["dry_run"])
+                self.assertEqual(structured["action"], "provider_setup_status")
+                self.assertEqual(structured["status"], "ready")
+                self.assertEqual(structured["checked_binding_count"], 2)
+                self.assertEqual(structured["would_change"], [])
+                self.assertFalse(any(structured["external_actions"].values()))
+                managed_statuses = {
+                    (item["provider"], item.get("provider_kind")): item["status"]
+                    for item in structured["providers"]
+                    if item["setup_managed"]
+                }
+                self.assertEqual(managed_statuses[("github", None)], "metadata_and_receipt_present")
+                self.assertEqual(
+                    managed_statuses[("object_storage", "cloudflare-r2")],
+                    "metadata_and_receipt_present",
+                )
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "provider_setup_status",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "provider_setup_status",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
                                 "dry_run": False,
                             },
                         },
