@@ -11407,6 +11407,22 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn("extension_histogram", result["folder_summary"])
             self.assertFalse(result["privacy_guards"]["recursive_scan"])
             self.assertFalse(result["privacy_guards"]["writes"])
+            self.assertTrue(result["privacy_guards"]["suggested_labels_only"])
+            self.assertTrue(result["privacy_guards"]["human_answers_required"])
+            self.assertIn("classification_labels", result)
+            labels = [item["label"] for item in result["classification_labels"]]
+            self.assertIn("original_source_objet", labels)
+            self.assertIn("private_sensitive_review", labels)
+            checklist_ids = [item["id"] for item in result["human_review_checklist"]]
+            self.assertEqual(checklist_ids[0], "scope.single_project")
+            self.assertIn("groups.visible_classification", checklist_ids)
+            self.assertIn("cleanup.evidence_gate", checklist_ids)
+            visible_classification = next(
+                item for item in result["human_review_checklist"] if item["id"] == "groups.visible_classification"
+            )
+            self.assertIn("allowed_labels", visible_classification)
+            self.assertIn("decision_record_template", result)
+            self.assertEqual(result["decision_record_template"]["status"], "draft_template_only")
             self.assertGreaterEqual(len(result["next_session_questions"]), 5)
             self.assertTrue(any("1 top-level file" in item for item in result["next_session_questions"]))
             self.assertTrue(any("temporary staged-folder cleanup" in item for item in result["next_session_questions"]))

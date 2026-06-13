@@ -6,7 +6,7 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
-No unreleased changes.
+- Extended `archive project-intake-plan --dry-run` with a human review checklist, classification labels, and a draft decision-record template while preserving the no-names/no-bodies privacy boundary.
 
 ## v0.3.5 - 2026-06-13
 
