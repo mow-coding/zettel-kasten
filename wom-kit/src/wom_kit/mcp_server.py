@@ -286,6 +286,23 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "project_intake_item_plan",
+        "description": "Preview the source-intake dry-run route for one human-selected project-intake item. Read-only; redacts local paths and never writes, captures, drafts, mints, uploads, or cleans.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "receipt": {"type": "string", "description": "Archive-relative project-intake decisions receipt."},
+                "local_path": {"type": "string", "description": "One local file selected by the human for item planning."},
+                "source_role": {"type": "string", "description": "Optional source role for later draft provenance."},
+                "title": {"type": "string", "description": "Optional non-secret human-reviewed title."},
+                "mime": {"type": "string", "description": "Optional MIME type."},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "receipt", "local_path"],
+        },
+    },
+    {
         "name": "source_intake_plan",
         "description": "Plan safe source/objet references before draft creation. Read-only metadata-only dry-run; never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, or calls provider APIs.",
         "inputSchema": {
@@ -1248,6 +1265,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_project_intake_next_question(arguments)
     if name == "project_intake_decision_template":
         return tool_project_intake_decision_template(arguments)
+    if name == "project_intake_item_plan":
+        return tool_project_intake_item_plan(arguments)
     if name == "source_intake_plan":
         return tool_source_intake_plan(arguments)
     if name == "archive_init":
@@ -1592,6 +1611,25 @@ def tool_project_intake_decision_template(arguments: dict[str, Any]) -> dict[str
     )
     state = str(result.get("state") or ("passed" if result["ok"] else "blocked"))
     return tool_success_result(f"project_intake_decision_template: {state}.", result)
+
+
+def tool_project_intake_item_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("project_intake_item_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    local_path = require_path_arg(arguments, "local_path")
+    result = call_service(
+        archive_services.project_intake_item_plan,
+        archive_root,
+        receipt=require_string_arg(arguments, "receipt"),
+        local_path=local_path,
+        source_role=optional_string_arg(arguments, "source_role") or archive_services.SOURCE_INTAKE_DEFAULT_ROLE,
+        title=optional_string_arg(arguments, "title"),
+        mime=optional_string_arg(arguments, "mime"),
+        dry_run=True,
+    )
+    state = str(result.get("state") or ("passed" if result["ok"] else "blocked"))
+    return tool_success_result(f"project_intake_item_plan: {state}.", result)
 
 
 def tool_source_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:
