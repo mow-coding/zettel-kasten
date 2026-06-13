@@ -40,7 +40,7 @@ Supported roles:
 
 ## Boundary
 
-`archive human-artifact-store --dry-run` writes nothing and never calls an external app. It does not start OAuth, create notes, update notes, delete notes, publish posts, attach binaries, upload files, mint zets, clean source folders, or run ZET transport.
+`archive human-artifact-store --dry-run` writes nothing and never calls an external app. MCP exposes the same read-only contract as `human_artifact_store_plan`. Neither surface starts OAuth, creates notes, updates notes, deletes notes, publishes posts, attaches binaries, uploads files, mints zets, cleans source folders, or runs ZET transport.
 
 The command returns the contract that a future adapter must satisfy before WOM-kit can safely write to a user-facing app:
 

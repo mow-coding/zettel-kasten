@@ -186,6 +186,25 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "human_artifact_store_plan",
+        "description": "Plan a user-facing human artifact surface. Read-only; never creates notes, publishes posts, uploads files, starts OAuth, calls providers, mints, or runs ZET transport.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "surface_kind": {"type": "string", "enum": sorted(archive_services.HUMAN_ARTIFACT_SURFACE_KINDS)},
+                "surface_ref": {"type": "string"},
+                "role": {
+                    "type": "string",
+                    "enum": sorted(archive_services.HUMAN_ARTIFACT_ROLES),
+                    "default": archive_services.HUMAN_ARTIFACT_DEFAULT_ROLE,
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "surface_kind"],
+        },
+    },
+    {
         "name": "source_intake_plan",
         "description": "Plan safe source/objet references before draft creation. Read-only metadata-only dry-run; never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, or calls provider APIs.",
         "inputSchema": {
@@ -1133,6 +1152,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_github_repository_setup_plan(arguments)
     if name == "object_storage_setup_plan":
         return tool_object_storage_setup_plan(arguments)
+    if name == "human_artifact_store_plan":
+        return tool_human_artifact_store_plan(arguments)
     if name == "source_intake_plan":
         return tool_source_intake_plan(arguments)
     if name == "archive_init":
@@ -1376,6 +1397,22 @@ def tool_object_storage_setup_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"object_storage_setup_plan: {state}.", result)
+
+
+def tool_human_artifact_store_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is False:
+        raise ToolError("human_artifact_store_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.human_artifact_store_plan,
+        archive_root,
+        surface_kind=require_string_arg(arguments, "surface_kind"),
+        surface_ref=optional_string_arg(arguments, "surface_ref"),
+        role=optional_string_arg(arguments, "role") or archive_services.HUMAN_ARTIFACT_DEFAULT_ROLE,
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"human_artifact_store_plan: {state}.", result)
 
 
 def tool_source_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:
