@@ -141,6 +141,12 @@ derive-text capture
 project-intake-plan
   Plan one staged project folder intake session. Dry-run only; reports top-level counts, next session questions, staging-convention status, and would_change: [] without reading file bodies, exposing child names, hashing, copying, uploading, drafting, minting, or deleting.
 
+project-intake-decisions
+  Validate and record human-reviewed project intake checklist decisions. Dry-run validates only; approved mode writes a receipt under receipts/project-intake. It does not run source intake, capture objets, create drafts, mint zets, call providers, or clean staged folders.
+
+project-intake-status
+  Review a recorded project intake decisions receipt. Dry-run only; reports checklist coverage, receipt integrity, and next safe actions without echoing answer text or authorizing automatic execution.
+
 block-header
   Preview a derived block header for one draft or canonical zet. Dry-run only; reads the zet file, derives refs/hashes/provenance/policy/receipt metadata, and writes nothing.
 
@@ -447,6 +453,10 @@ python wom-kit\cli\archive.py derive-text capture .\tmp-my-archive `
 The first implemented vocabulary is deliberately small: `derivation_kind` is one of `parser`, `ocr`, `asr`, or `llm_vision`; `review_status` is one of `unreviewed` or `human_corrected`. The command does not extract text by itself, call providers, create drafts, mint zets, or store the local source text path in the manifest.
 
 `archive project-intake-plan --dry-run` is the safe planning step before a user and AI inspect one staged project folder together. It reports only top-level counts, staging-convention status, concrete next-session questions, and `would_change: []`. It does not expose child names, read file bodies, recurse through the folder, hash, copy, upload, import, create drafts, mint, or delete the staged folder.
+
+`archive project-intake-decisions --decisions <json-file> --dry-run|--approve` is the first persistence step after that conversation. The JSON file must use `schema: wom-kit/project-intake-decisions/v0.1`, include a safe `session_id`, and contain reviewed `decisions` keyed by the checklist ids from `project-intake-plan`. Dry-run reads and validates the decision file but prints only counts, checklist ids, a decision hash, blockers, warnings, and the proposed receipt path. Approved mode also requires `--reviewed-by <actor>` and writes `receipts/project-intake/*.project-intake-decisions.json`. It records the reviewed answers as local archive evidence but still does not inspect staged file bodies, run source-intake, capture objets, derive text, create drafts, mint zets, call providers, or approve cleanup.
+
+`archive project-intake-status --receipt <receipt> --dry-run` reads one approved project-intake decision receipt and reports whether the receipt is intact, which checklist ids are answered, which ids are still missing, and what the next safe actions are. It does not echo the recorded answer values and never turns the receipt into automatic execution authority.
 
 `archive create-draft --source-intake-plan <json-file>` consumes a successful source-intake dry-run JSON file, validates that it is metadata-only and blocker-free, then merges safe `source_refs_for_draft` into draft `source_refs`. The plan file path is not stored in frontmatter, and WOM-kit does not follow local paths inside the plan.
 
