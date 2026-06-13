@@ -642,6 +642,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("project_intake_staging_guide", tool_names)
             self.assertIn("project_intake_status", tool_names)
             self.assertIn("project_intake_next_question", tool_names)
+            self.assertIn("project_intake_decision_template", tool_names)
             self.assertIn("source_intake_plan", tool_names)
             self.assertIn("create_draft_zettel", tool_names)
             self.assertIn("block_header_check", tool_names)
@@ -1752,11 +1753,38 @@ class McpServerTests(unittest.TestCase):
                 self.assertNotIn("SUPER_SECRET_BODY", first_question_dump)
                 self.assertNotIn('"answer"', first_question_dump)
 
-                status_response = self.send(
+                first_template_response = self.send(
                     process,
                     {
                         "jsonrpc": "2.0",
                         "id": 4,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "project_intake_decision_template",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "staged_folder": str(staged),
+                                "session_id": "alpha-project-20260613",
+                                "staged_folder_ref": "intake:alpha-project",
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(first_template_response["result"]["isError"])
+                first_template = first_template_response["result"]["structuredContent"]
+                self.assertTrue(first_template["ok"])
+                self.assertEqual(first_template["decision_record_template"]["session_id"], "alpha-project-20260613")
+                self.assertEqual(first_template["decision_record_template"]["decisions"][0]["checklist_id"], "scope.single_project")
+                self.assertIsNone(first_template["decision_record_template"]["decisions"][0]["answer"])
+                first_template_dump = json.dumps(first_template)
+                self.assertNotIn("private-file-name.md", first_template_dump)
+                self.assertNotIn("SUPER_SECRET_BODY", first_template_dump)
+
+                status_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 5,
                         "method": "tools/call",
                         "params": {
                             "name": "project_intake_status",
@@ -1781,7 +1809,7 @@ class McpServerTests(unittest.TestCase):
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": 5,
+                        "id": 6,
                         "method": "tools/call",
                         "params": {
                             "name": "project_intake_next_question",
@@ -1802,11 +1830,37 @@ class McpServerTests(unittest.TestCase):
                 self.assertNotIn("One project only", next_question_dump)
                 self.assertNotIn('"answer"', next_question_dump)
 
+                next_template_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 7,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "project_intake_decision_template",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "receipt": receipt_path,
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(next_template_response["result"]["isError"])
+                next_template = next_template_response["result"]["structuredContent"]
+                self.assertTrue(next_template["ok"])
+                self.assertEqual(next_template["source"]["existing_answered_checklist_ids"], ["scope.single_project"])
+                self.assertFalse(next_template["source"]["previous_decision_values_included"])
+                self.assertEqual(next_template["decision_record_template"]["decisions"][0]["checklist_id"], "staging.location")
+                self.assertIsNone(next_template["decision_record_template"]["decisions"][0]["answer"])
+                next_template_dump = json.dumps(next_template)
+                self.assertNotIn("One project only", next_template_dump)
+                self.assertNotIn('"yes"', next_template_dump)
+
                 source_response = self.send(
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": 6,
+                        "id": 8,
                         "method": "tools/call",
                         "params": {
                             "name": "source_intake_plan",
@@ -1828,7 +1882,7 @@ class McpServerTests(unittest.TestCase):
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": 7,
+                        "id": 9,
                         "method": "tools/call",
                         "params": {
                             "name": "project_intake_plan",
@@ -1846,7 +1900,7 @@ class McpServerTests(unittest.TestCase):
                     process,
                     {
                         "jsonrpc": "2.0",
-                        "id": 8,
+                        "id": 10,
                         "method": "tools/call",
                         "params": {
                             "name": "project_intake_next_question",

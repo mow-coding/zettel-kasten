@@ -12238,6 +12238,115 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn("One project only", output)
             self.assertNotIn('"answer"', output)
 
+    def test_project_intake_decision_template_starts_from_staged_folder_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            staged = Path(tmp) / "archive-objets" / "intake" / "alpha-project"
+            staged.mkdir(parents=True)
+            (staged / "private-file-name.md").write_text("SUPER_SECRET_BODY", encoding="utf-8")
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "project-intake-decision-template",
+                    str(archive_root),
+                    "--staged-folder",
+                    str(staged),
+                    "--session-id",
+                    "alpha-project-20260613",
+                    "--staged-folder-ref",
+                    "intake:alpha-project",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["action"], "archive_project_intake_decision_template")
+            self.assertEqual(result["state"], "needs_first_review")
+            self.assertEqual(result["next_question"]["checklist_id"], "scope.single_project")
+            template = result["decision_record_template"]
+            self.assertEqual(template["schema"], "wom-kit/project-intake-decisions/v0.1")
+            self.assertEqual(template["session_id"], "alpha-project-20260613")
+            self.assertEqual(template["staged_folder_ref"], "intake:alpha-project")
+            self.assertEqual(template["decisions"][0]["checklist_id"], "scope.single_project")
+            self.assertIsNone(template["decisions"][0]["answer"])
+            self.assertIsNone(template["decisions"][0]["notes"])
+            self.assertFalse(result["template_policy"]["answer_values_included"])
+            self.assertFalse(result["privacy_guards"]["file_bodies_read"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("private-file-name.md", output)
+            self.assertNotIn("SUPER_SECRET_BODY", output)
+
+    def test_project_intake_decision_template_continues_from_receipt_without_echoing_previous_answers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            decisions_path = Path(tmp) / "decisions.json"
+            decisions_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/project-intake-decisions/v0.1",
+                        "session_id": "alpha-project-20260613",
+                        "decisions": [
+                            {
+                                "checklist_id": "scope.single_project",
+                                "answer": "yes",
+                                "notes": "One project only.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            approve_code, approve_output = self.run_cli(
+                [
+                    "project-intake-decisions",
+                    str(archive_root),
+                    "--decisions",
+                    str(decisions_path),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            receipt_path = json.loads(approve_output)["receipt_path"]
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "project-intake-decision-template",
+                    str(archive_root),
+                    "--receipt",
+                    receipt_path,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["state"], "needs_more_review")
+            self.assertEqual(result["source"]["existing_answered_checklist_ids"], ["scope.single_project"])
+            self.assertFalse(result["source"]["previous_decision_values_included"])
+            self.assertEqual(result["decision_record_template"]["session_id"], "alpha-project-20260613")
+            self.assertEqual(result["decision_record_template"]["decisions"][0]["checklist_id"], "staging.location")
+            self.assertIsNone(result["decision_record_template"]["decisions"][0]["answer"])
+            self.assertFalse(result["template_policy"]["previous_answer_values_included"])
+            self.assertNotIn("One project only", output)
+            self.assertNotIn('"yes"', output)
+
     def test_project_intake_next_question_requires_dry_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "archive"

@@ -14,6 +14,10 @@ This project uses semantic versioning for public compatibility checkpoints.
   `project_intake_next_question` so AI-assisted intake can ask one
   human-review question at a time without echoing decision values, writing
   decisions, capturing, drafting, minting, uploading, or cleaning.
+- Added read-only CLI `archive project-intake-decision-template --dry-run` and
+  MCP `project_intake_decision_template` to produce the next answer's decision
+  JSON shape without filling answer values, echoing previous answers, approving
+  receipts, or writing files.
 
 ## v0.3.7 - 2026-06-13
 

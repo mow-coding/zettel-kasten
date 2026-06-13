@@ -41,9 +41,11 @@ project-intake-staging-guide
 -> create the staged folder manually
 project-intake-plan
 -> project-intake-next-question
+-> project-intake-decision-template
 -> project-intake-decisions
 -> project-intake-status
 -> project-intake-next-question
+-> project-intake-decision-template
 -> source-intake --project-intake-receipt
 -> objet-capture --project-intake-receipt
 -> derive-text capture when external text already exists
@@ -124,6 +126,7 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Staging guide | `archive project-intake-staging-guide --dry-run` / MCP `project_intake_staging_guide` | Shows the recommended local objet-store staging path for one project slug. It creates no folders and moves no files. |
 | Session planning | `archive project-intake-plan --dry-run` / MCP `project_intake_plan` | Plans one staged project folder session with top-level counts, human review checklist, suggested classification labels, and no writes. |
 | Next question | `archive project-intake-next-question --dry-run` / MCP `project_intake_next_question` | Returns exactly one next human-review question for a new staged folder or continuing receipt. It includes placeholders only, does not echo decision values, and writes nothing. |
+| Decision template | `archive project-intake-decision-template --dry-run` / MCP `project_intake_decision_template` | Builds the JSON shape for the next human-reviewed answer. It leaves `answer` empty, does not echo previous answers, and writes nothing. |
 | Decision recording | `archive project-intake-decisions --dry-run|--approve` | Validates a user-reviewed checklist JSON file; approved mode writes a local receipt under `receipts/project-intake/` without running capture, drafting, minting, provider calls, or cleanup. |
 | Decision status | `archive project-intake-status --dry-run` / MCP `project_intake_status` | Reviews one approved decisions receipt for checklist coverage and integrity, and returns `next_review_prompts` for missing checklist ids without echoing answer text or authorizing automatic execution. |
 | Artifact hygiene | `wom-kit/tools/check_artifact_hygiene.py` | Report-only artifact classification and generated `.gitignore` checks; never cleans files. |
@@ -136,8 +139,9 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Index | `archive index` / `archive search` | Generated SQLite index; rebuildable local search. |
 
 These primitives now include a dry-run staging guide, a session planner with
-human review prompts, a one-question-at-a-time prompt surface, a receipt writer
-for reviewed answers, a read-only receipt status check, an optional
+human review prompts, a one-question-at-a-time prompt surface, a next-answer
+decision JSON template, a receipt writer for reviewed answers, a read-only
+receipt status check, an optional
 source-intake session-context link, missing-question prompts for the next human
 review turn, and draft/mint metadata preservation for that receipt evidence.
 They still do not form a full human-guided intake/capture/draft/mint/cleanup

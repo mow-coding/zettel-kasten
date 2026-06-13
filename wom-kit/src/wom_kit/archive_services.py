@@ -16926,6 +16926,117 @@ def project_intake_next_question_safe_actions(state: str) -> list[str]:
     ]
 
 
+def project_intake_decision_template(
+    archive_root: Path | str,
+    *,
+    staged_folder: Path | str | None = None,
+    receipt: str | None = None,
+    session_id: str | None = None,
+    staged_folder_ref: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    if not dry_run:
+        raise ArchiveServiceError("project-intake-decision-template is dry-run only.")
+    resolved_session_id = safe_project_intake_session_id(session_id) if session_id else None
+    if session_id and resolved_session_id is None:
+        raise ArchiveServiceError("session_id must be a safe project intake session id.")
+    safe_staged_folder_ref = None
+    if staged_folder_ref is not None:
+        blockers: list[str] = []
+        safe_staged_folder_ref = validate_project_intake_safe_value(
+            staged_folder_ref,
+            blockers,
+            "$.staged_folder_ref",
+        )
+        if blockers:
+            raise ArchiveServiceError("; ".join(blockers))
+
+    next_question = project_intake_next_question(
+        archive_root,
+        staged_folder=staged_folder,
+        receipt=receipt,
+        dry_run=True,
+    )
+    selected = next_question.get("next_question") if isinstance(next_question.get("next_question"), dict) else None
+    if selected is None:
+        decision_record = None
+        single_decision = None
+    else:
+        single_decision = {
+            "checklist_id": selected["checklist_id"],
+            "answer": None,
+            "notes": None,
+        }
+        decision_record = {
+            "schema": PROJECT_INTAKE_DECISION_SCHEMA,
+            "session_id": resolved_session_id or next_question.get("session_id") or "<safe-session-id>",
+            "staged_folder_ref": safe_staged_folder_ref or "<optional human-reviewed non-secret reference>",
+            "decisions": [single_decision],
+        }
+
+    source = next_question.get("source") if isinstance(next_question.get("source"), dict) else {}
+    answered_ids: list[str] = []
+    coverage = source.get("checklist_coverage") if isinstance(source.get("checklist_coverage"), dict) else {}
+    if isinstance(coverage.get("answered_checklist_ids"), list):
+        answered_ids = [str(item) for item in coverage["answered_checklist_ids"] if isinstance(item, str)]
+
+    return {
+        "ok": next_question["ok"],
+        "dry_run": True,
+        "action": "archive_project_intake_decision_template",
+        "archive_id": next_question["archive_id"],
+        "state": next_question["state"],
+        "session_id": resolved_session_id or next_question.get("session_id"),
+        "source": {
+            "kind": source.get("kind"),
+            "receipt_path": source.get("receipt_path"),
+            "existing_answered_checklist_ids": answered_ids,
+            "previous_decision_values_included": False,
+        },
+        "next_question": selected,
+        "decision_record_template": decision_record,
+        "single_decision_template": single_decision,
+        "template_policy": {
+            "human_must_fill_answer": True,
+            "answer_values_included": False,
+            "previous_answer_values_included": False,
+            "template_is_not_approval": True,
+            "writes": False,
+        },
+        "privacy_guards": {
+            "decision_values_included": False,
+            "previous_decision_values_included": False,
+            "entry_names_included": False,
+            "file_bodies_read": False,
+            "provider_calls": False,
+            "writes": False,
+        },
+        "blockers": next_question.get("blockers") or [],
+        "warnings": next_question.get("warnings") or [],
+        "next_safe_actions": project_intake_decision_template_safe_actions(bool(receipt), selected is None),
+        "would_change": [],
+    }
+
+
+def project_intake_decision_template_safe_actions(from_receipt: bool, complete: bool) -> list[str]:
+    if complete:
+        return [
+            "No missing project-intake review question remains in this template context.",
+            "Run project-intake-status --dry-run before continuing to source-intake or capture.",
+        ]
+    actions = [
+        "Ask the user the next_question.ask_user text.",
+        "Fill decision_record_template.decisions[0].answer only with the human-reviewed response.",
+        "Run project-intake-decisions --dry-run against the completed JSON before approval.",
+    ]
+    if from_receipt:
+        actions.insert(
+            2,
+            "If continuing from an earlier receipt, keep previous human-reviewed decisions in your working decision file; this template does not echo previous answer values.",
+        )
+    return actions
+
+
 def safe_project_intake_actor_id(value: str | None) -> str | None:
     if value is None:
         return None
