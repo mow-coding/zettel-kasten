@@ -1306,6 +1306,124 @@ def safe_optional_source_intake_plan_scalar(
     return text
 
 
+def prepare_project_intake_context_for_draft(context: Any, blockers: list[str]) -> dict[str, Any] | None:
+    if context is None:
+        return None
+    if not isinstance(context, dict):
+        blockers.append("source_intake_plan.project_intake_context must be an object when present.")
+        return None
+    if context.get("provided") is not True:
+        return None
+    context_blocker_start = len(blockers)
+    if context.get("ok") is not True:
+        blockers.append("source_intake_plan.project_intake_context.ok must be true.")
+    if context.get("decision_values_included") is not False:
+        blockers.append("source_intake_plan.project_intake_context.decision_values_included must be false.")
+    if context.get("automatic_execution_authorized") is not False:
+        blockers.append("source_intake_plan.project_intake_context.automatic_execution_authorized must be false.")
+
+    raw_receipt_path = str(context.get("receipt_path") or "").strip()
+    receipt_path: str | None = None
+    try:
+        receipt_path = normalize_archive_relative_path(raw_receipt_path)
+    except ArchivePathError:
+        blockers.append("source_intake_plan.project_intake_context.receipt_path must be an archive-relative project-intake receipt path.")
+    if receipt_path and (
+        not receipt_path.startswith(f"{PROJECT_INTAKE_DECISION_RECEIPTS_DIR}/")
+        or not receipt_path.endswith(".project-intake-decisions.json")
+    ):
+        blockers.append("source_intake_plan.project_intake_context.receipt_path must point under receipts/project-intake/.")
+
+    session_id = safe_project_intake_session_id(context.get("session_id"))
+    if session_id is None:
+        blockers.append("source_intake_plan.project_intake_context.session_id must be a safe session id.")
+    raw_reviewed_by = context.get("reviewed_by")
+    reviewed_by = safe_project_intake_actor_id(raw_reviewed_by if isinstance(raw_reviewed_by, str) else None)
+    if reviewed_by is None:
+        blockers.append("source_intake_plan.project_intake_context.reviewed_by must be a safe actor id.")
+    reviewed_at = str(context.get("reviewed_at") or "").strip()
+    if not reviewed_at or not safe_source_intake_plan_scalar(reviewed_at):
+        blockers.append("source_intake_plan.project_intake_context.reviewed_at must be a safe timestamp string.")
+        reviewed_at = ""
+    decision_sha256 = str(context.get("decision_sha256") or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", decision_sha256):
+        blockers.append("source_intake_plan.project_intake_context.decision_sha256 must be a sha256 hex digest.")
+
+    coverage = context.get("checklist_coverage")
+    if not isinstance(coverage, dict):
+        blockers.append("source_intake_plan.project_intake_context.checklist_coverage must be an object.")
+        coverage = {}
+    answered_count = coverage.get("answered_count")
+    required_count = coverage.get("required_count")
+    complete = coverage.get("complete")
+    if isinstance(answered_count, bool) or not isinstance(answered_count, int) or answered_count < 0:
+        blockers.append("source_intake_plan.project_intake_context.checklist_coverage.answered_count must be a non-negative integer.")
+        answered_count = 0
+    if isinstance(required_count, bool) or not isinstance(required_count, int) or required_count < 0:
+        blockers.append("source_intake_plan.project_intake_context.checklist_coverage.required_count must be a non-negative integer.")
+        required_count = 0
+    if not isinstance(complete, bool):
+        blockers.append("source_intake_plan.project_intake_context.checklist_coverage.complete must be a boolean.")
+        complete = False
+
+    def safe_checklist_ids(key: str) -> list[str]:
+        values = coverage.get(key)
+        if not isinstance(values, list):
+            blockers.append(f"source_intake_plan.project_intake_context.checklist_coverage.{key} must be a list.")
+            return []
+        result: list[str] = []
+        for index, value in enumerate(values):
+            text = str(value).strip()
+            if not text:
+                continue
+            if not safe_source_intake_plan_scalar(text):
+                blockers.append(
+                    f"source_intake_plan.project_intake_context.checklist_coverage.{key}[{index}] is unsafe."
+                )
+                continue
+            result.append(text)
+        return result
+
+    readiness = context.get("readiness")
+    if not isinstance(readiness, dict):
+        blockers.append("source_intake_plan.project_intake_context.readiness must be an object.")
+        readiness = {}
+    readiness_status = str(readiness.get("status") or "").strip()
+    if not readiness_status or not safe_source_intake_plan_scalar(readiness_status):
+        blockers.append("source_intake_plan.project_intake_context.readiness.status must be safe.")
+        readiness_status = "unknown"
+    if readiness.get("ready_for_automatic_execution") is not False:
+        blockers.append("source_intake_plan.project_intake_context.readiness.ready_for_automatic_execution must be false.")
+
+    answered_checklist_ids = safe_checklist_ids("answered_checklist_ids")
+    missing_checklist_ids = safe_checklist_ids("missing_checklist_ids")
+
+    if len(blockers) > context_blocker_start:
+        return None
+    return {
+        "provided": True,
+        "ok": True,
+        "receipt_path": receipt_path,
+        "session_id": session_id,
+        "reviewed_by": reviewed_by,
+        "reviewed_at": reviewed_at,
+        "decision_sha256": decision_sha256,
+        "checklist_coverage": {
+            "answered_count": answered_count,
+            "required_count": required_count,
+            "answered_checklist_ids": answered_checklist_ids,
+            "missing_checklist_ids": missing_checklist_ids,
+            "complete": complete,
+        },
+        "readiness": {
+            "status": readiness_status,
+            "ready_for_automatic_execution": False,
+        },
+        "decision_values_included": False,
+        "automatic_execution_authorized": False,
+    }
+
+
 def validate_source_intake_plan_refs(refs: list[dict[str, Any]], blockers: list[str]) -> None:
     for index, ref in enumerate(refs):
         for key in ["type", "value", "role"]:
@@ -1401,6 +1519,10 @@ def prepare_source_intake_plan_for_draft(
     input_kind = safe_optional_source_intake_plan_scalar(plan, "input_kind", plan_blockers)
     source_kind = safe_optional_source_intake_plan_scalar(plan, "source_kind", plan_blockers)
     objet_status = safe_optional_source_intake_plan_scalar(plan, "objet_status", plan_blockers)
+    project_intake_context = prepare_project_intake_context_for_draft(
+        plan.get("project_intake_context"),
+        plan_blockers,
+    )
 
     if plan_blockers:
         blockers.extend(plan_blockers)
@@ -1411,7 +1533,7 @@ def prepare_source_intake_plan_for_draft(
     derived_from = anonymize_source_intake_candidate_derived_from(derived_from, plan_sha256)
     object_storage = plan.get("object_storage_context") if isinstance(plan.get("object_storage_context"), dict) else {}
     prepared["source_refs"] = refs
-    prepared["source_intake"] = drop_none_values(
+    source_intake_doc = drop_none_values(
         {
             "plan_sha256": plan_sha256,
             "input_kind": input_kind,
@@ -1421,6 +1543,9 @@ def prepare_source_intake_plan_for_draft(
             "content_access": {key: content_access[key] for key in SOURCE_INTAKE_CONTENT_ACCESS_EXPECTATIONS},
         }
     )
+    if project_intake_context:
+        source_intake_doc["project_intake_context"] = project_intake_context
+    prepared["source_intake"] = source_intake_doc
     prepared["derived_from"] = derived_from
     prepared["profile_id"] = profile_id
     return prepared

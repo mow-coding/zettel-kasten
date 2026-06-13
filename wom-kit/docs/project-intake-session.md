@@ -114,15 +114,16 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Per-item intake | `archive source-intake --dry-run` | Classifies exactly one locator; reads no bodies and writes nothing. Optional `--project-intake-receipt` validates a decisions receipt as session context only. |
 | Local objet capture | `archive objet-capture --dry-run|--approve` | Captures explicitly approved staged originals into the local content-addressed store for sandbox-marked archives; optional `--project-intake-receipt` or `project_intake_receipt_path` validates a decisions receipt before staged bytes are read; never deletes staged originals. |
 | Derived text capture | `archive derive-text capture --dry-run|--approve` | Registers already extracted UTF-8 text for an existing `object_id`; single-file and JSONL batch input are supported. |
-| Drafting | `archive create-draft --dry-run` | Previews an inbox draft; approved write is separate from minting. |
+| Drafting | `archive create-draft --dry-run` | Previews an inbox draft; can preserve validated source-intake `project_intake_context` as receipt evidence; approved write is separate from minting. |
 | Minting | `archive mint-zet --dry-run` / `--approve` | Mints only after explicit approval and writes receipts/snapshots. |
 | Cleanup verification | `archive staged-cleanup-check --dry-run` | Reports whether staged files are preserved, deferred, or unsafe to remove; never deletes. |
 | Index | `archive index` / `archive search` | Generated SQLite index; rebuildable local search. |
 
 These primitives now include a dry-run session planner with human review prompts,
-a receipt writer for reviewed answers, a read-only receipt status check, and an
-optional source-intake session-context link. They still do not form a full
-human-guided intake/capture/draft/mint/cleanup workflow.
+a receipt writer for reviewed answers, a read-only receipt status check, an
+optional source-intake session-context link, and draft/mint metadata preservation
+for that receipt evidence. They still do not form a full human-guided
+intake/capture/draft/mint/cleanup workflow.
 
 ## 5. Planned Surfaces
 

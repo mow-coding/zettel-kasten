@@ -180,6 +180,33 @@ class ArchiveCliTests(unittest.TestCase):
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
         return root
 
+    def project_intake_receipt(self, tmp: str, archive_root: Path) -> str:
+        decisions_path = Path(tmp) / "project-intake-decisions.json"
+        decisions_path.write_text(
+            json.dumps(
+                {
+                    "schema": "wom-kit/project-intake-decisions/v0.1",
+                    "session_id": "alpha-project-20260613",
+                    "decisions": [
+                        {
+                            "checklist_id": "scope.single_project",
+                            "answer": "yes",
+                            "notes": "One project only.",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = archive_services.project_intake_decisions(
+            archive_root,
+            decisions_path,
+            approve=True,
+            reviewed_by="person:test",
+        )
+        self.assertTrue(result["ok"], result)
+        return str(result["receipt_path"])
+
     def archive_tree_snapshot(self, archive_root: Path) -> list[tuple[str, str, str]]:
         snapshot: list[tuple[str, str, str]] = []
         for path in sorted(archive_root.rglob("*"), key=lambda item: item.relative_to(archive_root).as_posix()):
@@ -2280,6 +2307,163 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(frontmatter["source_intake"]["plan_sha256"].startswith("sha256:"))
             self.assertEqual(frontmatter["source_intake"]["content_access"]["metadata_only"], True)
             self.assertEqual(result["target_archive"]["profile_id"], "profile:personal:test")
+
+    def test_create_draft_preserves_project_intake_context_from_source_intake_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            object_id = "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            receipt_path = self.project_intake_receipt(tmp, archive_root)
+            plan_path = Path(tmp) / "source-intake-plan.json"
+            body = "Draft text composed after a reviewed project-intake session."
+            intake_code, intake_output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--object-id",
+                    object_id,
+                    "--project-intake-receipt",
+                    receipt_path,
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(intake_code, 0, intake_output)
+            plan_path.write_text(intake_output, encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Project intake evidence draft",
+                    "--body",
+                    body,
+                    "--dry-run",
+                    "--source-intake-plan",
+                    str(plan_path),
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            context = result["frontmatter_preview"]["source_intake"]["project_intake_context"]
+            self.assertTrue(context["provided"])
+            self.assertTrue(context["ok"])
+            self.assertEqual(context["receipt_path"], receipt_path)
+            self.assertEqual(context["session_id"], "alpha-project-20260613")
+            self.assertEqual(context["reviewed_by"], "person:test")
+            self.assertEqual(context["checklist_coverage"]["answered_checklist_ids"], ["scope.single_project"])
+            self.assertFalse(context["decision_values_included"])
+            self.assertFalse(context["automatic_execution_authorized"])
+            self.assertNotIn("One project only", output)
+            self.assertNotIn('"answer"', output)
+
+            expected_hash = hashlib.sha256((body.rstrip() + "\n").encode("utf-8")).hexdigest()
+            write_code, write_output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Project intake evidence draft",
+                    "--body",
+                    body,
+                    "--source-intake-plan",
+                    str(plan_path),
+                    "--draft-id",
+                    "zet_20260613_project_intake_evidence",
+                    "--created-at",
+                    "2026-06-13T09:10:11+09:00",
+                    "--expected-body-sha256",
+                    expected_hash,
+                    "--draft-approved-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            write_result = json.loads(write_output)
+            self.assertEqual(write_code, 0, write_output)
+            draft_path = archive_root / write_result["path"]
+            text = draft_path.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            self.assertIsNotNone(match)
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            self.assertEqual(
+                frontmatter["source_intake"]["project_intake_context"]["receipt_path"],
+                receipt_path,
+            )
+
+            frontmatter["kind"] = "permanent_note"
+            frontmatter["facets"] = {"domain": "test"}
+            frontmatter["promotion"] = {
+                "stage": "promotion_candidate",
+                "ready_for_promotion": True,
+                "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
+            }
+            draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body + "\n", encoding="utf-8")
+            mint_code, mint_output = self.run_cli(
+                ["mint-zet", str(archive_root), "--path", write_result["path"], "--dry-run", "--format", "json"]
+            )
+            mint_result = json.loads(mint_output)
+            self.assertEqual(mint_code, 0, mint_output)
+            self.assertEqual(
+                mint_result["receipt_preview"]["source_intake"]["project_intake_context"]["receipt_path"],
+                receipt_path,
+            )
+
+    def test_create_draft_blocks_tampered_project_intake_context_in_source_intake_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            object_id = "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            receipt_path = self.project_intake_receipt(tmp, archive_root)
+            plan_path = Path(tmp) / "tampered-source-intake-plan.json"
+            intake_code, intake_output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--object-id",
+                    object_id,
+                    "--project-intake-receipt",
+                    receipt_path,
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(intake_code, 0, intake_output)
+            plan = json.loads(intake_output)
+            plan["project_intake_context"]["decision_values_included"] = True
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Tampered project intake evidence",
+                    "--body",
+                    "This draft should be blocked by tampered intake context.",
+                    "--dry-run",
+                    "--source-intake-plan",
+                    str(plan_path),
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(
+                any(
+                    "source_intake_plan.project_intake_context.decision_values_included" in blocker
+                    for blocker in result["blockers"]
+                )
+            )
 
     def test_create_draft_write_preserves_source_intake_plan_refs_and_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
