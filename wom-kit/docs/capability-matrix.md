@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: Unreleased after v0.3.6 project intake decision recording checkpoint
+Status: v0.3.7 project intake and human artifact planning checkpoint
 Date: 2026-06-13
-Version: working tree after v0.3.6
+Version: v0.3.7, release candidate
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 

@@ -6,6 +6,8 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.7 - 2026-06-13
+
 - Added optional `archive objet-capture --project-intake-receipt <receipt>` context validation, and matching selection-manifest support via `project_intake_receipt_path`, so reviewed project-intake decisions can gate capture planning before staged bytes are read; added a fake-archive roundtrip regression for plan -> decisions -> status -> source-intake -> objet-capture.
 - Added read-only CLI/MCP human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces, keeping raw data, human-facing artifacts, and system/AI artifacts separate without provider calls, note writes, publishing, uploads, minting, cleanup, or ZET transport.
 - Added per-item `item_status` values to derived-text batch dry-run/apply output so large JSONL captures can distinguish ready, skipped, blocked, and written rows at a glance.
