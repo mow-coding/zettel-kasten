@@ -44,6 +44,14 @@ DERIVED_TEXT_DERIVATION_KINDS = {"parser", "ocr", "asr", "llm_vision"}
 DERIVED_TEXT_REVIEW_STATUSES = {"unreviewed", "human_corrected"}
 DERIVED_TEXT_CAPTURE_RECEIPT_SCHEMA = "wom-kit/derived-text-capture-receipt/v0.1"
 DERIVED_TEXT_RECORD_SCHEMA = "wom-kit/derived-text-record/v0.1"
+DERIVED_TEXT_CAPTURE_MANIFEST_REQUIRED_FIELDS = (
+    "source_object_id",
+    "text_file",
+    "derivation_kind",
+    "tool_name",
+    "tool_version",
+    "review_status",
+)
 KIT_ROOT = Path(__file__).resolve().parents[2]
 WORKPACK_MODES = {"reference", "copy", "mount", "derive", "handover", "return"}
 ARCHIVE_SCOPES = {"personal", "relationship", "family", "child", "project", "company", "business_unit"}
@@ -20271,6 +20279,268 @@ def derived_text_capture_apply(
     )
 
 
+def _derived_text_capture_manifest_item_blocked(
+    *,
+    archive_id: str,
+    line_number: int,
+    item_id: str,
+    blockers: list[str],
+    approve: bool,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "dry_run": not approve,
+        "lifecycle_action": "derived_text_capture_plan" if not approve else "derived_text_capture",
+        "archive_id": archive_id,
+        "manifest_line": line_number,
+        "item_id": item_id,
+        "source_object_id": None,
+        "derived_text_id": None,
+        "text_logical_key": None,
+        "planned_action": "blocked",
+        "action": "blocked",
+        "blockers": unique_preserve_order(blockers),
+        "warnings": [],
+        "would_change": [],
+    }
+
+
+def _derived_text_capture_manifest_item_kwargs(
+    raw: dict[str, Any],
+    *,
+    manifest_parent: Path,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    blockers: list[str] = []
+    missing = [field for field in DERIVED_TEXT_CAPTURE_MANIFEST_REQUIRED_FIELDS if field not in raw]
+    blockers.extend(f"{field}_missing" for field in missing)
+    text_file_value = raw.get("text_file")
+    if not isinstance(text_file_value, str) or not text_file_value.strip():
+        blockers.append("text_file_invalid")
+    string_fields = ["source_object_id", "derivation_kind", "tool_name", "tool_version", "review_status"]
+    for field in string_fields:
+        value = raw.get(field)
+        if not isinstance(value, str) or not value.strip():
+            blockers.append(f"{field}_invalid")
+    for field in ["model_name", "model_version", "language"]:
+        value = raw.get(field)
+        if value is not None and not isinstance(value, str):
+            blockers.append(f"{field}_invalid")
+    confidence = raw.get("confidence")
+    if confidence is not None and (isinstance(confidence, bool) or not isinstance(confidence, (int, float))):
+        blockers.append("confidence_invalid")
+    born_digital = raw.get("born_digital", False)
+    if not isinstance(born_digital, bool):
+        blockers.append("born_digital_invalid")
+    if blockers:
+        return None, unique_preserve_order(blockers)
+
+    text_file_path = Path(text_file_value.strip())
+    if not text_file_path.is_absolute():
+        text_file_path = manifest_parent / text_file_path
+    return (
+        {
+            "text_file": text_file_path,
+            "source_object_id": raw["source_object_id"].strip(),
+            "derivation_kind": raw["derivation_kind"].strip(),
+            "tool_name": raw["tool_name"].strip(),
+            "tool_version": raw["tool_version"].strip(),
+            "review_status": raw["review_status"].strip(),
+            "model_name": raw.get("model_name"),
+            "model_version": raw.get("model_version"),
+            "confidence": confidence,
+            "language": raw.get("language"),
+            "born_digital": born_digital,
+        },
+        [],
+    )
+
+
+def _derived_text_capture_manifest_summary(items: list[dict[str, Any]], *, approve: bool) -> dict[str, int]:
+    blocked = sum(1 for item in items if item.get("blockers"))
+    if approve:
+        actions = [str(item.get("action") or item.get("planned_action") or "") for item in items]
+        return {
+            "captured": actions.count("captured"),
+            "repair_appended": actions.count("repair_appended"),
+            "re_materialized": actions.count("re_materialized"),
+            "skipped": actions.count("skip_already_present"),
+            "blocked": blocked,
+        }
+    actions = [str(item.get("planned_action") or "") for item in items]
+    return {
+        "would_capture": actions.count("capture"),
+        "would_repair_append": actions.count("repair_append"),
+        "would_re_materialize": actions.count("re_materialize"),
+        "would_skip": actions.count("skip_already_present"),
+        "blocked": blocked,
+    }
+
+
+def _derived_text_capture_manifest_run(
+    archive_root: Path | str,
+    manifest_path: Path | str,
+    *,
+    approve: bool,
+    reviewed_by: str | None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    path = Path(manifest_path)
+    try:
+        manifest_text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return {
+            "ok": False,
+            "dry_run": not approve,
+            "lifecycle_action": "derived_text_capture_batch_plan" if not approve else "derived_text_capture_batch",
+            "archive_id": archive_id,
+            "items": [],
+            "summary": _derived_text_capture_manifest_summary([], approve=approve),
+            "blockers": ["capture_manifest_not_utf8"],
+            "warnings": [],
+            "would_change": [],
+        }
+    except OSError:
+        return {
+            "ok": False,
+            "dry_run": not approve,
+            "lifecycle_action": "derived_text_capture_batch_plan" if not approve else "derived_text_capture_batch",
+            "archive_id": archive_id,
+            "items": [],
+            "summary": _derived_text_capture_manifest_summary([], approve=approve),
+            "blockers": ["capture_manifest_unreadable"],
+            "warnings": [],
+            "would_change": [],
+        }
+    if approve and (reviewed_by is None or not str(reviewed_by).strip()):
+        return {
+            "ok": False,
+            "dry_run": False,
+            "lifecycle_action": "derived_text_capture_batch",
+            "archive_id": archive_id,
+            "items": [],
+            "summary": _derived_text_capture_manifest_summary([], approve=True),
+            "blockers": ["reviewed_by_required"],
+            "warnings": [],
+            "would_change": [],
+        }
+
+    items: list[dict[str, Any]] = []
+    planned_derived_ids: set[str] = set()
+    planned_text_keys: set[str] = set()
+    for line_number, line in enumerate(manifest_text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError:
+            items.append(
+                _derived_text_capture_manifest_item_blocked(
+                    archive_id=archive_id,
+                    line_number=line_number,
+                    item_id=f"line:{line_number}",
+                    blockers=["capture_manifest_line_json_invalid"],
+                    approve=approve,
+                )
+            )
+            continue
+        if not isinstance(raw, dict):
+            items.append(
+                _derived_text_capture_manifest_item_blocked(
+                    archive_id=archive_id,
+                    line_number=line_number,
+                    item_id=f"line:{line_number}",
+                    blockers=["capture_manifest_line_not_object"],
+                    approve=approve,
+                )
+            )
+            continue
+        item_id = str(raw.get("item_id") or f"line:{line_number}")
+        kwargs, blockers = _derived_text_capture_manifest_item_kwargs(raw, manifest_parent=path.parent)
+        if blockers or kwargs is None:
+            items.append(
+                _derived_text_capture_manifest_item_blocked(
+                    archive_id=archive_id,
+                    line_number=line_number,
+                    item_id=item_id,
+                    blockers=blockers,
+                    approve=approve,
+                )
+            )
+            continue
+        if approve:
+            item_result = derived_text_capture_apply(
+                root,
+                reviewed_by=str(reviewed_by),
+                **kwargs,
+            )
+        else:
+            item_result = derived_text_capture_dry_run(root, **kwargs)
+            derived_text_id = str(item_result.get("derived_text_id") or "")
+            text_logical_key = str(item_result.get("text_logical_key") or "")
+            if item_result.get("ok") and derived_text_id and text_logical_key:
+                if derived_text_id in planned_derived_ids:
+                    item_result["planned_action"] = "skip_already_present"
+                    item_result["planned_writes"] = []
+                    item_result["would_change"] = []
+                elif text_logical_key in planned_text_keys and item_result.get("planned_action") == "capture":
+                    item_result["planned_action"] = "repair_append"
+                    item_result["planned_writes"] = [f"{DERIVED_TEXT_MANIFEST_RELATIVE_PATH} (+1 line)"]
+                    item_result["would_change"] = list(item_result["planned_writes"])
+                if item_result.get("planned_action") in ("capture", "repair_append", "re_materialize"):
+                    planned_derived_ids.add(derived_text_id)
+                    planned_text_keys.add(text_logical_key)
+        item_result["manifest_line"] = line_number
+        item_result["item_id"] = item_id
+        items.append(item_result)
+
+    run_blockers = unique_preserve_order([code for item in items for code in item.get("blockers", [])])
+    warnings = unique_preserve_order([code for item in items for code in item.get("warnings", [])])
+    if not items:
+        run_blockers.append("capture_manifest_empty")
+    would_change = unique_preserve_order(
+        [path for item in items for path in item.get("would_change", []) if isinstance(path, str)]
+    )
+    return {
+        "ok": bool(items) and not run_blockers,
+        "dry_run": not approve,
+        "lifecycle_action": "derived_text_capture_batch_plan" if not approve else "derived_text_capture_batch",
+        "archive_id": archive_id,
+        "manifest_items": len(items),
+        "items": items,
+        "summary": _derived_text_capture_manifest_summary(items, approve=approve),
+        "blockers": run_blockers,
+        "warnings": warnings,
+        "would_change": [] if run_blockers else would_change,
+    }
+
+
+def derived_text_capture_manifest_dry_run(
+    archive_root: Path | str,
+    manifest_path: Path | str,
+) -> dict[str, Any]:
+    return _derived_text_capture_manifest_run(
+        archive_root,
+        manifest_path,
+        approve=False,
+        reviewed_by=None,
+    )
+
+
+def derived_text_capture_manifest_apply(
+    archive_root: Path | str,
+    manifest_path: Path | str,
+    *,
+    reviewed_by: str,
+) -> dict[str, Any]:
+    return _derived_text_capture_manifest_run(
+        archive_root,
+        manifest_path,
+        approve=True,
+        reviewed_by=reviewed_by,
+    )
+
+
 OBJET_CAPTURE_RECEIPTS_DIR = "receipts/objet-capture"
 OBJET_CAPTURE_SELECTION_ACTION = "local_objet_capture_approved"
 OBJET_CAPTURE_RECEIPT_SCHEMA = "wom-kit/objet-capture-receipt/v0.2"
@@ -20325,8 +20595,6 @@ OBJET_CAPTURE_MAGIC_SIGNATURES = (
 def target_looks_external_live_never_touch(target: Path) -> bool:
     # Duplicated from tools/check_artifact_hygiene.py: wom_kit must never import tools/.
     parts = [part.lower() for part in target.resolve().parts]
-    if any("zettel-kasten-basoon" in part or part == "basoon" for part in parts):
-        return True
     if any(part.startswith("zettel-kasten-") for part in parts):
         return True
     if any(part.endswith("-objets") for part in parts):

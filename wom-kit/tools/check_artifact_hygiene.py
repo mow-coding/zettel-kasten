@@ -169,8 +169,6 @@ def classify_artifact(relative_path: str) -> ArtifactObservation:
 
 def target_looks_external_live_never_touch(target: Path) -> bool:
     parts = [part.lower() for part in target.resolve().parts]
-    if any("zettel-kasten-basoon" in part or part == "basoon" for part in parts):
-        return True
     if any(part.startswith("zettel-kasten-") for part in parts):
         return True
     if any(part.endswith("-objets") for part in parts):

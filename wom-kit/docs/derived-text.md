@@ -12,7 +12,7 @@ source object -> parser/OCR/ASR/vision text -> derived text record
 The source object remains the evidence object. The derived text record is a
 regenerable layer that records how the text was produced.
 
-## Command
+## Single-File Command
 
 ```powershell
 python wom-kit\cli\archive.py derive-text capture <archive-root> `
@@ -28,6 +28,47 @@ python wom-kit\cli\archive.py derive-text capture <archive-root> `
 
 Use `--approve --reviewed-by <actor>` only after reviewing the dry-run.
 
+## Batch Manifest Command
+
+For hundreds or thousands of already extracted text files, use a JSONL manifest:
+
+```powershell
+python wom-kit\cli\archive.py derive-text capture <archive-root> `
+  --from-manifest derived-text-ledger.jsonl `
+  --dry-run `
+  --format json
+```
+
+Use `--approve --reviewed-by <actor>` only after reviewing the batch dry-run.
+
+Each non-empty JSONL line is one capture item:
+
+```json
+{"source_object_id":"sha256:<64-hex>","text_file":"derived/example.txt","derivation_kind":"parser","tool_name":"python-docx","tool_version":"1.0.0","review_status":"unreviewed","language":"ko","born_digital":true}
+```
+
+Required fields:
+
+- `source_object_id`
+- `text_file`
+- `derivation_kind`
+- `tool_name`
+- `tool_version`
+- `review_status`
+
+Optional fields:
+
+- `item_id`
+- `model_name`
+- `model_version`
+- `confidence`
+- `language`
+- `born_digital`
+
+Relative `text_file` paths are resolved from the JSONL manifest location. The
+archive manifest and derived-text records do not store the local source text
+file path.
+
 ## What It Writes
 
 Approved capture writes:
@@ -40,6 +81,9 @@ receipts/derived-text-capture/<timestamp-random>.json
 
 It does not modify the original object, create drafts, mint zets, call provider
 APIs, run OCR, run ASR, run parsers, or run LLM vision.
+
+Batch mode reuses the same write path for each item. Approved batch runs may
+write item-level receipts under `receipts/derived-text-capture/`.
 
 ## Vocabulary
 

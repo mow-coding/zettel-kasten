@@ -8,6 +8,13 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 No unreleased changes.
 
+## v0.3.5 - 2026-06-13
+
+- Added `archive derive-text capture --from-manifest <jsonl>` for dry-run/approved batch registration of already extracted UTF-8 derived text.
+- Batch derived-text manifests accept one JSON object per line with `source_object_id`, `text_file`, `derivation_kind`, `tool_name`, `tool_version`, and `review_status`; relative `text_file` paths resolve from the manifest location.
+- Added `archive repair-gitignore <archive-root> --dry-run|--approve --reviewed-by <actor>` to append missing WOM-kit safe `.gitignore` patterns without rewriting existing entries.
+- Removed private dogfood archive identifiers from public guardrail code and docs, keeping generic live-archive and `*-objets` protections.
+
 ## v0.3.4 - 2026-06-13
 
 - Added `archive derive-text capture` for dry-run/approved registration of externally extracted text as provenance-aware derived text records.
@@ -65,7 +72,7 @@ Compatibility:
 - archives authored from older v0.2-draft rules should run the migration dry-run before strict v0.3 validation,
 - the objet-capture write path refuses archives without an explicit sandbox marker,
 - run `archive index` once to pick up edges and facets,
-- basoon/live archives, provider sync, staged-original deletion, MCP write tools, ZET transport, and schema redesign are not part of this release.
+- private/live archives, provider sync, staged-original deletion, MCP write tools, ZET transport, and schema redesign are not part of this release.
 
 ## v0.3.1 - 2026-06-04
 

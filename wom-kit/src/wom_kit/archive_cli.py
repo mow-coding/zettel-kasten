@@ -240,6 +240,10 @@ RECOMMENDED_GITIGNORE_PATTERNS = [
     "rclone.conf",
     "credentials.json",
     "token.json",
+    "tmp/",
+    "/collab/",
+    "/.mow-harness/",
+    "**/db/archive-index.sqlite",
     "objects/sha256/",
     "objects/derived-text/sha256/",
 ]
@@ -1494,6 +1498,35 @@ def command_validate(args: argparse.Namespace) -> int:
         print("Validation passed." if ok else "Validation failed.")
 
     return 0 if ok else 1
+
+
+def command_repair_gitignore(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("Gitignore repair requires --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("Gitignore repair requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+    try:
+        result = repair_gitignore(Path(args.archive_root), approve=args.approve, reviewed_by=args.reviewed_by)
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(f"Gitignore repair failed: {exc}", file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Gitignore repair {result.get('action')}.")
+        for pattern in result.get("missing_patterns", []):
+            print(f"MISSING: {pattern}")
+        for path in result.get("changed_paths", []):
+            print(f"CHANGED: {path}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+    return 0 if result.get("ok") else 1
 
 
 def command_migrate(args: argparse.Namespace) -> int:
@@ -3097,35 +3130,82 @@ def command_derive_text_capture(args: argparse.Namespace) -> int:
     if args.approve and not args.reviewed_by:
         print("Derived text capture requires --reviewed-by when --approve is used.", file=sys.stderr)
         return 1
+    single_fields = [
+        args.text_file,
+        args.source_object_id,
+        args.derivation_kind,
+        args.tool_name,
+        args.tool_version,
+        args.review_status,
+    ]
+    single_optional_fields = [
+        args.model_name,
+        args.model_version,
+        args.confidence,
+        args.language,
+        True if args.born_digital else None,
+    ]
+    if args.from_manifest and any(value is not None for value in single_fields + single_optional_fields):
+        print("Use --from-manifest or single-file capture arguments, not both.", file=sys.stderr)
+        return 1
+    if not args.from_manifest and any(value is None for value in single_fields):
+        print(
+            "Derived text capture requires --text-file, --source-object-id, --derivation-kind, --tool-name, --tool-version, and --review-status unless --from-manifest is used.",
+            file=sys.stderr,
+        )
+        return 1
 
-    kwargs = {
-        "text_file": Path(args.text_file),
-        "source_object_id": args.source_object_id,
-        "derivation_kind": args.derivation_kind,
-        "tool_name": args.tool_name,
-        "tool_version": args.tool_version,
-        "review_status": args.review_status,
-        "model_name": args.model_name,
-        "model_version": args.model_version,
-        "confidence": args.confidence,
-        "language": args.language,
-        "born_digital": args.born_digital,
-    }
     try:
-        if args.dry_run:
-            result = archive_services.derived_text_capture_dry_run(Path(args.archive_root), **kwargs)
+        if args.from_manifest:
+            if args.dry_run:
+                result = archive_services.derived_text_capture_manifest_dry_run(
+                    Path(args.archive_root),
+                    Path(args.from_manifest),
+                )
+            else:
+                result = archive_services.derived_text_capture_manifest_apply(
+                    Path(args.archive_root),
+                    Path(args.from_manifest),
+                    reviewed_by=args.reviewed_by,
+                )
         else:
-            result = archive_services.derived_text_capture_apply(
-                Path(args.archive_root),
-                reviewed_by=args.reviewed_by,
-                **kwargs,
-            )
+            kwargs = {
+                "text_file": Path(args.text_file),
+                "source_object_id": args.source_object_id,
+                "derivation_kind": args.derivation_kind,
+                "tool_name": args.tool_name,
+                "tool_version": args.tool_version,
+                "review_status": args.review_status,
+                "model_name": args.model_name,
+                "model_version": args.model_version,
+                "confidence": args.confidence,
+                "language": args.language,
+                "born_digital": args.born_digital,
+            }
+            if args.dry_run:
+                result = archive_services.derived_text_capture_dry_run(Path(args.archive_root), **kwargs)
+            else:
+                result = archive_services.derived_text_capture_apply(
+                    Path(args.archive_root),
+                    reviewed_by=args.reviewed_by,
+                    **kwargs,
+                )
     except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError) as exc:
         print(f"Derived text capture failed: {exc}", file=sys.stderr)
         return 1
 
     if args.format == "json":
         print_json(result)
+    elif args.from_manifest:
+        for entry in result.get("items", []):
+            state = entry.get("action") or entry.get("planned_action")
+            print(f"{entry.get('item_id') or entry.get('manifest_line')}: {state}")
+        summary = result.get("summary") or {}
+        print("Summary: " + ", ".join(f"{key}={value}" for key, value in summary.items()))
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+        for warning in result.get("warnings", []):
+            print(f"WARNING: {warning}")
     else:
         state = result.get("action") or result.get("planned_action")
         print(f"{result.get('derived_text_id') or '-'}: {state}")
@@ -4345,6 +4425,62 @@ def write_safe_gitignore(target: Path) -> None:
     )
 
 
+def gitignore_missing_patterns(gitignore: Path) -> list[str]:
+    if not gitignore.is_file():
+        return list(RECOMMENDED_GITIGNORE_PATTERNS)
+    lines = {
+        line.strip()
+        for line in gitignore.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+    return [pattern for pattern in RECOMMENDED_GITIGNORE_PATTERNS if pattern not in lines]
+
+
+def append_gitignore_patterns(gitignore: Path, missing: list[str]) -> None:
+    if not gitignore.is_file():
+        gitignore.write_text(
+            "\n".join(["# WOM-kit safe defaults", *RECOMMENDED_GITIGNORE_PATTERNS, ""]),
+            encoding="utf-8",
+        )
+        return
+    existing = gitignore.read_text(encoding="utf-8")
+    prefix = "" if not existing or existing.endswith("\n") else "\n"
+    addition = "\n".join(["", "# WOM-kit repaired safe defaults", *missing, ""])
+    gitignore.write_text(existing + prefix + addition, encoding="utf-8")
+
+
+def repair_gitignore(root: Path, *, approve: bool, reviewed_by: str | None) -> dict[str, Any]:
+    archive_root = archive_services.require_existing_archive_root(root)
+    archive_id = archive_services.read_archive_id(archive_root)
+    gitignore = archive_root / ".gitignore"
+    missing = gitignore_missing_patterns(gitignore)
+    if not gitignore.is_file() and missing:
+        action = "create_gitignore"
+    elif missing:
+        action = "append_patterns"
+    else:
+        action = "up_to_date"
+    result = {
+        "ok": True,
+        "dry_run": not approve,
+        "lifecycle_action": "repair_gitignore_plan" if not approve else "repair_gitignore",
+        "archive_id": archive_id,
+        "action": action if approve else f"would_{action}" if action != "up_to_date" else "up_to_date",
+        "missing_patterns": missing,
+        "planned_writes": [".gitignore"] if missing else [],
+        "changed_paths": [],
+        "reviewed_by": reviewed_by if approve else None,
+        "blockers": [],
+        "warnings": [],
+    }
+    if not approve or not missing:
+        return result
+    if not reviewed_by or not str(reviewed_by).strip():
+        return {**result, "ok": False, "action": "blocked", "blockers": ["reviewed_by_required"]}
+    append_gitignore_patterns(gitignore, missing)
+    return {**result, "action": action, "changed_paths": [".gitignore"]}
+
+
 def update_archive_yml(target: Path, args: argparse.Namespace) -> None:
     path = target / "archive.yml"
     data = load_yaml(path.read_text(encoding="utf-8"))
@@ -4615,6 +4751,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     validate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     validate.set_defaults(func=command_validate)
+
+    repair_gitignore = subcommands.add_parser(
+        "repair-gitignore",
+        help="Dry-run or approve adding missing WOM-kit safe .gitignore patterns.",
+    )
+    repair_gitignore.add_argument("archive_root", help="Archive root whose .gitignore should be repaired.")
+    repair_gitignore.add_argument("--dry-run", action="store_true", help="Preview missing .gitignore patterns without writing.")
+    repair_gitignore.add_argument("--approve", action="store_true", help="Append missing safe .gitignore patterns.")
+    repair_gitignore.add_argument("--reviewed-by", help="Reviewer id required with --approve.")
+    repair_gitignore.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    repair_gitignore.set_defaults(func=command_repair_gitignore)
 
     migrate = subcommands.add_parser("migrate", help="Dry-run or approve a frontmatter compatibility migration.")
     migrate.add_argument("archive_root", help="Archive root to migrate.")
@@ -5487,26 +5634,25 @@ def build_parser() -> argparse.ArgumentParser:
     derive_text_subcommands = derive_text.add_subparsers(dest="derive_text_command", required=True)
     derive_text_capture = derive_text_subcommands.add_parser(
         "capture",
-        help="Dry-run or approve registering one extracted/OCR/ASR/vision text file.",
+        help="Dry-run or approve registering extracted/OCR/ASR/vision text.",
     )
     derive_text_capture.add_argument("archive_root", help="Archive root receiving the derived text record.")
-    derive_text_capture.add_argument("--text-file", required=True, help="UTF-8 extracted text file to capture.")
-    derive_text_capture.add_argument("--source-object-id", required=True, help="Source object_id from objects/manifests/files.jsonl.")
+    derive_text_capture.add_argument("--from-manifest", help="JSONL batch manifest of derived text capture items.")
+    derive_text_capture.add_argument("--text-file", help="UTF-8 extracted text file to capture.")
+    derive_text_capture.add_argument("--source-object-id", help="Source object_id from objects/manifests/files.jsonl.")
     derive_text_capture.add_argument(
         "--derivation-kind",
-        required=True,
         choices=sorted(archive_services.DERIVED_TEXT_DERIVATION_KINDS),
         help="How this text was derived from the source object.",
     )
-    derive_text_capture.add_argument("--tool-name", required=True, help="Extractor/OCR/ASR/vision tool name.")
-    derive_text_capture.add_argument("--tool-version", required=True, help="Extractor/OCR/ASR/vision tool version.")
+    derive_text_capture.add_argument("--tool-name", help="Extractor/OCR/ASR/vision tool name.")
+    derive_text_capture.add_argument("--tool-version", help="Extractor/OCR/ASR/vision tool version.")
     derive_text_capture.add_argument("--model-name", help="Optional model name for model-dependent derivations.")
     derive_text_capture.add_argument("--model-version", help="Optional model version for model-dependent derivations.")
     derive_text_capture.add_argument("--confidence", type=float, help="Optional confidence from 0.0 to 1.0.")
     derive_text_capture.add_argument("--language", help="Optional BCP-47-ish language tag, e.g. ko or en.")
     derive_text_capture.add_argument(
         "--review-status",
-        required=True,
         choices=sorted(archive_services.DERIVED_TEXT_REVIEW_STATUSES),
         help="Review status for this derived text.",
     )

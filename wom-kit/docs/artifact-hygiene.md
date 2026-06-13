@@ -46,7 +46,7 @@ For installation today:
 | `REBUILDABLE_GENERATED` | `db/archive-index.sqlite`, future search indexes and caches | Safe to rebuild later, but do not delete silently in this batch. |
 | `DISPOSABLE_AFTER_REVIEW` | `tmp/`, `tmp-*`, dry-run sandboxes, abandoned staging folders, expired workpacks after review | Disposable only after explicit review gates. |
 | `LOCAL_ONLY_SECRET_CONFIG` | `.env`, `.env.*`, keys, tokens, `profiles/local/`, `keyrings/local/`, `.archive-local/`, `rclone.conf`, credentials | Must stay local and ignored by git. Never publish. |
-| `EXTERNAL_LIVE_NEVER_TOUCH` | a real basoon dogfood archive, any real user archive, any real local `-objets` store | Never read or mutate by default. Require explicit operator approval. |
+| `EXTERNAL_LIVE_NEVER_TOUCH` | private dogfood archives, any real user archive, any real local `-objets` store | Never read or mutate by default. Require explicit operator approval. |
 | `EXTERNAL_MANUAL_OR_DEFERRED` | GitHub repositories, R2/B2/S3 buckets, Neon/Postgres, provider permissions, remote object storage state | Manual or future provider flow. No automatic provider changes. |
 | `LOCAL_ONLY_COLLAB_HARNESS` | `collab/`, `.mow-harness/` | Useful operation state, but not WOM archive records. Keep local-only. |
 
@@ -109,6 +109,17 @@ tmp/
 
 The checker validates these patterns on throwaway or explicitly approved archive
 targets. It does not change `.gitignore` by itself.
+
+Use the approval-gated repair command to append missing safe defaults while
+preserving existing entries:
+
+```powershell
+python wom-kit\cli\archive.py repair-gitignore <archive-root> --dry-run --format json
+python wom-kit\cli\archive.py repair-gitignore <archive-root> --approve --reviewed-by person:me --format json
+```
+
+`repair-gitignore` does not delete existing `.gitignore` lines, inspect source
+file bodies, clean files, upload, sync, or call provider APIs.
 
 ## 5. Future Cleanup Guidance
 
