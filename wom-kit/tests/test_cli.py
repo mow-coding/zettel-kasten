@@ -1413,6 +1413,65 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(result["provider_setup_receipt_preview"]["external_actions"]["files_uploaded"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
+    def test_human_artifact_store_joplin_plan_is_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "human-artifact-store",
+                    str(archive_root),
+                    "--dry-run",
+                    "--surface-kind",
+                    "joplin",
+                    "--surface-ref",
+                    "joplin:notebook:work",
+                    "--role",
+                    "working_note_store",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "human_artifact_store_plan")
+            self.assertEqual(result["surface"]["surface_kind"], "joplin")
+            self.assertEqual(result["surface"]["role"], "working_note_store")
+            self.assertEqual(result["adapter_contract"]["typical_role"], "working_note_store")
+            self.assertIn("system_ai_artifact_store", result["three_store_model"])
+            self.assertFalse(result["external_actions"]["provider_api_called"])
+            self.assertFalse(result["external_actions"]["note_created"])
+            self.assertFalse(result["external_actions"]["note_updated"])
+            self.assertFalse(result["external_actions"]["post_published"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+    def test_human_artifact_store_blocks_unsafe_surface_ref(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+
+        code, output = self.run_cli(
+            [
+                "human-artifact-store",
+                str(archive_root),
+                "--dry-run",
+                "--surface-kind",
+                "notion",
+                "--surface-ref",
+                "https://example.com/private",
+                "--format",
+                "json",
+            ]
+        )
+
+        result = json.loads(output)
+        self.assertEqual(code, 1, output)
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("surface_ref" in blocker for blocker in result["blockers"]))
+
     def test_object_storage_invalid_provider_bucket_slug_and_secret_refs_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
