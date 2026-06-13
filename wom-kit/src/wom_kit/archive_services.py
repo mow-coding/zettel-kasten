@@ -15727,10 +15727,15 @@ def project_intake_plan(archive_root: Path | str, staged_folder: Path | str) -> 
             "file_bodies_read": False,
             "content_hashes_calculated": False,
             "extension_histogram_included": False,
+            "suggested_labels_only": True,
+            "human_answers_required": True,
             "provider_calls": False,
             "writes": False,
         },
         "session_plan": project_intake_session_plan(),
+        "classification_labels": project_intake_classification_labels(),
+        "human_review_checklist": project_intake_human_review_checklist(folder_summary, staging_convention),
+        "decision_record_template": project_intake_decision_record_template(),
         "next_session_questions": project_intake_next_session_questions(folder_summary, staging_convention),
         "next_safe_actions": project_intake_next_safe_actions(staging_convention),
         "blockers": [],
@@ -15810,6 +15815,122 @@ def project_intake_session_plan() -> list[dict[str, Any]]:
             "writes": False,
         },
     ]
+
+
+def project_intake_classification_labels() -> list[dict[str, str]]:
+    return [
+        {
+            "label": "original_source_objet",
+            "meaning": "An original source file that should be preserved before it is cited, summarized, or drafted from.",
+        },
+        {
+            "label": "working_note",
+            "meaning": "Human working text that may become an inbox draft or evidence for a later zet after review.",
+        },
+        {
+            "label": "generated_output",
+            "meaning": "A build/export/cache/output artifact that may be rebuildable or lower-authority than the source.",
+        },
+        {
+            "label": "private_sensitive_review",
+            "meaning": "A private or sensitive item that needs explicit handling before any citation or draft.",
+        },
+        {
+            "label": "defer",
+            "meaning": "An item intentionally left for a later intake session.",
+        },
+        {
+            "label": "ignore_noise",
+            "meaning": "An item that appears irrelevant or disposable, subject to later cleanup verification.",
+        },
+    ]
+
+
+def project_intake_human_review_checklist(
+    folder_summary: dict[str, Any],
+    staging_convention: dict[str, Any],
+) -> list[dict[str, Any]]:
+    count_sentence = (
+        f"{folder_summary['top_level_file_count']} top-level file(s), "
+        f"{folder_summary['top_level_dir_count']} top-level folder(s), "
+        f"{folder_summary['top_level_other_count']} other top-level item(s)"
+    )
+    staging_prompt = (
+        "This folder follows the recommended intake staging shape. Continue here?"
+        if staging_convention["follows_staging_convention"]
+        else "This folder is outside the recommended intake staging shape. Restage first, or continue with explicit review?"
+    )
+    return [
+        {
+            "id": "scope.single_project",
+            "question": "Is this staged folder exactly one project or life/work bundle for this intake session?",
+            "answer_type": "yes_no_or_split",
+            "required_before": ["source-intake", "objet-capture", "create-draft", "mint-zet"],
+            "writes": False,
+        },
+        {
+            "id": "staging.location",
+            "question": staging_prompt,
+            "answer_type": "continue_restage_or_defer",
+            "required_before": ["objet-capture", "staged-cleanup-check"],
+            "writes": False,
+        },
+        {
+            "id": "groups.visible_classification",
+            "question": f"The folder contains {count_sentence}. Which visible groups should be labeled as originals, working notes, generated outputs, sensitive review items, deferred items, or noise?",
+            "answer_type": "classification_labels",
+            "allowed_labels": [item["label"] for item in project_intake_classification_labels()],
+            "required_before": ["objet-capture", "create-draft"],
+            "writes": False,
+        },
+        {
+            "id": "privacy.sensitive_items",
+            "question": "Which areas must stay private, be redacted, or be reviewed before they appear in any zet or derived text?",
+            "answer_type": "freeform_review_notes",
+            "required_before": ["create-draft", "mint-zet"],
+            "writes": False,
+        },
+        {
+            "id": "preservation.originals",
+            "question": "Which originals must be preserved as objets before any drafting or cleanup?",
+            "answer_type": "selected_items_or_groups",
+            "required_before": ["create-draft", "staged-cleanup-check"],
+            "writes": False,
+        },
+        {
+            "id": "drafting.zet_candidates",
+            "question": "Which reviewed materials should become inbox drafts, and which should remain source-only?",
+            "answer_type": "draft_defer_or_source_only",
+            "required_before": ["create-draft", "mint-zet"],
+            "writes": False,
+        },
+        {
+            "id": "cleanup.evidence_gate",
+            "question": "What evidence must exist before this temporary staged folder can be considered safe for later cleanup?",
+            "answer_type": "evidence_checklist",
+            "required_before": ["manual-cleanup"],
+            "writes": False,
+        },
+    ]
+
+
+def project_intake_decision_record_template() -> dict[str, Any]:
+    return {
+        "schema": "wom-kit/project-intake-decisions/v0.1",
+        "status": "draft_template_only",
+        "path_policy": "do_not_store_private_absolute_paths",
+        "item_name_policy": "record only after human review",
+        "decisions": [
+            {
+                "checklist_id": "scope.single_project",
+                "answer": None,
+                "reviewed_by": None,
+                "reviewed_at": None,
+                "notes": None,
+            }
+        ],
+        "writes": False,
+    }
 
 
 def project_intake_next_session_questions(

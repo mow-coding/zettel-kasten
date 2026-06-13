@@ -90,7 +90,7 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Upgrade safety | `archive upgrade-check --dry-run` | Reports upgrade-readiness signals; writes nothing and is not a migration engine. |
 | Source registration | `archive add-source` | Can write source binding metadata only after approval. |
 | Source scan | `archive scan-source` | Metadata-first; approved mode writes source maps and receipts. |
-| Session planning | `archive project-intake-plan --dry-run` | Plans one staged project folder session; counts only; writes nothing. |
+| Session planning | `archive project-intake-plan --dry-run` | Plans one staged project folder session with top-level counts, human review checklist, suggested classification labels, and no writes. |
 | Artifact hygiene | `wom-kit/tools/check_artifact_hygiene.py` | Report-only artifact classification and generated `.gitignore` checks; never cleans files. |
 | Per-item intake | `archive source-intake --dry-run` | Classifies exactly one locator; reads no bodies and writes nothing. |
 | Local objet capture | `archive objet-capture --dry-run|--approve` | Captures explicitly approved staged originals into the local content-addressed store for sandbox-marked archives; never deletes staged originals. |
@@ -100,15 +100,16 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Cleanup verification | `archive staged-cleanup-check --dry-run` | Reports whether staged files are preserved, deferred, or unsafe to remove; never deletes. |
 | Index | `archive index` / `archive search` | Generated SQLite index; rebuildable local search. |
 
-These primitives now include a first dry-run session planner, but they still do
-not form a full human-guided intake/capture/draft/mint/cleanup workflow.
+These primitives now include a dry-run session planner with human review prompts,
+but they still do not form a full human-guided intake/capture/draft/mint/cleanup
+workflow.
 
 ## 5. Planned Surfaces
 
 These surfaces are planned, not currently available:
 
 - an approved project intake session executor after the planner,
-- a conversational intake checklist that asks the user how to classify each important item,
+- a persisted conversational intake checklist that carries the user's reviewed answers forward,
 - a joined executor that carries reviewed choices across source-intake, objet capture, derived text capture, draft creation, minting, and cleanup verification,
 - automatic remote object-storage upload.
 

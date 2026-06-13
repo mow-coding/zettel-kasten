@@ -3803,6 +3803,9 @@ def print_project_intake_plan_result(result: dict[str, Any], output_format: str)
         print("Warnings:")
         for warning in result["warnings"]:
             print(f"- {warning}")
+    print("Human review checklist:")
+    for item in result.get("human_review_checklist", []):
+        print(f"- {item.get('id')}: {item.get('question')}")
     print("Next session questions:")
     for question in result["next_session_questions"]:
         print(f"- {question}")
