@@ -41,6 +41,7 @@ Supporting philosophy and model docs:
 - [Zettel-Kasten Layer](../specs/zettel-kasten.md)
 - [Source Object Storage Policy](source-object-storage-policy.md)
 - [Text Provenance Hierarchy](text-provenance-hierarchy.md)
+- [Derived Text Capture](derived-text.md)
 
 These documents cover:
 
@@ -149,6 +150,7 @@ Onboarding and setup plans:
 - [One-Command Setup](one-command-setup.md)
 - [New User Flow](new-user-flow.md)
 - [External Imports](external-imports.md)
+- [Derived Text Capture](derived-text.md)
 
 The current implementation priority is:
 

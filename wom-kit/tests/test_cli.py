@@ -9545,6 +9545,8 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("/.mow-harness/", gitignore)
             self.assertNotIn("/AGENTS.md", gitignore)
             self.assertIn("**/db/archive-index.sqlite", gitignore)
+            self.assertIn("objects/sha256/", gitignore)
+            self.assertIn("objects/derived-text/sha256/", gitignore)
 
     def test_init_writes_archive_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -15050,6 +15052,8 @@ class ObjetCaptureTests(unittest.TestCase):
             digest = hashlib.sha256(b"x").hexdigest()
             observation = module.classify_artifact(f"objects/sha256/{digest[:2]}/{digest}")
             self.assertEqual(observation.category, module.DURABLE_ARCHIVE_RECORD)
+            derived = module.classify_artifact(f"objects/derived-text/sha256/{digest[:2]}/{digest}.txt")
+            self.assertEqual(derived.category, module.DURABLE_ARCHIVE_RECORD)
         finally:
             sys.modules.pop("check_artifact_hygiene", None)
         with tempfile.TemporaryDirectory() as tmp:
@@ -15057,6 +15061,205 @@ class ObjetCaptureTests(unittest.TestCase):
             target.mkdir()
             archive_cli.write_safe_gitignore(target)
             self.assertIn("objects/sha256/", (target / ".gitignore").read_text(encoding="utf-8"))
+            self.assertIn("objects/derived-text/sha256/", (target / ".gitignore").read_text(encoding="utf-8"))
+
+    def _derived_text_source_object(self, archive_root: Path, data: bytes = b"source document bytes") -> str:
+        digest = hashlib.sha256(data).hexdigest()
+        record = {
+            "object_id": f"sha256:{digest}",
+            "sha256": digest,
+            "logical_key": f"objects/sha256/{digest[:2]}/{digest}",
+            "mime": "application/pdf",
+            "size_bytes": len(data),
+            "locations": [],
+            "provenance": {"source": "test"},
+        }
+        manifest = archive_root / "objects" / "manifests" / "files.jsonl"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        with manifest.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+        return record["object_id"]
+
+    def test_derive_text_capture_dry_run_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-dry")
+            source_object_id = self._derived_text_source_object(archive_root)
+            text_file = Path(tmp) / "derived.txt"
+            text_file.write_text("Unique dry-run derived text marker\n", encoding="utf-8")
+            before = self._inventory(archive_root)
+
+            result = archive_services.derived_text_capture_dry_run(
+                archive_root,
+                text_file=text_file,
+                source_object_id=source_object_id,
+                derivation_kind="parser",
+                tool_name="fake-parser",
+                tool_version="1.0.0",
+                review_status="unreviewed",
+                language="en",
+                born_digital=True,
+            )
+
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["planned_action"], "capture")
+            self.assertIn("proposed_receipt_path", result)
+            self.assertEqual(self._inventory(archive_root), before, "dry-run must not write archive files")
+
+    def test_derive_text_capture_apply_indexes_searchable_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-apply")
+            source_object_id = self._derived_text_source_object(archive_root)
+            text_file = Path(tmp) / "derived.txt"
+            marker = "ZzzDerivedTextMarker20260613"
+            text_file.write_text(f"Extracted body with {marker} inside.\n", encoding="utf-8")
+
+            result = archive_services.derived_text_capture_apply(
+                archive_root,
+                text_file=text_file,
+                source_object_id=source_object_id,
+                derivation_kind="parser",
+                tool_name="fake-parser",
+                tool_version="1.0.0",
+                review_status="human_corrected",
+                reviewed_by="person:test",
+                confidence=0.99,
+                language="en",
+                born_digital=True,
+            )
+
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["action"], "captured")
+            self.assertTrue(result["stored_sha256_verified"])
+            text_path = archive_root / Path(result["text_logical_key"])
+            self.assertTrue(text_path.is_file())
+            self.assertEqual(text_path.read_text(encoding="utf-8"), f"Extracted body with {marker} inside.\n")
+            receipt_path = archive_root / Path(result["receipt_path"])
+            self.assertTrue(receipt_path.is_file())
+
+            manifest = archive_root / archive_services.DERIVED_TEXT_MANIFEST_RELATIVE_PATH
+            lines = [json.loads(line) for line in manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
+            captured = [line for line in lines if line.get("derived_text_id") == result["derived_text_id"]]
+            self.assertEqual(len(captured), 1)
+            record = captured[0]
+            self.assertEqual(record["source_object_id"], source_object_id)
+            self.assertEqual(record["review_status"], "human_corrected")
+            self.assertNotIn(str(tmp), json.dumps(record), "manifest must not store the local source text path")
+
+            index_result = archive_services.index_archive(archive_root)
+            self.assertEqual(index_result["derived_texts"], 1)
+            search_result = archive_services.search_archive(archive_root, marker)
+            self.assertTrue(any(item["type"] == "derived_text" for item in search_result["results"]), search_result)
+
+    def test_derive_text_capture_idempotent_rerun_skips_manifest_append(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-idempotent")
+            source_object_id = self._derived_text_source_object(archive_root)
+            text_file = Path(tmp) / "derived.txt"
+            text_file.write_text("Same derived text.\n", encoding="utf-8")
+
+            first = archive_services.derived_text_capture_apply(
+                archive_root,
+                text_file=text_file,
+                source_object_id=source_object_id,
+                derivation_kind="parser",
+                tool_name="fake-parser",
+                tool_version="1.0.0",
+                review_status="unreviewed",
+                reviewed_by="person:test",
+            )
+            self.assertTrue(first["ok"], first)
+            manifest = archive_root / archive_services.DERIVED_TEXT_MANIFEST_RELATIVE_PATH
+            manifest_before = manifest.read_bytes()
+            stored = archive_root / Path(first["text_logical_key"])
+            stored_mtime = stored.stat().st_mtime_ns
+
+            second = archive_services.derived_text_capture_apply(
+                archive_root,
+                text_file=text_file,
+                source_object_id=source_object_id,
+                derivation_kind="parser",
+                tool_name="fake-parser",
+                tool_version="1.0.0",
+                review_status="unreviewed",
+                reviewed_by="person:test",
+            )
+            self.assertTrue(second["ok"], second)
+            self.assertEqual(second["action"], "skip_already_present")
+            self.assertEqual(manifest.read_bytes(), manifest_before)
+            self.assertEqual(stored.stat().st_mtime_ns, stored_mtime)
+
+    def test_derive_text_capture_blocks_missing_source_and_cli_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-gates")
+            text_file = Path(tmp) / "derived.txt"
+            text_file.write_text("Derived text without a source object.\n", encoding="utf-8")
+            missing_source = "sha256:" + "b" * 64
+
+            result = archive_services.derived_text_capture_dry_run(
+                archive_root,
+                text_file=text_file,
+                source_object_id=missing_source,
+                derivation_kind="parser",
+                tool_name="fake-parser",
+                tool_version="1.0.0",
+                review_status="unreviewed",
+            )
+            self.assertFalse(result["ok"])
+            self.assertIn("source_object_missing", result["blockers"])
+
+            base = [
+                "derive-text",
+                "capture",
+                str(archive_root),
+                "--text-file",
+                str(text_file),
+                "--source-object-id",
+                missing_source,
+                "--derivation-kind",
+                "parser",
+                "--tool-name",
+                "fake-parser",
+                "--tool-version",
+                "1.0.0",
+                "--review-status",
+                "unreviewed",
+            ]
+            code, output = self.run_cli(base)
+            self.assertEqual(code, 1, output)
+            code, output = self.run_cli(base + ["--dry-run", "--approve"])
+            self.assertEqual(code, 1, output)
+            code, output = self.run_cli(base + ["--approve"])
+            self.assertEqual(code, 1, output)
+            self.assertIn("--reviewed-by", output)
+
+    def test_doctor_flags_malformed_derived_text_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-doctor")
+            source_object_id = self._derived_text_source_object(archive_root)
+            manifest = archive_root / archive_services.DERIVED_TEXT_MANIFEST_RELATIVE_PATH
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schema": archive_services.DERIVED_TEXT_RECORD_SCHEMA,
+                        "derived_text_id": "derived-text:sha256:" + "a" * 64,
+                        "source_object_id": source_object_id,
+                        "derivation_kind": "screen-scrape",
+                        "tool_name": "fake",
+                        "tool_version": "1",
+                        "review_status": "maybe",
+                        "text_sha256": "c" * 64,
+                        "text_logical_key": "objects/derived-text/sha256/cc/" + "c" * 64 + ".txt",
+                        "provenance": {},
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            code, output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 1, output)
+            self.assertIn("derived_text_derivation_kind_invalid", output)
+            self.assertIn("derived_text_review_status_invalid", output)
 
 
 if __name__ == "__main__":

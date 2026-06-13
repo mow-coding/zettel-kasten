@@ -24,6 +24,7 @@
         "ai_inbox": {"type": "string"},
         "views": {"type": "string"},
         "object_manifest": {"type": "string"},
+        "derived_text_manifest": {"type": "string"},
         "sqlite_schema": {"type": "string"}
       }
     },

@@ -105,6 +105,12 @@ In practical terms:
   source maps, zets or explicit deferrals, receipts, and `archive doctor
   --strict` have been reviewed.
 
+The first implemented derived-text write path is `archive derive-text capture`.
+It registers already extracted UTF-8 text for an existing `object_id`, stores
+the text body under `objects/derived-text/sha256/`, appends
+`objects/manifests/derived-text.jsonl`, and writes a receipt. It does not run
+OCR, ASR, parsers, LLM vision, provider APIs, drafting, or minting.
+
 ## 4. File-Type Guidance
 
 ### HWP / HWPX

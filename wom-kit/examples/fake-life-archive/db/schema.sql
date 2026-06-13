@@ -30,6 +30,17 @@ CREATE TABLE IF NOT EXISTS objects (
   provenance_json TEXT
 );
 
+CREATE TABLE IF NOT EXISTS derived_texts (
+  derived_text_id TEXT PRIMARY KEY,
+  source_object_id TEXT NOT NULL,
+  derivation_kind TEXT NOT NULL,
+  review_status TEXT NOT NULL,
+  language TEXT,
+  text_logical_key TEXT NOT NULL,
+  text_sha256 TEXT NOT NULL,
+  provenance_json TEXT
+);
+
 CREATE TABLE IF NOT EXISTS object_locations (
   object_id TEXT NOT NULL,
   provider TEXT NOT NULL,

@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.3 field feedback hardening checkpoint
+Status: v0.3.4 derived text capture checkpoint
 Date: 2026-06-13
-Version: v0.3.3, released
+Version: v0.3.4, released
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -26,6 +26,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Archive doctor | `implemented local command` | read-only | `archive doctor` checks archive structure, schema, manifest, receipt, and lifecycle consistency. |
 | Archive frontmatter migration | `approval-gated write` | dry-run previews first; CLI approve rewrites zettel frontmatter only | `archive migrate --target frontmatter-v0.3` aligns older v0.2-draft-authored zettel frontmatter with the current v0.3 schema. Ambiguous or unsafe source values block for manual review. |
 | Local objet capture | `approval-gated write` | dry-run previews first; CLI approve writes objet bytes, one manifest record, and a capture receipt | `archive objet-capture` captures explicitly approved staged files into `objects/sha256/`. Sandbox-marked archives only; lossless and idempotent; never deletes or modifies staged originals. |
+| Derived text capture | `approval-gated write` | dry-run previews first; CLI approve stores text, appends one derived text manifest record, and writes a receipt | `archive derive-text capture` registers already extracted UTF-8 text for an existing `object_id` in `objects/manifests/files.jsonl`. It writes `objects/manifests/derived-text.jsonl`, stores text bodies under `objects/derived-text/sha256/`, and indexes them for search. It does not run OCR, ASR, parsers, LLM vision, provider APIs, drafting, or minting. |
 | Staged cleanup verifier | `read-only preview` | none | `archive staged-cleanup-check` reports per staged file whether it is preserved, deferred, or not preserved before any manual cleanup. Fails closed on unenumerable trees, exits 0 only when `safe_to_cleanup` is true, and never deletes. |
 | Related zets (typed-edge backlinks) | `implemented local command` | read-only | `archive related-zets` traverses typed edges in both directions over the generated index, so backlinks are answerable. Redacted zettels are never returned. |
 | Facet view execution | `implemented local command` | read-only | `archive view-zets` executes `views/*.yml` facet filters or ad-hoc facet queries against the generated index. List-valued facets index as repeated scalar rows; unsupported filter keys or list-valued filter inputs block instead of silently broadening results. |
