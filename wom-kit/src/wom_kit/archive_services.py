@@ -21388,6 +21388,54 @@ def objet_capture_intake_evidence_blockers(root: Path, item: dict[str, Any]) -> 
     return []
 
 
+def objet_capture_project_intake_context(
+    root: Path,
+    selection: dict[str, Any],
+    explicit_receipt: str | None,
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    selection_receipt = selection.get("project_intake_receipt_path")
+    if selection_receipt is not None and not isinstance(selection_receipt, str):
+        blockers.append("project_intake_receipt_invalid")
+        selection_receipt = None
+    receipt = explicit_receipt or selection_receipt
+    if explicit_receipt and selection_receipt and explicit_receipt != selection_receipt:
+        blockers.append("project_intake_receipt_mismatch")
+    if not receipt:
+        return {
+            "provided": False,
+            "decision_values_included": False,
+            "automatic_execution_authorized": False,
+        }
+    try:
+        status = project_intake_status(root, receipt, dry_run=True)
+    except (ArchiveServiceError, OSError):
+        blockers.append("project_intake_receipt_invalid")
+        return {
+            "provided": True,
+            "ok": False,
+            "decision_values_included": False,
+            "automatic_execution_authorized": False,
+        }
+    if not status.get("ok"):
+        blockers.append("project_intake_receipt_invalid")
+    warnings.extend(str(item) for item in status.get("warnings", []) if isinstance(item, str))
+    return {
+        "provided": True,
+        "ok": bool(status.get("ok")),
+        "receipt_path": status.get("receipt_path"),
+        "session_id": status.get("session_id"),
+        "reviewed_by": status.get("reviewed_by"),
+        "reviewed_at": status.get("reviewed_at"),
+        "decision_sha256": status.get("decision_sha256"),
+        "checklist_coverage": status.get("checklist_coverage"),
+        "readiness": status.get("readiness"),
+        "decision_values_included": False,
+        "automatic_execution_authorized": False,
+    }
+
+
 def objet_capture_canonical_record_ids(records: list[dict[str, Any]]) -> set[str]:
     # A record counts as canonical only when its logical_key IS the content-addressed
     # path for its own object_id; legacy objects/sample/ records must not satisfy
@@ -21735,6 +21783,7 @@ def _objet_capture_run(
     *,
     approve: bool,
     reviewed_by: str | None,
+    project_intake_receipt: str | None = None,
 ) -> dict[str, Any]:
     root = Path(archive_root).resolve()
     sandbox_blockers = objet_capture_sandbox_blockers(root)
@@ -21761,15 +21810,30 @@ def _objet_capture_run(
     selection = selection_raw
     selection_sha256 = sha256_json_value(selection)
     envelope_blockers = objet_capture_envelope_blockers(selection, archive_id)
+    context_warnings: list[str] = []
+    project_intake_context = objet_capture_project_intake_context(
+        root,
+        selection,
+        project_intake_receipt,
+        envelope_blockers,
+        context_warnings,
+    )
     base_output = {
         "dry_run": not approve,
         "lifecycle_action": "objet_capture_plan" if not approve else "objet_capture",
         "archive_id": archive_id,
         "selection_manifest_id": str(selection.get("manifest_id") or ""),
         "selection_manifest_sha256": selection_sha256,
+        "project_intake_context": project_intake_context,
     }
     if envelope_blockers:
-        return {"ok": False, **base_output, "items": [], "blockers": envelope_blockers, "warnings": []}
+        return {
+            "ok": False,
+            **base_output,
+            "items": [],
+            "blockers": unique_preserve_order(envelope_blockers),
+            "warnings": unique_preserve_order(context_warnings),
+        }
 
     items_sorted = sorted(selection["items"], key=lambda item: str(item.get("item_id") or ""))
     appended_this_run: set[str] = set()
@@ -21838,13 +21902,14 @@ def _objet_capture_run(
                     "archive_id": archive_id,
                     "selection_manifest_id": str(selection.get("manifest_id") or ""),
                     "selection_manifest_sha256": selection_sha256,
+                    "project_intake_context": project_intake_context,
                     "reviewed_by": reviewed_by,
                     "captured_at": captured_at,
                     "items": item_results,
                     "summary": summary,
                     "blockers": run_blockers,
                     "warnings": unique_preserve_order(
-                        [code for entry in item_results for code in entry["warnings"]]
+                        [*context_warnings, *[code for entry in item_results for code in entry["warnings"]]]
                     ),
                 }
                 receipt_path_value = _objet_capture_write_receipt(root, receipt, captured_at)
@@ -21859,7 +21924,9 @@ def _objet_capture_run(
             "receipt_path": receipt_path_value,
             "summary": objet_capture_summary(item_results, approve=True),
             "blockers": run_blockers,
-            "warnings": unique_preserve_order([code for entry in item_results for code in entry["warnings"]]),
+            "warnings": unique_preserve_order(
+                [*context_warnings, *[code for entry in item_results for code in entry["warnings"]]]
+            ),
         }
 
     canonical_ids = objet_capture_canonical_record_ids(load_manifest_records(root))
@@ -21894,7 +21961,9 @@ def _objet_capture_run(
         "planned_writes": planned_writes,
         "summary": objet_capture_summary(item_results, approve=False),
         "blockers": run_blockers,
-        "warnings": unique_preserve_order([code for entry in item_results for code in entry["warnings"]]),
+        "warnings": unique_preserve_order(
+            [*context_warnings, *[code for entry in item_results for code in entry["warnings"]]]
+        ),
         "would_change": planned_writes,
     }
 
@@ -22101,8 +22170,19 @@ def _staged_cleanup_abort(archive_id: str, blockers: list[str]) -> dict[str, Any
     }
 
 
-def objet_capture_dry_run(archive_root: Path | str, selection_path: Path | str) -> dict[str, Any]:
-    return _objet_capture_run(archive_root, selection_path, approve=False, reviewed_by=None)
+def objet_capture_dry_run(
+    archive_root: Path | str,
+    selection_path: Path | str,
+    *,
+    project_intake_receipt: str | None = None,
+) -> dict[str, Any]:
+    return _objet_capture_run(
+        archive_root,
+        selection_path,
+        approve=False,
+        reviewed_by=None,
+        project_intake_receipt=project_intake_receipt,
+    )
 
 
 def objet_capture_apply(
@@ -22110,5 +22190,12 @@ def objet_capture_apply(
     selection_path: Path | str,
     *,
     reviewed_by: str,
+    project_intake_receipt: str | None = None,
 ) -> dict[str, Any]:
-    return _objet_capture_run(archive_root, selection_path, approve=True, reviewed_by=reviewed_by)
+    return _objet_capture_run(
+        archive_root,
+        selection_path,
+        approve=True,
+        reviewed_by=reviewed_by,
+        project_intake_receipt=project_intake_receipt,
+    )

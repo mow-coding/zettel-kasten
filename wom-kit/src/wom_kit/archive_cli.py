@@ -3098,12 +3098,17 @@ def command_objet_capture(args: argparse.Namespace) -> int:
 
     try:
         if args.dry_run:
-            result = archive_services.objet_capture_dry_run(Path(args.archive_root), Path(args.selection))
+            result = archive_services.objet_capture_dry_run(
+                Path(args.archive_root),
+                Path(args.selection),
+                project_intake_receipt=args.project_intake_receipt,
+            )
         else:
             result = archive_services.objet_capture_apply(
                 Path(args.archive_root),
                 Path(args.selection),
                 reviewed_by=args.reviewed_by,
+                project_intake_receipt=args.project_intake_receipt,
             )
     except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError) as exc:
         print(f"Objet capture failed: {exc}", file=sys.stderr)
@@ -5735,6 +5740,10 @@ def build_parser() -> argparse.ArgumentParser:
     objet_capture.add_argument("--dry-run", action="store_true", help="Preview the capture plan without writing files.")
     objet_capture.add_argument("--approve", action="store_true", help="Capture bytes, append manifest records, write a receipt.")
     objet_capture.add_argument("--reviewed-by", help="Reviewer id required for approved capture.")
+    objet_capture.add_argument(
+        "--project-intake-receipt",
+        help="Optional project-intake decisions receipt to validate as capture-session context only.",
+    )
     objet_capture.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     objet_capture.set_defaults(func=command_objet_capture)
 
