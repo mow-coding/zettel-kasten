@@ -95,7 +95,9 @@ and receipts before any cleanup.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.1` | current public pre-release | `wom-kit/docs/releases/v0.3.1.md` |
+| `v0.3.3` | current public pre-release | `wom-kit/docs/releases/v0.3.3.md` |
+| `v0.3.2` | superseded public pre-release | `wom-kit/docs/releases/v0.3.2.md` |
+| `v0.3.1` | superseded public pre-release | `wom-kit/docs/releases/v0.3.1.md` |
 | `v0.3.0` | superseded public pre-release | `wom-kit/docs/releases/v0.3.0.md` |
 | `v0.2.60` | superseded public pre-release | `wom-kit/docs/releases/v0.2.60.md` |
 | `v0.2.59` | superseded public pre-release | `wom-kit/docs/releases/v0.2.59.md` |
@@ -156,6 +158,35 @@ and receipts before any cleanup.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.2` To `v0.3.3`
+
+This is a compatible field-feedback hardening release.
+
+What changed:
+
+- CLI output is resilient to console encodings that cannot represent every character,
+- doctor and validate now fail more clearly on unquoted YAML timestamp frontmatter,
+- `validate --strict` is accepted for parity with doctor,
+- `staged-cleanup-check` exits `0` only when `safe_to_cleanup` is true; unsafe cleanup reports exit `1`,
+- `view-zets` can match scalar facet filters against list-valued zettel facets after re-indexing,
+- list-valued view filter inputs block instead of being guessed or broadened,
+- objet-capture source-intake plan SHA binding is regression-tested with a real `source-intake --dry-run` producer plan through dry-run and approve,
+- updated version metadata to `0.3.3`.
+
+Archives authored under v0.3.2 rules need no schema migration. If you rely on
+facet views, rebuild the disposable search index once:
+
+```text
+archive index <archive-root>
+```
+
+If you automate staged-folder cleanup checks, treat the new nonzero exit on
+unsafe reports as expected fail-closed behavior and read the JSON
+`safe_to_cleanup` field before any manual cleanup decision.
+
+This release does not touch live archives, providers, ZET transport, MCP write
+tools, cleanup targets, or the v0.3.1 frontmatter schema itself.
 
 ## From `v0.3.1` To `v0.3.2`
 

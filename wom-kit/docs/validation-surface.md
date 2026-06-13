@@ -58,6 +58,17 @@ crashing (`UnicodeEncodeError`). On a Korean Windows cp949 console, Korean text
 renders natively; characters outside the codepage (emoji, box drawing) appear
 as replacement characters rather than killing the command.
 
+## Staged cleanup verifier exit status
+
+`archive staged-cleanup-check <root> --staged <folder> --dry-run` is report-only
+and never deletes. Its process exit status is also a safety signal:
+
+- exit `0`: the check ran and `safe_to_cleanup` is `true`;
+- exit `1`: the check failed, or the report says cleanup is not safe.
+
+Automation should still read the JSON report for the detailed file statuses, and
+must treat cleanup as approved only when `safe_to_cleanup` is `true`.
+
 ## What none of these commands do
 
 No command in this surface rewrites, migrates, deletes, or uploads anything.

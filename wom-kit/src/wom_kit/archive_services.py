@@ -18765,6 +18765,17 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
             """
         )
 
+        warnings: list[str] = []
+
+        def insert_facet_row(zettel_id: str, facet_key: str, facet_value: Any) -> bool:
+            if not isinstance(facet_value, (str, int, float, bool)):
+                return False
+            conn.execute(
+                "INSERT INTO zettel_facets(zettel_id, facet_key, facet_value) VALUES (?, ?, ?)",
+                (zettel_id, str(facet_key), str(facet_value)),
+            )
+            return True
+
         for path in iter_zettel_paths(root):
             frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
             frontmatter = json_safe(frontmatter)
@@ -18804,12 +18815,16 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
                     facets = frontmatter.get("facets")
                     if isinstance(facets, dict):
                         for facet_key, facet_value in facets.items():
-                            if isinstance(facet_value, (str, int, float, bool)):
-                                conn.execute(
-                                    "INSERT INTO zettel_facets(zettel_id, facet_key, facet_value) VALUES (?, ?, ?)",
-                                    (from_id, str(facet_key), str(facet_value)),
-                                )
+                            if insert_facet_row(from_id, str(facet_key), facet_value):
                                 facet_count += 1
+                            elif isinstance(facet_value, list):
+                                for index, item in enumerate(facet_value):
+                                    if insert_facet_row(from_id, str(facet_key), item):
+                                        facet_count += 1
+                                    else:
+                                        warnings.append(
+                                            f"facet list member not indexed: {from_id} facets.{facet_key}[{index}]"
+                                        )
 
         manifest_path = root / "objects" / "manifests" / "files.jsonl"
         if manifest_path.is_file():
@@ -18900,6 +18915,7 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
         "source_map_entries": source_map_count,
         "edges": edge_count,
         "facets": facet_count,
+        "warnings": warnings,
     }
 
 
@@ -18929,7 +18945,12 @@ def view_zets(
 
     wanted: dict[str, str] = {}
     if facets:
-        wanted = {str(key): str(value) for key, value in facets.items()}
+        for raw_key, raw_value in facets.items():
+            key = str(raw_key)
+            if isinstance(raw_value, list):
+                blockers.append(f"view filter value list not supported: facets.{key}")
+                continue
+            wanted[key] = str(raw_value)
     else:
         view_filters: dict[str, Any] | None = None
         views_root = root / "views"
@@ -18956,6 +18977,9 @@ def view_zets(
             key = str(raw_key)
             if not key.startswith("facets."):
                 blockers.append(f"view filter key not supported: {key}")
+                continue
+            if isinstance(raw_value, list):
+                blockers.append(f"view filter value list not supported: {key}")
                 continue
             wanted[key.split(".", 1)[1]] = str(raw_value)
 

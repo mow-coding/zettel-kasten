@@ -2964,7 +2964,7 @@ def command_staged_cleanup_check(args: argparse.Namespace) -> int:
             print(f"- {action}")
         for blocker in result.get("blockers", []):
             print(f"BLOCKED: {blocker}")
-    return 0 if result.get("ok") else 1
+    return 0 if result.get("ok") and result.get("safe_to_cleanup") else 1
 
 
 def command_objet_capture(args: argparse.Namespace) -> int:
@@ -5325,7 +5325,7 @@ def build_parser() -> argparse.ArgumentParser:
     staged_cleanup.add_argument("archive_root", help="Archive root containing the staged folder.")
     staged_cleanup.add_argument("--staged", required=True, help="Archive-relative staged folder to verify.")
     staged_cleanup.add_argument("--deferred", help="Optional JSON file: {\"deferred\": [staged-relative paths]} explicitly deferred from capture.")
-    staged_cleanup.add_argument("--dry-run", action="store_true", help="Required: this command is report-only and never deletes.")
+    staged_cleanup.add_argument("--dry-run", action="store_true", help="Required: report-only and never deletes; exits 0 only when safe_to_cleanup is true.")
     staged_cleanup.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     staged_cleanup.set_defaults(func=command_staged_cleanup_check)
 

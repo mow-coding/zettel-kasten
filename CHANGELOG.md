@@ -6,12 +6,27 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
-Fixes from v0.3.2 upgrade field feedback (basoon operator):
+No unreleased changes.
+
+## v0.3.3 - 2026-06-13
+
+Compatible fixes from v0.3.2 upgrade field feedback:
 
 - CLI output no longer crashes on console encodings that cannot represent a character (e.g. emoji on a Korean Windows cp949 console); unencodable characters are replaced,
 - doctor now warns (`zettel_frontmatter_unquoted_timestamp`) when frontmatter contains an unquoted YAML timestamp, with the field path and a quoting hint; `doctor --strict` and `validate` treat it as failing,
 - `validate` accepts `--strict` for parity with doctor (validate already fails on warnings unless `--allow-warnings`),
-- added `wom-kit/docs/validation-surface.md` documenting what doctor, validate, and preflight each guarantee, including the YAML timestamp policy.
+- `staged-cleanup-check` now exits `0` only when the report is both `ok` and `safe_to_cleanup`; unsafe cleanup reports exit `1` while still returning the JSON report,
+- `view-zets` now indexes list-valued facets as repeated scalar facet rows, so saved views and ad-hoc scalar filters can match zettels tagged with lists,
+- `view-zets` now blocks list-valued filter inputs instead of silently broadening or guessing,
+- objet-capture source-intake plan SHA binding now has regression coverage against a real `source-intake --dry-run` producer plan through dry-run and approve,
+- added `wom-kit/docs/validation-surface.md` documenting what doctor, validate, preflight, and staged cleanup checks each guarantee.
+
+Compatibility:
+
+- the v0.3.1 frontmatter schema is unchanged,
+- no archive migration is required for v0.3.2 users,
+- rebuild the disposable search index with `archive index <archive-root>` to pick up list-valued facet indexing for `view-zets`,
+- cleanup remains manual; `staged-cleanup-check` never deletes files.
 
 ## v0.3.2 - 2026-06-11
 
