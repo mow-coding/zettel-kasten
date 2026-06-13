@@ -21,6 +21,8 @@ Commands:
           Plan safe source/objet refs before draft creation.
   project-intake-plan
           Plan one staged project folder intake session without writing files.
+  project-intake-next-question
+          Return the next human-review question for a project intake session.
   block-header
           Preview the derived block header for one draft or canonical zet.
   projection-plan
@@ -4000,6 +4002,57 @@ def print_project_intake_status_result(result: dict[str, Any], output_format: st
             print(f"- {action}")
 
 
+def command_project_intake_next_question(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.project_intake_next_question(
+            Path(args.archive_root),
+            staged_folder=Path(args.staged_folder) if args.staged_folder else None,
+            receipt=args.receipt,
+            dry_run=args.dry_run,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_project_intake_next_question_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def print_project_intake_next_question_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"Project intake next question dry-run {result.get('state') or 'unknown'}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    if result.get("session_id"):
+        print(f"Session: {result['session_id']}")
+    question = result.get("next_question") if isinstance(result.get("next_question"), dict) else None
+    if question is None:
+        print("Next question: none")
+    else:
+        print(f"Checklist id: {question.get('checklist_id')}")
+        print(f"Question: {question.get('ask_user')}")
+        print(f"Answer type: {question.get('answer_type')}")
+        if question.get("allowed_labels"):
+            print("Allowed labels:")
+            for label in question["allowed_labels"]:
+                print(f"- {label}")
+    print(f"Remaining prompts: {result.get('remaining_prompt_count', 0)}")
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
+
+
 def command_restore_drill(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -6067,6 +6120,18 @@ def build_parser() -> argparse.ArgumentParser:
     project_intake_status.add_argument("--dry-run", action="store_true", help="Required; inspect without writing files.")
     project_intake_status.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     project_intake_status.set_defaults(func=command_project_intake_status)
+
+    project_intake_next_question = subcommands.add_parser(
+        "project-intake-next-question",
+        help="Return the next human-review question for a project intake session without writing files.",
+    )
+    project_intake_next_question.add_argument("archive_root", help="Archive root to inspect.")
+    project_intake_next_question_source = project_intake_next_question.add_mutually_exclusive_group(required=True)
+    project_intake_next_question_source.add_argument("--staged-folder", help="One staged project folder for a new intake session.")
+    project_intake_next_question_source.add_argument("--receipt", help="Archive-relative project intake decisions receipt for a continuing session.")
+    project_intake_next_question.add_argument("--dry-run", action="store_true", help="Required; ask-planning only.")
+    project_intake_next_question.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    project_intake_next_question.set_defaults(func=command_project_intake_next_question)
 
     recovery_plan = subcommands.add_parser("recovery-plan", help="Show local backup and restore readiness without writing files.")
     recovery_plan.add_argument("archive_root", help="Archive root to inspect.")

@@ -6,6 +6,11 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+- Added read-only CLI `archive project-intake-next-question --dry-run` and MCP
+  `project_intake_next_question` so AI-assisted intake can ask one
+  human-review question at a time without echoing decision values, writing
+  decisions, capturing, drafting, minting, uploading, or cleaning.
+
 ## v0.3.7 - 2026-06-13
 
 - Added optional `archive objet-capture --project-intake-receipt <receipt>` context validation, and matching selection-manifest support via `project_intake_receipt_path`, so reviewed project-intake decisions can gate capture planning before staged bytes are read; added fake-archive roundtrip regressions for plan -> decisions -> status -> source-intake -> create-draft/mint metadata and plan -> decisions -> status -> source-intake -> objet-capture.
