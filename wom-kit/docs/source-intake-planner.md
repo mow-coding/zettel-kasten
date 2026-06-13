@@ -70,6 +70,33 @@ would_change
 
 `content_access` is explicit: file bodies are not read, full hashes are not calculated, and no copy/upload/import/OCR/transcription/provider API action occurs.
 
+## Recording A Plan
+
+For capture evidence, a reviewed dry-run plan can be recorded under
+`receipts/sources/`:
+
+```bash
+archive source-intake-record <archive-root> \
+  --source-intake-plan source-intake-plan.json \
+  --dry-run \
+  --format json
+```
+
+Approved mode writes one redacted source-intake plan record:
+
+```bash
+archive source-intake-record <archive-root> \
+  --source-intake-plan source-intake-plan.json \
+  --approve \
+  --reviewed-by person:me \
+  --format json
+```
+
+The recorder validates the plan with the same metadata-only safety rules used
+by draft composition and blocks unredacted local paths, provider URLs, tokens,
+and secrets. It does not read file bodies, calculate content hashes, capture
+objets, create drafts, mint zets, upload, or clean.
+
 ## Draft Composition
 
 From v0.2.23, `create-draft` can consume a saved source intake dry-run result:

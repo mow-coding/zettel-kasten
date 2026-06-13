@@ -139,6 +139,9 @@ human-artifact-store
 source-intake
   Classify one source/objet locator before draft creation. Dry-run only; returns safe source refs without reading bodies, hashing, copying, uploading, importing, OCR, transcription, extraction, or provider API calls. It can optionally validate a project-intake decisions receipt as session context only.
 
+source-intake-record
+  Validate and record a reviewed source-intake dry-run JSON plan under receipts/sources/. Dry-run previews first; approved mode writes one redacted plan record only.
+
 derive-text capture
   Register an already extracted UTF-8 text file as a provenance-aware derived text record for one existing object_id. Dry-run previews first; approved mode stores the text body, appends objects/manifests/derived-text.jsonl, and writes a receipt. It does not run OCR, ASR, parser, LLM vision, provider APIs, drafting, or minting.
 
@@ -464,10 +467,12 @@ The first implemented vocabulary is deliberately small: `derivation_kind` is one
 
 `archive source-intake --project-intake-receipt <receipt> --dry-run` can carry that reviewed session receipt into a one-locator metadata plan. The receipt must pass the same status check, and the resulting `project_intake_context` includes only receipt path, session id, reviewer metadata, decision hash, checklist coverage, and readiness. It does not include answer values and does not approve source capture, draft creation, minting, provider calls, or cleanup.
 
+`archive source-intake-record --source-intake-plan <json-file> --dry-run|--approve` validates a reviewed `source-intake --dry-run` JSON file and, with approval, stores the redacted plan under `receipts/sources/` for later capture evidence. It blocks unredacted local paths, provider URLs, tokens, and secrets. It does not read file bodies, calculate content hashes, capture objets, create drafts, mint zets, call providers, upload, or clean.
+
 `archive objet-capture --project-intake-receipt <receipt> --dry-run|--approve` can carry the same reviewed session receipt into an explicit capture selection. A selection manifest may also include `project_intake_receipt_path`; if both are present they must match. Invalid or tampered intake receipts block before staged bytes are read. The context is recorded in the capture result and approved capture receipt, but it still does not approve drafting, minting, provider calls, or cleanup.
 
 For external project migrations, the intended manual spine is:
-`project-intake-plan -> project-intake-decisions -> project-intake-status -> source-intake --project-intake-receipt -> objet-capture --project-intake-receipt -> derive-text capture when text already exists -> create-draft --source-intake-plan -> mint-zet after approval -> staged-cleanup-check`. This is not one automatic bulk importer; every arrow is still a review boundary.
+`project-intake-plan -> project-intake-decisions -> project-intake-status -> source-intake --project-intake-receipt -> source-intake-record -> objet-capture --project-intake-receipt -> derive-text capture when text already exists -> create-draft --source-intake-plan -> mint-zet after approval -> staged-cleanup-check`. This is not one automatic bulk importer; every arrow is still a review boundary.
 
 `archive human-artifact-store --surface-kind <kind> --dry-run` previews the contract for a user-facing human artifact app or surface. Supported kinds are `wordpress`, `joplin`, `notion`, `obsidian`, `evernote`, `generic_markdown`, and `generic_workspace`. The command keeps three roles separate: raw/original data, human-readable artifacts, and system/AI artifacts such as manifests, source maps, receipts, indexes, hashes, and version history. It writes nothing, calls no providers, starts no OAuth, creates or updates no notes, publishes no posts, uploads no files, mints no zets, and runs no ZET transport.
 

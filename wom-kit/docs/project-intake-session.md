@@ -48,6 +48,7 @@ project-intake-plan
 -> project-intake-decision-template
 -> project-intake-item-plan
 -> source-intake --project-intake-receipt
+-> source-intake-record
 -> objet-capture --project-intake-receipt
 -> derive-text capture when external text already exists
 -> create-draft --source-intake-plan
@@ -131,6 +132,7 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Decision recording | `archive project-intake-decisions --dry-run|--approve` | Validates a user-reviewed checklist JSON file; approved mode writes a local receipt under `receipts/project-intake/` without running capture, drafting, minting, provider calls, or cleanup. |
 | Decision status | `archive project-intake-status --dry-run` / MCP `project_intake_status` | Reviews one approved decisions receipt for checklist coverage and integrity, and returns `next_review_prompts` for missing checklist ids without echoing answer text or authorizing automatic execution. |
 | Item plan | `archive project-intake-item-plan --dry-run` / MCP `project_intake_item_plan` | Previews the next `source-intake --dry-run` route for one human-selected local file. It redacts local paths, reads no file body, calculates no content hash, creates no selection manifest, and writes nothing. |
+| Source-intake record | `archive source-intake-record --dry-run|--approve` | Validates a reviewed `source-intake --dry-run` JSON file and writes the redacted plan under `receipts/sources/` for later capture evidence. It blocks unredacted local paths, provider URLs, tokens, and secrets. |
 | Artifact hygiene | `wom-kit/tools/check_artifact_hygiene.py` | Report-only artifact classification and generated `.gitignore` checks; never cleans files. |
 | Per-item intake | `archive source-intake --dry-run` / MCP `source_intake_plan` | Classifies exactly one locator; reads no bodies and writes nothing. Optional `--project-intake-receipt` / `project_intake_receipt` validates a decisions receipt as session context only. |
 | Local objet capture | `archive objet-capture --dry-run|--approve` | Captures explicitly approved staged originals into the local content-addressed store for sandbox-marked archives; optional `--project-intake-receipt` or `project_intake_receipt_path` validates a decisions receipt before staged bytes are read; never deletes staged originals. |
@@ -143,9 +145,10 @@ WOM-kit already has safe primitives that can support parts of this flow:
 These primitives now include a dry-run staging guide, a session planner with
 human review prompts, a one-question-at-a-time prompt surface, a next-answer
 decision JSON template, a receipt writer for reviewed answers, a read-only
-receipt status check, a one-item source-intake route preview, an optional
-source-intake session-context link, missing-question prompts for the next human
-review turn, and draft/mint metadata preservation for that receipt evidence.
+receipt status check, a one-item source-intake route preview, source-intake
+plan recording for later capture evidence, an optional source-intake
+session-context link, missing-question prompts for the next human review turn,
+and draft/mint metadata preservation for that receipt evidence.
 They still do not form a full human-guided intake/capture/draft/mint/cleanup
 workflow.
 

@@ -17149,6 +17149,120 @@ def project_intake_item_plan_safe_actions(blocked: bool) -> list[str]:
     ]
 
 
+def source_intake_record_path(plan_sha256: str) -> str:
+    digest = plan_sha256.removeprefix("sha256:")
+    return f"{SOURCE_SCAN_RECEIPTS_DIR}/source-intake-{digest[:16]}.source-intake-plan.json"
+
+
+def source_intake_plan_has_unsafe_stored_string(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(
+            contains_forbidden_location_reference(value)
+            or source_intake_has_provider_url(value)
+            or source_intake_secret_like(value)
+        )
+    if isinstance(value, list):
+        return any(source_intake_plan_has_unsafe_stored_string(item) for item in value)
+    if isinstance(value, dict):
+        return any(source_intake_plan_has_unsafe_stored_string(item) for item in value.values())
+    return False
+
+
+def source_intake_record(
+    archive_root: Path | str,
+    plan_path: Path | str,
+    *,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+
+    reviewer = safe_project_intake_actor_id(reviewed_by)
+    if approve and reviewer is None:
+        blockers.append("Source intake record approval requires --reviewed-by with a safe actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    plan = load_json_object_for_review(Path(plan_path), "source intake plan", blockers)
+    plan_sha256 = "sha256:" + ("0" * 64)
+    receipt_relative = f"{SOURCE_SCAN_RECEIPTS_DIR}/source-intake-invalid.source-intake-plan.json"
+    if plan is not None:
+        if plan.get("archive_id") != archive_id:
+            blockers.append("source_intake_plan.archive_id must match this archive.")
+        validation_blockers: list[str] = []
+        prepare_source_intake_plan_for_draft(plan, validation_blockers)
+        blockers.extend(validation_blockers)
+        if source_intake_plan_has_unsafe_stored_string(plan):
+            blockers.append(
+                "source_intake_plan must not contain local paths, provider URLs, tokens, or secrets; rerun source-intake with --redact-local-paths."
+            )
+        plan_sha256 = sha256_json_value(plan)
+        receipt_relative = source_intake_record_path(plan_sha256)
+
+    receipt_path = archive_internal_path(root, receipt_relative)
+    if approve and receipt_path.exists():
+        blockers.append("Source intake plan record already exists for this plan hash.")
+
+    privacy_guards = {
+        "source_plan_read": True,
+        "local_paths_blocked": True,
+        "decision_values_included": False,
+        "file_bodies_read": False,
+        "content_hashes_calculated": False,
+        "provider_calls": False,
+        "writes": approve and not blockers,
+    }
+    result: dict[str, Any] = {
+        "ok": not blockers,
+        "dry_run": dry_run,
+        "action": "archive_source_intake_record",
+        "archive_id": archive_id,
+        "reviewed_by": reviewer,
+        "source_intake_plan_sha256": plan_sha256,
+        "proposed_plan_path": receipt_relative,
+        "privacy_guards": privacy_guards,
+        "would_change": [receipt_relative] if dry_run and not blockers else [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+    if blockers or dry_run:
+        return result
+
+    assert plan is not None
+    created_dirs = missing_parent_dirs_before_write(root, [receipt_path])
+    created_paths: list[Path] = []
+    try:
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_new_file(receipt_path, plan)
+        created_paths.append(receipt_path)
+    except Exception:
+        for path in created_paths:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        cleanup_created_empty_dirs(root, created_dirs)
+        raise
+
+    result.update(
+        {
+            "ok": True,
+            "dry_run": False,
+            "plan_path": receipt_relative,
+            "files_written": [receipt_relative],
+            "would_change": [],
+            "privacy_guards": privacy_guards,
+        }
+    )
+    return result
+
+
 def safe_project_intake_actor_id(value: str | None) -> str | None:
     if value is None:
         return None
