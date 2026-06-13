@@ -230,6 +230,19 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "project_intake_staging_guide",
+        "description": "Show where to stage one project folder before a project intake session. Read-only; never creates folders, moves files, uploads, captures, drafts, mints, or cleans.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "project_slug": {"type": "string", "description": "Lowercase ASCII project slug for the staged folder."},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "project_slug"],
+        },
+    },
+    {
         "name": "project_intake_status",
         "description": "Review one project-intake decisions receipt. Read-only; returns checklist coverage and next human-review prompts without echoing answer values.",
         "inputSchema": {
@@ -1211,6 +1224,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_human_artifact_store_plan(arguments)
     if name == "project_intake_plan":
         return tool_project_intake_plan(arguments)
+    if name == "project_intake_staging_guide":
+        return tool_project_intake_staging_guide(arguments)
     if name == "project_intake_status":
         return tool_project_intake_status(arguments)
     if name == "project_intake_next_question":
@@ -1493,6 +1508,20 @@ def tool_project_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     result = call_service(archive_services.project_intake_plan, archive_root, staged_folder)
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"project_intake_plan: {state}.", result)
+
+
+def tool_project_intake_staging_guide(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("project_intake_staging_guide is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.project_intake_staging_guide,
+        archive_root,
+        project_slug=require_string_arg(arguments, "project_slug"),
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"project_intake_staging_guide: {state}.", result)
 
 
 def tool_project_intake_status(arguments: dict[str, Any]) -> dict[str, Any]:

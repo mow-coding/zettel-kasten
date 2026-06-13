@@ -387,6 +387,7 @@ PROJECT_INTAKE_DECISION_RECEIPT_SCHEMA = "wom-kit/project-intake-decisions-recei
 PROJECT_INTAKE_DECISION_RECEIPTS_DIR = "receipts/project-intake"
 PROJECT_INTAKE_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 PROJECT_INTAKE_ACTOR_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,199}$")
+PROJECT_INTAKE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 PROJECT_INTAKE_MAX_STRING_LENGTH = 4000
 MINT_RECEIPTS_DIR = "receipts/mint"
 MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
@@ -16435,6 +16436,77 @@ def project_intake_staging_convention(archive_root: Path, staged_folder: Path) -
         "recommended_intake_folder_name": "intake",
         "requires_one_project_folder": True,
     }
+
+
+def project_intake_staging_guide(
+    archive_root: Path | str,
+    *,
+    project_slug: str,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    if not dry_run:
+        raise ArchiveServiceError("project-intake-staging-guide is dry-run only.")
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    normalized_slug = (project_slug or "").strip().lower()
+    blockers: list[str] = []
+    if not safe_project_intake_slug(normalized_slug):
+        blockers.append("project_slug must use lowercase ASCII letters, numbers, and hyphens only.")
+
+    objet_store = (root.parent / f"{root.name}-objets").resolve()
+    intake_root = (objet_store / "intake").resolve()
+    staged_folder = (intake_root / (normalized_slug or "<project-slug>")).resolve()
+    follows_expected_parent = staged_folder.parent == intake_root
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "action": "archive_project_intake_staging_guide",
+        "archive_id": archive_id,
+        "project_slug": normalized_slug or None,
+        "recommended_paths": {
+            "archive_root": str(root),
+            "objet_store_root": str(objet_store),
+            "intake_root": str(intake_root),
+            "staged_project_folder": str(staged_folder),
+        },
+        "path_policy": {
+            "one_project_per_staged_folder": True,
+            "staged_folder_is_temporary": True,
+            "archive_root_is_git_control_plane": True,
+            "objet_store_holds_raw_originals": True,
+            "do_not_commit_raw_sources_to_public_repo": True,
+            "create_directories": False,
+            "move_files": False,
+            "copy_files": False,
+            "delete_files": False,
+            "provider_calls": False,
+            "writes": False,
+        },
+        "staging_convention": {
+            "recommended_shape": r"C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug>",
+            "recommended_objet_store_suffix": "-objets",
+            "recommended_intake_folder_name": "intake",
+            "follows_expected_parent": follows_expected_parent,
+        },
+        "next_safe_actions": [
+            "Create the recommended staged_project_folder manually if it does not exist.",
+            "Place exactly one project folder's temporary intake materials there before running project-intake-plan.",
+            "Run project-intake-next-question --staged-folder <folder> --dry-run to start the human review loop.",
+            "Do not upload, capture, draft, mint, or clean staged files from this guide.",
+        ],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": [],
+        "would_change": [],
+    }
+
+
+def safe_project_intake_slug(value: str) -> bool:
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    if contains_forbidden_location_reference(text) or GITHUB_SECRET_LIKE_RE.search(text):
+        return False
+    return bool(PROJECT_INTAKE_SLUG_RE.match(text))
 
 
 def project_intake_session_plan() -> list[dict[str, Any]]:

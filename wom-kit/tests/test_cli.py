@@ -11743,6 +11743,65 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertFalse((archive_root / "receipts" / "recovery").exists())
 
+    def test_project_intake_staging_guide_returns_recommended_paths_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "project-intake-staging-guide",
+                    str(archive_root),
+                    "--project-slug",
+                    "alpha-project",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["action"], "archive_project_intake_staging_guide")
+            self.assertEqual(result["project_slug"], "alpha-project")
+            self.assertTrue(result["recommended_paths"]["objet_store_root"].endswith("archive-objets"))
+            self.assertTrue(result["recommended_paths"]["intake_root"].endswith("archive-objets\\intake"))
+            self.assertTrue(
+                result["recommended_paths"]["staged_project_folder"].endswith(
+                    "archive-objets\\intake\\alpha-project"
+                )
+            )
+            self.assertFalse(result["path_policy"]["create_directories"])
+            self.assertFalse(result["path_policy"]["copy_files"])
+            self.assertEqual(result["would_change"], [])
+            self.assertFalse((Path(tmp) / "archive-objets").exists())
+
+    def test_project_intake_staging_guide_blocks_unsafe_slug(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "project-intake-staging-guide",
+                    str(archive_root),
+                    "--project-slug",
+                    "Bad Path",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertIn("project_slug", "\n".join(result["blockers"]))
+            self.assertEqual(result["would_change"], [])
+
     def test_project_intake_plan_dry_run_counts_only_and_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "archive"

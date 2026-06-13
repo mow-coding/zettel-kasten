@@ -37,6 +37,8 @@ It is not a silent bulk importer.
 The current safe spine is intentionally step-by-step:
 
 ```text
+project-intake-staging-guide
+-> create the staged folder manually
 project-intake-plan
 -> project-intake-next-question
 -> project-intake-decisions
@@ -65,6 +67,16 @@ local archive root:       C:\Users\<user>\zettel-kasten-<profile_slug>
 local objet store:        C:\Users\<user>\zettel-kasten-<profile_slug>-objets
 project intake staging:   C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug>
 ```
+
+To ask WOM-kit for the recommended path before creating folders:
+
+```text
+archive project-intake-staging-guide <archive-root> --project-slug <project_slug> --dry-run
+```
+
+This guide writes nothing. It does not create folders, move files, copy files,
+upload, capture, draft, mint, or clean. It is only the "where should I put this
+one project before we review it?" answer.
 
 The local archive root is the Git-friendly control plane.
 
@@ -109,6 +121,7 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Upgrade safety | `archive upgrade-check --dry-run` | Reports upgrade-readiness signals; writes nothing and is not a migration engine. |
 | Source registration | `archive add-source` | Can write source binding metadata only after approval. |
 | Source scan | `archive scan-source` | Metadata-first; approved mode writes source maps and receipts. |
+| Staging guide | `archive project-intake-staging-guide --dry-run` / MCP `project_intake_staging_guide` | Shows the recommended local objet-store staging path for one project slug. It creates no folders and moves no files. |
 | Session planning | `archive project-intake-plan --dry-run` / MCP `project_intake_plan` | Plans one staged project folder session with top-level counts, human review checklist, suggested classification labels, and no writes. |
 | Next question | `archive project-intake-next-question --dry-run` / MCP `project_intake_next_question` | Returns exactly one next human-review question for a new staged folder or continuing receipt. It includes placeholders only, does not echo decision values, and writes nothing. |
 | Decision recording | `archive project-intake-decisions --dry-run|--approve` | Validates a user-reviewed checklist JSON file; approved mode writes a local receipt under `receipts/project-intake/` without running capture, drafting, minting, provider calls, or cleanup. |
@@ -122,12 +135,13 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Cleanup verification | `archive staged-cleanup-check --dry-run` | Reports whether staged files are preserved, deferred, or unsafe to remove; never deletes. |
 | Index | `archive index` / `archive search` | Generated SQLite index; rebuildable local search. |
 
-These primitives now include a dry-run session planner with human review prompts,
-a one-question-at-a-time prompt surface, a receipt writer for reviewed answers,
-a read-only receipt status check, an optional source-intake session-context
-link, missing-question prompts for the next human review turn, and draft/mint
-metadata preservation for that receipt evidence. They still do not form a full human-guided
-intake/capture/draft/mint/cleanup workflow.
+These primitives now include a dry-run staging guide, a session planner with
+human review prompts, a one-question-at-a-time prompt surface, a receipt writer
+for reviewed answers, a read-only receipt status check, an optional
+source-intake session-context link, missing-question prompts for the next human
+review turn, and draft/mint metadata preservation for that receipt evidence.
+They still do not form a full human-guided intake/capture/draft/mint/cleanup
+workflow.
 
 ## 5. Planned Surfaces
 
