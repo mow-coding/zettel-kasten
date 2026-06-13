@@ -637,6 +637,8 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("github_repository_setup_plan", tool_names)
             self.assertIn("object_storage_setup_plan", tool_names)
             self.assertIn("human_artifact_store_plan", tool_names)
+            self.assertIn("project_intake_plan", tool_names)
+            self.assertIn("project_intake_status", tool_names)
             self.assertIn("source_intake_plan", tool_names)
             self.assertIn("create_draft_zettel", tool_names)
             self.assertIn("block_header_check", tool_names)
@@ -851,6 +853,9 @@ class McpServerTests(unittest.TestCase):
             self.assertNotIn("object_storage_connect", tool_names)
             self.assertNotIn("object_storage_upload", tool_names)
             self.assertNotIn("object_storage_sync", tool_names)
+            self.assertNotIn("project_intake_apply", tool_names)
+            self.assertNotIn("project_intake_decisions", tool_names)
+            self.assertNotIn("project_intake_capture", tool_names)
             self.assertNotIn("source_intake_apply", tool_names)
             self.assertNotIn("source_intake_capture", tool_names)
             self.assertNotIn("source_intake_upload", tool_names)
@@ -1507,6 +1512,173 @@ class McpServerTests(unittest.TestCase):
                 self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
             finally:
                 self.stop_server(process)
+
+    def test_project_intake_mcp_tools_surface_review_prompts_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            staged = allowed_root / "archive-objets" / "intake" / "alpha-project"
+            staged.mkdir(parents=True)
+            (staged / "private-file-name.md").write_text("SUPER_SECRET_BODY", encoding="utf-8")
+            outside_staged = outside_root / "archive-objets" / "intake" / "outside-project"
+            outside_staged.mkdir(parents=True)
+
+            decisions_path = allowed_root / "project-intake-decisions.json"
+            decisions_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/project-intake-decisions/v0.1",
+                        "session_id": "alpha-project-20260613",
+                        "decisions": [
+                            {
+                                "checklist_id": "scope.single_project",
+                                "answer": "yes",
+                                "notes": "One project only.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            receipt_result = archive_services.project_intake_decisions(
+                allowed_archive,
+                decisions_path,
+                approve=True,
+                reviewed_by="person:mcp",
+            )
+            self.assertTrue(receipt_result["ok"], receipt_result)
+            receipt_path = receipt_result["receipt_path"]
+            before_archive = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+            before_staged = sorted(path.relative_to(staged).as_posix() for path in staged.rglob("*"))
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                plan_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "project_intake_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "staged_folder": str(staged),
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(plan_response["result"]["isError"])
+                plan = plan_response["result"]["structuredContent"]
+                self.assertTrue(plan["ok"])
+                self.assertEqual(plan["action"], "archive_project_intake_plan")
+                self.assertEqual(plan["folder_summary"]["top_level_file_count"], 1)
+                self.assertFalse(plan["folder_summary"]["entry_names_included"])
+                self.assertEqual(plan["would_change"], [])
+                plan_dump = json.dumps(plan)
+                self.assertNotIn("private-file-name.md", plan_dump)
+                self.assertNotIn("SUPER_SECRET_BODY", plan_dump)
+
+                status_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "project_intake_status",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "receipt": receipt_path,
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(status_response["result"]["isError"])
+                status = status_response["result"]["structuredContent"]
+                self.assertTrue(status["ok"])
+                self.assertEqual(status["readiness"]["status"], "partial_review_recorded")
+                prompt_ids = [item["checklist_id"] for item in status["next_review_prompts"]]
+                self.assertIn("privacy.sensitive_items", prompt_ids)
+                status_dump = json.dumps(status)
+                self.assertNotIn("One project only", status_dump)
+                self.assertNotIn('"answer"', status_dump)
+
+                source_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "source_intake_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "object_id": "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136",
+                                "project_intake_receipt": receipt_path,
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(source_response["result"]["isError"])
+                source_plan = source_response["result"]["structuredContent"]
+                self.assertTrue(source_plan["ok"])
+                self.assertEqual(source_plan["project_intake_context"]["receipt_path"], receipt_path)
+                self.assertFalse(source_plan["project_intake_context"]["decision_values_included"])
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 4,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "project_intake_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "staged_folder": str(outside_staged),
+                            },
+                        },
+                    },
+                )
+                self.assertTrue(outside_response["result"]["isError"])
+                self.assertIn("outside allowed archive root", outside_response["result"]["structuredContent"]["error"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 5,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "project_intake_status",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "receipt": receipt_path,
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                self.assertTrue(dry_run_response["result"]["isError"])
+                self.assertIn("dry-run only", dry_run_response["result"]["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+            after_archive = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+            after_staged = sorted(path.relative_to(staged).as_posix() for path in staged.rglob("*"))
+            self.assertEqual(after_archive, before_archive)
+            self.assertEqual(after_staged, before_staged)
 
     def test_source_intake_plan_tool_writes_nothing_and_respects_allowed_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

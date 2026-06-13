@@ -205,6 +205,32 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "project_intake_plan",
+        "description": "Plan one staged project folder intake session. Read-only; returns human review questions and never reads bodies, recurses, writes, uploads, drafts, mints, or cleans.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "staged_folder": {"type": "string", "description": "Path to one staged project folder."},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "staged_folder"],
+        },
+    },
+    {
+        "name": "project_intake_status",
+        "description": "Review one project-intake decisions receipt. Read-only; returns checklist coverage and next human-review prompts without echoing answer values.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "receipt": {"type": "string", "description": "Archive-relative project-intake decisions receipt."},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "receipt"],
+        },
+    },
+    {
         "name": "source_intake_plan",
         "description": "Plan safe source/objet references before draft creation. Read-only metadata-only dry-run; never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, or calls provider APIs.",
         "inputSchema": {
@@ -231,6 +257,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "title": {"type": "string"},
                 "mime": {"type": "string"},
                 "redact_local_paths": {"type": "boolean", "default": True},
+                "project_intake_receipt": {"type": "string"},
             },
             "required": ["archive_root"],
         },
@@ -1154,6 +1181,10 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_object_storage_setup_plan(arguments)
     if name == "human_artifact_store_plan":
         return tool_human_artifact_store_plan(arguments)
+    if name == "project_intake_plan":
+        return tool_project_intake_plan(arguments)
+    if name == "project_intake_status":
+        return tool_project_intake_status(arguments)
     if name == "source_intake_plan":
         return tool_source_intake_plan(arguments)
     if name == "archive_init":
@@ -1415,6 +1446,30 @@ def tool_human_artifact_store_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     return tool_success_result(f"human_artifact_store_plan: {state}.", result)
 
 
+def tool_project_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("project_intake_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    staged_folder = require_path_arg(arguments, "staged_folder")
+    result = call_service(archive_services.project_intake_plan, archive_root, staged_folder)
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"project_intake_plan: {state}.", result)
+
+
+def tool_project_intake_status(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("project_intake_status is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.project_intake_status,
+        archive_root,
+        require_string_arg(arguments, "receipt"),
+        dry_run=True,
+    )
+    state = str(result.get("readiness", {}).get("status") or ("passed" if result["ok"] else "blocked"))
+    return tool_success_result(f"project_intake_status: {state}.", result)
+
+
 def tool_source_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     if arguments.get("dry_run", True) is False:
         raise ToolError("source_intake_plan is dry-run only.")
@@ -1445,6 +1500,7 @@ def tool_source_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:
         title=optional_string_arg(arguments, "title"),
         mime=optional_string_arg(arguments, "mime"),
         redact_local_paths=redact_local_paths,
+        project_intake_receipt=optional_string_arg(arguments, "project_intake_receipt"),
     )
     add_mcp_redaction_warning(result, requested_redaction, redact_local_paths)
     state = "passed" if result["ok"] else "blocked"
