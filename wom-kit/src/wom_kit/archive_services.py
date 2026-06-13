@@ -366,6 +366,12 @@ RUNTIME_CONTEXT_SAFE_ACTIONS = [
 SOURCE_MAPS_DIR = "source-maps"
 SOURCE_SCAN_RECEIPTS_DIR = "receipts/sources"
 RESTORE_DRILL_RECEIPTS_DIR = "receipts/recovery"
+PROJECT_INTAKE_DECISION_SCHEMA = "wom-kit/project-intake-decisions/v0.1"
+PROJECT_INTAKE_DECISION_RECEIPT_SCHEMA = "wom-kit/project-intake-decisions-receipt/v0.1"
+PROJECT_INTAKE_DECISION_RECEIPTS_DIR = "receipts/project-intake"
+PROJECT_INTAKE_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+PROJECT_INTAKE_ACTOR_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,199}$")
+PROJECT_INTAKE_MAX_STRING_LENGTH = 4000
 MINT_RECEIPTS_DIR = "receipts/mint"
 MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
 DELEGATE_RECEIPTS_DIR = "receipts/delegate"
@@ -15916,16 +15922,16 @@ def project_intake_human_review_checklist(
 
 def project_intake_decision_record_template() -> dict[str, Any]:
     return {
-        "schema": "wom-kit/project-intake-decisions/v0.1",
+        "schema": PROJECT_INTAKE_DECISION_SCHEMA,
         "status": "draft_template_only",
         "path_policy": "do_not_store_private_absolute_paths",
         "item_name_policy": "record only after human review",
+        "session_id": None,
+        "staged_folder_ref": None,
         "decisions": [
             {
                 "checklist_id": "scope.single_project",
                 "answer": None,
-                "reviewed_by": None,
-                "reviewed_at": None,
                 "notes": None,
             }
         ],
@@ -15974,6 +15980,489 @@ def project_intake_next_safe_actions(staging_convention: dict[str, Any]) -> list
             r"Restage the folder under C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug> before capture if you want the recommended path.",
         )
     return actions
+
+
+def project_intake_known_checklist_ids() -> set[str]:
+    return {
+        "scope.single_project",
+        "staging.location",
+        "groups.visible_classification",
+        "privacy.sensitive_items",
+        "preservation.originals",
+        "drafting.zet_candidates",
+        "cleanup.evidence_gate",
+    }
+
+
+def safe_project_intake_actor_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if PROJECT_INTAKE_ACTOR_ID_RE.match(normalized) and not header_string_is_private_or_unsafe(normalized):
+        return normalized
+    return None
+
+
+def safe_project_intake_session_id(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if PROJECT_INTAKE_SESSION_ID_RE.match(normalized) and not header_string_is_private_or_unsafe(normalized):
+        return normalized
+    return None
+
+
+def load_project_intake_decisions_payload(decisions_path: Path | str) -> dict[str, Any]:
+    path = Path(decisions_path).expanduser().resolve()
+    if not path.is_file():
+        raise ArchiveServiceError("Project intake decisions file does not exist or is not a file.")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ArchiveServiceError("Project intake decisions file must contain one JSON object.") from exc
+    except OSError as exc:
+        raise ArchiveServiceError("Project intake decisions file could not be read.") from exc
+    if not isinstance(data, dict):
+        raise ArchiveServiceError("Project intake decisions file must contain one JSON object.")
+    return data
+
+
+def validate_project_intake_safe_value(value: Any, blockers: list[str], field_path: str) -> Any:
+    if isinstance(value, dict):
+        normalized: dict[str, Any] = {}
+        for key, child in value.items():
+            key_text = str(key)
+            if not key_text.strip():
+                blockers.append(f"{field_path} contains an empty object key.")
+                continue
+            if len(key_text) > 200 or header_string_is_private_or_unsafe(key_text):
+                blockers.append(f"{field_path} contains a private or unsafe object key.")
+                continue
+            normalized[key_text] = validate_project_intake_safe_value(child, blockers, f"{field_path}.<key>")
+        return normalized
+    if isinstance(value, list):
+        return [
+            validate_project_intake_safe_value(child, blockers, f"{field_path}[{index}]")
+            for index, child in enumerate(value)
+        ]
+    if isinstance(value, str):
+        if len(value) > PROJECT_INTAKE_MAX_STRING_LENGTH:
+            blockers.append(f"{field_path} is too long for a project intake decision record.")
+        if header_string_is_private_or_unsafe(value):
+            blockers.append(f"{field_path} contains a private or unsafe reference.")
+        return value
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    blockers.append(f"{field_path} must be a JSON-safe value.")
+    return json_safe(value)
+
+
+def normalize_project_intake_decisions_payload(
+    payload: dict[str, Any],
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    schema = payload.get("schema")
+    if schema != PROJECT_INTAKE_DECISION_SCHEMA:
+        blockers.append(f"Project intake decisions schema must be {PROJECT_INTAKE_DECISION_SCHEMA}.")
+
+    session_id = safe_project_intake_session_id(payload.get("session_id"))
+    if session_id is None:
+        blockers.append("Project intake decisions require a safe session_id.")
+        session_id = "invalid-session"
+
+    staged_folder_ref = payload.get("staged_folder_ref")
+    if staged_folder_ref is not None:
+        if not isinstance(staged_folder_ref, str):
+            blockers.append("staged_folder_ref must be a string when provided.")
+            staged_folder_ref = None
+        else:
+            staged_folder_ref = validate_project_intake_safe_value(
+                staged_folder_ref,
+                blockers,
+                "$.staged_folder_ref",
+            )
+
+    decisions = payload.get("decisions")
+    if not isinstance(decisions, list):
+        blockers.append("Project intake decisions require a decisions list.")
+        decisions = []
+    elif not decisions:
+        blockers.append("Project intake decisions list must contain at least one decision.")
+
+    allowed_checklist_ids = project_intake_known_checklist_ids()
+    allowed_keys = {"checklist_id", "answer", "notes"}
+    normalized_decisions: list[dict[str, Any]] = []
+    seen_checklist_ids: set[str] = set()
+    for index, decision in enumerate(decisions):
+        field_path = f"$.decisions[{index}]"
+        if not isinstance(decision, dict):
+            blockers.append(f"{field_path} must be an object.")
+            continue
+        unknown_keys = sorted(set(str(key) for key in decision) - allowed_keys)
+        if unknown_keys:
+            blockers.append(f"{field_path} contains unsupported field(s).")
+        checklist_id = decision.get("checklist_id")
+        if not isinstance(checklist_id, str) or checklist_id not in allowed_checklist_ids:
+            blockers.append(f"{field_path}.checklist_id must match the project intake checklist.")
+            checklist_id = "invalid"
+        elif checklist_id in seen_checklist_ids:
+            blockers.append(f"{field_path}.checklist_id duplicates an earlier decision.")
+        else:
+            seen_checklist_ids.add(checklist_id)
+
+        if "answer" not in decision or decision.get("answer") is None:
+            blockers.append(f"{field_path}.answer is required.")
+            answer = None
+        else:
+            answer = validate_project_intake_safe_value(decision.get("answer"), blockers, f"{field_path}.answer")
+            if isinstance(answer, str) and not answer.strip():
+                blockers.append(f"{field_path}.answer must not be empty.")
+
+        normalized: dict[str, Any] = {
+            "checklist_id": checklist_id,
+            "answer": answer,
+        }
+        if "notes" in decision and decision.get("notes") is not None:
+            if not isinstance(decision.get("notes"), str):
+                blockers.append(f"{field_path}.notes must be a string when provided.")
+            else:
+                normalized["notes"] = validate_project_intake_safe_value(
+                    decision.get("notes"),
+                    blockers,
+                    f"{field_path}.notes",
+                )
+        normalized_decisions.append(normalized)
+
+    if len(normalized_decisions) > 50:
+        blockers.append("Project intake decisions list must contain 50 or fewer decisions.")
+
+    if len(normalized_decisions) < len(project_intake_known_checklist_ids()):
+        warnings.append("Project intake decisions do not answer every checklist item yet.")
+
+    return {
+        "schema": PROJECT_INTAKE_DECISION_SCHEMA,
+        "session_id": session_id,
+        "staged_folder_ref": staged_folder_ref,
+        "decisions": normalized_decisions,
+    }
+
+
+def project_intake_decisions_receipt_path(session_id: str, decision_sha256: str) -> str:
+    session_slug = safe_slug(session_id)
+    return f"{PROJECT_INTAKE_DECISION_RECEIPTS_DIR}/{session_slug}-{decision_sha256[:16]}.project-intake-decisions.json"
+
+
+def project_intake_decisions(
+    archive_root: Path | str,
+    decisions_path: Path | str,
+    *,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+
+    reviewer = safe_project_intake_actor_id(reviewed_by)
+    if approve and reviewer is None:
+        blockers.append("Project intake decision approval requires --reviewed-by with a safe actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    payload = load_project_intake_decisions_payload(decisions_path)
+    normalized_payload = normalize_project_intake_decisions_payload(payload, blockers, warnings)
+    decision_sha256 = sha256_json_hex(normalized_payload)
+    session_id = normalized_payload["session_id"]
+    checklist_ids = [
+        item["checklist_id"]
+        for item in normalized_payload["decisions"]
+        if isinstance(item.get("checklist_id"), str) and item.get("checklist_id") != "invalid"
+    ]
+    receipt_relative = project_intake_decisions_receipt_path(session_id, decision_sha256)
+    receipt_path = archive_internal_path(root, receipt_relative)
+    if approve and receipt_path.exists():
+        blockers.append("Project intake decisions receipt already exists for this session and decision hash.")
+
+    privacy_guards = {
+        "decision_file_read": True,
+        "decision_values_echoed": False,
+        "unsafe_local_paths_blocked": True,
+        "staged_folder_scanned": False,
+        "staged_entry_names_included": False,
+        "file_bodies_read": False,
+        "provider_calls": False,
+        "writes": approve and not blockers,
+    }
+    result: dict[str, Any] = {
+        "ok": not blockers,
+        "dry_run": dry_run,
+        "action": "archive_project_intake_decisions",
+        "archive_root": str(root),
+        "archive_id": archive_id,
+        "session_id": session_id,
+        "reviewed_by": reviewer,
+        "decision_sha256": decision_sha256,
+        "answer_count": len(normalized_payload["decisions"]),
+        "checklist_ids": checklist_ids,
+        "privacy_guards": privacy_guards,
+        "proposed_receipt_path": receipt_relative,
+        "would_change": [receipt_relative] if dry_run else [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+    if blockers or dry_run:
+        return result
+
+    assert reviewer is not None
+    reviewed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    receipt = {
+        "schema": PROJECT_INTAKE_DECISION_RECEIPT_SCHEMA,
+        "receipt_id": f"receipt:project-intake-decisions:{safe_slug(session_id)}:{decision_sha256[:16]}",
+        "receipt_kind": "project_intake_decisions",
+        "receipt_path": receipt_relative,
+        "action": "archive_project_intake_decisions",
+        "dry_run": False,
+        "timestamp": reviewed_at,
+        "archive_id": archive_id,
+        "session_id": session_id,
+        "staged_folder_ref": normalized_payload.get("staged_folder_ref"),
+        "reviewed_by": reviewer,
+        "reviewed_at": reviewed_at,
+        "decision_sha256": decision_sha256,
+        "source_decision_schema": PROJECT_INTAKE_DECISION_SCHEMA,
+        "answer_count": len(normalized_payload["decisions"]),
+        "checklist_ids": checklist_ids,
+        "decisions": normalized_payload["decisions"],
+        "privacy_guards": privacy_guards,
+        "closed_actions": {
+            "source_intake_run": False,
+            "objet_capture_run": False,
+            "derived_text_capture_run": False,
+            "draft_created": False,
+            "zet_minted": False,
+            "staged_cleanup_performed": False,
+            "provider_api_called": False,
+        },
+        "files_written": [receipt_relative],
+        "blockers": [],
+        "warnings": unique_preserve_order(warnings),
+    }
+
+    created_dirs = missing_parent_dirs_before_write(root, [receipt_path])
+    created_paths: list[Path] = []
+    try:
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_new_file(receipt_path, receipt)
+        created_paths.append(receipt_path)
+    except Exception:
+        for path in created_paths:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        cleanup_created_empty_dirs(root, created_dirs)
+        raise
+
+    result.update(
+        {
+            "ok": True,
+            "dry_run": False,
+            "receipt_path": receipt_relative,
+            "files_written": [receipt_relative],
+            "would_change": [],
+            "privacy_guards": privacy_guards,
+        }
+    )
+    return result
+
+
+def project_intake_decision_status_next_actions(blockers: list[str], missing_ids: list[str]) -> list[str]:
+    if blockers:
+        return ["fix the project intake decision receipt before using it as session context"]
+    actions: list[str] = []
+    if missing_ids:
+        actions.append("review the missing checklist ids with the user before treating the intake session as complete")
+    actions.extend(
+        [
+            "use the recorded decisions only as context for one-item-at-a-time source-intake dry-runs",
+            "capture objets only after the specific original item or group is reviewed again for the current command",
+            "keep create-draft, mint-zet, and staged cleanup as separate approval gates",
+            "do not delete staged folders from this status report",
+        ]
+    )
+    return actions
+
+
+def project_intake_status(
+    archive_root: Path | str,
+    receipt: str,
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("Project intake status is read-only and requires --dry-run.")
+
+    try:
+        receipt_path = resolve_receipt_input_path(root, receipt)
+    except ArchiveServiceError:
+        raise
+
+    if is_path_within_root(receipt_path, root):
+        receipt_relative = archive_relative_path(receipt_path, root)
+    else:
+        receipt_relative = "<outside-archive>"
+        blockers.append("Project intake decision receipt must be inside the archive root.")
+
+    if receipt_relative != "<outside-archive>":
+        if not receipt_relative.startswith(f"{PROJECT_INTAKE_DECISION_RECEIPTS_DIR}/"):
+            blockers.append("Project intake decision receipt must be under receipts/project-intake/.")
+        if not receipt_relative.endswith(".project-intake-decisions.json"):
+            blockers.append("Project intake decision receipt filename must end with .project-intake-decisions.json.")
+
+    receipt_doc = None
+    if receipt_relative != "<outside-archive>":
+        receipt_doc = load_json_object_for_review(receipt_path, "project intake decision receipt", blockers)
+
+    session_id: str | None = None
+    reviewed_by: str | None = None
+    reviewed_at: str | None = None
+    decision_sha256: str | None = None
+    answered_ids: list[str] = []
+    answer_count = 0
+    if receipt_doc is not None:
+        if receipt_doc.get("schema") != PROJECT_INTAKE_DECISION_RECEIPT_SCHEMA:
+            blockers.append(f"Project intake decision receipt schema must be {PROJECT_INTAKE_DECISION_RECEIPT_SCHEMA}.")
+        if receipt_doc.get("receipt_kind") != "project_intake_decisions":
+            blockers.append("Project intake decision receipt_kind must be project_intake_decisions.")
+        if receipt_doc.get("action") != "archive_project_intake_decisions":
+            blockers.append("Project intake decision action must be archive_project_intake_decisions.")
+        if receipt_doc.get("dry_run") is not False:
+            blockers.append("Project intake decision receipt must be an approved non-dry-run receipt.")
+        if receipt_doc.get("archive_id") != archive_id:
+            blockers.append("Project intake decision receipt archive_id must match this archive.")
+        if receipt_doc.get("receipt_path") and receipt_doc.get("receipt_path") != receipt_relative:
+            blockers.append("Project intake decision receipt_path must match the reviewed file path.")
+
+        session_id = safe_project_intake_session_id(receipt_doc.get("session_id"))
+        if session_id is None:
+            blockers.append("Project intake decision receipt session_id must be safe.")
+        reviewed_by = safe_project_intake_actor_id(
+            receipt_doc.get("reviewed_by") if isinstance(receipt_doc.get("reviewed_by"), str) else None
+        )
+        if reviewed_by is None:
+            blockers.append("Project intake decision receipt reviewed_by must be a safe actor id.")
+        reviewed_at_value = receipt_doc.get("reviewed_at")
+        if isinstance(reviewed_at_value, str) and is_utc_z_timestamp(reviewed_at_value):
+            reviewed_at = reviewed_at_value
+        else:
+            blockers.append("Project intake decision receipt reviewed_at must be a UTC Z timestamp.")
+        decision_sha = receipt_doc.get("decision_sha256")
+        if isinstance(decision_sha, str) and SHA256_RE.match(decision_sha):
+            decision_sha256 = decision_sha
+        else:
+            blockers.append("Project intake decision receipt decision_sha256 must be a SHA-256 hex value.")
+
+        replay_payload = {
+            "schema": PROJECT_INTAKE_DECISION_SCHEMA,
+            "session_id": receipt_doc.get("session_id"),
+            "staged_folder_ref": receipt_doc.get("staged_folder_ref"),
+            "decisions": receipt_doc.get("decisions"),
+        }
+        replay_blockers: list[str] = []
+        replay_warnings: list[str] = []
+        normalized_payload = normalize_project_intake_decisions_payload(
+            replay_payload,
+            replay_blockers,
+            replay_warnings,
+        )
+        blockers.extend(replay_blockers)
+        warnings.extend(replay_warnings)
+        replay_sha256 = sha256_json_hex(normalized_payload)
+        if decision_sha256 and replay_sha256 != decision_sha256:
+            blockers.append("Project intake decision receipt decision_sha256 does not match the stored decisions.")
+        answered_ids = [
+            item["checklist_id"]
+            for item in normalized_payload["decisions"]
+            if isinstance(item.get("checklist_id"), str) and item.get("checklist_id") != "invalid"
+        ]
+        answer_count = len(normalized_payload["decisions"])
+        if receipt_doc.get("answer_count") != answer_count:
+            blockers.append("Project intake decision receipt answer_count must match the stored decisions.")
+        receipt_checklist_ids = receipt_doc.get("checklist_ids")
+        if isinstance(receipt_checklist_ids, list):
+            safe_receipt_ids = [item for item in receipt_checklist_ids if isinstance(item, str)]
+            if safe_receipt_ids != answered_ids:
+                blockers.append("Project intake decision receipt checklist_ids must match the stored decisions.")
+        else:
+            blockers.append("Project intake decision receipt checklist_ids must be a list.")
+
+    checklist_order = [
+        "scope.single_project",
+        "staging.location",
+        "groups.visible_classification",
+        "privacy.sensitive_items",
+        "preservation.originals",
+        "drafting.zet_candidates",
+        "cleanup.evidence_gate",
+    ]
+    missing_ids = [checklist_id for checklist_id in checklist_order if checklist_id not in set(answered_ids)]
+    if blockers:
+        readiness_status = "blocked"
+    elif missing_ids:
+        readiness_status = "partial_review_recorded"
+    else:
+        readiness_status = "complete_review_recorded"
+    privacy_guards = {
+        "receipt_file_read": True,
+        "decision_values_echoed": False,
+        "staged_folder_scanned": False,
+        "file_bodies_read": False,
+        "provider_calls": False,
+        "writes": False,
+    }
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "action": "archive_project_intake_status",
+        "archive_root": str(root),
+        "archive_id": archive_id,
+        "receipt_path": receipt_relative,
+        "session_id": session_id,
+        "reviewed_by": reviewed_by,
+        "reviewed_at": reviewed_at,
+        "decision_sha256": decision_sha256,
+        "answer_count": answer_count,
+        "checklist_coverage": {
+            "answered_count": len(answered_ids),
+            "required_count": len(checklist_order),
+            "answered_checklist_ids": answered_ids,
+            "missing_checklist_ids": missing_ids,
+            "complete": not missing_ids,
+        },
+        "readiness": {
+            "status": readiness_status,
+            "ready_for_automatic_execution": False,
+        },
+        "privacy_guards": privacy_guards,
+        "next_safe_actions": project_intake_decision_status_next_actions(blockers, missing_ids),
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
 
 
 def restore_drill_dry_run(archive_root: Path | str, target: Path | str) -> dict[str, Any]:

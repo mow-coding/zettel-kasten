@@ -91,6 +91,8 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Source registration | `archive add-source` | Can write source binding metadata only after approval. |
 | Source scan | `archive scan-source` | Metadata-first; approved mode writes source maps and receipts. |
 | Session planning | `archive project-intake-plan --dry-run` | Plans one staged project folder session with top-level counts, human review checklist, suggested classification labels, and no writes. |
+| Decision recording | `archive project-intake-decisions --dry-run|--approve` | Validates a user-reviewed checklist JSON file; approved mode writes a local receipt under `receipts/project-intake/` without running capture, drafting, minting, provider calls, or cleanup. |
+| Decision status | `archive project-intake-status --dry-run` | Reviews one approved decisions receipt for checklist coverage and integrity without echoing answer text or authorizing automatic execution. |
 | Artifact hygiene | `wom-kit/tools/check_artifact_hygiene.py` | Report-only artifact classification and generated `.gitignore` checks; never cleans files. |
 | Per-item intake | `archive source-intake --dry-run` | Classifies exactly one locator; reads no bodies and writes nothing. |
 | Local objet capture | `archive objet-capture --dry-run|--approve` | Captures explicitly approved staged originals into the local content-addressed store for sandbox-marked archives; never deletes staged originals. |
@@ -101,7 +103,8 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Index | `archive index` / `archive search` | Generated SQLite index; rebuildable local search. |
 
 These primitives now include a dry-run session planner with human review prompts,
-but they still do not form a full human-guided intake/capture/draft/mint/cleanup
+a receipt writer for reviewed answers, and a read-only receipt status check, but
+they still do not form a full human-guided intake/capture/draft/mint/cleanup
 workflow.
 
 ## 5. Planned Surfaces
@@ -109,7 +112,6 @@ workflow.
 These surfaces are planned, not currently available:
 
 - an approved project intake session executor after the planner,
-- a persisted conversational intake checklist that carries the user's reviewed answers forward,
 - a joined executor that carries reviewed choices across source-intake, objet capture, derived text capture, draft creation, minting, and cleanup verification,
 - automatic remote object-storage upload.
 

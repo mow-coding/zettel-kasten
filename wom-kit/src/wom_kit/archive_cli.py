@@ -3814,6 +3814,109 @@ def print_project_intake_plan_result(result: dict[str, Any], output_format: str)
         print(f"- {action}")
 
 
+def command_project_intake_decisions(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.project_intake_decisions(
+            Path(args.archive_root),
+            Path(args.decisions),
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_project_intake_decisions_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def print_project_intake_decisions_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    mode = "dry-run ready" if result.get("dry_run") else "recorded"
+    if not result.get("ok", True):
+        mode = "blocked"
+    print(f"Project intake decisions {mode}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Session: {result.get('session_id') or '-'}")
+    print(f"Answer count: {result.get('answer_count', 0)}")
+    print(f"Decision SHA-256: {result.get('decision_sha256') or '-'}")
+    if result.get("checklist_ids"):
+        print("Checklist ids:")
+        for checklist_id in result["checklist_ids"]:
+            print(f"- {checklist_id}")
+    if result.get("receipt_path"):
+        print(f"Receipt: {result['receipt_path']}")
+    else:
+        print(f"Proposed receipt: {result.get('proposed_receipt_path') or '-'}")
+    writes = result.get("files_written") or []
+    if writes:
+        print("Files written:")
+        for path in writes:
+            print(f"- {path}")
+    else:
+        print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+
+
+def command_project_intake_status(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.project_intake_status(
+            Path(args.archive_root),
+            args.receipt,
+            dry_run=args.dry_run,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_project_intake_status_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def print_project_intake_status_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    state = result.get("readiness", {}).get("status") or "unknown"
+    print(f"Project intake status dry-run {state}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Session: {result.get('session_id') or '-'}")
+    print(f"Receipt: {result.get('receipt_path') or '-'}")
+    coverage = result.get("checklist_coverage") if isinstance(result.get("checklist_coverage"), dict) else {}
+    print(f"Answered checklist ids: {coverage.get('answered_count', 0)} / {coverage.get('required_count', 0)}")
+    if coverage.get("answered_checklist_ids"):
+        print("Answered:")
+        for checklist_id in coverage["answered_checklist_ids"]:
+            print(f"- {checklist_id}")
+    if coverage.get("missing_checklist_ids"):
+        print("Missing:")
+        for checklist_id in coverage["missing_checklist_ids"]:
+            print(f"- {checklist_id}")
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
+
+
 def command_restore_drill(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -5820,6 +5923,28 @@ def build_parser() -> argparse.ArgumentParser:
     project_intake_plan.add_argument("--dry-run", action="store_true", help="Required; plan without writing files.")
     project_intake_plan.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     project_intake_plan.set_defaults(func=command_project_intake_plan)
+
+    project_intake_decisions = subcommands.add_parser(
+        "project-intake-decisions",
+        help="Record reviewed project intake checklist decisions after a planner session.",
+    )
+    project_intake_decisions.add_argument("archive_root", help="Archive root to update.")
+    project_intake_decisions.add_argument("--decisions", required=True, help="Reviewed project intake decisions JSON file.")
+    project_intake_decisions.add_argument("--dry-run", action="store_true", help="Preview validation without writing files.")
+    project_intake_decisions.add_argument("--approve", action="store_true", help="Write the reviewed decisions receipt.")
+    project_intake_decisions.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
+    project_intake_decisions.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    project_intake_decisions.set_defaults(func=command_project_intake_decisions)
+
+    project_intake_status = subcommands.add_parser(
+        "project-intake-status",
+        help="Review a recorded project intake decisions receipt without echoing answer text.",
+    )
+    project_intake_status.add_argument("archive_root", help="Archive root to inspect.")
+    project_intake_status.add_argument("--receipt", required=True, help="Archive-relative project intake decisions receipt.")
+    project_intake_status.add_argument("--dry-run", action="store_true", help="Required; inspect without writing files.")
+    project_intake_status.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    project_intake_status.set_defaults(func=command_project_intake_status)
 
     recovery_plan = subcommands.add_parser("recovery-plan", help="Show local backup and restore readiness without writing files.")
     recovery_plan.add_argument("archive_root", help="Archive root to inspect.")

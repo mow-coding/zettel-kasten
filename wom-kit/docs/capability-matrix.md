@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.5 derived text batch and hygiene repair checkpoint
+Status: v0.3.5 checkpoint plus Unreleased project intake decision recording
 Date: 2026-06-13
-Version: v0.3.5, released
+Version: v0.3.5 released; working tree includes Unreleased changes
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -43,6 +43,8 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Objet storage setup plan | `approval-gated write` | CLI approve writes local provider metadata/receipt only | Does not create buckets, upload, sync, copy files, hash source files, or call provider APIs. |
 | Source intake planner | `read-only preview` | none | Metadata-only classification before draft creation. It does not import, copy, upload, OCR, transcribe, or hash file bodies. |
 | Project intake planner | `read-only preview` | none | `archive project-intake-plan --dry-run` plans one staged folder session with top-level counts, human review checklist, suggested classification labels, and a draft decision-record template. It does not include entry names, read bodies, recurse, classify automatically, write, upload, mint, or clean. |
+| Project intake decision recording | `approval-gated write` | dry-run validates first; CLI approve writes one local receipt | `archive project-intake-decisions` records human-reviewed checklist decisions under `receipts/project-intake/`. It does not run source intake, capture objets, derive text, create drafts, mint zets, call providers, or clean staged folders. |
+| Project intake decision status | `read-only preview` | none | `archive project-intake-status --dry-run` checks one approved decisions receipt for integrity, coverage, and next safe actions. It does not echo answer values or authorize automatic execution. |
 | Source intake to draft composer | `approval-gated write` | CLI draft approval can write inbox draft only | Consumes validated source-intake plans without reading original source files. Minting remains separate. |
 | Prompt boundary check | `read-only preview` | none | Heuristic local check for obvious prompt-injection and unsafe-agent strings. Not complete prevention. |
 | Prompt boundary to draft composer | `approval-gated write` | CLI draft approval can write inbox draft only | Carries untrusted-text boundary metadata into draft/mint metadata where supported. |
