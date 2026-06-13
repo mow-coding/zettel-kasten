@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.5 pre-release
+v0.3.6 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -199,6 +199,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.6
 v0.3.5
 v0.3.4
 v0.3.3

@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.5 checkpoint plus Unreleased project intake decision recording
+Status: v0.3.6 project intake decision recording checkpoint
 Date: 2026-06-13
-Version: v0.3.5 released; working tree includes Unreleased changes
+Version: v0.3.6, released
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
