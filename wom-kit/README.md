@@ -87,6 +87,7 @@ docs/security-audit-2026-05-21.md
 docs/new-user-flow.md
 docs/project-intake-session.md
 docs/human-artifact-store-contract.md
+docs/notion-source-export-three-store-example.md
 docs/source-maps.md
 docs/platform-support.md
 docs/server-blueprint.md
@@ -135,6 +136,9 @@ object-storage
 
 human-artifact-store
   Plan a user-facing note/workspace/publication surface such as WordPress, Joplin, Notion, Obsidian, Evernote, or generic Markdown. Dry-run only; writes nothing, calls no providers, creates no notes, publishes no posts, and keeps system/AI artifacts separate from human-readable artifacts.
+
+prehashed-objet-ledger
+  Preview an already-hashed external content-addressed object/objet ledger. Dry-run only; counts sha256/byte-size rows without reading blob bytes or registering manifest records.
 
 source-intake
   Classify one source/objet locator before draft creation. Dry-run only; returns safe source refs without reading bodies, hashing, copying, uploading, importing, OCR, transcription, extraction, or provider API calls. It can optionally validate a project-intake decisions receipt as session context only.
@@ -477,6 +481,8 @@ For external project migrations, the intended manual spine is:
 `archive human-artifact-store --surface-kind <kind> --dry-run` previews the contract for a user-facing human artifact app or surface. Supported kinds are `wordpress`, `joplin`, `notion`, `obsidian`, `evernote`, `generic_markdown`, and `generic_workspace`. The command keeps three roles separate: raw/original data, human-readable artifacts, and system/AI artifacts such as manifests, source maps, receipts, indexes, hashes, and version history. It writes nothing, calls no providers, starts no OAuth, creates or updates no notes, publishes no posts, uploads no files, mints no zets, and runs no ZET transport.
 
 MCP exposes the same read-only preview as `human_artifact_store_plan`.
+
+`archive prehashed-objet-ledger --ledger <jsonl> --dry-run` previews an already-hashed external content-addressed store ledger, including a Notion source-export ledger. By default it expects `sha256` and `bytes` fields, counts valid, invalid, duplicate, and total declared bytes, and echoes no row values, filenames, URLs, or local paths. It does not read blob bytes, register manifest records, capture objets, create drafts, mint zets, call providers, upload, or clean. Today, `objet-capture` still verifies bytes itself from staged files; a no-rehash manifest registration path remains future work.
 
 `archive create-draft --source-intake-plan <json-file>` consumes a successful source-intake dry-run JSON file, validates that it is metadata-only and blocker-free, then merges safe `source_refs_for_draft` into draft `source_refs`. If the source-intake plan carries a valid `project_intake_context`, the draft `source_intake.project_intake_context` preserves that receipt evidence through mint preview/receipts without copying decision answer values. The plan file path is not stored in frontmatter, and WOM-kit does not follow local paths inside the plan.
 

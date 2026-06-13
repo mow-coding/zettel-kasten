@@ -139,6 +139,10 @@ HUMAN_ARTIFACT_ROLES = {
     "working_note_store",
 }
 HUMAN_ARTIFACT_DEFAULT_ROLE = "human_artifact_store"
+PREHASHED_OBJET_LEDGER_STORE_KINDS = {
+    "generic_content_addressed_store",
+    "notion_source_export",
+}
 ZET_SHARED_UPDATE_RECORD_EXPECTED_KIND = "zet_shared_update_record_preview"
 ZET_SHARED_UPDATE_REVIEW_INDEX_MAX_LIMIT = 100
 ZET_SHARED_UPDATE_ATTESTATION_REVIEW_DECISIONS = {"attest", "needs_more_review", "reject"}
@@ -10337,6 +10341,179 @@ def human_artifact_surface_contract(surface_kind: str | None) -> dict[str, Any]:
 
 def safe_human_artifact_surface_ref(value: str) -> bool:
     return safe_source_intake_ref(value)
+
+
+def prehashed_objet_ledger_preview(
+    archive_root: Path | str,
+    ledger: Path | str,
+    *,
+    store_kind: str = "generic_content_addressed_store",
+    sha256_field: str = "sha256",
+    size_field: str = "bytes",
+    dry_run: bool = True,
+    max_rows: int = 100000,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("prehashed-objet-ledger is dry-run only; pass --dry-run.")
+
+    normalized_store = str(store_kind or "").strip().lower().replace("-", "_")
+    if normalized_store not in PREHASHED_OBJET_LEDGER_STORE_KINDS:
+        blockers.append(
+            "store_kind must be one of: " + ", ".join(sorted(PREHASHED_OBJET_LEDGER_STORE_KINDS)) + "."
+        )
+        normalized_store = "generic_content_addressed_store"
+    safe_sha_field = prehashed_ledger_safe_field_name(sha256_field, "sha256_field", blockers) or "sha256"
+    safe_size_field = prehashed_ledger_safe_field_name(size_field, "size_field", blockers) or "bytes"
+    capped_max_rows = max(1, min(int(max_rows), 100000))
+
+    ledger_path = Path(ledger).expanduser().resolve()
+    if not ledger_path.is_file():
+        blockers.append("ledger must be an existing JSONL file.")
+
+    row_count = 0
+    valid_count = 0
+    invalid_count = 0
+    duplicate_count = 0
+    total_bytes = 0
+    seen_sha256: set[str] = set()
+    invalid_reasons: dict[str, int] = {}
+    if ledger_path.is_file() and not blockers:
+        try:
+            with ledger_path.open("r", encoding="utf-8") as handle:
+                for line_number, raw_line in enumerate(handle, start=1):
+                    if line_number > capped_max_rows:
+                        warnings.append("prehashed objet ledger preview stopped at max_rows.")
+                        break
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    row_count += 1
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        invalid_count += 1
+                        invalid_reasons["invalid_json"] = invalid_reasons.get("invalid_json", 0) + 1
+                        continue
+                    if not isinstance(row, dict):
+                        invalid_count += 1
+                        invalid_reasons["row_not_object"] = invalid_reasons.get("row_not_object", 0) + 1
+                        continue
+                    row_sha = normalize_prehashed_ledger_sha256(row.get(safe_sha_field))
+                    if row_sha is None:
+                        invalid_count += 1
+                        invalid_reasons["sha256_missing_or_invalid"] = invalid_reasons.get("sha256_missing_or_invalid", 0) + 1
+                        continue
+                    row_size = normalize_prehashed_ledger_size(row.get(safe_size_field))
+                    if row_size is None:
+                        invalid_count += 1
+                        invalid_reasons["size_missing_or_invalid"] = invalid_reasons.get("size_missing_or_invalid", 0) + 1
+                        continue
+                    if row_sha in seen_sha256:
+                        duplicate_count += 1
+                    else:
+                        seen_sha256.add(row_sha)
+                    valid_count += 1
+                    total_bytes += row_size
+        except (OSError, UnicodeError):
+            blockers.append("ledger could not be read safely as UTF-8 JSONL.")
+
+    if row_count == 0 and not blockers:
+        blockers.append("ledger must contain at least one JSON object row.")
+    if invalid_count:
+        warnings.append("Some ledger rows are invalid and were counted without echoing row values.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "prehashed_objet_ledger_preview",
+        "archive_id": archive_id,
+        "store_kind": normalized_store,
+        "ledger": {
+            "format": "jsonl",
+            "ledger_path_included": False,
+            "sha256_field": safe_sha_field,
+            "size_field": safe_size_field,
+            "row_count": row_count,
+            "valid_object_count": valid_count,
+            "invalid_row_count": invalid_count,
+            "duplicate_sha256_count": duplicate_count,
+            "unique_sha256_count": len(seen_sha256),
+            "total_declared_bytes": total_bytes,
+            "invalid_reasons": invalid_reasons,
+        },
+        "current_capability": {
+            "objet_capture_can_import_prehashed_external_store_without_rehashing": False,
+            "manifest_registration_from_prehashed_ledger_implemented": False,
+            "this_preview_reads_blob_bytes": False,
+            "this_preview_registers_manifest_records": False,
+        },
+        "future_adapter_contract": {
+            "requires_content_addressed_blobs": True,
+            "requires_sha256_and_size_per_object": True,
+            "requires_separate_source_export_context": True,
+            "must_preserve_raw_human_system_store_separation": True,
+            "must_not_treat_workspace_as_canonical_archive": True,
+        },
+        "privacy_guards": {
+            "ledger_path_echoed": False,
+            "row_values_echoed": False,
+            "filenames_echoed": False,
+            "urls_echoed": False,
+            "local_paths_echoed": False,
+            "blob_bytes_read": False,
+            "provider_calls": False,
+            "writes": False,
+        },
+        "next_safe_actions": [
+            "Keep this as a planning preview; do not feed prehashed ledgers directly to objet-capture yet.",
+            "Use project-intake and source-intake records to bind human-reviewed migration context.",
+            "Design a separate approval-gated manifest registration command before any no-rehash import path.",
+            "If capture is needed today, use objet-capture on staged files so WOM-kit can verify bytes itself.",
+        ],
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def prehashed_ledger_safe_field_name(value: str | None, label: str, blockers: list[str]) -> str | None:
+    text = str(value or "").strip()
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_.-]{0,79}$", text):
+        blockers.append(f"{label} must be a safe JSON field name.")
+        return None
+    if contains_forbidden_location_reference(text) or source_intake_has_provider_url(text) or source_intake_secret_like(text):
+        blockers.append(f"{label} must not contain paths, URLs, tokens, or secrets.")
+        return None
+    return text
+
+
+def normalize_prehashed_ledger_sha256(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower()
+    if text.startswith("sha256:"):
+        text = text.removeprefix("sha256:")
+    if SHA256_RE.match(text):
+        return text
+    return None
+
+
+def normalize_prehashed_ledger_size(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        size = value
+    elif isinstance(value, str) and re.match(r"^[0-9]{1,20}$", value.strip()):
+        size = int(value.strip())
+    else:
+        return None
+    if size < 0:
+        return None
+    return size
 
 
 def zet_shared_update_record_review_preview(
