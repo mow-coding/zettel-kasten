@@ -131,6 +131,12 @@ attestation-statement-draft-decision --dry-run
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
+derive-text capture --dry-run
+  Preview registering an already extracted UTF-8 text file as a derived text record for an existing source object. This writes nothing and does not run OCR, ASR, parsers, LLM vision, provider APIs, drafting, or minting.
+
+derive-text capture --approve --reviewed-by
+  Store the derived text body, append `objects/manifests/derived-text.jsonl`, and write a capture receipt after the same gates pass. The manifest stores archive-relative text paths and metadata, not the local source text path.
+
 github-repo --dry-run
   Plan a private GitHub repository for a resolved WOM profile without writing files or calling GitHub.
 
@@ -162,7 +168,7 @@ index
   Build a generated local SQLite search index.
 
 search
-  Search zettels, object manifest entries, views, and source map entries through the generated index.
+  Search zettels, object manifest entries, derived text records, views, and source map entries through the generated index.
 
 parcel
   Create a portable parcel from a saved view. The v0.2 compatibility path still writes under workpacks/.
@@ -527,6 +533,37 @@ python wom-kit\cli\archive.py source-intake .\tmp-my-archive `
 ```
 
 `source-intake` accepts exactly one locator mode: `--local-path`, `--source` with `--item-id`, `--source` with `--relative-path`, `--objet-ref`, `--object-id`, provider object refs, or AI artifact refs. It returns metadata-only classification, `objet_status`, object storage context, and safe `source_refs_for_draft` that can be passed to `create-draft --dry-run`.
+
+Register already extracted text for a manifested source object:
+
+```powershell
+python wom-kit\cli\archive.py derive-text capture .\tmp-my-archive `
+  --text-file .\workbench\example-extracted.txt `
+  --source-object-id sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
+  --derivation-kind parser `
+  --tool-name example-parser `
+  --tool-version 1.0.0 `
+  --review-status unreviewed `
+  --dry-run `
+  --format json
+```
+
+Approved mode writes only the derived text body, `objects/manifests/derived-text.jsonl`, and a receipt:
+
+```powershell
+python wom-kit\cli\archive.py derive-text capture .\tmp-my-archive `
+  --text-file .\workbench\example-extracted.txt `
+  --source-object-id sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
+  --derivation-kind parser `
+  --tool-name example-parser `
+  --tool-version 1.0.0 `
+  --review-status human_corrected `
+  --approve `
+  --reviewed-by person:me `
+  --format json
+```
+
+`derive-text capture` does not extract text by itself. The implemented vocabulary is `parser`, `ocr`, `asr`, `llm_vision` for derivation kind and `unreviewed`, `human_corrected` for review status.
 
 Compose a draft from the source intake plan without manually copying refs:
 

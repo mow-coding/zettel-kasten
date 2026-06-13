@@ -40,6 +40,7 @@
 - [Zettel-Kasten Layer](../specs/zettel-kasten.md)
 - [Source Object Storage Policy](source-object-storage-policy.md)
 - [Text Provenance Hierarchy](text-provenance-hierarchy.md)
+- [Derived Text Capture](derived-text.md)
 
 이 문서들이 다루는 내용:
 
@@ -148,6 +149,7 @@
 - [One-Command Setup](one-command-setup.md)
 - [New User Flow](new-user-flow.md)
 - [External Imports](external-imports.md)
+- [Derived Text Capture](derived-text.md)
 
 현재 구현 우선순위:
 

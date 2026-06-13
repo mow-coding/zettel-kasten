@@ -75,6 +75,8 @@ Commands:
   admit  Preview admitting a parcel/workpack without mutating the target archive. Alias: import.
   import-external
           Import Notion or Google Drive exports as governed inbox drafts.
+  derive-text
+          Register extracted/OCR/ASR/vision text as a provenance-aware derived text record.
   providers
           Inspect provider bindings and external account change plans.
   sources
@@ -203,6 +205,7 @@ ALLOWED_ZETTEL_STATUS = {"draft", "canonical", "archived", "redacted"}
 CANONICAL_REQUIRES_VALUES = {"human_minting", "human_promotion"}
 OBJECT_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+DERIVED_TEXT_ID_RE = re.compile(r"^derived-text:sha256:[0-9a-f]{64}$")
 FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n", re.DOTALL)
 SECRET_VALUE_RE = re.compile(
     r"(?i)(?:api[_-]?key|secret|token|password|credential|aws_secret_access_key)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{12,}"
@@ -237,6 +240,8 @@ RECOMMENDED_GITIGNORE_PATTERNS = [
     "rclone.conf",
     "credentials.json",
     "token.json",
+    "objects/sha256/",
+    "objects/derived-text/sha256/",
 ]
 SECRET_FILENAME_EXACT = {
     ".env",
@@ -322,6 +327,7 @@ class Doctor:
         self._check_source_bindings_yml()
         self._check_sqlite_schema()
         self._check_object_manifest()
+        self._check_derived_text_manifest()
         self._check_source_maps()
         self._check_zettels()
         self._check_views()
@@ -427,6 +433,23 @@ class Doctor:
                     continue
                 if not policy_path.exists():
                     self.error("root_policy_path_missing", f"root_policy.{key} points to a missing path: {relative}", path)
+            if "derived_text_manifest" in root_policy:
+                relative = root_policy.get("derived_text_manifest")
+                try:
+                    policy_path = resolve_archive_relative_path(self.archive_root, str(relative))
+                except ArchivePathError as exc:
+                    self.error(
+                        "root_policy_path_unsafe",
+                        f"root_policy.derived_text_manifest has an unsafe path: {relative} ({exc})",
+                        path,
+                    )
+                else:
+                    if not policy_path.exists():
+                        self.error(
+                            "root_policy_path_missing",
+                            f"root_policy.derived_text_manifest points to a missing path: {relative}",
+                            path,
+                        )
 
         ai_policy = data.get("ai_write_policy") or {}
         if isinstance(ai_policy, dict):
@@ -637,6 +660,66 @@ class Doctor:
                 self.warn("object_locations_missing", f"Object has no locations list: {object_id}", path)
 
             self._check_local_object_locations(record, path)
+
+    def _check_derived_text_manifest(self) -> None:
+        path = self.archive_root / archive_services.DERIVED_TEXT_MANIFEST_RELATIVE_PATH
+        if not path.is_file():
+            return
+
+        seen: set[str] = set()
+        for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                self.error("derived_text_manifest_json_invalid", f"Invalid JSON on line {line_number}: {exc}", path)
+                continue
+            if not isinstance(record, dict):
+                self.error("derived_text_record_invalid", f"Derived text line {line_number} must be a JSON object.", path)
+                continue
+            self._check_schema(record, "derived-text-record.schema.json", path)
+
+            derived_text_id = record.get("derived_text_id")
+            if not isinstance(derived_text_id, str) or not DERIVED_TEXT_ID_RE.match(derived_text_id):
+                self.error("derived_text_id_invalid", f"Invalid derived_text_id on line {line_number}: {derived_text_id}", path)
+            elif derived_text_id in seen:
+                self.error("derived_text_id_duplicate", f"Duplicate derived_text_id: {derived_text_id}", path)
+            else:
+                seen.add(derived_text_id)
+
+            source_object_id = record.get("source_object_id")
+            if not isinstance(source_object_id, str) or not OBJECT_ID_RE.match(source_object_id):
+                self.error("derived_text_source_object_id_invalid", f"Invalid source_object_id on line {line_number}: {source_object_id}", path)
+            elif self.manifest_objects and source_object_id not in self.manifest_objects:
+                self.error("derived_text_source_object_missing", f"Derived text source object is not in files.jsonl: {source_object_id}", path)
+
+            derivation_kind = record.get("derivation_kind")
+            if derivation_kind not in archive_services.DERIVED_TEXT_DERIVATION_KINDS:
+                self.error("derived_text_derivation_kind_invalid", f"Invalid derivation_kind on line {line_number}: {derivation_kind}", path)
+            review_status = record.get("review_status")
+            if review_status not in archive_services.DERIVED_TEXT_REVIEW_STATUSES:
+                self.error("derived_text_review_status_invalid", f"Invalid review_status on line {line_number}: {review_status}", path)
+
+            text_sha256 = record.get("text_sha256")
+            if not isinstance(text_sha256, str) or not SHA256_RE.match(text_sha256):
+                self.error("derived_text_sha256_invalid", f"Invalid text_sha256 on line {line_number}: {text_sha256}", path)
+            text_logical_key = record.get("text_logical_key")
+            if not isinstance(text_logical_key, str) or not text_logical_key:
+                self.error("derived_text_logical_key_missing", f"Derived text missing text_logical_key: {derived_text_id}", path)
+            else:
+                try:
+                    text_path = resolve_archive_relative_path(self.archive_root, text_logical_key)
+                except ArchivePathError as exc:
+                    self.error("derived_text_path_unsafe", f"Derived text path is unsafe: {text_logical_key} ({exc})", path)
+                else:
+                    if text_path.is_file() and isinstance(text_sha256, str) and SHA256_RE.match(text_sha256):
+                        actual_sha = sha256_file(text_path)
+                        if actual_sha != text_sha256:
+                            self.error("derived_text_sha_mismatch", f"Derived text SHA-256 mismatch: {text_logical_key}", text_path)
+                    elif not text_path.is_file():
+                        self.warn("derived_text_body_missing", f"Derived text body file is missing: {text_logical_key}", text_path)
 
     def _check_local_object_locations(self, record: dict[str, Any], manifest_path: Path) -> None:
         object_id = record.get("object_id")
@@ -2792,6 +2875,7 @@ def command_index(args: argparse.Namespace) -> int:
             "Indexed "
             f"{result['zettels']} zettel(s), "
             f"{result['objects']} object(s), "
+            f"{result['derived_texts']} derived text record(s), "
             f"{result['views']} view(s), "
             f"{result['source_map_entries']} source map item(s) "
             f"at {result['index_path']}"
@@ -3000,6 +3084,57 @@ def command_objet_capture(args: argparse.Namespace) -> int:
         print("Summary: " + ", ".join(f"{key}={value}" for key, value in summary.items()))
         for blocker in result.get("blockers", []):
             print(f"BLOCKED: {blocker}")
+    return 0 if result.get("ok") else 1
+
+
+def command_derive_text_capture(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("Derived text capture requires --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("Derived text capture requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+
+    kwargs = {
+        "text_file": Path(args.text_file),
+        "source_object_id": args.source_object_id,
+        "derivation_kind": args.derivation_kind,
+        "tool_name": args.tool_name,
+        "tool_version": args.tool_version,
+        "review_status": args.review_status,
+        "model_name": args.model_name,
+        "model_version": args.model_version,
+        "confidence": args.confidence,
+        "language": args.language,
+        "born_digital": args.born_digital,
+    }
+    try:
+        if args.dry_run:
+            result = archive_services.derived_text_capture_dry_run(Path(args.archive_root), **kwargs)
+        else:
+            result = archive_services.derived_text_capture_apply(
+                Path(args.archive_root),
+                reviewed_by=args.reviewed_by,
+                **kwargs,
+            )
+    except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError) as exc:
+        print(f"Derived text capture failed: {exc}", file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("action") or result.get("planned_action")
+        print(f"{result.get('derived_text_id') or '-'}: {state}")
+        print(f"Source object: {result.get('source_object_id') or '-'}")
+        print(f"Text path: {result.get('text_logical_key') or '-'}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+        for warning in result.get("warnings", []):
+            print(f"WARNING: {warning}")
     return 0 if result.get("ok") else 1
 
 
@@ -4149,9 +4284,11 @@ def create_recommended_dirs(target: Path) -> None:
         "views",
         "source-maps",
         "objects/manifests",
+        "objects/derived-text/sha256",
         "db",
         "workbench",
         "receipts",
+        "receipts/derived-text-capture",
         "receipts/delegate",
         "receipts/import",
         "receipts/lineage",
@@ -4200,6 +4337,7 @@ def write_safe_gitignore(target: Path) -> None:
                 "",
                 "# Local content-addressed objet byte store (manifests/receipts stay tracked)",
                 "objects/sha256/",
+                "objects/derived-text/sha256/",
                 "",
             ]
         ),
@@ -4226,6 +4364,7 @@ def update_archive_yml(target: Path, args: argparse.Namespace) -> None:
     data["root_policy"].setdefault("ai_inbox", "inbox/")
     data["root_policy"].setdefault("views", "views/")
     data["root_policy"].setdefault("object_manifest", "objects/manifests/files.jsonl")
+    data["root_policy"].setdefault("derived_text_manifest", archive_services.DERIVED_TEXT_MANIFEST_RELATIVE_PATH)
     data["root_policy"].setdefault("source_bindings", "source-bindings.yml")
     data["root_policy"].setdefault("source_maps", "source-maps/")
     data["root_policy"].setdefault("sqlite_schema", "db/schema.sql")
@@ -5340,6 +5479,43 @@ def build_parser() -> argparse.ArgumentParser:
     objet_capture.add_argument("--reviewed-by", help="Reviewer id required for approved capture.")
     objet_capture.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     objet_capture.set_defaults(func=command_objet_capture)
+
+    derive_text = subcommands.add_parser(
+        "derive-text",
+        help="Register extracted text as provenance-aware derived text records.",
+    )
+    derive_text_subcommands = derive_text.add_subparsers(dest="derive_text_command", required=True)
+    derive_text_capture = derive_text_subcommands.add_parser(
+        "capture",
+        help="Dry-run or approve registering one extracted/OCR/ASR/vision text file.",
+    )
+    derive_text_capture.add_argument("archive_root", help="Archive root receiving the derived text record.")
+    derive_text_capture.add_argument("--text-file", required=True, help="UTF-8 extracted text file to capture.")
+    derive_text_capture.add_argument("--source-object-id", required=True, help="Source object_id from objects/manifests/files.jsonl.")
+    derive_text_capture.add_argument(
+        "--derivation-kind",
+        required=True,
+        choices=sorted(archive_services.DERIVED_TEXT_DERIVATION_KINDS),
+        help="How this text was derived from the source object.",
+    )
+    derive_text_capture.add_argument("--tool-name", required=True, help="Extractor/OCR/ASR/vision tool name.")
+    derive_text_capture.add_argument("--tool-version", required=True, help="Extractor/OCR/ASR/vision tool version.")
+    derive_text_capture.add_argument("--model-name", help="Optional model name for model-dependent derivations.")
+    derive_text_capture.add_argument("--model-version", help="Optional model version for model-dependent derivations.")
+    derive_text_capture.add_argument("--confidence", type=float, help="Optional confidence from 0.0 to 1.0.")
+    derive_text_capture.add_argument("--language", help="Optional BCP-47-ish language tag, e.g. ko or en.")
+    derive_text_capture.add_argument(
+        "--review-status",
+        required=True,
+        choices=sorted(archive_services.DERIVED_TEXT_REVIEW_STATUSES),
+        help="Review status for this derived text.",
+    )
+    derive_text_capture.add_argument("--born-digital", action="store_true", help="Mark text as extracted from born-digital content.")
+    derive_text_capture.add_argument("--dry-run", action="store_true", help="Preview derived text capture without writing files.")
+    derive_text_capture.add_argument("--approve", action="store_true", help="Store derived text, append manifest record, and write receipt.")
+    derive_text_capture.add_argument("--reviewed-by", help="Reviewer id required for approved capture.")
+    derive_text_capture.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    derive_text_capture.set_defaults(func=command_derive_text_capture)
 
     import_external = subcommands.add_parser("import-external", help="Import Notion or Google Drive exports as inbox drafts.")
     import_external.add_argument("archive_root", help="Target archive root.")

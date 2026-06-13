@@ -10,6 +10,7 @@ root_policy:
   ai_inbox: inbox/
   views: views/
   object_manifest: objects/manifests/files.jsonl
+  derived_text_manifest: objects/manifests/derived-text.jsonl
   sqlite_schema: db/schema.sql
 ai_write_policy:
   default: inbox_only

@@ -87,7 +87,8 @@ zet, receipt로 보존해야 합니다.
 
 | Version | Status | Upgrade note |
 | --- | --- | --- |
-| `v0.3.3` | current public pre-release | `wom-kit/docs/releases/v0.3.3.md` |
+| `v0.3.4` | current public pre-release | `wom-kit/docs/releases/v0.3.4.md` |
+| `v0.3.3` | superseded public pre-release | `wom-kit/docs/releases/v0.3.3.md` |
 | `v0.3.2` | superseded public pre-release | `wom-kit/docs/releases/v0.3.2.md` |
 | `v0.3.1` | superseded public pre-release | `wom-kit/docs/releases/v0.3.1.md` |
 | `v0.3.0` | superseded public pre-release | `wom-kit/docs/releases/v0.3.0.md` |
@@ -150,6 +151,28 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.4` | superseded public pre-release | `wom-kit/docs/releases/v0.2.4.md` |
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
+
+## From `v0.3.3` To `v0.3.4`
+
+This release adds the first derived text capture layer.
+
+What changed:
+
+- added CLI `archive derive-text capture <archive-root> --text-file <file> --source-object-id <object-id> --derivation-kind <kind> --tool-name <name> --tool-version <version> --review-status <status> --dry-run|--approve`,
+- added `objects/manifests/derived-text.jsonl` for provenance-aware derived text records,
+- approved capture stores UTF-8 text bodies under `objects/derived-text/sha256/` and writes `receipts/derived-text-capture/*.json`,
+- `archive index` ingests derived text records and `archive search` can return `type: derived_text`,
+- doctor validates derived text JSONL, source object references, vocabulary, and stored text hashes when present,
+- updated version metadata to `0.3.4`.
+
+The source object must already exist in `objects/manifests/files.jsonl`.
+`derive-text capture` does not run OCR, ASR, parsers, LLM vision, provider APIs,
+drafting, or minting. Rebuild the generated search index after approved derived
+text capture:
+
+```text
+archive index <archive-root>
+```
 
 ## From `v0.3.2` To `v0.3.3`
 

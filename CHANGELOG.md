@@ -8,6 +8,12 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 No unreleased changes.
 
+## v0.3.4 - 2026-06-13
+
+- Added `archive derive-text capture` for dry-run/approved registration of externally extracted text as provenance-aware derived text records.
+- Added `objects/manifests/derived-text.jsonl`, local derived text body storage under `objects/derived-text/sha256/`, approval receipts under `receipts/derived-text-capture/`, doctor/schema validation, and search index ingestion for derived text.
+- Standardized the first implemented derived-text vocabulary to `parser`, `ocr`, `asr`, `llm_vision` and `unreviewed`, `human_corrected`.
+
 ## v0.3.3 - 2026-06-13
 
 Compatible fixes from v0.3.2 upgrade field feedback:

@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.3 pre-release
+v0.3.4 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -36,6 +36,7 @@ What exists today:
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
 - private archive lifecycle tools for doctor checks, draft creation, minting, delegation, receipts, search, and metadata review,
 - read-only preview layers for runtime context, profiles, source/objet intake, block headers, prompt boundaries, foreign block review, projection, shared update review/index, shared update route pointers, and ZET would-transport planning,
+- approval-gated derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
 - approval-gated local write paths for selected private archive, foreign-block review records, and the first v0.3.0 shared update attestation/review record,
 - a v0.2.x freeze / v0.3.0 entry boundary document plus a narrow v0.3.0 write boundary that stays local-first and body-safe,
 - local public-release hygiene tools for links, Korean product language, privacy, release readiness, and branch-protection planning.
@@ -197,6 +198,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.4
 v0.3.3
 v0.3.2
 v0.3.1

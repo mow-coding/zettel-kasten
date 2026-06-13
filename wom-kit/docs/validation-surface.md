@@ -19,8 +19,8 @@ behavior of the shipped code, not an aspiration.
 The Doctor walk checks: archive structure and symlink boundaries, zettel
 frontmatter against `zettel-frontmatter.schema.json` (for `zettels/` and
 `inbox/`), the `zettel-kasten/` rules layer against its schemas, object
-manifests, mint/promotion receipts, lifecycle consistency, secret-like values,
-and provider-URL/absolute-path leaks.
+manifests, derived text manifests, mint/promotion receipts, lifecycle
+consistency, secret-like values, and provider-URL/absolute-path leaks.
 
 ## The YAML timestamp policy (the WOM-COMPAT-1 root, made explicit)
 

@@ -172,20 +172,30 @@ derived_text:
   created_at: 2026-05-23T00:00:00Z
 ```
 
-Allowed `derivation_kind` values should include:
+The first implemented CLI vocabulary for `archive derive-text capture` is:
+
+- `parser`,
+- `ocr`,
+- `asr`,
+- `llm_vision`.
+
+Future `derivation_kind` values may include:
 
 - `born_digital_text`,
 - `parser_extraction`,
-- `ocr`,
 - `speech_to_text`,
 - `video_transcript`,
 - `ai_transcription`,
 - `human_transcription`,
 - `human_reviewed_correction`.
 
-Allowed `review_status` values should include:
+The first implemented CLI vocabulary for `review_status` is:
 
 - `unreviewed`,
+- `human_corrected`.
+
+Future `review_status` values may include:
+
 - `machine_only`,
 - `human_spot_checked`,
 - `human_reviewed`,

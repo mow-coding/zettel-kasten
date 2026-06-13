@@ -37,6 +37,13 @@ except ImportError:  # pragma: no cover - exercised only when dependency is abse
 FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n", re.DOTALL)
 VALID_ZETTEL_FOLDERS = ("zettels/", "inbox/")
 INDEX_RELATIVE_PATH = "db/archive-index.sqlite"
+DERIVED_TEXT_MANIFEST_RELATIVE_PATH = "objects/manifests/derived-text.jsonl"
+DERIVED_TEXT_STORE_PREFIX = "objects/derived-text/sha256"
+DERIVED_TEXT_CAPTURE_RECEIPTS_DIR = "receipts/derived-text-capture"
+DERIVED_TEXT_DERIVATION_KINDS = {"parser", "ocr", "asr", "llm_vision"}
+DERIVED_TEXT_REVIEW_STATUSES = {"unreviewed", "human_corrected"}
+DERIVED_TEXT_CAPTURE_RECEIPT_SCHEMA = "wom-kit/derived-text-capture-receipt/v0.1"
+DERIVED_TEXT_RECORD_SCHEMA = "wom-kit/derived-text-record/v0.1"
 KIT_ROOT = Path(__file__).resolve().parents[2]
 WORKPACK_MODES = {"reference", "copy", "mount", "derive", "handover", "return"}
 ARCHIVE_SCOPES = {"personal", "relationship", "family", "child", "project", "company", "business_unit"}
@@ -15100,6 +15107,24 @@ def load_manifest_records(archive_root: Path) -> list[dict[str, Any]]:
     return records
 
 
+def load_derived_text_records(archive_root: Path) -> list[dict[str, Any]]:
+    manifest_path = archive_internal_path(archive_root, DERIVED_TEXT_MANIFEST_RELATIVE_PATH)
+    if not manifest_path.is_file():
+        return []
+    records: list[dict[str, Any]] = []
+    for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+    return records
+
+
 def load_source_bindings(archive_root: Path) -> dict[str, Any]:
     path = archive_internal_path(archive_root, "source-bindings.yml")
     if not path.is_file():
@@ -18704,6 +18729,7 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
 
     zettel_count = 0
     object_count = 0
+    derived_text_count = 0
     view_count = 0
     source_map_count = 0
     edge_count = 0
@@ -18725,6 +18751,16 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
               object_id TEXT PRIMARY KEY,
               logical_key TEXT,
               mime TEXT,
+              manifest_json TEXT
+            );
+            CREATE TABLE IF NOT EXISTS derived_texts (
+              derived_text_id TEXT PRIMARY KEY,
+              source_object_id TEXT,
+              derivation_kind TEXT,
+              review_status TEXT,
+              language TEXT,
+              text_logical_key TEXT,
+              text_body TEXT,
               manifest_json TEXT
             );
             CREATE TABLE IF NOT EXISTS views (
@@ -18758,6 +18794,7 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
             CREATE INDEX IF NOT EXISTS facets_key_value ON zettel_facets(facet_key, facet_value);
             DELETE FROM zettels;
             DELETE FROM objects;
+            DELETE FROM derived_texts;
             DELETE FROM views;
             DELETE FROM source_map_entries;
             DELETE FROM edges;
@@ -18850,6 +18887,39 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
                 )
                 object_count += 1
 
+        for record in load_derived_text_records(root):
+            text_body = ""
+            text_logical_key = record.get("text_logical_key")
+            if isinstance(text_logical_key, str) and text_logical_key:
+                try:
+                    text_path = archive_internal_path(root, text_logical_key)
+                    if text_path.is_file():
+                        text_body = text_path.read_text(encoding="utf-8")
+                    else:
+                        warnings.append(f"derived text body missing: {text_logical_key}")
+                except (OSError, UnicodeError, ArchiveServiceError) as exc:
+                    warnings.append(f"derived text body not indexed: {text_logical_key} ({exc})")
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO derived_texts(
+                  derived_text_id, source_object_id, derivation_kind, review_status,
+                  language, text_logical_key, text_body, manifest_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.get("derived_text_id"),
+                    record.get("source_object_id"),
+                    record.get("derivation_kind"),
+                    record.get("review_status"),
+                    record.get("language"),
+                    text_logical_key,
+                    text_body,
+                    json.dumps(record, ensure_ascii=False, default=str),
+                ),
+            )
+            derived_text_count += 1
+
         views_root = root / "views"
         if views_root.is_dir():
             for path in safe_archive_glob(views_root, "*.yml", root):
@@ -18911,6 +18981,7 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
         "index_path": archive_relative_path(db_path, root),
         "zettels": zettel_count,
         "objects": object_count,
+        "derived_texts": derived_text_count,
         "views": view_count,
         "source_map_entries": source_map_count,
         "edges": edge_count,
@@ -19197,6 +19268,36 @@ def search_archive(archive_root: Path | str, query: str, limit: int = 20) -> dic
                         "title": row["logical_key"],
                         "mime": row["mime"],
                         "snippet": make_snippet(row["manifest_json"] or "", query),
+                    }
+                )
+
+        remaining = limit - len(results)
+        if remaining > 0:
+            for row in conn.execute(
+                """
+                SELECT derived_text_id, source_object_id, derivation_kind, review_status,
+                       language, text_logical_key, text_body, manifest_json
+                FROM derived_texts
+                WHERE lower(coalesce(derived_text_id, '') || ' ' || coalesce(source_object_id, '') || ' ' ||
+                            coalesce(derivation_kind, '') || ' ' || coalesce(review_status, '') || ' ' ||
+                            coalesce(language, '') || ' ' || coalesce(text_logical_key, '') || ' ' ||
+                            coalesce(text_body, '') || ' ' || coalesce(manifest_json, '')) LIKE ?
+                ORDER BY text_logical_key
+                LIMIT ?
+                """,
+                (like, remaining),
+            ):
+                results.append(
+                    {
+                        "type": "derived_text",
+                        "path": row["text_logical_key"],
+                        "id": row["derived_text_id"],
+                        "title": row["source_object_id"],
+                        "source_object_id": row["source_object_id"],
+                        "derivation_kind": row["derivation_kind"],
+                        "review_status": row["review_status"],
+                        "language": row["language"],
+                        "snippet": make_snippet(row["text_body"] or row["manifest_json"] or "", query),
                     }
                 )
 
@@ -19645,6 +19746,529 @@ def unique_preserve_order(values: list[str]) -> list[str]:
 
 def drop_none_values(value: dict[str, Any]) -> dict[str, Any]:
     return {key: item for key, item in value.items() if item is not None}
+
+
+def _jsonl_needs_leading_newline(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    with path.open("rb") as handle:
+        handle.seek(-1, os.SEEK_END)
+        return handle.read(1) != b"\n"
+
+
+class _DerivedTextManifestLock:
+    def __init__(self, root: Path) -> None:
+        manifests_dir = archive_internal_path(root, "objects/manifests")
+        manifests_dir.mkdir(parents=True, exist_ok=True)
+        self._path = manifests_dir / ".derived-text.jsonl.lock"
+        self._handle: Any = None
+
+    def __enter__(self) -> "_DerivedTextManifestLock":
+        self._handle = open(self._path, "a+b")
+        if os.name == "nt":
+            import msvcrt
+
+            self._handle.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(self._handle.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    continue
+        else:
+            import fcntl
+
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc_info: Any) -> bool:
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                self._handle.seek(0)
+                msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._handle.close()
+        return False
+
+
+def derived_text_canonical_record_ids(records: list[dict[str, Any]]) -> set[str]:
+    return {str(record.get("derived_text_id") or "") for record in records if record.get("derived_text_id")}
+
+
+def derived_text_identity_digest(
+    *,
+    source_object_id: str,
+    text_sha256: str,
+    derivation_kind: str,
+    tool_name: str,
+    tool_version: str,
+    model_name: str | None,
+    model_version: str | None,
+    review_status: str,
+) -> str:
+    identity = drop_none_values(
+        {
+            "source_object_id": source_object_id,
+            "text_sha256": text_sha256,
+            "derivation_kind": derivation_kind,
+            "tool_name": tool_name,
+            "tool_version": tool_version,
+            "model_name": model_name,
+            "model_version": model_version,
+            "review_status": review_status,
+        }
+    )
+    encoded = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _derived_text_metadata_blockers(
+    *,
+    source_object_id: str,
+    derivation_kind: str,
+    tool_name: str,
+    tool_version: str,
+    review_status: str,
+    confidence: float | int | None,
+    language: str | None,
+) -> list[str]:
+    blockers: list[str] = []
+    normalize_object_id(source_object_id, blockers)
+    if derivation_kind not in DERIVED_TEXT_DERIVATION_KINDS:
+        blockers.append("derivation_kind_invalid")
+    if review_status not in DERIVED_TEXT_REVIEW_STATUSES:
+        blockers.append("review_status_invalid")
+    for label, value in [("tool_name", tool_name), ("tool_version", tool_version)]:
+        if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value or "\x00" in value:
+            blockers.append(f"{label}_invalid")
+    if language is not None and ("\n" in language or "\r" in language or "\x00" in language):
+        blockers.append("language_invalid")
+    if confidence is not None:
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+            blockers.append("confidence_invalid")
+        elif confidence < 0 or confidence > 1:
+            blockers.append("confidence_invalid")
+    return unique_preserve_order(blockers)
+
+
+def _derived_text_read_source_file(text_file: Path | str) -> tuple[bytes | None, list[str]]:
+    path = Path(text_file)
+    blockers: list[str] = []
+    try:
+        entry_stat = os.lstat(path)
+    except FileNotFoundError:
+        return None, ["text_file_missing"]
+    except OSError:
+        return None, ["text_file_unreadable"]
+    if stat.S_ISLNK(entry_stat.st_mode):
+        return None, ["text_file_symlink_not_allowed"]
+    if stat.S_ISDIR(entry_stat.st_mode):
+        return None, ["text_file_is_directory"]
+    if not stat.S_ISREG(entry_stat.st_mode):
+        return None, ["text_file_special_not_allowed"]
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None, ["text_file_unreadable"]
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        blockers.append("text_file_not_utf8")
+    return data, blockers
+
+
+def _derived_text_build_record(
+    *,
+    archive_id: str,
+    source_object_id: str,
+    text_sha256: str,
+    text_logical_key: str,
+    size_bytes: int,
+    text_filename: str,
+    derivation_kind: str,
+    tool_name: str,
+    tool_version: str,
+    model_name: str | None,
+    model_version: str | None,
+    confidence: float | int | None,
+    language: str | None,
+    review_status: str,
+    born_digital: bool,
+    captured_at: str,
+    reviewed_by: str | None,
+) -> dict[str, Any]:
+    digest = derived_text_identity_digest(
+        source_object_id=source_object_id,
+        text_sha256=text_sha256,
+        derivation_kind=derivation_kind,
+        tool_name=tool_name,
+        tool_version=tool_version,
+        model_name=model_name,
+        model_version=model_version,
+        review_status=review_status,
+    )
+    return drop_none_values(
+        {
+            "schema": DERIVED_TEXT_RECORD_SCHEMA,
+            "derived_text_id": f"derived-text:sha256:{digest}",
+            "source_object_id": source_object_id,
+            "derivation_kind": derivation_kind,
+            "tool_name": tool_name,
+            "tool_version": tool_version,
+            "model_name": model_name,
+            "model_version": model_version,
+            "confidence": confidence,
+            "language": language,
+            "review_status": review_status,
+            "born_digital": born_digital,
+            "text_sha256": text_sha256,
+            "text_logical_key": text_logical_key,
+            "mime": "text/plain; charset=utf-8",
+            "size_bytes": size_bytes,
+            "provenance": {
+                "source": "derived_text_capture",
+                "created_in": f"archive:{archive_id}",
+                "captured_at": captured_at,
+                "captured_by": reviewed_by,
+                "source_text_filename": text_filename,
+            },
+        }
+    )
+
+
+def _derived_text_write_receipt(root: Path, receipt: dict[str, Any], captured_at: str) -> str:
+    receipts_dir = archive_internal_path(root, DERIVED_TEXT_CAPTURE_RECEIPTS_DIR)
+    receipts_dir.mkdir(parents=True, exist_ok=True)
+    timestamp_compact = re.sub(r"[^0-9TZ]", "", captured_at)
+    while True:
+        capture_id = f"{timestamp_compact}-{secrets.token_hex(6)}"
+        receipt_path = receipts_dir / f"{capture_id}.json"
+        receipt["receipt_id"] = f"receipt:derived-text-capture:{capture_id}"
+        try:
+            with receipt_path.open("x", encoding="utf-8") as handle:
+                handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+        except FileExistsError:
+            continue
+        except OSError:
+            receipt_path.unlink(missing_ok=True)
+            raise
+        return f"{DERIVED_TEXT_CAPTURE_RECEIPTS_DIR}/{capture_id}.json"
+
+
+def _derived_text_capture_run(
+    archive_root: Path | str,
+    *,
+    text_file: Path | str,
+    source_object_id: str,
+    derivation_kind: str,
+    tool_name: str,
+    tool_version: str,
+    review_status: str,
+    approve: bool,
+    reviewed_by: str | None,
+    model_name: str | None = None,
+    model_version: str | None = None,
+    confidence: float | int | None = None,
+    language: str | None = None,
+    born_digital: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    captured_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    blockers = _derived_text_metadata_blockers(
+        source_object_id=source_object_id,
+        derivation_kind=derivation_kind,
+        tool_name=tool_name,
+        tool_version=tool_version,
+        review_status=review_status,
+        confidence=confidence,
+        language=language,
+    )
+    normalized_source_object_id = normalize_object_id(source_object_id, []) if not blockers else ""
+    source_record_present = False
+    if normalized_source_object_id:
+        source_record_present = find_manifest_record(root, normalized_source_object_id) is not None
+        if not source_record_present:
+            blockers.append("source_object_missing")
+
+    text_bytes, file_blockers = _derived_text_read_source_file(text_file)
+    blockers.extend(file_blockers)
+    if blockers or text_bytes is None:
+        return {
+            "ok": False,
+            "dry_run": not approve,
+            "lifecycle_action": "derived_text_capture_plan" if not approve else "derived_text_capture",
+            "archive_id": archive_id,
+            "source_object_id": normalized_source_object_id or source_object_id,
+            "source_object_present": source_record_present,
+            "derived_text_id": None,
+            "text_logical_key": None,
+            "planned_action": "blocked",
+            "action": "blocked",
+            "blockers": unique_preserve_order(blockers),
+            "warnings": [],
+            "would_change": [],
+        }
+
+    warnings: list[str] = []
+    if len(text_bytes) == 0:
+        warnings.append("zero_byte_text")
+    text_sha256 = hashlib.sha256(text_bytes).hexdigest()
+    text_logical_key = f"{DERIVED_TEXT_STORE_PREFIX}/{text_sha256[:2]}/{text_sha256}.txt"
+    text_filename = Path(text_file).name
+    record = _derived_text_build_record(
+        archive_id=archive_id,
+        source_object_id=normalized_source_object_id,
+        text_sha256=text_sha256,
+        text_logical_key=text_logical_key,
+        size_bytes=len(text_bytes),
+        text_filename=text_filename,
+        derivation_kind=derivation_kind,
+        tool_name=tool_name.strip(),
+        tool_version=tool_version.strip(),
+        model_name=model_name.strip() if isinstance(model_name, str) and model_name.strip() else None,
+        model_version=model_version.strip() if isinstance(model_version, str) and model_version.strip() else None,
+        confidence=confidence,
+        language=language.strip() if isinstance(language, str) and language.strip() else None,
+        review_status=review_status,
+        born_digital=born_digital,
+        captured_at=captured_at,
+        reviewed_by=reviewed_by,
+    )
+    derived_text_id = str(record["derived_text_id"])
+    dest = archive_internal_path(root, text_logical_key)
+
+    def compute_planned_action(existing_ids: set[str]) -> str:
+        record_present = derived_text_id in existing_ids
+        dest_present = dest.is_file()
+        if dest_present and sha256_path(dest) != text_sha256:
+            return "dest_collision"
+        if record_present and dest_present:
+            return "skip_already_present"
+        if record_present and not dest_present:
+            return "re_materialize"
+        if not record_present and dest_present:
+            return "repair_append"
+        return "capture"
+
+    existing_ids = derived_text_canonical_record_ids(load_derived_text_records(root))
+    planned_action = compute_planned_action(existing_ids)
+    if planned_action == "dest_collision":
+        blockers.append("dest_collision")
+
+    base_output = {
+        "dry_run": not approve,
+        "lifecycle_action": "derived_text_capture_plan" if not approve else "derived_text_capture",
+        "archive_id": archive_id,
+        "source_object_id": normalized_source_object_id,
+        "source_object_present": source_record_present,
+        "derived_text_id": derived_text_id,
+        "derivation_kind": derivation_kind,
+        "review_status": review_status,
+        "text_sha256": text_sha256,
+        "text_logical_key": text_logical_key,
+        "size_bytes": len(text_bytes),
+        "mime": "text/plain; charset=utf-8",
+    }
+    planned_writes: list[str] = []
+    if planned_action in ("capture", "re_materialize"):
+        planned_writes.append(text_logical_key)
+    if planned_action in ("capture", "repair_append"):
+        planned_writes.append(f"{DERIVED_TEXT_MANIFEST_RELATIVE_PATH} (+1 line)")
+
+    if not approve:
+        timestamp_compact = re.sub(r"[^0-9TZ]", "", captured_at)
+        return {
+            "ok": not blockers,
+            **base_output,
+            "planned_action": planned_action if not blockers else "blocked",
+            "proposed_receipt_path": f"{DERIVED_TEXT_CAPTURE_RECEIPTS_DIR}/{timestamp_compact}-{secrets.token_hex(6)}.json",
+            "planned_writes": [] if blockers else planned_writes,
+            "blockers": unique_preserve_order(blockers),
+            "warnings": warnings,
+            "would_change": [] if blockers else planned_writes,
+        }
+
+    if reviewed_by is None or not str(reviewed_by).strip():
+        blockers.append("reviewed_by_required")
+
+    manifest_record_appended = False
+    stored_sha256_verified = False
+    action = planned_action
+    receipt_path_value: str | None = None
+    if not blockers:
+        try:
+            archive_internal_path(root, DERIVED_TEXT_CAPTURE_RECEIPTS_DIR).mkdir(parents=True, exist_ok=True)
+        except OSError:
+            blockers.append("receipts_dir_unavailable")
+    if not blockers:
+        manifest_path = archive_internal_path(root, DERIVED_TEXT_MANIFEST_RELATIVE_PATH)
+        with _DerivedTextManifestLock(root):
+            action = compute_planned_action(derived_text_canonical_record_ids(load_derived_text_records(root)))
+            if action == "dest_collision":
+                blockers.append("dest_collision")
+            if not blockers and action in ("capture", "re_materialize"):
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                tmp = dest.parent / (dest.name + ".part-" + secrets.token_hex(8))
+                try:
+                    with tmp.open("wb") as handle:
+                        handle.write(text_bytes)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    if sha256_path(tmp) != text_sha256:
+                        tmp.unlink(missing_ok=True)
+                        blockers.append("lossless_verification_failed")
+                    else:
+                        _objet_capture_fsync_dir(dest.parent)
+                        os.replace(tmp, dest)
+                        _objet_capture_fsync_dir(dest.parent)
+                        if sha256_path(dest) != text_sha256:
+                            dest.unlink(missing_ok=True)
+                            blockers.append("lossless_verification_failed")
+                        else:
+                            stored_sha256_verified = True
+                except OSError:
+                    tmp.unlink(missing_ok=True)
+                    blockers.append("text_store_write_failed")
+            elif action == "skip_already_present":
+                stored_sha256_verified = dest.is_file() and sha256_path(dest) == text_sha256
+            if not blockers and action in ("capture", "repair_append"):
+                try:
+                    needs_newline = _jsonl_needs_leading_newline(manifest_path)
+                    with manifest_path.open("a", encoding="utf-8", newline="\n") as manifest_handle:
+                        if needs_newline:
+                            manifest_handle.write("\n")
+                        manifest_handle.write(
+                            json.dumps(record, ensure_ascii=False, default=str, separators=(",", ":")) + "\n"
+                        )
+                        manifest_handle.flush()
+                        os.fsync(manifest_handle.fileno())
+                    manifest_record_appended = True
+                except OSError:
+                    blockers.append("manifest_append_failed")
+    receipt = {
+        "receipt_id": None,
+        "schema": DERIVED_TEXT_CAPTURE_RECEIPT_SCHEMA,
+        "dry_run": False,
+        "ok": not blockers,
+        "archive_id": archive_id,
+        "reviewed_by": reviewed_by,
+        "captured_at": captured_at,
+        "derived_text_id": derived_text_id,
+        "source_object_id": normalized_source_object_id,
+        "text_sha256": text_sha256,
+        "text_logical_key": text_logical_key,
+        "derivation_kind": derivation_kind,
+        "review_status": review_status,
+        "planned_action": action,
+        "action": {
+            "capture": "captured",
+            "repair_append": "repair_appended",
+            "re_materialize": "re_materialized",
+            "skip_already_present": "skip_already_present",
+        }.get(action, action)
+        if not blockers
+        else "blocked",
+        "manifest_record_appended": manifest_record_appended,
+        "stored_sha256_verified": stored_sha256_verified,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": warnings,
+    }
+    if not (blockers and "receipts_dir_unavailable" in blockers):
+        receipt_path_value = _derived_text_write_receipt(root, receipt, captured_at)
+    return {
+        "ok": not blockers,
+        **base_output,
+        "reviewed_by": reviewed_by,
+        "captured_at": captured_at,
+        "planned_action": action,
+        "action": {
+            "capture": "captured",
+            "repair_append": "repair_appended",
+            "re_materialize": "re_materialized",
+            "skip_already_present": "skip_already_present",
+        }.get(action, action)
+        if not blockers
+        else "blocked",
+        "manifest_record_appended": manifest_record_appended,
+        "stored_sha256_verified": stored_sha256_verified,
+        "receipt_path": receipt_path_value,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": warnings,
+    }
+
+
+def derived_text_capture_dry_run(
+    archive_root: Path | str,
+    *,
+    text_file: Path | str,
+    source_object_id: str,
+    derivation_kind: str,
+    tool_name: str,
+    tool_version: str,
+    review_status: str,
+    model_name: str | None = None,
+    model_version: str | None = None,
+    confidence: float | int | None = None,
+    language: str | None = None,
+    born_digital: bool = False,
+) -> dict[str, Any]:
+    return _derived_text_capture_run(
+        archive_root,
+        text_file=text_file,
+        source_object_id=source_object_id,
+        derivation_kind=derivation_kind,
+        tool_name=tool_name,
+        tool_version=tool_version,
+        review_status=review_status,
+        approve=False,
+        reviewed_by=None,
+        model_name=model_name,
+        model_version=model_version,
+        confidence=confidence,
+        language=language,
+        born_digital=born_digital,
+    )
+
+
+def derived_text_capture_apply(
+    archive_root: Path | str,
+    *,
+    text_file: Path | str,
+    source_object_id: str,
+    derivation_kind: str,
+    tool_name: str,
+    tool_version: str,
+    review_status: str,
+    reviewed_by: str,
+    model_name: str | None = None,
+    model_version: str | None = None,
+    confidence: float | int | None = None,
+    language: str | None = None,
+    born_digital: bool = False,
+) -> dict[str, Any]:
+    return _derived_text_capture_run(
+        archive_root,
+        text_file=text_file,
+        source_object_id=source_object_id,
+        derivation_kind=derivation_kind,
+        tool_name=tool_name,
+        tool_version=tool_version,
+        review_status=review_status,
+        approve=True,
+        reviewed_by=reviewed_by,
+        model_name=model_name,
+        model_version=model_version,
+        confidence=confidence,
+        language=language,
+        born_digital=born_digital,
+    )
 
 
 OBJET_CAPTURE_RECEIPTS_DIR = "receipts/objet-capture"

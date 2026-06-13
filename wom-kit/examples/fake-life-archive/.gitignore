@@ -19,5 +19,13 @@ token.json
 tmp/
 tmp-*/
 
+# Local-only collaboration and harness state
+/collab/
+/.mow-harness/
+
 # Generated archive search indexes
 **/db/archive-index.sqlite
+
+# Local content-addressed stores
+objects/sha256/
+objects/derived-text/sha256/

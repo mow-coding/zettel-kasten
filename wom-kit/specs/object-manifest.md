@@ -103,6 +103,39 @@ review_status: unreviewed
 
 Born-digital text has higher authority than OCR-derived text. OCR and AI transcription should be treated as model-dependent derived records that can be regenerated later.
 
+The first implemented CLI surface is:
+
+```text
+archive derive-text capture
+```
+
+It registers already extracted UTF-8 text. It does not run OCR, ASR, parser
+extraction, LLM vision, provider APIs, drafting, or minting.
+
+Approved capture stores:
+
+```text
+objects/derived-text/sha256/<2>/<text-sha256>.txt
+objects/manifests/derived-text.jsonl
+receipts/derived-text-capture/*.json
+```
+
+The first implemented `derivation_kind` vocabulary is:
+
+```text
+parser
+ocr
+asr
+llm_vision
+```
+
+The first implemented `review_status` vocabulary is:
+
+```text
+unreviewed
+human_corrected
+```
+
 ## Portability Rule
 
 The same objet may have many physical locations but one logical identity.

@@ -135,6 +135,9 @@ object-storage
 source-intake
   Classify one source/objet locator before draft creation. Dry-run only; returns safe source refs without reading bodies, hashing, copying, uploading, importing, OCR, transcription, extraction, or provider API calls.
 
+derive-text capture
+  Register an already extracted UTF-8 text file as a provenance-aware derived text record for one existing object_id. Dry-run previews first; approved mode stores the text body, appends objects/manifests/derived-text.jsonl, and writes a receipt. It does not run OCR, ASR, parser, LLM vision, provider APIs, drafting, or minting.
+
 project-intake-plan
   Plan one staged project folder intake session. Dry-run only; reports top-level counts, next session questions, staging-convention status, and would_change: [] without reading file bodies, exposing child names, hashing, copying, uploading, drafting, minting, or deleting.
 
@@ -241,7 +244,7 @@ index
   Build a generated local SQLite search index at db/archive-index.sqlite.
 
 search
-  Search zettels, object manifest entries, views, and source map entries through the generated index.
+  Search zettels, object manifest entries, derived text records, views, and source map entries through the generated index.
 
 parcel
   Create a portable parcel from a saved view. The v0.2 compatibility path still writes under workpacks/.
@@ -426,6 +429,22 @@ This file is a rebuildable map, not the archive itself. The durable archive stil
 `archive mint-zet --dry-run` checks the minting gate using `minting_rules` in `zettel-kasten/zettel-rules.yml`, with legacy `promotion_rules` as a v0.2 fallback. It reports blockers, warnings, missing human-review items, near duplicates, the proposed canonical path, the proposed mint receipt path, and the proposed draft snapshot path. It writes nothing. `archive mint-zettel` remains a v0.2 compatibility alias.
 
 `archive source-intake --dry-run` is the safe classification step before drafting from a source/objet. It accepts exactly one locator, returns `source_refs_for_draft`, reports object storage context, and writes nothing. It does not read file bodies, hash, copy, upload, import, OCR, transcribe, extract, call provider APIs, create drafts, or mint.
+
+`archive derive-text capture` is the safe registration step after an external parser, OCR tool, ASR tool, or vision model has already produced a UTF-8 text file. The source object must already exist in `objects/manifests/files.jsonl`. Dry-run writes nothing; approved mode stores the text body under `objects/derived-text/sha256/`, appends `objects/manifests/derived-text.jsonl`, and writes `receipts/derived-text-capture/*.json`.
+
+```powershell
+python wom-kit\cli\archive.py derive-text capture .\tmp-my-archive `
+  --text-file .\workbench\example-extracted.txt `
+  --source-object-id sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
+  --derivation-kind parser `
+  --tool-name example-parser `
+  --tool-version 1.0.0 `
+  --review-status unreviewed `
+  --dry-run `
+  --format json
+```
+
+The first implemented vocabulary is deliberately small: `derivation_kind` is one of `parser`, `ocr`, `asr`, or `llm_vision`; `review_status` is one of `unreviewed` or `human_corrected`. The command does not extract text by itself, call providers, create drafts, mint zets, or store the local source text path in the manifest.
 
 `archive project-intake-plan --dry-run` is the safe planning step before a user and AI inspect one staged project folder together. It reports only top-level counts, staging-convention status, concrete next-session questions, and `would_change: []`. It does not expose child names, read file bodies, recurse through the folder, hash, copy, upload, import, create drafts, mint, or delete the staged folder.
 
