@@ -17571,6 +17571,30 @@ def project_intake_item_plan(
         command_parts.extend(["--title", "<human-reviewed-title>"])
     if mime:
         command_parts.extend(["--mime", "<mime-type>"])
+    source_record_parts = [
+        "archive",
+        "source-intake-record",
+        "<archive-root>",
+        "--source-intake-plan",
+        "<source-intake-dry-run-json>",
+        "--approve",
+        "--reviewed-by",
+        "<actor>",
+        "--format",
+        "json",
+    ]
+    selection_parts = [
+        "archive",
+        "objet-capture-selection",
+        "<archive-root>",
+        "--staged-path",
+        "<archive-relative-staged-file>",
+        "--source-intake-receipt",
+        "<source-intake-record-path>",
+        "--dry-run",
+        "--format",
+        "json",
+    ]
 
     return {
         "ok": not blockers,
@@ -17593,9 +17617,12 @@ def project_intake_item_plan(
         "source_intake_preview": source_plan,
         "command_guidance": {
             "source_intake_dry_run": " ".join(command_parts),
+            "source_intake_record_approve": " ".join(source_record_parts),
+            "objet_capture_selection_dry_run": " ".join(selection_parts),
             "save_source_intake_plan_before_capture": True,
             "capture_requires_persisted_source_intake_plan": True,
             "capture_requires_separate_selection_manifest": True,
+            "selection_manifest_command_available": True,
             "selection_manifest_generated": False,
             "automatic_execution_authorized": False,
         },
@@ -17623,7 +17650,8 @@ def project_intake_item_plan_safe_actions(blocked: bool) -> list[str]:
         ]
     return [
         "Save the source-intake dry-run JSON as a receipt/source evidence file before capture.",
-        "Use objet-capture only with a separately reviewed selection manifest.",
+        "Use objet-capture-selection to prepare a separately reviewed selection manifest.",
+        "Run objet-capture only after reviewing that selection manifest.",
         "Keep drafting, minting, provider sync, and cleanup as separate approval gates.",
     ]
 
