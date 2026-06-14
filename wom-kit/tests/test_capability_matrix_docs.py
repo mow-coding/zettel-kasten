@@ -12,6 +12,7 @@ PROJECT_INTAKE_COOKBOOK_PATH = KIT_ROOT / "docs" / "project-intake-cookbook.md"
 HUMAN_ARTIFACT_STORE_CONTRACT_PATH = KIT_ROOT / "docs" / "human-artifact-store-contract.md"
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
 NOTION_PAGE_SNAPSHOT_MODEL_PATH = KIT_ROOT / "docs" / "notion-page-snapshot-model.md"
+OBJET_REF_RESOLUTION_PATH = KIT_ROOT / "docs" / "objet-ref-resolution.md"
 SOURCE_OBJECT_STORAGE_POLICY_PATH = KIT_ROOT / "docs" / "source-object-storage-policy.md"
 TEXT_PROVENANCE_HIERARCHY_PATH = KIT_ROOT / "docs" / "text-provenance-hierarchy.md"
 NOTION_THREE_STORE_EXAMPLE_PATH = KIT_ROOT / "docs" / "notion-source-export-three-store-example.md"
@@ -45,6 +46,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Attestation statement draft write",
             "Projection plan",
             "Notion page snapshot model",
+            "Objet ref resolver",
             "Publication surface baseline",
             "Closed sharing model",
             "Radio-frequency recommendation model",
@@ -222,7 +224,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             (
                 matrix_text,
                 (
-                    "Status: v0.3.16 Notion page snapshot and store-ref checkpoint",
                     "Notion page snapshot model",
                     "No Notion API, provider sync, page-snapshot schema, extraction helper, or byte materialization adapter exists",
                 ),
@@ -230,7 +231,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             (
                 readme_text,
                 (
-                    "v0.3.16 pre-release",
                     "[Notion Page Snapshot Model](wom-kit/docs/notion-page-snapshot-model.md)",
                     "provider page/block snapshot JSON",
                 ),
@@ -240,6 +240,48 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             for phrase in phrases:
                 with self.subTest(phrase=phrase):
                     self.assertIn(phrase, doc_text)
+
+    def test_objet_ref_resolution_doc_and_matrix_keep_read_only_boundaries(self) -> None:
+        resolver_text = OBJET_REF_RESOLUTION_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.17 read-only baseline",
+            "archive resolve-objet-ref <archive-root> --object-id sha256:<hex> --dry-run",
+            "objects/manifests/files.jsonl",
+            "Local candidates",
+            "External candidates",
+            "does not print local absolute paths",
+            "does not hash the file",
+            "again during resolution",
+            "store_ref` remains a reviewed external",
+            "call provider APIs",
+            "create presigned URLs",
+            "download objects",
+            "prove remote availability",
+            "decide whether local originals can be deleted",
+            "None of those are implemented in v0.3.17",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, resolver_text)
+        for phrase in (
+            "Status: v0.3.17 read-only objet ref resolution checkpoint",
+            "Objet ref resolver",
+            "archive resolve-objet-ref --object-id sha256:<hex> --dry-run",
+            "MCP `resolve_objet_ref`",
+            "do not decide deletion safety",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.17 pre-release",
+            "[Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)",
+            "read-only objet reference resolution",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        self.assertIn("[Objet Ref Resolution](objet-ref-resolution.md)", public_map_text)
 
     def test_v02x_freeze_boundary_doc_covers_public_proof_and_non_goals(self) -> None:
         text = FREEZE_DOC_PATH.read_text(encoding="utf-8")

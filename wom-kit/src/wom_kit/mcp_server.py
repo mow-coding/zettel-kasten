@@ -252,6 +252,19 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "resolve_objet_ref",
+        "description": "Resolve one sha256 objet reference to safe manifest, local, and external candidates. Read-only; never echoes absolute paths, calls providers, creates URLs, downloads, hashes bytes, or writes files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "object_id": {"type": "string", "description": "sha256:<64 lowercase hex> or bare 64 lowercase hex."},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "object_id"],
+        },
+    },
+    {
         "name": "project_intake_plan",
         "description": "Plan one staged project folder intake session. Read-only; returns human review questions and never reads bodies, recurses, writes, uploads, drafts, mints, or cleans.",
         "inputSchema": {
@@ -1343,6 +1356,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_zet_surface_prototype_plan(arguments)
     if name == "prehashed_objet_ledger_preview":
         return tool_prehashed_objet_ledger_preview(arguments)
+    if name == "resolve_objet_ref":
+        return tool_resolve_objet_ref(arguments)
     if name == "project_intake_plan":
         return tool_project_intake_plan(arguments)
     if name == "project_intake_unpack_queue":
@@ -1663,6 +1678,20 @@ def tool_prehashed_objet_ledger_preview(arguments: dict[str, Any]) -> dict[str, 
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"prehashed_objet_ledger_preview: {state}.", result)
+
+
+def tool_resolve_objet_ref(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("resolve_objet_ref is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.resolve_objet_ref,
+        archive_root,
+        object_id=require_string_arg(arguments, "object_id"),
+        dry_run=True,
+    )
+    state = str(result.get("resolution_state") or ("passed" if result["ok"] else "blocked"))
+    return tool_success_result(f"resolve_objet_ref: {state}.", result)
 
 
 def tool_project_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:

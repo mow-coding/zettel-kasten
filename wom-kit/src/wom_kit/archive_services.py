@@ -21559,6 +21559,170 @@ def find_manifest_record(root: Path, object_id_value: str) -> dict[str, Any] | N
     return None
 
 
+def resolve_objet_ref(
+    archive_root: Path | str,
+    *,
+    object_id: str,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("resolve-objet-ref is read-only; pass --dry-run.")
+    normalized_object_id = normalize_object_id(str(object_id or ""), blockers)
+    records = [
+        record
+        for record in load_manifest_records(root)
+        if normalized_object_id and str(record.get("object_id") or "").lower() == normalized_object_id
+    ]
+    if normalized_object_id and not records:
+        blockers.append("object_id_not_found_in_manifest")
+    if len(records) > 1:
+        warnings.append("duplicate_manifest_records_for_object_id")
+
+    digest = normalized_object_id.removeprefix("sha256:") if normalized_object_id else ""
+    local_candidates: list[dict[str, Any]] = []
+    external_candidates: list[dict[str, Any]] = []
+    record_summaries: list[dict[str, Any]] = []
+    seen_local: set[str] = set()
+    unsafe_location_refs_redacted = 0
+
+    def safe_label(value: Any, *, field: str) -> str | None:
+        nonlocal unsafe_location_refs_redacted
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        if contains_forbidden_location_reference(text) or source_intake_has_provider_url(text) or source_intake_secret_like(text):
+            unsafe_location_refs_redacted += 1
+            return f"redacted_unsafe_{field}"
+        return text
+
+    def add_local_candidate(relative_path: str, *, provider: str = "local", availability: str | None = None) -> None:
+        try:
+            normalized = normalize_archive_relative_path(relative_path)
+            candidate = archive_internal_path(root, normalized)
+        except (ArchiveServiceError, ArchivePathError):
+            return
+        if normalized in seen_local:
+            return
+        seen_local.add(normalized)
+        exists = candidate.is_file()
+        local_candidates.append(
+            {
+                "provider": provider,
+                "archive_relative_path": normalized,
+                "exists": exists,
+                "availability": availability or ("available" if exists else "missing"),
+                "path_kind": "archive_relative",
+                "sha256_verified_now": False,
+                "file_bytes_read": False,
+                "open_hint": "open this path relative to the archive root" if exists else "local bytes not present at this path",
+            }
+        )
+
+    if records and digest:
+        add_local_candidate(f"objects/sha256/{digest[:2]}/{digest}", availability="canonical_candidate")
+
+    for record in records:
+        logical_key = safe_label(record.get("logical_key"), field="logical_key")
+        provenance = record.get("provenance") if isinstance(record.get("provenance"), dict) else {}
+        record_summaries.append(
+            {
+                "object_id": normalized_object_id,
+                "logical_key": logical_key,
+                "mime": safe_label(record.get("mime"), field="mime"),
+                "size_bytes": record.get("size_bytes") if isinstance(record.get("size_bytes"), int) else None,
+                "location_count": len(record.get("locations")) if isinstance(record.get("locations"), list) else 0,
+                "provenance_source": safe_label(provenance.get("source"), field="provenance_source"),
+            }
+        )
+        if logical_key and logical_key.startswith("objects/sha256/"):
+            add_local_candidate(logical_key, availability="manifest_logical_key")
+        locations = record.get("locations")
+        if not isinstance(locations, list):
+            continue
+        for location in locations:
+            if not isinstance(location, dict):
+                continue
+            provider = safe_label(location.get("provider"), field="provider") or "unknown"
+            availability = safe_label(location.get("availability"), field="availability")
+            path_value = location.get("path")
+            if provider == "local" and isinstance(path_value, str):
+                add_local_candidate(path_value, provider=provider, availability=availability)
+                continue
+            external_candidates.append(
+                {
+                    "provider": provider,
+                    "store_kind": safe_label(location.get("store_kind"), field="store_kind"),
+                    "store_ref": safe_label(location.get("store_ref"), field="store_ref"),
+                    "availability": availability,
+                    "content_addressed": bool(location.get("content_addressed")),
+                    "byte_verification_by_wom_kit": bool(location.get("byte_verification_by_wom_kit")),
+                    "presigned_url_created": False,
+                    "provider_api_called": False,
+                    "download_performed": False,
+                }
+            )
+
+    local_available = any(candidate.get("exists") for candidate in local_candidates)
+    external_declared = bool(external_candidates)
+    if blockers:
+        resolution_state = "blocked"
+    elif local_available:
+        resolution_state = "local_available"
+    elif external_declared:
+        resolution_state = "external_declared"
+    elif records:
+        resolution_state = "manifest_only"
+    else:
+        resolution_state = "not_found"
+
+    next_safe_actions: list[str] = []
+    if local_available:
+        next_safe_actions.append("Open the existing archive-relative local candidate from the archive root.")
+    if external_declared:
+        next_safe_actions.append("Use the external store label for manual lookup; this command does not call providers or create presigned URLs.")
+    if not local_available and not external_declared and records:
+        next_safe_actions.append("Review the manifest record; it has no available local or external location candidate.")
+    if blockers:
+        next_safe_actions.append("Fix blockers before using this object_id as an openable objet reference.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "resolve_objet_ref",
+        "archive_id": archive_id,
+        "object_id": normalized_object_id or str(object_id or ""),
+        "resolution_state": resolution_state,
+        "manifest_path": "objects/manifests/files.jsonl",
+        "manifest_record_count": len(records),
+        "record_summaries": record_summaries,
+        "local_candidates": local_candidates,
+        "external_candidates": external_candidates,
+        "local_openable": local_available,
+        "external_declared": external_declared,
+        "privacy_guards": {
+            "absolute_local_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "unsafe_location_refs_redacted": unsafe_location_refs_redacted,
+            "provider_api_called": False,
+            "presigned_url_created": False,
+            "download_performed": False,
+            "file_bytes_read": False,
+            "file_hash_verified_now": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": next_safe_actions,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
 def manifest_record_for_local_path(root: Path, candidate: Path) -> dict[str, Any] | None:
     relative: str | None = None
     try:

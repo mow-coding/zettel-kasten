@@ -19,6 +19,8 @@ Commands:
           Plan object storage metadata for WOM objets.
   prehashed-objet-ledger
           Preview or approve-register an already-hashed external objet ledger without reading blob bytes.
+  resolve-objet-ref
+          Resolve one sha256 objet reference to safe local/external candidates.
   source-intake
           Plan safe source/objet refs before draft creation.
   source-intake-record
@@ -1863,6 +1865,24 @@ def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_resolve_objet_ref(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("resolve-objet-ref is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.resolve_objet_ref(
+            Path(args.archive_root),
+            object_id=args.object_id,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_resolve_objet_ref_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
 def command_project_intake_unpack_queue(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("project-intake-unpack-queue is read-only and requires --dry-run.", file=sys.stderr)
@@ -2004,6 +2024,48 @@ def print_prehashed_objet_ledger_result(result: dict[str, Any], output_format: s
         print("Warnings:")
         for warning in result["warnings"]:
             print(f"- {warning}")
+
+
+def print_resolve_objet_ref_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    state = result.get("resolution_state") or ("passed" if result.get("ok") else "blocked")
+    print(f"Objet ref resolution {state}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Object id: {result.get('object_id') or '-'}")
+    print(f"Manifest records: {result.get('manifest_record_count', 0)}")
+    local_candidates = result.get("local_candidates") if isinstance(result.get("local_candidates"), list) else []
+    if local_candidates:
+        print("Local candidates:")
+        for candidate in local_candidates:
+            if not isinstance(candidate, dict):
+                continue
+            state_label = "exists" if candidate.get("exists") else "missing"
+            print(f"- {candidate.get('archive_relative_path') or '-'} ({state_label})")
+    external_candidates = result.get("external_candidates") if isinstance(result.get("external_candidates"), list) else []
+    if external_candidates:
+        print("External candidates:")
+        for candidate in external_candidates:
+            if not isinstance(candidate, dict):
+                continue
+            store_kind = candidate.get("store_kind") or "-"
+            store_ref = candidate.get("store_ref") or "-"
+            availability = candidate.get("availability") or "-"
+            print(f"- {candidate.get('provider') or '-'} {store_kind} {store_ref} ({availability})")
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
 
 
 def command_source_intake(args: argparse.Namespace) -> int:
@@ -5822,6 +5884,16 @@ def build_parser() -> argparse.ArgumentParser:
     prehashed_objet_ledger.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
     prehashed_objet_ledger.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     prehashed_objet_ledger.set_defaults(func=command_prehashed_objet_ledger)
+
+    resolve_objet_ref = subcommands.add_parser(
+        "resolve-objet-ref",
+        help="Resolve one sha256 objet reference to safe local/external candidates without opening providers.",
+    )
+    resolve_objet_ref.add_argument("archive_root", help="Archive root to inspect.")
+    resolve_objet_ref.add_argument("--object-id", required=True, help="Object id formatted as sha256:<64 hex> or bare 64 hex.")
+    resolve_objet_ref.add_argument("--dry-run", action="store_true", help="Required. Read manifests only; never writes, downloads, or calls providers.")
+    resolve_objet_ref.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    resolve_objet_ref.set_defaults(func=command_resolve_objet_ref)
 
     source_intake = subcommands.add_parser(
         "source-intake",
