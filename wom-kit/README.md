@@ -146,6 +146,9 @@ source-intake
 source-intake-record
   Validate and record a reviewed source-intake dry-run JSON plan under receipts/sources/. Dry-run previews first; approved mode writes one redacted plan record only.
 
+objet-capture-selection
+  Build a reviewed selection manifest for one staged file after source-intake recording. Dry-run hashes the staged file and previews the manifest; approved mode writes only the selection JSON for a later, separate objet-capture dry-run/approve step.
+
 derive-text capture
   Register an already extracted UTF-8 text file as a provenance-aware derived text record for one existing object_id. Dry-run previews first; approved mode stores the text body, appends objects/manifests/derived-text.jsonl, and writes a receipt. It does not run OCR, ASR, parser, LLM vision, provider APIs, drafting, or minting.
 
@@ -476,13 +479,15 @@ The first implemented vocabulary is deliberately small: `derivation_kind` is one
 `archive objet-capture --project-intake-receipt <receipt> --dry-run|--approve` can carry the same reviewed session receipt into an explicit capture selection. A selection manifest may also include `project_intake_receipt_path`; if both are present they must match. Invalid or tampered intake receipts block before staged bytes are read. The context is recorded in the capture result and approved capture receipt, but it still does not approve drafting, minting, provider calls, or cleanup.
 
 For external project migrations, the intended manual spine is:
-`project-intake-plan -> project-intake-decisions -> project-intake-status -> source-intake --project-intake-receipt -> source-intake-record -> objet-capture --project-intake-receipt -> derive-text capture when text already exists -> create-draft --source-intake-plan -> mint-zet after approval -> staged-cleanup-check`. This is not one automatic bulk importer; every arrow is still a review boundary.
+`project-intake-plan -> project-intake-decisions -> project-intake-status -> source-intake --project-intake-receipt -> source-intake-record -> objet-capture-selection -> objet-capture --project-intake-receipt -> derive-text capture when text already exists -> create-draft --source-intake-plan -> mint-zet after approval -> staged-cleanup-check`. This is not one automatic bulk importer; every arrow is still a review boundary.
 
 `archive human-artifact-store --surface-kind <kind> --dry-run` previews the contract for a user-facing human artifact app or surface. Supported kinds are `wordpress`, `joplin`, `notion`, `obsidian`, `evernote`, `generic_markdown`, and `generic_workspace`. The command keeps three roles separate: raw/original data, human-readable artifacts, and system/AI artifacts such as manifests, source maps, receipts, indexes, hashes, and version history. It writes nothing, calls no providers, starts no OAuth, creates or updates no notes, publishes no posts, uploads no files, mints no zets, and runs no ZET transport.
 
 MCP exposes the same read-only preview as `human_artifact_store_plan`.
 
 `archive prehashed-objet-ledger --ledger <jsonl> --dry-run` previews an already-hashed external content-addressed store ledger, including a Notion source-export ledger. By default it expects `sha256` and `bytes` fields, counts valid, invalid, duplicate, and total declared bytes, and echoes no row values, filenames, URLs, or local paths. `--approve --reviewed-by <actor> --store-ref <safe-label>` appends external manifest records to `objects/manifests/files.jsonl` and writes a receipt under `receipts/prehashed-objet-ledger/` without reading blob bytes, copying objects, uploading, drafting, minting, or cleaning. MCP exposes only the read-only preview as `prehashed_objet_ledger_preview`. `objet-capture` still verifies bytes itself from staged files; this is a separate manifest-registration path for externally verified stores.
+
+`archive objet-capture-selection --staged-path <archive-relative-file> --source-intake-receipt <receipt> --dry-run` bridges a recorded source-intake plan to B4 local objet capture. It hashes one staged file to produce `approved_object_id`, validates the source-intake receipt, and previews a selection manifest. `--approve --reviewed-by <actor>` writes only `receipts/objet-capture-selections/*.selection.json`; it does not run `objet-capture`, copy object bytes, append `objects/manifests/files.jsonl`, draft, mint, upload, or clean.
 
 `archive create-draft --source-intake-plan <json-file>` consumes a successful source-intake dry-run JSON file, validates that it is metadata-only and blocker-free, then merges safe `source_refs_for_draft` into draft `source_refs`. If the source-intake plan carries a valid `project_intake_context`, the draft `source_intake.project_intake_context` preserves that receipt evidence through mint preview/receipts without copying decision answer values. The plan file path is not stored in frontmatter, and WOM-kit does not follow local paths inside the plan.
 
