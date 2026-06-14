@@ -111,6 +111,7 @@
 - [Project Intake Session](project-intake-session.md)
 - [Project Intake Cookbook](project-intake-cookbook.md)
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
+- [IMAP Mailbox Source](imap-mailbox-source.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
 - [WOM Profile Registry](wom-profile-registry.md)
 - [WOM Profile Wallet Model](wom-profile-wallet-model.md)

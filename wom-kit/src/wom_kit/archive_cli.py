@@ -21,6 +21,8 @@ Commands:
           Preview or approve-register an already-hashed external objet ledger without reading blob bytes.
   resolve-objet-ref
           Resolve one sha256 objet reference to safe local/external candidates.
+  imap-mailbox-plan
+          Plan a read-only IMAP mailbox source without connecting or storing secrets.
   source-intake
           Plan safe source/objet refs before draft creation.
   source-intake-record
@@ -1880,6 +1882,51 @@ def command_resolve_objet_ref(args: argparse.Namespace) -> int:
         return 1
 
     print_resolve_objet_ref_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def command_imap_mailbox_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("imap-mailbox-plan is dry-run only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.imap_mailbox_plan(
+            Path(args.archive_root),
+            source_id=args.source_id,
+            provider=args.provider,
+            imap_host=args.imap_host,
+            imap_port=args.imap_port,
+            account_ref=args.account_ref,
+            username_ref=args.username_ref,
+            auth_mode=args.auth_mode,
+            app_password_ref=args.app_password_ref,
+            oauth_token_ref=args.oauth_token_ref,
+            mailbox_ref=args.mailbox_ref,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        print(f"IMAP mailbox plan {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source: {result.get('source_id') or '-'} ({result.get('source_type') or '-'})")
+        print(f"Provider: {result.get('provider') or '-'}")
+        server = result.get("server") if isinstance(result.get("server"), dict) else {}
+        print(f"Server: {server.get('imap_host') or '-'}:{server.get('imap_port') or '-'}")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
 
 
@@ -5949,6 +5996,53 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_objet_ref.add_argument("--dry-run", action="store_true", help="Required. Read manifests only; never writes, downloads, or calls providers.")
     resolve_objet_ref.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     resolve_objet_ref.set_defaults(func=command_resolve_objet_ref)
+
+    imap_mailbox_plan = subcommands.add_parser(
+        "imap-mailbox-plan",
+        help="Plan a read-only IMAP mailbox source without connecting or storing secrets.",
+    )
+    imap_mailbox_plan.add_argument("archive_root", help="Archive root to inspect.")
+    imap_mailbox_plan.add_argument("--source-id", required=True, help="Stable source id, e.g. imap:gmail-personal.")
+    imap_mailbox_plan.add_argument(
+        "--provider",
+        choices=sorted(archive_services.IMAP_MAILBOX_ALLOWED_PROVIDERS),
+        default="generic_imap",
+        help="Provider preset. generic_imap requires --imap-host.",
+    )
+    imap_mailbox_plan.add_argument("--imap-host", help="Safe IMAP host label. Required for generic_imap.")
+    imap_mailbox_plan.add_argument("--imap-port", type=int, default=993, help="IMAP SSL port. Defaults to 993.")
+    imap_mailbox_plan.add_argument(
+        "--account-ref",
+        required=True,
+        help="Safe account reference, e.g. imap:account:personal-mail. Do not pass an email address.",
+    )
+    imap_mailbox_plan.add_argument(
+        "--username-ref",
+        required=True,
+        help="env/keyring/secret/wallet reference for the username. Do not pass the username value.",
+    )
+    imap_mailbox_plan.add_argument(
+        "--auth-mode",
+        choices=sorted(archive_services.IMAP_MAILBOX_ALLOWED_AUTH_MODES),
+        default="app_password_ref",
+        help="Credential reference kind.",
+    )
+    imap_mailbox_plan.add_argument(
+        "--app-password-ref",
+        help="env/keyring/secret/wallet reference for an app password. Do not pass the password value.",
+    )
+    imap_mailbox_plan.add_argument(
+        "--oauth-token-ref",
+        help="env/keyring/secret/wallet reference for an OAuth token. Do not pass the token value.",
+    )
+    imap_mailbox_plan.add_argument(
+        "--mailbox-ref",
+        default="imap:mailbox:inbox",
+        help="Safe mailbox reference. Do not pass private mailbox names.",
+    )
+    imap_mailbox_plan.add_argument("--dry-run", action="store_true", help="Required; plan only.")
+    imap_mailbox_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    imap_mailbox_plan.set_defaults(func=command_imap_mailbox_plan)
 
     source_intake = subcommands.add_parser(
         "source-intake",

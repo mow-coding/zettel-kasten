@@ -217,6 +217,36 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "imap_mailbox_plan",
+        "description": "Plan a read-only Gmail, Naver, or generic IMAP mailbox source. Dry-run only; never connects, logs in, reads headers/bodies/attachments, sends mail, changes flags, stores secrets, or writes files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "source_id": {"type": "string"},
+                "provider": {
+                    "type": "string",
+                    "enum": sorted(archive_services.IMAP_MAILBOX_ALLOWED_PROVIDERS),
+                    "default": "generic_imap",
+                },
+                "imap_host": {"type": "string"},
+                "imap_port": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 993},
+                "account_ref": {"type": "string"},
+                "username_ref": {"type": "string"},
+                "auth_mode": {
+                    "type": "string",
+                    "enum": sorted(archive_services.IMAP_MAILBOX_ALLOWED_AUTH_MODES),
+                    "default": "app_password_ref",
+                },
+                "app_password_ref": {"type": "string"},
+                "oauth_token_ref": {"type": "string"},
+                "mailbox_ref": {"type": "string", "default": "imap:mailbox:inbox"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "source_id", "account_ref", "username_ref"],
+        },
+    },
+    {
         "name": "zet_surface_prototype_plan",
         "description": "Plan a user-selected ZET surface prototype for WordPress, Joplin, Notion, or Obsidian. Read-only; never calls providers, requests tokens, writes notes, publishes, syncs, mints, or transports.",
         "inputSchema": {
@@ -1367,6 +1397,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_provider_setup_status(arguments)
     if name == "human_artifact_store_plan":
         return tool_human_artifact_store_plan(arguments)
+    if name == "imap_mailbox_plan":
+        return tool_imap_mailbox_plan(arguments)
     if name == "zet_surface_prototype_plan":
         return tool_zet_surface_prototype_plan(arguments)
     if name == "prehashed_objet_ledger_preview":
@@ -1661,6 +1693,29 @@ def tool_human_artifact_store_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"human_artifact_store_plan: {state}.", result)
+
+
+def tool_imap_mailbox_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("imap_mailbox_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.imap_mailbox_plan,
+        archive_root,
+        source_id=require_string_arg(arguments, "source_id"),
+        provider=optional_string_arg(arguments, "provider") or "generic_imap",
+        imap_host=optional_string_arg(arguments, "imap_host"),
+        imap_port=arguments.get("imap_port", 993),
+        account_ref=require_string_arg(arguments, "account_ref"),
+        username_ref=require_string_arg(arguments, "username_ref"),
+        auth_mode=optional_string_arg(arguments, "auth_mode") or "app_password_ref",
+        app_password_ref=optional_string_arg(arguments, "app_password_ref"),
+        oauth_token_ref=optional_string_arg(arguments, "oauth_token_ref"),
+        mailbox_ref=optional_string_arg(arguments, "mailbox_ref") or "imap:mailbox:inbox",
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"imap_mailbox_plan: {state}.", result)
 
 
 def tool_zet_surface_prototype_plan(arguments: dict[str, Any]) -> dict[str, Any]:

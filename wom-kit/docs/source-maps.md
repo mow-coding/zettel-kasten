@@ -22,6 +22,7 @@ external_ssd
 notion_export
 google_drive_export
 object_manifest
+imap_mailbox
 ```
 
 It stores refs such as `ARCHIVE_PERSONAL_DOCUMENTS_ROOT` or `archive:objects/manifests/files.jsonl`. It must not store real API tokens, database URLs, passwords, or sensitive absolute local paths.
@@ -47,6 +48,24 @@ provenance
 ```
 
 It does not read file bodies, summarize content with AI, call live provider APIs, or calculate full file hashes.
+
+For email, v0.3.19 recognizes `imap_mailbox` as a registered source type, but
+live mailbox scans are still closed. Use `imap-mailbox-plan` to review safe
+provider, account, mailbox, and credential refs before any future IMAP work:
+
+```powershell
+python cli\archive.py imap-mailbox-plan .\my-archive `
+  --source-id imap:naver-personal `
+  --provider naver `
+  --account-ref imap:account:naver-personal `
+  --username-ref env:NAVER_IMAP_USERNAME `
+  --app-password-ref keyring:naver-app-password `
+  --dry-run `
+  --format json
+```
+
+This command does not connect, login, read headers, read bodies, read
+attachments, send mail, delete mail, change flags, store secrets, or write files.
 
 ## Source Intake Planner
 
@@ -143,6 +162,7 @@ MCP exposes:
 list_sources
 source_scan_plan
 source_intake_plan
+imap_mailbox_plan
 ```
 
 It does not expose a real source scan apply tool. Human-approved writes stay in the CLI.
