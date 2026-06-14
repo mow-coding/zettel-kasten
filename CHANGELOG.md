@@ -6,6 +6,19 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.14 - 2026-06-14
+
+- Added read-only CLI `archive project-intake-unpack-queue --dry-run` and MCP
+  `project_intake_unpack_queue` for the first practical "unpacking boxes"
+  layer in the human-guided project intake flow.
+- The unpack queue returns opaque `item-0001` style refs plus coarse
+  kind/extension/size hints so an AI can ask which staged item the human wants
+  to unpack next without exposing entry names, local paths, file bodies, or
+  decision values.
+- Documented the queue between project-intake receipt review and per-item
+  `project-intake-item-plan`, while keeping source-intake, capture, drafting,
+  minting, provider sync, and cleanup as separate approval gates.
+
 ## v0.3.13 - 2026-06-14
 
 - Strengthened `wom-kit/docs/human-artifact-store-contract.md` as the shared

@@ -47,6 +47,7 @@ project-intake-plan
 -> project-intake-status
 -> project-intake-next-question
 -> project-intake-decision-template
+-> project-intake-unpack-queue
 -> project-intake-item-plan
 -> source-intake --project-intake-receipt
 -> source-intake-record
@@ -136,6 +137,7 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Staging guide | `archive project-intake-staging-guide --dry-run` / MCP `project_intake_staging_guide` | Shows the recommended local objet-store staging path for one project slug. It creates no folders and moves no files. |
 | Session guide | `archive project-intake-session-guide --dry-run` / MCP `project_intake_session_guide` | Shows the next safe human-guided step from a project slug, staged folder, or existing decisions receipt. It writes nothing, echoes no decision values, reads no bodies, and authorizes no automatic execution. |
 | Session planning | `archive project-intake-plan --dry-run` / MCP `project_intake_plan` | Plans one staged project folder session with top-level counts, human review checklist, suggested classification labels, and no writes. |
+| Unpack queue | `archive project-intake-unpack-queue --dry-run` / MCP `project_intake_unpack_queue` | Queues top-level staged items as opaque `item-0001` refs with coarse kind/extension/size hints so the AI can ask which box to unpack next. It exposes no entry names or local paths, reads no bodies, hashes nothing, classifies nothing automatically, and writes nothing. |
 | Next question | `archive project-intake-next-question --dry-run` / MCP `project_intake_next_question` | Returns exactly one next human-review question for a new staged folder or continuing receipt. It includes placeholders only, does not echo decision values, and writes nothing. |
 | Decision template | `archive project-intake-decision-template --dry-run` / MCP `project_intake_decision_template` | Builds the JSON shape for the next human-reviewed answer. It leaves `answer` empty, does not echo previous answers, and writes nothing. |
 | Answer recording | `archive project-intake-record-answer --dry-run|--approve` | Appends one human-reviewed answer file to a new or existing session and writes a new decisions receipt on approval. It does not echo current or previous answer values, run capture, draft, mint, provider calls, or cleanup. |

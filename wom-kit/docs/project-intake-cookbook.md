@@ -122,6 +122,17 @@ permission to run the rest of the workflow automatically.
 
 ## 5. Plan One Selected File
 
+Ask for the next unpacking choice before naming one file for source-intake:
+
+```powershell
+archive project-intake-unpack-queue "$tmp\archive" --staged-folder "$tmp\archive\staging\incoming" --receipt $projectReceipt --dry-run --format json
+```
+
+The queue returns opaque `item-0001` style refs and coarse hints only. It does
+not expose staged entry names, read bodies, hash content, classify
+automatically, capture, draft, mint, upload, or clean. The human still chooses
+the actual local item before `project-intake-item-plan`.
+
 ```powershell
 archive project-intake-item-plan "$tmp\archive" --receipt $projectReceipt --local-path "$tmp\archive\staging\incoming\project-note.txt" --dry-run --format json
 archive source-intake "$tmp\archive" --dry-run --local-path "$tmp\archive\staging\incoming\project-note.txt" --project-intake-receipt $projectReceipt --redact-local-paths --format json

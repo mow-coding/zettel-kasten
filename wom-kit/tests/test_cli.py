@@ -12404,6 +12404,70 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(after_archive, before_archive)
             self.assertEqual(after_staged, before_staged)
 
+    def test_project_intake_unpack_queue_returns_opaque_item_refs_without_leaks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            staged = Path(tmp) / "archive-objets" / "intake" / "alpha-project"
+            staged.mkdir(parents=True)
+            (staged / "private-file-name.md").write_text("SUPER_SECRET_BODY", encoding="utf-8")
+            (staged / "client-private-folder-name").mkdir()
+            (staged / "secret-photo.JPG").write_bytes(b"fake image bytes")
+            before_archive = self.snapshot_archive_files(archive_root)
+            before_staged = sorted(path.relative_to(staged).as_posix() for path in staged.rglob("*"))
+
+            code, output = self.run_cli(
+                [
+                    "project-intake-unpack-queue",
+                    str(archive_root),
+                    "--staged-folder",
+                    str(staged),
+                    "--max-items",
+                    "2",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["action"], "archive_project_intake_unpack_queue")
+            self.assertEqual(result["state"], "needs_project_review")
+            self.assertEqual(result["folder_summary"]["top_level_entry_count"], 3)
+            self.assertEqual(result["unpack_queue"]["total_item_count"], 3)
+            self.assertEqual(result["unpack_queue"]["returned_item_count"], 2)
+            self.assertTrue(result["unpack_queue"]["truncated"])
+            self.assertEqual([item["item_ref"] for item in result["unpack_queue"]["items"]], ["item-0001", "item-0002"])
+            self.assertTrue(all(not item["name_included"] for item in result["unpack_queue"]["items"]))
+            self.assertTrue(all(not item["local_path_included"] for item in result["unpack_queue"]["items"]))
+            self.assertEqual(result["next_human_turn"]["kind"], "choose_next_unpack_item")
+            self.assertTrue(result["next_human_turn"]["requires_project_intake_receipt_before_source_intake"])
+            self.assertFalse(result["command_guidance"]["automatic_execution_authorized"])
+            self.assertTrue(result["command_guidance"]["selection_requires_human_to_map_item_ref_locally"])
+            self.assertFalse(result["privacy_guards"]["entry_names_included"])
+            self.assertFalse(result["privacy_guards"]["local_paths_included"])
+            self.assertFalse(result["privacy_guards"]["file_bodies_read"])
+            self.assertFalse(result["privacy_guards"]["content_hashes_calculated"])
+            self.assertFalse(result["closed_actions"]["automatic_classification"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("private-file-name.md", output)
+            self.assertNotIn("client-private-folder-name", output)
+            self.assertNotIn("secret-photo.JPG", output)
+            self.assertNotIn("SUPER_SECRET_BODY", output)
+            self.assertNotIn(str(staged), output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before_archive)
+            self.assertEqual(sorted(path.relative_to(staged).as_posix() for path in staged.rglob("*")), before_staged)
+
+    def test_project_intake_unpack_queue_requires_dry_run(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+
+        code, output = self.run_cli(["project-intake-unpack-queue", str(archive_root), "--staged-folder", str(archive_root)])
+
+        self.assertEqual(code, 1)
+        self.assertIn("requires --dry-run", output)
+
     def test_project_intake_plan_requires_dry_run(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         staged = archive_root
