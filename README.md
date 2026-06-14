@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.16 pre-release
+v0.3.17 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -41,6 +41,7 @@ What exists today:
 - human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
 - read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces,
 - documented Notion page snapshot and `store-ref` boundaries for page/block JSON exports,
+- read-only objet reference resolution for mapping `sha256:<hex>` refs to safe local/external candidates,
 - approval-gated local write paths for selected private archive, foreign-block review records, and the first v0.3.0 shared update attestation/review record,
 - a v0.2.x freeze / v0.3.0 entry boundary document plus a narrow v0.3.0 write boundary that stays local-first and body-safe,
 - local public-release hygiene tools for links, Korean product language, privacy, release readiness, and branch-protection planning.
@@ -101,6 +102,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Project Intake Cookbook](wom-kit/docs/project-intake-cookbook.md)
 - [Human Artifact Store Contract](wom-kit/docs/human-artifact-store-contract.md)
 - [Notion Page Snapshot Model](wom-kit/docs/notion-page-snapshot-model.md)
+- [Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)
 
 The public project records are intentionally separated into:
 
@@ -219,6 +221,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.17
 v0.3.16
 v0.3.15
 v0.3.14

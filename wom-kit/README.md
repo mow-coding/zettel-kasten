@@ -91,6 +91,7 @@ docs/human-artifact-store-contract.md
 docs/zet-surface-prototypes.md
 docs/notion-source-export-three-store-example.md
 docs/notion-page-snapshot-model.md
+docs/objet-ref-resolution.md
 docs/source-maps.md
 docs/platform-support.md
 docs/server-blueprint.md
@@ -145,6 +146,9 @@ zet-surface-prototype
 
 prehashed-objet-ledger
   Preview or approve-register one or more already-hashed external content-addressed object/objet ledgers. Dry-run counts sha256/byte-size rows, skipped null-sha rows, cross-ledger duplicates, and planned manifest writes without reading blob bytes. Approved mode appends external manifest records and writes a receipt. MCP exposes only the read-only preview as prehashed_objet_ledger_preview.
+
+resolve-objet-ref
+  Resolve one sha256 objet reference to safe local archive-relative candidates and external store labels. Dry-run only; reads the object manifest, writes nothing, echoes no absolute local paths or provider URLs, calls no providers, creates no presigned URLs, downloads nothing, and hashes no object bytes.
 
 source-intake
   Classify one source/objet locator before draft creation. Dry-run only; returns safe source refs without reading bodies, hashing, copying, uploading, importing, OCR, transcription, extraction, or provider API calls. It can optionally validate a project-intake decisions receipt as session context only.
@@ -516,6 +520,8 @@ MCP exposes the same read-only preview as `human_artifact_store_plan`.
 `archive prehashed-objet-ledger --ledger <jsonl> --dry-run` previews one or more already-hashed external content-addressed store ledgers, including Notion source-export ledgers. `--ledger` may be repeated so retrieval, deep, and workspace download ledgers can be deduped in one run. By default it expects `sha256` and `bytes` fields, counts valid, skipped, invalid, duplicate, and total declared bytes, and echoes no row values, filenames, URLs, or local paths. Rows with null or empty `sha256` are skipped for aid-dedup style ledgers; malformed sha strings remain invalid. `--approve --reviewed-by <actor> --store-ref <safe-label>` appends external manifest records to `objects/manifests/files.jsonl` and writes a receipt under `receipts/prehashed-objet-ledger/` without reading blob bytes, copying objects, uploading, drafting, minting, or cleaning. MCP exposes only the read-only preview as `prehashed_objet_ledger_preview`. `objet-capture` still verifies bytes itself from staged files; this is a separate manifest-registration path for externally verified stores.
 
 For Notion page/block exports, `recordMap` or `blocks` JSON is treated as a provider page snapshot source objet. Extracted readable block text is a derived text record, and a human conclusion is a later draft or minted zet. See `docs/notion-page-snapshot-model.md`. In prehashed ledgers, `object_id` identifies the bytes, `store_kind` names the storage family, and `store_ref` is only a reviewed safe external-store label. It is not a raw path, URL, token, or proof of byte availability.
+
+`archive resolve-objet-ref --object-id sha256:<hex> --dry-run` resolves one object manifest reference for reading UX. It returns existing local candidates as archive-relative paths and external candidates as safe provider/store labels. It writes nothing, echoes no absolute local paths or provider URLs, reads no object bytes, re-hashes no object bytes, calls no providers, creates no presigned URLs, downloads nothing, uploads nothing, and does not decide whether local originals can be deleted. MCP exposes the same read-only flow as `resolve_objet_ref`.
 
 `archive objet-capture-selection --staged-path <archive-relative-file> --source-intake-receipt <receipt> --dry-run` bridges a recorded source-intake plan to B4 local objet capture. It hashes one staged file to produce `approved_object_id`, validates the source-intake receipt, and previews a selection manifest. `--approve --reviewed-by <actor>` writes only `receipts/objet-capture-selections/*.selection.json`; it does not run `objet-capture`, copy object bytes, append `objects/manifests/files.jsonl`, draft, mint, upload, or clean.
 

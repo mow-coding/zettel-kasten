@@ -43,6 +43,7 @@ Supporting philosophy and model docs:
 - [Text Provenance Hierarchy](text-provenance-hierarchy.md)
 - [Derived Text Capture](derived-text.md)
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)
+- [Objet Ref Resolution](objet-ref-resolution.md)
 
 These documents cover:
 
@@ -114,6 +115,7 @@ Onboarding and setup plans:
 - [Project Intake Cookbook](project-intake-cookbook.md)
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)
+- [Objet Ref Resolution](objet-ref-resolution.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
 - [WOM Profile Registry](wom-profile-registry.md)
 - [WOM Profile Wallet Model](wom-profile-wallet-model.md)

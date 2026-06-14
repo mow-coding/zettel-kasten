@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.17 - 2026-06-14
+
+- Added read-only CLI `archive resolve-objet-ref --object-id sha256:<hex>
+  --dry-run` and MCP `resolve_objet_ref` for the first reading-side objet
+  reference resolver.
+- The resolver reads `objects/manifests/files.jsonl` and reports safe local
+  archive-relative candidates plus external store labels for one manifest
+  `object_id`.
+- Kept the resolver non-mutating and conservative: it writes nothing, echoes no
+  absolute local paths or provider URLs, reads no object bytes, re-hashes no
+  object bytes, calls no providers, creates no presigned URLs, downloads
+  nothing, uploads nothing, and does not decide deletion safety.
+- Added `wom-kit/docs/objet-ref-resolution.md` and documentation tests for the
+  resolver boundary.
+
 ## v0.3.16 - 2026-06-14
 
 - Added `wom-kit/docs/notion-page-snapshot-model.md` to define Notion

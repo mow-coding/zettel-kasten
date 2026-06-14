@@ -1798,6 +1798,128 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(receipt["ledger_path_included"])
             self.assertFalse(receipt["privacy_guards"]["row_values_echoed"])
 
+    def test_resolve_objet_ref_reports_local_and_external_candidates_without_paths_or_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+            payload = b"hello resolve objet ref\n"
+            local_digest = hashlib.sha256(payload).hexdigest()
+            local_relative = f"objects/sha256/{local_digest[:2]}/{local_digest}"
+            local_path = archive_root / local_relative
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_bytes(payload)
+            external_digest = "e" * 64
+            unsafe_url = "https://" + "redacted.example/unsafe"
+            records = [
+                {
+                    "object_id": f"sha256:{local_digest}",
+                    "sha256": local_digest,
+                    "logical_key": local_relative,
+                    "mime": "text/plain",
+                    "size_bytes": len(payload),
+                    "locations": [{"provider": "local", "path": local_relative, "availability": "available"}],
+                    "provenance": {"source": "b4_local_objet_capture"},
+                },
+                {
+                    "object_id": f"sha256:{external_digest}",
+                    "sha256": external_digest,
+                    "logical_key": f"objects/external/prehashed/notion_source_export/{external_digest[:2]}/{external_digest}",
+                    "mime": "application/octet-stream",
+                    "size_bytes": 123,
+                    "locations": [
+                        {
+                            "provider": "external_prehashed",
+                            "store_kind": "notion_source_export",
+                            "store_ref": "notion-export-20260614",
+                            "availability": "declared_external",
+                            "content_addressed": True,
+                            "byte_verification_by_wom_kit": False,
+                            "provider_url": unsafe_url,
+                        }
+                    ],
+                    "provenance": {"source": "prehashed_external_objet_ledger"},
+                },
+            ]
+            with manifest_path.open("a", encoding="utf-8") as handle:
+                for record in records:
+                    handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+            before = self.snapshot_archive_files(archive_root)
+            local_code, local_output = self.run_cli(
+                [
+                    "resolve-objet-ref",
+                    str(archive_root),
+                    "--object-id",
+                    local_digest,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(local_code, 0, local_output)
+            local_result = json.loads(local_output)
+            self.assertTrue(local_result["ok"], local_result)
+            self.assertEqual(local_result["lifecycle_action"], "resolve_objet_ref")
+            self.assertEqual(local_result["resolution_state"], "local_available")
+            self.assertEqual(local_result["object_id"], f"sha256:{local_digest}")
+            self.assertTrue(local_result["local_openable"])
+            self.assertEqual(local_result["local_candidates"][0]["archive_relative_path"], local_relative)
+            self.assertTrue(local_result["local_candidates"][0]["exists"])
+            self.assertFalse(local_result["privacy_guards"]["absolute_local_paths_echoed"])
+            self.assertFalse(local_result["privacy_guards"]["provider_api_called"])
+            self.assertFalse(local_result["privacy_guards"]["file_bytes_read"])
+            self.assertFalse(local_result["privacy_guards"]["writes"])
+            self.assertEqual(local_result["would_change"], [])
+            self.assertNotIn(str(archive_root), local_output)
+
+            external_code, external_output = self.run_cli(
+                [
+                    "resolve-objet-ref",
+                    str(archive_root),
+                    "--object-id",
+                    f"sha256:{external_digest}",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(external_code, 0, external_output)
+            external_result = json.loads(external_output)
+            self.assertTrue(external_result["ok"], external_result)
+            self.assertEqual(external_result["resolution_state"], "external_declared")
+            self.assertFalse(external_result["local_openable"])
+            self.assertEqual(external_result["external_candidates"][0]["provider"], "external_prehashed")
+            self.assertEqual(external_result["external_candidates"][0]["store_kind"], "notion_source_export")
+            self.assertEqual(external_result["external_candidates"][0]["store_ref"], "notion-export-20260614")
+            self.assertFalse(external_result["external_candidates"][0]["presigned_url_created"])
+            self.assertFalse(external_result["privacy_guards"]["provider_urls_echoed"])
+            self.assertNotIn(unsafe_url, external_output)
+
+            missing_code, missing_output = self.run_cli(
+                [
+                    "resolve-objet-ref",
+                    str(archive_root),
+                    "--object-id",
+                    "f" * 64,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(missing_code, 1, missing_output)
+            missing_result = json.loads(missing_output)
+            self.assertFalse(missing_result["ok"])
+            self.assertIn("object_id_not_found_in_manifest", missing_result["blockers"])
+
+            no_dry_code, no_dry_output = self.run_cli(
+                ["resolve-objet-ref", str(archive_root), "--object-id", f"sha256:{local_digest}"]
+            )
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
     def test_prehashed_objet_ledger_approve_blocks_invalid_rows_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
