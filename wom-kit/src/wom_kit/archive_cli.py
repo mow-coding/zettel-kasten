@@ -31,6 +31,8 @@ Commands:
           Show where to stage one project before a project intake session.
   project-intake-session-guide
           Show the next safe human-guided project intake step without writing files.
+  project-intake-unpack-queue
+          Queue top-level staged items for human-guided unpacking without exposing names.
   project-intake-next-question
           Return the next human-review question for a project intake session.
   project-intake-decision-template
@@ -1857,6 +1859,55 @@ def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
 
     print_prehashed_objet_ledger_result(result, args.format)
     return 0 if result.get("ok", True) else 1
+
+
+def command_project_intake_unpack_queue(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("project-intake-unpack-queue is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.project_intake_unpack_queue(
+            Path(args.archive_root),
+            Path(args.staged_folder),
+            receipt=args.receipt,
+            max_items=args.max_items,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_project_intake_unpack_queue_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def print_project_intake_unpack_queue_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    state = str(result.get("state") or ("passed" if result.get("ok") else "blocked"))
+    queue = result.get("unpack_queue") if isinstance(result.get("unpack_queue"), dict) else {}
+    turn = result.get("next_human_turn") if isinstance(result.get("next_human_turn"), dict) else {}
+    print(f"Project intake unpack queue {state}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Items: {queue.get('returned_item_count', 0)} of {queue.get('total_item_count', 0)}")
+    print(f"Names included: {queue.get('entry_names_included', False)}")
+    for item in queue.get("items", []):
+        if isinstance(item, dict):
+            print(
+                f"- {item.get('item_ref')}: {item.get('kind')}"
+                f" ext={item.get('extension') or '-'} size={item.get('size_bucket') or '-'}"
+            )
+    if turn.get("ask_user"):
+        print(f"Ask: {turn['ask_user']}")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
 
 
 def print_prehashed_objet_ledger_result(result: dict[str, Any], output_format: str) -> None:
@@ -6659,6 +6710,18 @@ def build_parser() -> argparse.ArgumentParser:
     project_intake_plan.add_argument("--dry-run", action="store_true", help="Required; plan without writing files.")
     project_intake_plan.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     project_intake_plan.set_defaults(func=command_project_intake_plan)
+
+    project_intake_unpack_queue = subcommands.add_parser(
+        "project-intake-unpack-queue",
+        help="Queue top-level staged items for human-guided unpacking without exposing entry names.",
+    )
+    project_intake_unpack_queue.add_argument("archive_root", help="Archive root to inspect.")
+    project_intake_unpack_queue.add_argument("--staged-folder", required=True, help="One staged project folder to queue.")
+    project_intake_unpack_queue.add_argument("--receipt", help="Optional archive-relative project intake decisions receipt.")
+    project_intake_unpack_queue.add_argument("--max-items", type=int, default=25, help="Maximum top-level items to return, capped at 100.")
+    project_intake_unpack_queue.add_argument("--dry-run", action="store_true", help="Required; queue without writing files.")
+    project_intake_unpack_queue.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    project_intake_unpack_queue.set_defaults(func=command_project_intake_unpack_queue)
 
     project_intake_decisions = subcommands.add_parser(
         "project-intake-decisions",

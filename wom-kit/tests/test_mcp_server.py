@@ -641,6 +641,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("zet_surface_prototype_plan", tool_names)
             self.assertIn("prehashed_objet_ledger_preview", tool_names)
             self.assertIn("project_intake_plan", tool_names)
+            self.assertIn("project_intake_unpack_queue", tool_names)
             self.assertIn("project_intake_staging_guide", tool_names)
             self.assertIn("project_intake_session_guide", tool_names)
             self.assertIn("project_intake_status", tool_names)
@@ -1958,6 +1959,34 @@ class McpServerTests(unittest.TestCase):
                 plan_dump = json.dumps(plan)
                 self.assertNotIn("private-file-name.md", plan_dump)
                 self.assertNotIn("SUPER_SECRET_BODY", plan_dump)
+
+                unpack_queue_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 22,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "project_intake_unpack_queue",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "staged_folder": str(staged),
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(unpack_queue_response["result"]["isError"])
+                unpack_queue = unpack_queue_response["result"]["structuredContent"]
+                self.assertTrue(unpack_queue["ok"])
+                self.assertEqual(unpack_queue["action"], "archive_project_intake_unpack_queue")
+                self.assertEqual(unpack_queue["state"], "needs_project_review")
+                self.assertEqual(unpack_queue["unpack_queue"]["items"][0]["item_ref"], "item-0001")
+                self.assertFalse(unpack_queue["privacy_guards"]["entry_names_included"])
+                self.assertFalse(unpack_queue["privacy_guards"]["file_bodies_read"])
+                self.assertFalse(unpack_queue["closed_actions"]["automatic_classification"])
+                unpack_queue_dump = json.dumps(unpack_queue)
+                self.assertNotIn("private-file-name.md", unpack_queue_dump)
+                self.assertNotIn("SUPER_SECRET_BODY", unpack_queue_dump)
 
                 first_question_response = self.send(
                     process,

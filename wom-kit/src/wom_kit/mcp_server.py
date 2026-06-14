@@ -265,6 +265,21 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "project_intake_unpack_queue",
+        "description": "Queue top-level staged items for human-guided unpacking. Read-only; returns opaque item refs and never exposes names, reads bodies, hashes, writes, captures, drafts, mints, uploads, or cleans.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "staged_folder": {"type": "string", "description": "Path to one staged project folder."},
+                "receipt": {"type": "string", "description": "Optional archive-relative project-intake decisions receipt."},
+                "max_items": {"type": "integer", "default": 25},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "staged_folder"],
+        },
+    },
+    {
         "name": "project_intake_staging_guide",
         "description": "Show where to stage one project folder before a project intake session. Read-only; never creates folders, moves files, uploads, captures, drafts, mints, or cleans.",
         "inputSchema": {
@@ -1313,6 +1328,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_prehashed_objet_ledger_preview(arguments)
     if name == "project_intake_plan":
         return tool_project_intake_plan(arguments)
+    if name == "project_intake_unpack_queue":
+        return tool_project_intake_unpack_queue(arguments)
     if name == "project_intake_staging_guide":
         return tool_project_intake_staging_guide(arguments)
     if name == "project_intake_session_guide":
@@ -1637,6 +1654,23 @@ def tool_project_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     result = call_service(archive_services.project_intake_plan, archive_root, staged_folder)
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"project_intake_plan: {state}.", result)
+
+
+def tool_project_intake_unpack_queue(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("project_intake_unpack_queue is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    staged_folder = require_path_arg(arguments, "staged_folder")
+    result = call_service(
+        archive_services.project_intake_unpack_queue,
+        archive_root,
+        staged_folder,
+        receipt=optional_string_arg(arguments, "receipt"),
+        max_items=int(arguments.get("max_items", 25)),
+        dry_run=True,
+    )
+    state = str(result.get("state") or ("passed" if result["ok"] else "blocked"))
+    return tool_success_result(f"project_intake_unpack_queue: {state}.", result)
 
 
 def tool_project_intake_staging_guide(arguments: dict[str, Any]) -> dict[str, Any]:

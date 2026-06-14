@@ -17178,6 +17178,245 @@ def summarize_project_intake_folder(staged_folder: Path) -> dict[str, Any]:
     }
 
 
+def project_intake_unpack_queue(
+    archive_root: Path | str,
+    staged_folder: Path | str,
+    *,
+    receipt: str | None = None,
+    max_items: int = 25,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    if not dry_run:
+        raise ArchiveServiceError("project-intake-unpack-queue is dry-run only.")
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    staged = Path(staged_folder).expanduser().resolve()
+    if not staged.exists():
+        raise ArchiveServiceError(f"Staged folder does not exist: {staged}")
+    if not staged.is_dir():
+        raise ArchiveServiceError(f"Staged folder is not a directory: {staged}")
+    try:
+        item_limit = max(1, min(int(max_items), 100))
+    except (TypeError, ValueError):
+        raise ArchiveServiceError("max_items must be an integer.")
+
+    folder_summary = summarize_project_intake_folder(staged)
+    staging_convention = project_intake_staging_convention(root, staged)
+    warnings: list[str] = []
+    blockers: list[str] = []
+    if not staging_convention["follows_staging_convention"]:
+        warnings.append(
+            "Staged folder is outside the recommended local objet intake shape: "
+            r"C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug>."
+        )
+
+    receipt_status: dict[str, Any] | None = None
+    if receipt:
+        receipt_status = project_intake_status(root, receipt, dry_run=True)
+        blockers.extend(str(item) for item in receipt_status.get("blockers", []))
+        warnings.extend(str(item) for item in receipt_status.get("warnings", []))
+
+    queue_items, total_items, truncated = project_intake_unpack_queue_items(staged, item_limit)
+    action_counts: dict[str, int] = {}
+    for item in queue_items:
+        for action in item["suggested_human_actions"]:
+            action_counts[action] = action_counts.get(action, 0) + 1
+
+    if blockers:
+        state = "blocked"
+    elif receipt_status is None:
+        state = "needs_project_review"
+    else:
+        coverage = receipt_status.get("checklist_coverage") if isinstance(receipt_status.get("checklist_coverage"), dict) else {}
+        state = "ready_for_manual_unpack_choice" if coverage.get("complete") else "needs_more_project_review"
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "action": "archive_project_intake_unpack_queue",
+        "archive_id": archive_id,
+        "state": state,
+        "receipt_path": receipt_status.get("receipt_path") if receipt_status else None,
+        "staged_folder_path_included": False,
+        "folder_summary": folder_summary,
+        "staging_convention": staging_convention,
+        "unpack_queue": {
+            "queue_kind": "top_level_staged_items",
+            "item_ref_policy": "opaque_local_order_refs_not_paths",
+            "total_item_count": total_items,
+            "returned_item_count": len(queue_items),
+            "truncated": truncated,
+            "max_items": item_limit,
+            "items": queue_items,
+            "entry_names_included": False,
+            "local_paths_included": False,
+        },
+        "next_human_turn": project_intake_unpack_next_human_turn(state, len(queue_items), bool(receipt_status)),
+        "command_guidance": {
+            "review_project_questions_first": "archive project-intake-next-question <archive-root> --staged-folder <staged-folder> --dry-run --format json",
+            "record_project_answer_with": "archive project-intake-record-answer <archive-root> --answer <answer-json> --dry-run, then --approve after human review",
+            "after_human_selects_file": (
+                "archive project-intake-item-plan <archive-root> --receipt <project-intake-receipt> "
+                "--local-path <human-selected-local-path> --dry-run --format json"
+            ),
+            "selection_requires_human_to_map_item_ref_locally": True,
+            "automatic_execution_authorized": False,
+        },
+        "privacy_guards": {
+            "top_level_only": True,
+            "recursive_scan": False,
+            "entry_names_included": False,
+            "local_paths_included": False,
+            "decision_values_included": False,
+            "file_bodies_read": False,
+            "content_hashes_calculated": False,
+            "provider_calls": False,
+            "writes": False,
+        },
+        "closed_actions": {
+            "automatic_classification": False,
+            "source_intake_run": False,
+            "objet_capture_run": False,
+            "draft_created": False,
+            "minted": False,
+            "provider_upload": False,
+            "cleanup_performed": False,
+        },
+        "suggested_action_counts": action_counts,
+        "next_safe_actions": project_intake_unpack_queue_safe_actions(state),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+    }
+
+
+def project_intake_unpack_queue_items(staged_folder: Path, max_items: int) -> tuple[list[dict[str, Any]], int, bool]:
+    children = sorted(staged_folder.iterdir(), key=lambda item: item.name.casefold())
+    items: list[dict[str, Any]] = []
+    for index, child in enumerate(children[:max_items], start=1):
+        items.append(project_intake_unpack_queue_item(child, index))
+    return items, len(children), len(children) > max_items
+
+
+def project_intake_unpack_queue_item(path: Path, index: int) -> dict[str, Any]:
+    kind = "other"
+    extension = None
+    size_bucket = "unknown"
+    if path.is_symlink():
+        kind = "other"
+    elif path.is_file():
+        kind = "file"
+        extension = project_intake_safe_extension(path.suffix)
+        size_bucket = project_intake_size_bucket(project_intake_file_size(path))
+    elif path.is_dir():
+        kind = "folder"
+
+    return {
+        "item_ref": f"item-{index:04d}",
+        "kind": kind,
+        "extension": extension,
+        "size_bucket": size_bucket,
+        "selection_hint": "Map this item_ref to the matching top-level item in the local staged folder view.",
+        "suggested_human_actions": project_intake_unpack_suggested_actions(kind, extension),
+        "name_included": False,
+        "local_path_included": False,
+        "file_body_read": False,
+        "content_hash_calculated": False,
+    }
+
+
+def project_intake_safe_extension(suffix: str) -> str | None:
+    normalized = suffix.lower().strip()
+    if not normalized or len(normalized) > 16:
+        return None
+    if re.fullmatch(r"\.[a-z0-9][a-z0-9._+-]*", normalized):
+        return normalized
+    return None
+
+
+def project_intake_file_size(path: Path) -> int | None:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return None
+
+
+def project_intake_size_bucket(size: int | None) -> str:
+    if size is None:
+        return "unknown"
+    if size == 0:
+        return "empty"
+    if size < 1024 * 1024:
+        return "small"
+    if size < 100 * 1024 * 1024:
+        return "medium"
+    return "large"
+
+
+def project_intake_unpack_suggested_actions(kind: str, extension: str | None) -> list[str]:
+    if kind == "folder":
+        return ["open_as_next_box", "split_into_new_session", "defer", "mark_noise_after_review"]
+    if kind == "file" and extension in {".md", ".txt", ".rst", ".html", ".csv", ".json"}:
+        return ["review_as_working_note_or_source", "plan_source_intake", "defer", "mark_noise_after_review"]
+    if kind == "file":
+        return ["review_as_original_objet", "plan_source_intake", "defer", "mark_noise_after_review"]
+    return ["inspect_manually", "defer", "mark_noise_after_review"]
+
+
+def project_intake_unpack_next_human_turn(state: str, item_count: int, has_receipt: bool) -> dict[str, Any]:
+    if state == "blocked":
+        return {
+            "kind": "blocked",
+            "ask_user": "Fix the blocker before choosing the next staged item.",
+            "answer_type": "manual_fix_then_continue",
+            "writes": False,
+        }
+    if state == "needs_project_review":
+        ask = "Choose whether to answer project-intake review questions first, or pick one item_ref only for discussion without source-intake."
+    elif state == "needs_more_project_review":
+        ask = "Finish the remaining project-intake review questions, then choose one item_ref for the next source-intake plan."
+    elif item_count == 0:
+        ask = "No top-level staged items were found. Should this intake session stop, restage, or defer?"
+    else:
+        ask = "Which item_ref should we unpack next, and should it be inspected, preserved as an objet, drafted from, deferred, marked as noise, or split into another session?"
+    return {
+        "kind": "choose_next_unpack_item",
+        "ask_user": ask,
+        "answer_type": "item_ref_and_human_action",
+        "allowed_actions": [
+            "inspect_next",
+            "preserve_as_objet",
+            "draft_from",
+            "defer",
+            "mark_noise_after_review",
+            "split_session",
+            "stop",
+        ],
+        "requires_project_intake_receipt_before_source_intake": not has_receipt,
+        "decision_values_included": False,
+        "writes": False,
+    }
+
+
+def project_intake_unpack_queue_safe_actions(state: str) -> list[str]:
+    if state == "blocked":
+        return [
+            "Fix the blocker before asking the human to choose a staged item.",
+            "Do not run source-intake, capture, drafting, minting, provider sync, or cleanup from a blocked unpack queue.",
+        ]
+    actions = [
+        "Ask the human to choose exactly one item_ref and one intended action.",
+        "Have the human map the item_ref to the local staged item; this queue does not expose names or paths.",
+        "Run project-intake-item-plan only after a reviewed project-intake receipt exists and one local file is selected.",
+        "Keep capture, drafting, minting, provider sync, and cleanup as separate approval gates.",
+    ]
+    if state == "needs_project_review":
+        actions.insert(0, "Run project-intake-next-question and record the required human answers before source-intake.")
+    elif state == "needs_more_project_review":
+        actions.insert(0, "Finish the remaining project-intake questions before using the queue for source-intake.")
+    return actions
+
+
 def project_intake_staging_convention(archive_root: Path, staged_folder: Path) -> dict[str, Any]:
     expected_intake_root = (archive_root.parent / f"{archive_root.name}-objets" / "intake").resolve()
     follows = staged_folder.parent == expected_intake_root and staged_folder.name != "intake"

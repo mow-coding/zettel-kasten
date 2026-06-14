@@ -95,6 +95,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "human-guided promotion spine",
             "archive-objets/` as a recommended local staging",
             "content-addressed store must be moved there",
+            "archive project-intake-unpack-queue",
+            "opaque `item-0001` style refs",
             "archive project-intake-session-guide",
             "archive project-intake-record-answer",
             "archive project-intake-status",
