@@ -115,6 +115,10 @@ The inventory helps a human remember which refs exist without turning WOM into
 a password vault. It scans provider bindings, source bindings, and the ignored
 local catalog `profiles/local/credential-refs.local.yml`, but it does not echo the exact ref value or read the secret behind it.
 
+v0.3.22 adds [Credential Store Recommendations](credential-store-recommendations.md)
+so WOM can explain which external store class fits a human scenario without
+opening a vault or reading any secret value.
+
 ## Mail Sources
 
 Mail source access should use refs such as:

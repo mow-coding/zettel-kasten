@@ -112,6 +112,7 @@
 - [Project Intake Cookbook](project-intake-cookbook.md)
 - [Credential Store Contract](credential-store-contract.md)
 - [Credential Ref Inventory And Onboarding](credential-ref-inventory-and-onboarding.md)
+- [Credential Store Recommendations](credential-store-recommendations.md)
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
 - [IMAP Mailbox Source](imap-mailbox-source.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)

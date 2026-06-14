@@ -27,6 +27,8 @@ Commands:
           Plan a local credential reference without reading or storing secret values.
   credential-ref-inventory
           List known credential refs without echoing ref values or secrets.
+  credential-store-recommendation
+          Recommend a secret store class for a human scenario without reading secrets.
   source-intake
           Plan safe source/objet refs before draft creation.
   source-intake-record
@@ -2003,6 +2005,44 @@ def command_credential_ref_inventory(args: argparse.Namespace) -> int:
                 f"{item.get('provider') or '-'} "
                 f"{item.get('ref_prefix') or '-'}"
             )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_credential_store_recommendation(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("credential-store-recommendation is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.credential_store_recommendation(
+            Path(args.archive_root),
+            scenario=args.scenario,
+            platform=args.platform,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        primary = result.get("primary_recommendation") if isinstance(result.get("primary_recommendation"), dict) else {}
+        print(f"Credential store recommendation {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Scenario: {result.get('scenario') or '-'}")
+        print(f"Platform: {result.get('platform') or '-'}")
+        print(f"Primary: {primary.get('store_id') or '-'} ({primary.get('store_class') or '-'})")
+        print(f"WOM ref prefix: {primary.get('wom_ref_prefix') or '-'}")
+        print("Writes: none")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -6168,6 +6208,28 @@ def build_parser() -> argparse.ArgumentParser:
     credential_ref_inventory.add_argument("--dry-run", action="store_true", help="Required; read-only inventory.")
     credential_ref_inventory.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_ref_inventory.set_defaults(func=command_credential_ref_inventory)
+
+    credential_store_recommendation = subcommands.add_parser(
+        "credential-store-recommendation",
+        aliases=["credential-store-plan", "secret-store-recommendation"],
+        help="Recommend a secret store class for a human scenario without reading secrets.",
+    )
+    credential_store_recommendation.add_argument("archive_root", help="Archive root to inspect.")
+    credential_store_recommendation.add_argument(
+        "--scenario",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS),
+        required=True,
+        help="Human secret-vault usage scenario.",
+    )
+    credential_store_recommendation.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Host platform for OS keyring wording.",
+    )
+    credential_store_recommendation.add_argument("--dry-run", action="store_true", help="Required; read-only recommendation.")
+    credential_store_recommendation.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    credential_store_recommendation.set_defaults(func=command_credential_store_recommendation)
 
     source_intake = subcommands.add_parser(
         "source-intake",
