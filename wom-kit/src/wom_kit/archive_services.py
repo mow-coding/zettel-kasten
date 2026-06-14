@@ -17201,6 +17201,215 @@ def project_intake_staging_guide(
     }
 
 
+def project_intake_session_guide(
+    archive_root: Path | str,
+    *,
+    project_slug: str | None = None,
+    staged_folder: Path | str | None = None,
+    receipt: str | None = None,
+    session_id: str | None = None,
+    staged_folder_ref: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    if not dry_run:
+        raise ArchiveServiceError("project-intake-session-guide is dry-run only.")
+    selected_inputs = [project_slug is not None, staged_folder is not None, bool(receipt)]
+    if sum(1 for item in selected_inputs if item) != 1:
+        raise ArchiveServiceError("Pass exactly one of project_slug, staged_folder, or receipt.")
+
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    mode = "unknown"
+    state = "blocked"
+    current_context: dict[str, Any] = {}
+    next_human_turn: dict[str, Any] | None = None
+    decision_record_template: dict[str, Any] | None = None
+    command_guidance: dict[str, Any] = {}
+
+    if project_slug is not None:
+        mode = "staging"
+        guide = project_intake_staging_guide(root, project_slug=project_slug, dry_run=True)
+        blockers.extend(guide.get("blockers") or [])
+        warnings.extend(guide.get("warnings") or [])
+        paths = guide.get("recommended_paths") if isinstance(guide.get("recommended_paths"), dict) else {}
+        current_context = {
+            "project_slug": guide.get("project_slug"),
+            "recommended_paths": paths,
+            "path_policy": guide.get("path_policy"),
+            "staged_folder_exists": False,
+            "staged_folder_created": False,
+        }
+        state = "blocked" if blockers else "needs_manual_staging"
+        next_human_turn = {
+            "kind": "manual_staging",
+            "ask_user": "Create the staged project folder manually, place exactly one project there, then run project-intake-plan.",
+            "answer_type": "manual_action_then_continue",
+            "writes": False,
+        }
+        command_guidance = {
+            "current_safe_command": (
+                "archive project-intake-staging-guide <archive-root> "
+                "--project-slug <project-slug> --dry-run --format json"
+            ),
+            "next_safe_command_after_manual_staging": (
+                "archive project-intake-plan <archive-root> "
+                "--staged-folder <staged-project-folder> --dry-run --format json"
+            ),
+            "automatic_execution_authorized": False,
+        }
+    elif staged_folder is not None:
+        mode = "new_session"
+        plan = project_intake_plan(root, staged_folder)
+        question = project_intake_next_question(root, staged_folder=staged_folder, dry_run=True)
+        template = project_intake_decision_template(
+            root,
+            staged_folder=staged_folder,
+            session_id=session_id,
+            staged_folder_ref=staged_folder_ref,
+            dry_run=True,
+        )
+        blockers.extend(question.get("blockers") or [])
+        warnings.extend(plan.get("warnings") or [])
+        warnings.extend(question.get("warnings") or [])
+        current_context = {
+            "folder_summary": plan["folder_summary"],
+            "follows_staging_convention": plan["follows_staging_convention"],
+            "staging_convention": plan["staging_convention"],
+            "entry_names_included": False,
+            "file_bodies_read": False,
+        }
+        next_human_turn = question.get("next_question")
+        decision_record_template = template.get("decision_record_template")
+        state = "blocked" if blockers else str(question.get("state") or "needs_first_review")
+        command_guidance = {
+            "ask_next_question_with": (
+                "archive project-intake-next-question <archive-root> "
+                "--staged-folder <staged-folder> --dry-run --format json"
+            ),
+            "build_answer_template_with": (
+                "archive project-intake-decision-template <archive-root> "
+                "--staged-folder <staged-folder> --session-id <safe-session-id> --dry-run --format json"
+            ),
+            "record_reviewed_answer_with": (
+                "archive project-intake-decisions <archive-root> "
+                "--decisions <reviewed-decisions.json> --dry-run, then --approve --reviewed-by <actor>"
+            ),
+            "automatic_execution_authorized": False,
+        }
+    else:
+        mode = "continuing_session"
+        assert receipt is not None
+        status = project_intake_status(root, receipt, dry_run=True)
+        question = project_intake_next_question(root, receipt=receipt, dry_run=True)
+        template = project_intake_decision_template(
+            root,
+            receipt=receipt,
+            session_id=session_id,
+            staged_folder_ref=staged_folder_ref,
+            dry_run=True,
+        )
+        blockers.extend(status.get("blockers") or [])
+        blockers.extend(question.get("blockers") or [])
+        warnings.extend(status.get("warnings") or [])
+        warnings.extend(question.get("warnings") or [])
+        coverage = status.get("checklist_coverage") if isinstance(status.get("checklist_coverage"), dict) else {}
+        current_context = {
+            "receipt_path": status.get("receipt_path"),
+            "session_id": status.get("session_id"),
+            "readiness": status.get("readiness"),
+            "checklist_coverage": coverage,
+            "decision_values_included": False,
+        }
+        next_human_turn = question.get("next_question")
+        decision_record_template = template.get("decision_record_template")
+        if blockers:
+            state = "blocked"
+        elif coverage.get("complete"):
+            state = "ready_for_item_selection"
+        else:
+            state = str(question.get("state") or "needs_more_review")
+        command_guidance = {
+            "review_receipt_with": (
+                "archive project-intake-status <archive-root> "
+                "--receipt <project-intake-receipt> --dry-run --format json"
+            ),
+            "ask_next_question_with": (
+                "archive project-intake-next-question <archive-root> "
+                "--receipt <project-intake-receipt> --dry-run --format json"
+            ),
+            "build_answer_template_with": (
+                "archive project-intake-decision-template <archive-root> "
+                "--receipt <project-intake-receipt> --dry-run --format json"
+            ),
+            "plan_one_selected_item_with": (
+                "archive project-intake-item-plan <archive-root> "
+                "--receipt <project-intake-receipt> --local-path <human-selected-file> --dry-run --format json"
+            ),
+            "automatic_execution_authorized": False,
+        }
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "action": "archive_project_intake_session_guide",
+        "archive_id": archive_id,
+        "mode": mode,
+        "state": state,
+        "current_context": current_context,
+        "next_human_turn": next_human_turn,
+        "decision_record_template": decision_record_template,
+        "command_guidance": command_guidance,
+        "privacy_guards": {
+            "entry_names_included": False,
+            "decision_values_included": False,
+            "file_bodies_read": False,
+            "content_hashes_calculated": False,
+            "provider_calls": False,
+            "writes": False,
+        },
+        "closed_actions": {
+            "source_intake_run": False,
+            "objet_capture_run": False,
+            "draft_created": False,
+            "minted": False,
+            "provider_upload": False,
+            "cleanup_performed": False,
+            "full_auto_used": False,
+        },
+        "next_safe_actions": project_intake_session_guide_safe_actions(state),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+    }
+
+
+def project_intake_session_guide_safe_actions(state: str) -> list[str]:
+    if state == "blocked":
+        return [
+            "Fix the blocker before continuing the project intake session.",
+            "Do not run source-intake, capture, drafting, minting, upload, or cleanup from a blocked guide.",
+        ]
+    if state == "needs_manual_staging":
+        return [
+            "Create the staged folder manually and place exactly one project there.",
+            "Run project-intake-plan or project-intake-session-guide with --staged-folder after staging.",
+            "Do not capture, draft, mint, upload, or clean from the staging guide.",
+        ]
+    if state == "ready_for_item_selection":
+        return [
+            "Ask the human to select exactly one file for the next item plan.",
+            "Run project-intake-item-plan for that selected file before source-intake recording or capture selection.",
+            "Keep capture, drafting, minting, provider sync, and cleanup as separate approval gates.",
+        ]
+    return [
+        "Ask the next_human_turn.ask_user question.",
+        "Record only the human-reviewed answer in a decisions JSON file.",
+        "Run project-intake-decisions --dry-run before approving any new receipt.",
+    ]
+
+
 def safe_project_intake_slug(value: str) -> bool:
     text = value.strip()
     if not text or not text.isascii():

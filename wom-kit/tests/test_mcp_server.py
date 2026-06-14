@@ -642,6 +642,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("prehashed_objet_ledger_preview", tool_names)
             self.assertIn("project_intake_plan", tool_names)
             self.assertIn("project_intake_staging_guide", tool_names)
+            self.assertIn("project_intake_session_guide", tool_names)
             self.assertIn("project_intake_status", tool_names)
             self.assertIn("project_intake_next_question", tool_names)
             self.assertIn("project_intake_decision_template", tool_names)
@@ -1901,6 +1902,36 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(guide["action"], "archive_project_intake_staging_guide")
                 self.assertTrue(guide["recommended_paths"]["staged_project_folder"].endswith("alpha-project"))
                 self.assertFalse(guide["path_policy"]["create_directories"])
+
+                session_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 12,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "project_intake_session_guide",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "staged_folder": str(staged),
+                                "session_id": "alpha-project-20260613",
+                                "staged_folder_ref": "intake:alpha-project",
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(session_response["result"]["isError"])
+                session = session_response["result"]["structuredContent"]
+                self.assertTrue(session["ok"])
+                self.assertEqual(session["action"], "archive_project_intake_session_guide")
+                self.assertEqual(session["mode"], "new_session")
+                self.assertEqual(session["state"], "needs_first_review")
+                self.assertEqual(session["next_human_turn"]["checklist_id"], "scope.single_project")
+                self.assertFalse(session["closed_actions"]["objet_capture_run"])
+                self.assertFalse(session["command_guidance"]["automatic_execution_authorized"])
+                session_dump = json.dumps(session)
+                self.assertNotIn("private-file-name.md", session_dump)
+                self.assertNotIn("SUPER_SECRET_BODY", session_dump)
 
                 plan_response = self.send(
                     process,

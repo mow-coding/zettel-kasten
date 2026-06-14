@@ -29,6 +29,8 @@ Commands:
           Plan one staged project folder intake session without writing files.
   project-intake-staging-guide
           Show where to stage one project before a project intake session.
+  project-intake-session-guide
+          Show the next safe human-guided project intake step without writing files.
   project-intake-next-question
           Return the next human-review question for a project intake session.
   project-intake-decision-template
@@ -4142,6 +4144,60 @@ def print_project_intake_staging_guide_result(result: dict[str, Any], output_for
             print(f"- {action}")
 
 
+def command_project_intake_session_guide(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.project_intake_session_guide(
+            Path(args.archive_root),
+            project_slug=args.project_slug,
+            staged_folder=Path(args.staged_folder) if args.staged_folder else None,
+            receipt=args.receipt,
+            session_id=args.session_id,
+            staged_folder_ref=args.staged_folder_ref,
+            dry_run=args.dry_run,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_project_intake_session_guide_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def print_project_intake_session_guide_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"Project intake session guide dry-run {result.get('state') or 'unknown'}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Mode: {result.get('mode') or '-'}")
+    turn = result.get("next_human_turn") if isinstance(result.get("next_human_turn"), dict) else None
+    if turn is None:
+        print("Next human turn: none")
+    else:
+        if turn.get("checklist_id"):
+            print(f"Checklist id: {turn.get('checklist_id')}")
+        print(f"Ask: {turn.get('ask_user') or '-'}")
+        print(f"Answer type: {turn.get('answer_type') or '-'}")
+    guidance = result.get("command_guidance") if isinstance(result.get("command_guidance"), dict) else {}
+    if guidance:
+        print("Command guidance:")
+        for key, value in guidance.items():
+            print(f"- {key}: {value}")
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
+
+
 def command_project_intake_decisions(args: argparse.Namespace) -> int:
     try:
         result = archive_services.project_intake_decisions(
@@ -6506,6 +6562,21 @@ def build_parser() -> argparse.ArgumentParser:
     project_intake_staging_guide.add_argument("--dry-run", action="store_true", help="Required; path guidance only.")
     project_intake_staging_guide.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     project_intake_staging_guide.set_defaults(func=command_project_intake_staging_guide)
+
+    project_intake_session_guide = subcommands.add_parser(
+        "project-intake-session-guide",
+        help="Show the next safe human-guided project intake step without writing files.",
+    )
+    project_intake_session_guide.add_argument("archive_root", help="Archive root to inspect.")
+    project_intake_session_guide_source = project_intake_session_guide.add_mutually_exclusive_group(required=True)
+    project_intake_session_guide_source.add_argument("--project-slug", help="Lowercase ASCII project slug for staging guidance.")
+    project_intake_session_guide_source.add_argument("--staged-folder", help="One staged project folder for a new intake session.")
+    project_intake_session_guide_source.add_argument("--receipt", help="Archive-relative project intake decisions receipt for a continuing session.")
+    project_intake_session_guide.add_argument("--session-id", help="Optional safe session id for a new decision template.")
+    project_intake_session_guide.add_argument("--staged-folder-ref", help="Optional non-secret staged folder reference for a new decision template.")
+    project_intake_session_guide.add_argument("--dry-run", action="store_true", help="Required; guide only.")
+    project_intake_session_guide.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    project_intake_session_guide.set_defaults(func=command_project_intake_session_guide)
 
     project_intake_plan = subcommands.add_parser(
         "project-intake-plan",
