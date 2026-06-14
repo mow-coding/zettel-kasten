@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.3.23 pre-release
+v0.3.24 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -36,7 +36,7 @@ v0.3.23 pre-release
 - runtime context, profile, source/objet intake, block header, prompt boundary, foreign block review, projection, shared update review/index, shared update route preview, ZET would-transport planning을 위한 read-only preview layer,
 - 사람 승인 뒤에만 동작하는 일부 local write path,
 - read-only objet reference resolution 및 zettel objet link preview,
-- mail, OpenAI API, OCR API 등을 위한 read-only credential reference planning, inventory, external store recommendation, future access broker planning,
+- mail, OpenAI API, OCR API 등을 위한 read-only credential reference planning, inventory, external store recommendation, future access broker planning, approval receipt preview,
 - public link, Korean product language, privacy, release readiness, branch-protection planning을 위한 local hygiene tool.
 
 각 기능이 실제 구현인지, read-only preview인지, 승인 write인지, 문서만 있는지 보려면 [WOM-kit Capability Matrix](wom-kit/docs/capability-matrix.md)를 보세요.
@@ -95,6 +95,7 @@ v0.3.23 pre-release
 - [Credential Ref Inventory And Onboarding](wom-kit/docs/credential-ref-inventory-and-onboarding.md)
 - [Credential Store Recommendations](wom-kit/docs/credential-store-recommendations.md)
 - [Credential Access Broker Plan](wom-kit/docs/credential-access-broker-plan.md)
+- [Credential Access Approval Plan](wom-kit/docs/credential-access-approval-plan.md)
 - [Human Artifact Store Contract](wom-kit/docs/human-artifact-store-contract.md)
 - [IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)
 - [Zettel Objet Links](wom-kit/docs/zettel-objet-links.md)
@@ -202,6 +203,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.3.24
 v0.3.23
 v0.3.22
 v0.3.21

@@ -21,6 +21,9 @@ human asks AI to do a task
 
 v0.3.23 does not implement secret retrieval. It only plans the broker request.
 
+v0.3.24 adds a read-only approval receipt preview. See
+[Credential Access Approval Plan](credential-access-approval-plan.md).
+
 ## Read-Only Planner
 
 ```powershell

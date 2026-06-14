@@ -122,6 +122,10 @@ opening a vault or reading any secret value.
 v0.3.23 adds [Credential Access Broker Plan](credential-access-broker-plan.md)
 so WOM can describe future approved secret use without implementing secret retrieval.
 
+v0.3.24 adds [Credential Access Approval Plan](credential-access-approval-plan.md)
+so WOM can preview the human-reviewed approval receipt without writing it or
+granting live access.
+
 ## Mail Sources
 
 Mail source access should use refs such as:

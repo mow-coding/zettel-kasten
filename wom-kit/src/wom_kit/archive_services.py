@@ -1039,6 +1039,8 @@ CREDENTIAL_ACCESS_BROKER_STORE_KINDS = {
     "environment",
     "future_wallet",
 }
+CREDENTIAL_ACCESS_APPROVAL_DECISIONS = {"needs_review", "approve_once", "deny"}
+CREDENTIAL_ACCESS_APPROVAL_RECEIPTS_DIR = "receipts/credentials/access-approvals"
 ONBOARDING_PROVIDER_PROFILES = {
     "local_only": {
         "description": "Local archive plus physical/local backup and external secret vault guidance.",
@@ -11564,6 +11566,182 @@ def credential_access_broker_plan(
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
+
+
+def credential_access_approval_plan(
+    archive_root: Path | str,
+    *,
+    credential_id: str,
+    action_kind: str,
+    decision: str = "needs_review",
+    store_kind: str = "password_manager",
+    credential_ref: str | None = None,
+    credential_kind: str | None = None,
+    provider: str | None = None,
+    consumer: str | None = None,
+    reviewed_by: str | None = None,
+    platform: str = "windows",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("credential-access-approval-plan is read-only and requires --dry-run.")
+
+    resolved_decision = (decision or "needs_review").strip().lower().replace("-", "_")
+    if resolved_decision not in CREDENTIAL_ACCESS_APPROVAL_DECISIONS:
+        blockers.append("decision must be one of: " + ", ".join(sorted(CREDENTIAL_ACCESS_APPROVAL_DECISIONS)) + ".")
+        resolved_decision = "needs_review"
+
+    broker_preview = credential_access_broker_plan(
+        root,
+        credential_id=credential_id,
+        credential_ref=credential_ref,
+        credential_kind=credential_kind,
+        provider=provider,
+        action_kind=action_kind,
+        store_kind=store_kind,
+        consumer=consumer,
+        platform=platform,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in broker_preview.get("blockers") or [])
+    warnings.extend(str(item) for item in broker_preview.get("warnings") or [])
+
+    resolved_reviewed_by = (reviewed_by or "human:pending-review").strip()
+    if not safe_source_intake_plan_scalar(resolved_reviewed_by):
+        blockers.append("reviewed_by must be a safe non-secret reviewer label.")
+        resolved_reviewed_by = "human:pending-review"
+
+    credential = broker_preview.get("credential") if isinstance(broker_preview.get("credential"), dict) else {}
+    broker_request = broker_preview.get("broker_request") if isinstance(broker_preview.get("broker_request"), dict) else {}
+    action_profile = broker_preview.get("action_profile") if isinstance(broker_preview.get("action_profile"), dict) else {}
+    case_id = credential_access_approval_case_id(
+        archive_id=archive_id,
+        credential_id=str(credential.get("credential_id") or ""),
+        action_kind=str(broker_request.get("action_kind") or ""),
+        store_kind=str(broker_request.get("store_kind") or ""),
+        consumer=str(broker_request.get("consumer") or ""),
+        decision=resolved_decision,
+    )
+    proposed_receipt_path = f"{CREDENTIAL_ACCESS_APPROVAL_RECEIPTS_DIR}/{case_id}.credential-access-approval.json"
+    decision_effect = {
+        "approve_once": "would_allow_one_approved_action_after_receipt_write",
+        "deny": "would_deny_the_requested_action_after_receipt_write",
+        "needs_review": "would_keep_the_request_pending_for_human_review",
+    }[resolved_decision]
+
+    receipt_preview = {
+        "receipt_kind": "credential_access_approval",
+        "schema_version": "wom-credential-access-approval/v0.1",
+        "archive_id": archive_id,
+        "decision": resolved_decision,
+        "decision_effect": decision_effect,
+        "reviewed_by": resolved_reviewed_by,
+        "credential": credential,
+        "broker_request": broker_request,
+        "action_description": action_profile.get("description"),
+        "approval_constraints": {
+            "single_action_only": resolved_decision == "approve_once",
+            "secret_value_return_to_ai": False,
+            "approval_receipt_required_before_use": True,
+            "replay_requires_new_approval": True,
+            "background_use_allowed": False,
+        },
+        "secret_material": {
+            "secret_value_included": False,
+            "credential_ref_value_included": False,
+            "username_included": False,
+            "email_included": False,
+            "token_included": False,
+            "local_path_included": False,
+        },
+        "non_secret_result_metadata_allowed": list(action_profile.get("expected_result_metadata") or []),
+        "never_return": list(action_profile.get("never_return") or []),
+    }
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "credential_access_approval_plan",
+        "archive_id": archive_id,
+        "decision": resolved_decision,
+        "decision_effect": decision_effect,
+        "proposed_receipt_path": proposed_receipt_path,
+        "receipt_preview": json_safe(receipt_preview),
+        "broker_plan_summary": {
+            "action_kind": broker_request.get("action_kind"),
+            "store_kind": broker_request.get("store_kind"),
+            "consumer": broker_request.get("consumer"),
+            "credential_id": credential.get("credential_id"),
+            "credential_kind": credential.get("credential_kind"),
+            "ref_store": credential.get("ref_store"),
+            "ref_prefix": credential.get("ref_prefix"),
+            "exact_ref_value_echoed": False,
+        },
+        "next_safe_actions": [
+            "Human reviews the receipt preview locally.",
+            "A future approval writer may record this receipt only after explicit approve/deny input.",
+            "A future broker may use approve_once only for one scoped action, then require a new receipt for replay.",
+            "Secret values and exact credential refs must stay outside chat, zets, receipts, logs, prompts, and public docs.",
+        ],
+        "current_capability": {
+            "approval_receipt_preview_available": True,
+            "approval_receipt_write_implemented": False,
+            "broker_adapter_implemented": False,
+            "secret_value_retrieval_implemented": False,
+        },
+        "closed_actions": {
+            "approval_receipt_written": False,
+            "secret_prompted_in_chat": False,
+            "secret_value_read": False,
+            "secret_value_written": False,
+            "password_manager_opened": False,
+            "browser_password_store_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "plaintext_file_read": False,
+            "provider_api_called": False,
+            "oauth_started": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "credential_ref_values_echoed": False,
+            "email_addresses_echoed": False,
+            "tokens_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def credential_access_approval_case_id(
+    *,
+    archive_id: str,
+    credential_id: str,
+    action_kind: str,
+    store_kind: str,
+    consumer: str,
+    decision: str,
+) -> str:
+    payload = {
+        "archive_id": archive_id,
+        "credential_id": credential_id,
+        "action_kind": action_kind,
+        "store_kind": store_kind,
+        "consumer": consumer,
+        "decision": decision,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
+    return f"credential-access-{digest}"
 
 
 def credential_access_action_profile(action_kind: str) -> dict[str, Any]:
