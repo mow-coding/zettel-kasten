@@ -88,6 +88,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         text = PROJECT_INTAKE_COOKBOOK_PATH.read_text(encoding="utf-8")
         for phrase in (
             "fake-archive rehearsal",
+            "Bulk Raw First, Selective Promotion Later",
+            "archive prehashed-objet-ledger --ledger ... --approve",
+            "human-guided promotion spine",
+            "archive-objets/` as a recommended local staging",
+            "content-addressed store must be moved there",
             "archive project-intake-session-guide",
             "archive project-intake-record-answer",
             "archive project-intake-status",
@@ -96,6 +101,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "archive objet-capture",
             "archive staged-cleanup-check",
             "does not echo the answer text",
+            "$sourceIntakeReceipt",
+            "$selectionJson",
             "Treat receipts as context, not automatic permission.",
             "WOM-kit still never deletes it for you.",
         ):
