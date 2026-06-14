@@ -10,6 +10,7 @@ MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 FREEZE_DOC_PATH = KIT_ROOT / "docs" / "v02x-freeze-v03-entry-boundary.md"
 PROJECT_INTAKE_COOKBOOK_PATH = KIT_ROOT / "docs" / "project-intake-cookbook.md"
 CREDENTIAL_STORE_CONTRACT_PATH = KIT_ROOT / "docs" / "credential-store-contract.md"
+CREDENTIAL_REF_INVENTORY_PATH = KIT_ROOT / "docs" / "credential-ref-inventory-and-onboarding.md"
 HUMAN_ARTIFACT_STORE_CONTRACT_PATH = KIT_ROOT / "docs" / "human-artifact-store-contract.md"
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
 IMAP_MAILBOX_SOURCE_PATH = KIT_ROOT / "docs" / "imap-mailbox-source.md"
@@ -49,6 +50,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Attestation statement draft write",
             "Projection plan",
             "Credential ref plan",
+            "Credential ref inventory",
             "IMAP mailbox source plan",
             "Notion page snapshot model",
             "Objet ref resolver",
@@ -271,7 +273,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, resolver_text)
         for phrase in (
-            "Status: v0.3.20 credential reference planning checkpoint",
+            "Status: v0.3.21 credential reference inventory checkpoint",
             "Objet ref resolver",
             "archive resolve-objet-ref --object-id sha256:<hex> --dry-run",
             "MCP `resolve_objet_ref`",
@@ -280,7 +282,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.20 pre-release",
+            "v0.3.21 pre-release",
             "[Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)",
             "read-only objet reference resolution",
         ):
@@ -375,7 +377,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.20 pre-release",
+            "v0.3.21 pre-release",
             "[IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)",
             "read-only IMAP mailbox source planning",
         ):
@@ -424,13 +426,71 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.20 pre-release",
+            "v0.3.21 pre-release",
             "[Credential Store Contract](wom-kit/docs/credential-store-contract.md)",
             "read-only credential reference planning",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         self.assertIn("[Credential Store Contract](credential-store-contract.md)", public_map_text)
+
+    def test_credential_ref_inventory_doc_and_matrix_keep_secret_boundaries(self) -> None:
+        inventory_text = CREDENTIAL_REF_INVENTORY_PATH.read_text(encoding="utf-8")
+        contract_text = CREDENTIAL_STORE_CONTRACT_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.21 read-only inventory baseline",
+            "WOM should not become a plaintext password vault",
+            "credential-ref-inventory",
+            "credentials",
+            "credential-status",
+            "credential_ref_inventory",
+            "profiles/local/credential-refs.local.yml",
+            "does not echo the exact ref value",
+            "Windows Credential Manager",
+            "KeePassXC",
+            "`account_ref` is not a secret",
+            "read passwords",
+            "read API keys",
+            "open an OS keyring",
+            "It is a catalog of refs, not a secret reader.",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, inventory_text)
+        for phrase in (
+            "Credential Ref Inventory And Onboarding",
+            "credential-ref-inventory",
+            "profiles/local/credential-refs.local.yml",
+            "does not echo the exact ref value",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, contract_text)
+        for phrase in (
+            "Credential ref inventory",
+            "archive credential-ref-inventory --dry-run",
+            "MCP `credential_ref_inventory`",
+            "credentials",
+            "credential-status",
+            "profiles/local/credential-refs.local.yml",
+            "without echoing exact ref values or secrets",
+            "reads no environment variables",
+            "opens no OS keyring",
+            "never prints passwords",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.21 pre-release",
+            "[Credential Ref Inventory And Onboarding](wom-kit/docs/credential-ref-inventory-and-onboarding.md)",
+            "read-only credential reference planning and inventory",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        self.assertIn("[Credential Ref Inventory And Onboarding](credential-ref-inventory-and-onboarding.md)", public_map_text)
+        self.assertIn("[Credential Ref Inventory And Onboarding](credential-ref-inventory-and-onboarding.md)", public_map_ko_text)
 
     def test_v02x_freeze_boundary_doc_covers_public_proof_and_non_goals(self) -> None:
         text = FREEZE_DOC_PATH.read_text(encoding="utf-8")

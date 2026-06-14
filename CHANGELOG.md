@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.21 - 2026-06-14
+
+- Added read-only CLI `archive credential-ref-inventory --dry-run` and MCP
+  `credential_ref_inventory` for listing known credential refs without echoing
+  exact ref values or secrets.
+- Added ignored local catalog guidance for
+  `profiles/local/credential-refs.local.yml` so a human can remember credential
+  ids, kinds, providers, purposes, and store prefixes while keeping passwords,
+  tokens, API keys, and account values outside WOM archive records.
+- Improved IMAP mailbox planning feedback when a credential-store ref such as
+  `keyring:*` is accidentally passed as `account_ref`; `account_ref` is now
+  explained as a non-secret account label, while `keyring:`, `env:`, `secret:`,
+  and `wallet:` refs belong in username, app-password, OAuth-token, or generic
+  credential fields.
+- Added `wom-kit/docs/credential-ref-inventory-and-onboarding.md` plus
+  CLI/MCP/docs tests for dry-run-only behavior, allowed-root enforcement,
+  no-write behavior, and non-echo guarantees.
+
 ## v0.3.20 - 2026-06-14
 
 - Added read-only CLI `archive credential-ref-plan --dry-run` and MCP

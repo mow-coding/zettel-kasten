@@ -274,6 +274,18 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "credential_ref_inventory",
+        "description": "List known credential refs without echoing ref values or secrets. Read-only; never reads environment variables, opens keyrings, calls providers, or writes files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "zet_surface_prototype_plan",
         "description": "Plan a user-selected ZET surface prototype for WordPress, Joplin, Notion, or Obsidian. Read-only; never calls providers, requests tokens, writes notes, publishes, syncs, mints, or transports.",
         "inputSchema": {
@@ -1428,6 +1440,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_imap_mailbox_plan(arguments)
     if name == "credential_ref_plan":
         return tool_credential_ref_plan(arguments)
+    if name == "credential_ref_inventory":
+        return tool_credential_ref_inventory(arguments)
     if name == "zet_surface_prototype_plan":
         return tool_zet_surface_prototype_plan(arguments)
     if name == "prehashed_objet_ledger_preview":
@@ -1763,6 +1777,19 @@ def tool_credential_ref_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"credential_ref_plan: {state}.", result)
+
+
+def tool_credential_ref_inventory(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("credential_ref_inventory is read-only and requires dry-run.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.credential_ref_inventory,
+        archive_root,
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"credential_ref_inventory: {state}, {result['credential_count']} ref(s).", result)
 
 
 def tool_zet_surface_prototype_plan(arguments: dict[str, Any]) -> dict[str, Any]:

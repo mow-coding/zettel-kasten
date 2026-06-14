@@ -1570,6 +1570,32 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn("abcdabcdabcdabcd", bad_output)
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
+            wrong_account_code, wrong_account_output = self.run_cli(
+                [
+                    "imap-mailbox-plan",
+                    str(archive_root),
+                    "--source-id",
+                    "imap:naver",
+                    "--provider",
+                    "naver",
+                    "--account-ref",
+                    "keyring:naver-account",
+                    "--username-ref",
+                    "env:NAVER_IMAP_USERNAME",
+                    "--app-password-ref",
+                    "keyring:naver-app-password",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            wrong_account = json.loads(wrong_account_output)
+            self.assertEqual(wrong_account_code, 1, wrong_account_output)
+            self.assertFalse(wrong_account["ok"])
+            self.assertTrue(any("account_ref is a non-secret account label" in blocker for blocker in wrong_account["blockers"]))
+            self.assertIsNone(wrong_account["auth"]["account_ref"])
+            self.assertNotIn("keyring:naver-account", wrong_account_output)
+
     def test_credential_ref_plan_is_read_only_and_redacts_raw_secret_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -1634,6 +1660,97 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(any("credential_ref" in blocker for blocker in bad_result["blockers"]))
             self.assertNotIn(raw_secret, bad_output)
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+    def test_credential_ref_inventory_lists_prefixes_without_secret_or_ref_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            local_inventory = archive_root / "profiles" / "local" / "credential-refs.local.yml"
+            local_inventory.parent.mkdir(parents=True, exist_ok=True)
+            local_inventory.write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "version": "wom-local-credential-ref-inventory/v0.1",
+                        "credentials": [
+                            {
+                                "credential_id": "cred:openai-api",
+                                "credential_kind": "openai_api_key",
+                                "provider": "openai",
+                                "credential_ref": "keyring:openai-api-key",
+                            },
+                            {
+                                "credential_id": "cred:naver-mail-access",
+                                "credential_kind": "mail_app_password",
+                                "provider": "naver",
+                                "credential_ref": "keyring:naver-app-password",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "credential-ref-inventory",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "credential_ref_inventory")
+            self.assertGreaterEqual(result["credential_count"], 2)
+            local_entries = [
+                item for item in result["credentials"]
+                if item["source"]["document"] == "profiles/local/credential-refs.local.yml"
+            ]
+            self.assertEqual(len(local_entries), 2)
+            self.assertEqual({item["ref_store"] for item in local_entries}, {"keyring"})
+            self.assertTrue(all(item["ref_prefix"] == "keyring:" for item in local_entries))
+            self.assertFalse(result["closed_actions"]["os_keyring_opened"])
+            self.assertFalse(result["closed_actions"]["environment_read"])
+            self.assertFalse(result["privacy_guards"]["credential_ref_values_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("keyring:openai-api-key", output)
+            self.assertNotIn("keyring:naver-app-password", output)
+            self.assertNotIn("GITHUB_TOKEN", output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            raw_secret = "sk" + "-proj-" + "abcdefghijklmnopqrstuvwxyz1234567890"
+            local_inventory.write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "credentials": [
+                            {
+                                "credential_id": "cred:bad-openai",
+                                "credential_kind": "openai_api_key",
+                                "provider": "openai",
+                                "credential_ref": raw_secret,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bad_code, bad_output = self.run_cli(
+                [
+                    "credential-ref-inventory",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            bad_result = json.loads(bad_output)
+            self.assertEqual(bad_code, 1, bad_output)
+            self.assertFalse(bad_result["ok"])
+            self.assertTrue(any("credential_ref must be a safe ref" in blocker for blocker in bad_result["blockers"]))
+            self.assertNotIn(raw_secret, bad_output)
 
     def test_zet_surface_prototype_four_surface_plans_are_read_only(self) -> None:
         expected = {
