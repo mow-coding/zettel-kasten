@@ -642,6 +642,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("credential_ref_plan", tool_names)
             self.assertIn("credential_ref_inventory", tool_names)
             self.assertIn("credential_store_recommendation", tool_names)
+            self.assertIn("credential_access_broker_plan", tool_names)
             self.assertIn("zet_surface_prototype_plan", tool_names)
             self.assertIn("prehashed_objet_ledger_preview", tool_names)
             self.assertIn("resolve_objet_ref", tool_names)
@@ -1918,6 +1919,105 @@ class McpServerTests(unittest.TestCase):
                             "arguments": {
                                 "archive_root": str(allowed_archive),
                                 "scenario": "personal_local_first",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_credential_access_broker_plan_tool_never_returns_secret_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_access_broker_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "credential_id": "cred:openai-api",
+                                "credential_ref": "secret:keepassxc-openai-api",
+                                "action_kind": "model_api_call",
+                                "store_kind": "password_manager",
+                                "consumer": "wom:adapter:model-api",
+                                "platform": "windows",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                serialized = json.dumps(structured)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "credential_access_broker_plan")
+                self.assertEqual(structured["credential"]["ref_store"], "secret")
+                self.assertFalse(structured["credential"]["exact_ref_value_echoed"])
+                self.assertFalse(structured["broker_request"]["secret_value_return_to_ai"])
+                self.assertFalse(structured["closed_actions"]["secret_value_read"])
+                self.assertFalse(structured["closed_actions"]["password_manager_opened"])
+                self.assertFalse(structured["privacy_guards"]["secret_values_echoed"])
+                self.assertNotIn("secret:keepassxc-openai-api", serialized)
+                self.assertNotIn("sk-proj-", serialized)
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_access_broker_plan",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "credential_id": "cred:openai-api",
+                                "action_kind": "model_api_call",
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_access_broker_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "credential_id": "cred:openai-api",
+                                "action_kind": "model_api_call",
                                 "dry_run": False,
                             },
                         },

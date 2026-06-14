@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.23 - 2026-06-15
+
+- Added read-only CLI `archive credential-access-broker-plan --dry-run` and
+  MCP `credential_access_broker_plan` for planning a future local credential
+  access broker without retrieving secrets.
+- Defined broker action kinds for mail source reads, model API calls, OCR API
+  calls, object-storage requests, CLI token auth, browser login fill, and
+  plaintext secret migration planning.
+- Kept exact credential ref values and raw secret values out of structured
+  output; the planner reports only safe metadata such as credential id, kind,
+  provider, purpose, ref store, and ref prefix.
+- Documented the broker boundary for future AI use: AI requests a credential
+  capability by purpose/ref, while a local approved adapter uses the secret for
+  the approved action without echoing it into chat, zets, receipts, logs,
+  prompts, or public docs.
+- Added `wom-kit/docs/credential-access-broker-plan.md` plus CLI/MCP/docs tests
+  for dry-run-only behavior, allowed-root enforcement, no-write behavior,
+  exact-ref non-echo, and raw-secret redaction.
+
 ## v0.3.22 - 2026-06-14
 
 - Added read-only CLI `archive credential-store-recommendation --dry-run` and

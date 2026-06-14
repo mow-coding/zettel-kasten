@@ -1022,6 +1022,23 @@ CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS = {
     "institutional_mail",
 }
 CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS = {"windows", "macos", "linux", "cross_platform"}
+CREDENTIAL_ACCESS_BROKER_ACTIONS = {
+    "mail_source_read",
+    "model_api_call",
+    "ocr_api_call",
+    "object_storage_request",
+    "cli_token_auth",
+    "browser_login_fill",
+    "plaintext_secret_migration",
+}
+CREDENTIAL_ACCESS_BROKER_STORE_KINDS = {
+    "password_manager",
+    "browser_platform_manager",
+    "os_keyring",
+    "developer_secret_manager",
+    "environment",
+    "future_wallet",
+}
 ONBOARDING_PROVIDER_PROFILES = {
     "local_only": {
         "description": "Local archive plus physical/local backup and external secret vault guidance.",
@@ -11377,6 +11394,249 @@ def credential_store_scenario_profiles(platform_keyring: str) -> dict[str, dict[
             ],
         },
     }
+
+
+def credential_access_broker_plan(
+    archive_root: Path | str,
+    *,
+    credential_id: str,
+    action_kind: str,
+    store_kind: str = "password_manager",
+    credential_ref: str | None = None,
+    credential_kind: str | None = None,
+    provider: str | None = None,
+    consumer: str | None = None,
+    platform: str = "windows",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("credential-access-broker-plan is read-only and requires --dry-run.")
+
+    resolved_credential_id = (credential_id or "").strip()
+    if not resolved_credential_id:
+        blockers.append("credential_id is required.")
+    elif not safe_source_intake_plan_scalar(resolved_credential_id):
+        blockers.append("credential_id must be a safe non-secret label such as cred:openai-api.")
+        resolved_credential_id = ""
+
+    resolved_action = (action_kind or "").strip().lower().replace("-", "_")
+    if resolved_action not in CREDENTIAL_ACCESS_BROKER_ACTIONS:
+        blockers.append("action_kind must be one of: " + ", ".join(sorted(CREDENTIAL_ACCESS_BROKER_ACTIONS)) + ".")
+        resolved_action = "model_api_call"
+
+    resolved_store = (store_kind or "password_manager").strip().lower().replace("-", "_")
+    if resolved_store not in CREDENTIAL_ACCESS_BROKER_STORE_KINDS:
+        blockers.append("store_kind must be one of: " + ", ".join(sorted(CREDENTIAL_ACCESS_BROKER_STORE_KINDS)) + ".")
+        resolved_store = "password_manager"
+
+    resolved_platform = (platform or "windows").strip().lower().replace("-", "_")
+    if resolved_platform not in CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS:
+        blockers.append("platform must be one of: " + ", ".join(sorted(CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS)) + ".")
+        resolved_platform = "cross_platform"
+
+    resolved_consumer = (consumer or "wom_local_adapter").strip()
+    if not safe_source_intake_plan_scalar(resolved_consumer):
+        blockers.append("consumer must be a safe non-secret label.")
+        resolved_consumer = "wom_local_adapter"
+
+    action_profile = credential_access_action_profile(resolved_action)
+    resolved_kind = (credential_kind or action_profile["recommended_credential_kind"]).strip().lower().replace("-", "_")
+    if resolved_kind not in CREDENTIAL_REF_ALLOWED_KINDS:
+        blockers.append("credential_kind must be one of: " + ", ".join(sorted(CREDENTIAL_REF_ALLOWED_KINDS)) + ".")
+        resolved_kind = action_profile["recommended_credential_kind"]
+
+    resolved_provider = (provider or default_credential_ref_provider(resolved_kind)).strip().lower().replace("-", "_")
+    if resolved_provider not in CREDENTIAL_REF_ALLOWED_PROVIDERS:
+        blockers.append("provider must be one of: " + ", ".join(sorted(CREDENTIAL_REF_ALLOWED_PROVIDERS)) + ".")
+        resolved_provider = "generic_provider"
+
+    resolved_ref = (credential_ref or "").strip()
+    ref_store = None
+    if resolved_ref:
+        if safe_credential_ref(resolved_ref):
+            ref_store = credential_ref_store(resolved_ref)
+        else:
+            blockers.append("credential_ref must be an env/keyring/secret/wallet reference, not a raw key, token, password, email, URL, or local path.")
+
+    if resolved_store == "browser_platform_manager" and resolved_action not in {"browser_login_fill", "plaintext_secret_migration"}:
+        warnings.append("Browser/platform password managers are best for login autofill and passkeys; API keys and CLI tokens usually need a password manager, OS keyring, or developer secret manager.")
+    if resolved_action == "plaintext_secret_migration":
+        warnings.append("Plaintext secret migration must start from a human-selected local file and must not print detected secrets into chat.")
+    if resolved_store == "environment":
+        warnings.append("Environment variables are a runtime injection surface, not a long-term human password notebook.")
+
+    platform_keyring = {
+        "windows": "Windows Credential Manager",
+        "macos": "macOS Keychain",
+        "linux": "Linux Secret Service compatible keyring",
+        "cross_platform": "OS credential manager/keyring",
+    }[resolved_platform]
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "credential_access_broker_plan",
+        "archive_id": archive_id,
+        "credential": {
+            "credential_id": resolved_credential_id,
+            "credential_kind": resolved_kind,
+            "purpose": default_credential_ref_purpose(resolved_kind),
+            "provider": resolved_provider,
+            "ref_store": ref_store,
+            "ref_prefix": f"{ref_store}:" if ref_store else None,
+            "exact_ref_value_echoed": False,
+        },
+        "broker_request": {
+            "action_kind": resolved_action,
+            "consumer": resolved_consumer,
+            "store_kind": resolved_store,
+            "platform": resolved_platform,
+            "secret_value_return_to_ai": False,
+            "approval_required": True,
+            "approval_receipt_required_before_use": True,
+            "secret_value_placeholder": "<never-return-secret>",
+        },
+        "action_profile": action_profile,
+        "approval_flow": [
+            "AI requests a credential capability by credential_id, purpose, action_kind, provider, and consumer.",
+            "WOM checks archive policy, source/tool scope, requested action, and whether a matching safe ref exists.",
+            "Human approval is requested through a local UI or OS prompt; secrets are not pasted into chat.",
+            "A future local adapter talks to the real vault, keyring, browser/platform surface, or secret manager.",
+            "The adapter uses the secret only for the approved action and returns non-secret result metadata.",
+            "WOM records a non-secret approval/use receipt; the secret value is never written to zets, logs, receipts, prompts, or public docs.",
+        ],
+        "adapter_boundary": {
+            "broker_adapter_implemented": False,
+            "secret_retrieval_implemented": False,
+            "allowed_future_store_surfaces": credential_access_store_surfaces(resolved_store, platform_keyring),
+            "disallowed_access_patterns": [
+                "AI scraping browser databases directly",
+                "AI reading plaintext desktop notes directly",
+                "AI receiving passwords or API keys in chat",
+                "Writing secrets into Git, zets, receipts, logs, prompts, source maps, screenshots, or public docs",
+                "Silent background secret use without a policy gate and approval receipt",
+            ],
+        },
+        "plaintext_migration_flow": credential_plaintext_migration_flow() if resolved_action == "plaintext_secret_migration" else None,
+        "next_safe_actions": [
+            "Keep using credential-store-recommendation to choose the real vault class.",
+            "Use credential-ref-plan to validate refs and credential-ref-inventory to catalog refs.",
+            "Design future adapter reads as local-only, policy-gated, human-approved, and non-echoing.",
+            "Treat browser/platform password managers as login/passkey/autofill sources, not generic API-key stores.",
+        ],
+        "current_capability": {
+            "broker_plan_available": True,
+            "credential_ref_contract_available": True,
+            "credential_store_recommendation_available": True,
+            "broker_adapter_implemented": False,
+            "secret_value_retrieval_implemented": False,
+            "plaintext_secret_migration_implemented": False,
+            "browser_password_store_read_implemented": False,
+        },
+        "closed_actions": {
+            "secret_prompted_in_chat": False,
+            "secret_value_read": False,
+            "secret_value_written": False,
+            "password_manager_opened": False,
+            "browser_password_store_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "plaintext_file_read": False,
+            "provider_api_called": False,
+            "oauth_started": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "credential_ref_values_echoed": False,
+            "email_addresses_echoed": False,
+            "tokens_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def credential_access_action_profile(action_kind: str) -> dict[str, Any]:
+    profiles: dict[str, dict[str, Any]] = {
+        "mail_source_read": {
+            "description": "Use a mail username/app-password/OAuth credential for an approved future mailbox operation.",
+            "recommended_credential_kind": "mail_app_password",
+            "expected_result_metadata": ["source_id", "mailbox_ref", "message_count", "derived_text_receipt_refs"],
+            "never_return": ["email address", "password", "OAuth token", "message body unless separately captured as source evidence"],
+        },
+        "model_api_call": {
+            "description": "Use a model provider API key for an approved future AI/OCR-supporting operation.",
+            "recommended_credential_kind": "openai_api_key",
+            "expected_result_metadata": ["provider", "model_or_service", "cost_class", "source_object_ids"],
+            "never_return": ["API key", "request bearer token"],
+        },
+        "ocr_api_call": {
+            "description": "Use an OCR provider API key for an approved future derived-text operation.",
+            "recommended_credential_kind": "ocr_api_key",
+            "expected_result_metadata": ["provider", "derivation_method", "source_object_ids", "confidence_summary"],
+            "never_return": ["API key", "provider token"],
+        },
+        "object_storage_request": {
+            "description": "Use an object-storage token for an approved future upload/download/presigned-url operation.",
+            "recommended_credential_kind": "object_storage_token",
+            "expected_result_metadata": ["store_kind", "store_ref", "object_id", "operation_receipt_ref"],
+            "never_return": ["access key", "secret key", "private URL unless explicitly approved as an output artifact"],
+        },
+        "cli_token_auth": {
+            "description": "Use a CLI/provider token for an approved local command or provider auth operation.",
+            "recommended_credential_kind": "provider_api_key",
+            "expected_result_metadata": ["provider", "command_label", "exit_status", "receipt_ref"],
+            "never_return": ["token", "refresh token", "account email"],
+        },
+        "browser_login_fill": {
+            "description": "Use a browser/platform password manager for an approved website login or passkey/autofill flow.",
+            "recommended_credential_kind": "generic_secret",
+            "expected_result_metadata": ["site_label", "approval_receipt_ref", "login_state"],
+            "never_return": ["username", "password", "passkey private material", "browser profile path"],
+        },
+        "plaintext_secret_migration": {
+            "description": "Plan a human-approved migration from an existing plaintext note into a real vault/keyring.",
+            "recommended_credential_kind": "generic_secret",
+            "expected_result_metadata": ["candidate_count", "confirmed_count", "target_store_kind", "inventory_ref_count"],
+            "never_return": ["detected secret values", "source file absolute path", "raw note text"],
+        },
+    }
+    return json_safe(profiles.get(action_kind) or profiles["model_api_call"])
+
+
+def credential_access_store_surfaces(store_kind: str, platform_keyring: str) -> list[str]:
+    if store_kind == "browser_platform_manager":
+        return ["Chrome Password Manager", "Microsoft Password Manager", "Windows Hello/passkey surface", "Android/iOS/Samsung platform password surface"]
+    if store_kind == "os_keyring":
+        return [platform_keyring]
+    if store_kind == "developer_secret_manager":
+        return ["Bitwarden Secrets Manager", "cloud provider secret manager", "deployment secret store"]
+    if store_kind == "environment":
+        return ["process environment supplied outside the archive"]
+    if store_kind == "future_wallet":
+        return ["future WOM wallet/local custody surface"]
+    return ["KeePassXC", "Bitwarden", "1Password", "other reviewed password manager"]
+
+
+def credential_plaintext_migration_flow() -> list[str]:
+    return [
+        "Human chooses a plaintext note through a local UI; chat receives no path or content.",
+        "Local tool scans candidate fields in memory and displays masked candidates to the human.",
+        "Human confirms each target entry and chooses a vault/keyring destination.",
+        "Future adapter writes each secret to the chosen vault/keyring without echoing values.",
+        "WOM records only credential refs, ids, kinds, providers, purposes, and non-secret receipt metadata.",
+        "Human reviews deletion or quarantine of the old plaintext note separately; WOM does not delete it automatically.",
+    ]
 
 
 def local_credential_inventory_entries(doc: dict[str, Any], blockers: list[str]) -> list[dict[str, Any]]:

@@ -119,6 +119,9 @@ v0.3.22 adds [Credential Store Recommendations](credential-store-recommendations
 so WOM can explain which external store class fits a human scenario without
 opening a vault or reading any secret value.
 
+v0.3.23 adds [Credential Access Broker Plan](credential-access-broker-plan.md)
+so WOM can describe future approved secret use without implementing secret retrieval.
+
 ## Mail Sources
 
 Mail source access should use refs such as:

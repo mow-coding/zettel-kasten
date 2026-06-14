@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.22 pre-release
+v0.3.23 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -39,7 +39,7 @@ What exists today:
 - approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
 - approval-gated `.gitignore` repair for missing WOM-kit safe defaults,
 - human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
-- read-only credential reference planning, inventory, and external store recommendation for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
+- read-only credential reference planning, inventory, external store recommendation, and future access broker planning for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
 - read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces,
 - read-only IMAP mailbox source planning for Gmail, Naver, and generic IMAP account refs,
 - documented Notion page snapshot and `store-ref` boundaries for page/block JSON exports,
@@ -107,6 +107,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Credential Store Contract](wom-kit/docs/credential-store-contract.md)
 - [Credential Ref Inventory And Onboarding](wom-kit/docs/credential-ref-inventory-and-onboarding.md)
 - [Credential Store Recommendations](wom-kit/docs/credential-store-recommendations.md)
+- [Credential Access Broker Plan](wom-kit/docs/credential-access-broker-plan.md)
 - [Human Artifact Store Contract](wom-kit/docs/human-artifact-store-contract.md)
 - [IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)
 - [Notion Page Snapshot Model](wom-kit/docs/notion-page-snapshot-model.md)
@@ -230,6 +231,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.23
 v0.3.22
 v0.3.21
 v0.3.20

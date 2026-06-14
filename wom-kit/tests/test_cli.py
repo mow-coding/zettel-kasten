@@ -1817,6 +1817,93 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_credential_access_broker_plan_is_read_only_and_never_echoes_refs_or_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "credential-access-broker-plan",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--credential-ref",
+                    "secret:keepassxc-openai-api",
+                    "--action-kind",
+                    "model_api_call",
+                    "--store-kind",
+                    "password_manager",
+                    "--consumer",
+                    "wom:adapter:model-api",
+                    "--platform",
+                    "windows",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "credential_access_broker_plan")
+            self.assertEqual(result["credential"]["credential_id"], "cred:openai-api")
+            self.assertEqual(result["credential"]["ref_store"], "secret")
+            self.assertEqual(result["credential"]["ref_prefix"], "secret:")
+            self.assertFalse(result["credential"]["exact_ref_value_echoed"])
+            self.assertFalse(result["broker_request"]["secret_value_return_to_ai"])
+            self.assertFalse(result["adapter_boundary"]["secret_retrieval_implemented"])
+            self.assertFalse(result["closed_actions"]["password_manager_opened"])
+            self.assertFalse(result["closed_actions"]["secret_value_read"])
+            self.assertFalse(result["closed_actions"]["plaintext_file_read"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("secret:keepassxc-openai-api", output)
+            self.assertNotIn("sk-proj-", output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            migration_code, migration_output = self.run_cli(
+                [
+                    "credential-access-broker-plan",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:migration-target",
+                    "--action-kind",
+                    "plaintext_secret_migration",
+                    "--store-kind",
+                    "os_keyring",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            migration = json.loads(migration_output)
+            self.assertEqual(migration_code, 0, migration_output)
+            self.assertIsInstance(migration["plaintext_migration_flow"], list)
+            self.assertFalse(migration["closed_actions"]["plaintext_file_read"])
+            self.assertTrue(any("Human chooses a plaintext note" in step for step in migration["plaintext_migration_flow"]))
+
+            raw_secret = "sk" + "-proj-" + "abcdefghijklmnopqrstuvwxyz1234567890"
+            bad_code, bad_output = self.run_cli(
+                [
+                    "credential-access-broker-plan",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:bad-openai",
+                    "--credential-ref",
+                    raw_secret,
+                    "--action-kind",
+                    "model_api_call",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            bad_result = json.loads(bad_output)
+            self.assertEqual(bad_code, 1, bad_output)
+            self.assertFalse(bad_result["ok"])
+            self.assertTrue(any("credential_ref must be" in blocker for blocker in bad_result["blockers"]))
+            self.assertNotIn(raw_secret, bad_output)
+
     def test_zet_surface_prototype_four_surface_plans_are_read_only(self) -> None:
         expected = {
             "wordpress": ("projection_surface", "remote_rest_api", "site_ref"),
