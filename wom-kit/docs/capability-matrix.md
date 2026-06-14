@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.19 IMAP mailbox source planning checkpoint
+Status: v0.3.20 credential reference planning checkpoint
 Date: 2026-06-14
-Version: v0.3.19, release candidate
+Version: v0.3.20, release candidate
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -42,6 +42,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | GitHub repository setup plan | `approval-gated write` | CLI approve writes local provider metadata/receipt only | Does not create a repository, configure remotes, push, call GitHub APIs, or run OAuth. |
 | Objet storage setup plan | `approval-gated write` | CLI approve writes local provider metadata/receipt only | Does not create buckets, upload, sync, copy files, hash source files, or call provider APIs. |
 | Provider setup status | `read-only preview` | none | CLI `archive provider-status --dry-run` and MCP `provider_setup_status` check setup-managed GitHub/object-storage bindings against local provider setup receipts. They do not call providers, verify live accounts, upload, sync, push, or write files. |
+| Credential ref plan | `read-only preview` | none | CLI `archive credential-ref-plan --dry-run` and MCP `credential_ref_plan` validate safe refs for mail usernames/app passwords/OAuth tokens, OpenAI API keys, OCR API keys, provider API keys, object storage tokens, and backup passwords. They write nothing, read no environment variables, open no OS keyring, store no secrets, call no providers, call no OpenAI or paid OCR APIs, and never echo raw keys, tokens, passwords, email addresses, local paths, or provider URLs. |
 | Human artifact store plan | `read-only preview` | none | CLI `archive human-artifact-store --dry-run` and MCP `human_artifact_store_plan` plan a user-facing surface such as WordPress, Joplin, Notion, Obsidian, Evernote, or generic Markdown/workspace. They keep raw data, human-readable artifacts, and system/AI artifacts separate, and perform no provider calls, OAuth, note writes, post publishing, uploads, minting, cleanup, or ZET transport. |
 | IMAP mailbox source plan | `read-only preview` | none | CLI `archive imap-mailbox-plan --dry-run` and MCP `imap_mailbox_plan` plan a Gmail, Naver, or generic `imap_mailbox` source using safe account, mailbox, username, and credential refs only. The source type can be registered with `add-source`, but `scan-source` fails closed for live IMAP in this release. It opens no connection, attempts no login, reads no headers, bodies, or attachments, sends no mail, deletes no mail, changes no flags, stores no secrets, and writes no files. |
 | ZET surface prototype plan | `read-only preview` | none | CLI `archive zet-surface-prototype --dry-run` and MCP `zet_surface_prototype_plan` preview user-selected ZET surface prototypes for WordPress, Joplin, Notion, and Obsidian. They return surface-specific settings, risks, receipt requirements, and future adapter steps, but perform no provider calls, token prompts, note writes, vault writes, post publishing, projection receipt writes, minting, cleanup, or ZET transport. |

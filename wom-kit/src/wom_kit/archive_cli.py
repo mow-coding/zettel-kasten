@@ -23,6 +23,8 @@ Commands:
           Resolve one sha256 objet reference to safe local/external candidates.
   imap-mailbox-plan
           Plan a read-only IMAP mailbox source without connecting or storing secrets.
+  credential-ref-plan
+          Plan a local credential reference without reading or storing secret values.
   source-intake
           Plan safe source/objet refs before draft creation.
   source-intake-record
@@ -1918,6 +1920,45 @@ def command_imap_mailbox_plan(args: argparse.Namespace) -> int:
         print(f"Provider: {result.get('provider') or '-'}")
         server = result.get("server") if isinstance(result.get("server"), dict) else {}
         print(f"Server: {server.get('imap_host') or '-'}:{server.get('imap_port') or '-'}")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_credential_ref_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("credential-ref-plan is dry-run only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.credential_ref_plan(
+            Path(args.archive_root),
+            credential_id=args.credential_id,
+            credential_ref=args.credential_ref,
+            credential_kind=args.credential_kind,
+            purpose=args.purpose,
+            provider=args.provider,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        print(f"Credential ref plan {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Credential: {result.get('credential_id') or '-'} ({result.get('credential_kind') or '-'})")
+        print(f"Provider: {result.get('provider') or '-'}")
+        print(f"Store: {result.get('credential_store') or '-'}")
         print("Writes: none")
         if result.get("blockers"):
             print("Blockers:")
@@ -6043,6 +6084,37 @@ def build_parser() -> argparse.ArgumentParser:
     imap_mailbox_plan.add_argument("--dry-run", action="store_true", help="Required; plan only.")
     imap_mailbox_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     imap_mailbox_plan.set_defaults(func=command_imap_mailbox_plan)
+
+    credential_ref_plan = subcommands.add_parser(
+        "credential-ref-plan",
+        help="Plan a local credential reference without reading or storing secret values.",
+    )
+    credential_ref_plan.add_argument("archive_root", help="Archive root to inspect.")
+    credential_ref_plan.add_argument("--credential-id", required=True, help="Safe label, e.g. cred:openai-api.")
+    credential_ref_plan.add_argument(
+        "--credential-ref",
+        required=True,
+        help="env/keyring/secret/wallet reference. Do not pass the actual secret value.",
+    )
+    credential_ref_plan.add_argument(
+        "--credential-kind",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+        default="generic_secret",
+        help="Kind of credential this ref points to.",
+    )
+    credential_ref_plan.add_argument(
+        "--purpose",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PURPOSES),
+        help="Optional intended use; defaults from credential kind.",
+    )
+    credential_ref_plan.add_argument(
+        "--provider",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+        help="Optional provider context; defaults from credential kind.",
+    )
+    credential_ref_plan.add_argument("--dry-run", action="store_true", help="Required; plan only.")
+    credential_ref_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    credential_ref_plan.set_defaults(func=command_credential_ref_plan)
 
     source_intake = subcommands.add_parser(
         "source-intake",

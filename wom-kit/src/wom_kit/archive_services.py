@@ -974,6 +974,43 @@ IMAP_HOST_RE = re.compile(
 IMAP_CREDENTIAL_REF_PREFIXES = ("env:", "keyring:", "secret:", "wallet:")
 IMAP_ACCOUNT_REF_PREFIXES = ("imap:account:", "mail:account:")
 IMAP_MAILBOX_REF_PREFIXES = ("imap:mailbox:", "mail:mailbox:")
+CREDENTIAL_REF_PREFIXES = ("env:", "keyring:", "secret:", "wallet:")
+CREDENTIAL_REF_ALLOWED_KINDS = {
+    "mail_username",
+    "mail_app_password",
+    "mail_oauth_token",
+    "openai_api_key",
+    "ocr_api_key",
+    "provider_api_key",
+    "object_storage_token",
+    "backup_password",
+    "generic_secret",
+}
+CREDENTIAL_REF_ALLOWED_PURPOSES = {
+    "mail_source_access",
+    "model_api_access",
+    "ocr_api_access",
+    "provider_api_access",
+    "object_storage_access",
+    "backup_access",
+    "generic_local_secret",
+}
+CREDENTIAL_REF_ALLOWED_PROVIDERS = {
+    "gmail",
+    "naver",
+    "generic_imap",
+    "university_mail",
+    "company_mail",
+    "microsoft365",
+    "openai",
+    "generic_ocr",
+    "google_cloud_vision",
+    "azure_ai_vision",
+    "aws_textract",
+    "cloudflare_r2",
+    "backblaze_b2",
+    "generic_provider",
+}
 ONBOARDING_PROVIDER_PROFILES = {
     "local_only": {
         "description": "Local archive plus physical/local backup and external secret vault guidance.",
@@ -10744,6 +10781,183 @@ def imap_mailbox_plan(
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
+
+
+def credential_ref_plan(
+    archive_root: Path | str,
+    *,
+    credential_id: str,
+    credential_ref: str,
+    credential_kind: str | None = None,
+    purpose: str | None = None,
+    provider: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("credential-ref-plan is dry-run only; pass --dry-run.")
+
+    resolved_credential_id = (credential_id or "").strip()
+    if not resolved_credential_id:
+        blockers.append("credential_id is required.")
+    elif not safe_source_intake_plan_scalar(resolved_credential_id):
+        blockers.append("credential_id must be a safe non-secret label such as cred:openai-api.")
+        resolved_credential_id = ""
+
+    resolved_kind = (credential_kind or "generic_secret").strip().lower().replace("-", "_")
+    if resolved_kind not in CREDENTIAL_REF_ALLOWED_KINDS:
+        blockers.append("credential_kind must be one of: " + ", ".join(sorted(CREDENTIAL_REF_ALLOWED_KINDS)) + ".")
+        resolved_kind = "generic_secret"
+
+    resolved_purpose = (purpose or default_credential_ref_purpose(resolved_kind)).strip().lower().replace("-", "_")
+    if resolved_purpose not in CREDENTIAL_REF_ALLOWED_PURPOSES:
+        blockers.append("purpose must be one of: " + ", ".join(sorted(CREDENTIAL_REF_ALLOWED_PURPOSES)) + ".")
+        resolved_purpose = default_credential_ref_purpose(resolved_kind)
+
+    resolved_provider = (provider or default_credential_ref_provider(resolved_kind)).strip().lower().replace("-", "_")
+    if resolved_provider not in CREDENTIAL_REF_ALLOWED_PROVIDERS:
+        blockers.append("provider must be one of: " + ", ".join(sorted(CREDENTIAL_REF_ALLOWED_PROVIDERS)) + ".")
+        resolved_provider = "generic_provider"
+
+    resolved_ref = (credential_ref or "").strip()
+    if not safe_credential_ref(resolved_ref):
+        blockers.append("credential_ref must be an env/keyring/secret/wallet reference, not a raw key, token, password, email, URL, or local path.")
+        resolved_ref = ""
+
+    store = credential_ref_store(resolved_ref)
+    if store == "env":
+        warnings.append("Environment variables are useful for automation, but OS keyring or a local secret manager is preferred for long-lived personal credentials.")
+    if resolved_provider == "openai" and resolved_kind != "openai_api_key":
+        warnings.append("OpenAI model access should normally use credential_kind=openai_api_key.")
+    if resolved_purpose == "ocr_api_access" and resolved_kind not in {"ocr_api_key", "provider_api_key"}:
+        warnings.append("Paid OCR access should normally use credential_kind=ocr_api_key or provider_api_key.")
+    if resolved_purpose == "mail_source_access" and resolved_kind not in {"mail_username", "mail_app_password", "mail_oauth_token"}:
+        warnings.append("Mail source access should normally use a mail_username, mail_app_password, or mail_oauth_token credential kind.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "credential_ref_plan",
+        "archive_id": archive_id,
+        "credential_id": resolved_credential_id,
+        "credential_kind": resolved_kind,
+        "purpose": resolved_purpose,
+        "provider": resolved_provider,
+        "credential_ref": resolved_ref or None,
+        "credential_store": store,
+        "storage_contract": {
+            "archive_records_store_refs_only": True,
+            "secret_values_allowed_in_git": False,
+            "secret_values_allowed_in_zets": False,
+            "secret_values_allowed_in_receipts": False,
+            "secret_values_allowed_in_logs": False,
+            "allowed_ref_prefixes": list(CREDENTIAL_REF_PREFIXES),
+            "local_only_locations": [
+                "OS credential manager or keyring",
+                "environment variable supplied outside the archive",
+                "ignored local secret manager profile",
+                "external password manager such as KeePassXC",
+            ],
+        },
+        "consumer_examples": [
+            "imap_mailbox_plan username_ref/app_password_ref/oauth_token_ref",
+            "future OCR adapter api_key_ref",
+            "future OpenAI model adapter api_key_ref",
+            "future object-storage adapter token_ref",
+        ],
+        "current_capability": {
+            "credential_ref_contract_available": True,
+            "os_keyring_write_implemented": False,
+            "os_keyring_read_implemented": False,
+            "secret_value_storage_implemented": False,
+            "secret_value_retrieval_implemented": False,
+            "provider_api_call_implemented": False,
+            "paid_ocr_call_implemented": False,
+            "openai_api_call_implemented": False,
+        },
+        "future_workflow": [
+            "Store or rotate the real secret outside the archive.",
+            "Record only the credential ref in WOM archive metadata.",
+            "A future trusted local adapter may resolve the ref after policy and human approval.",
+            "The adapter must never echo the secret into chat, zets, receipts, logs, source maps, or public docs.",
+            "Record only non-secret result metadata such as provider, cost class, derivation method, and source object ids.",
+        ],
+        "closed_actions": {
+            "secret_prompted_in_chat": False,
+            "secret_value_read": False,
+            "secret_value_written": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "provider_api_called": False,
+            "oauth_started": False,
+            "paid_ocr_called": False,
+            "openai_api_called": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "email_addresses_echoed": False,
+            "tokens_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def default_credential_ref_purpose(credential_kind: str) -> str:
+    if credential_kind in {"mail_username", "mail_app_password", "mail_oauth_token"}:
+        return "mail_source_access"
+    if credential_kind == "openai_api_key":
+        return "model_api_access"
+    if credential_kind == "ocr_api_key":
+        return "ocr_api_access"
+    if credential_kind == "object_storage_token":
+        return "object_storage_access"
+    if credential_kind == "backup_password":
+        return "backup_access"
+    if credential_kind == "provider_api_key":
+        return "provider_api_access"
+    return "generic_local_secret"
+
+
+def default_credential_ref_provider(credential_kind: str) -> str:
+    if credential_kind == "openai_api_key":
+        return "openai"
+    if credential_kind == "ocr_api_key":
+        return "generic_ocr"
+    if credential_kind in {"mail_username", "mail_app_password", "mail_oauth_token"}:
+        return "generic_imap"
+    return "generic_provider"
+
+
+def credential_ref_store(credential_ref: str) -> str | None:
+    text = credential_ref.strip().lower()
+    for prefix in CREDENTIAL_REF_PREFIXES:
+        if text.startswith(prefix):
+            return prefix[:-1]
+    return None
+
+
+def safe_credential_ref(value: str) -> bool:
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    lower = text.lower()
+    if not any(lower.startswith(prefix) for prefix in CREDENTIAL_REF_PREFIXES):
+        return False
+    if any(item in text for item in ["@", "://", "/", "\\", "#", "?", "&", "="]):
+        return False
+    if contains_forbidden_location_reference(text):
+        return False
+    return bool(OBJECT_STORAGE_REF_RE.match(text))
 
 
 def normalize_imap_mailbox_provider(value: str | None) -> str:

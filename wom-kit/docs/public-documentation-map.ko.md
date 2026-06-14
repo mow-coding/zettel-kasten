@@ -110,6 +110,7 @@
 - [AI-Assisted Onboarding And Provider Setup](ai-assisted-onboarding-and-provider-setup.md)
 - [Project Intake Session](project-intake-session.md)
 - [Project Intake Cookbook](project-intake-cookbook.md)
+- [Credential Store Contract](credential-store-contract.md)
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
 - [IMAP Mailbox Source](imap-mailbox-source.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)

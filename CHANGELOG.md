@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.20 - 2026-06-14
+
+- Added read-only CLI `archive credential-ref-plan --dry-run` and MCP
+  `credential_ref_plan` for planning mail, OpenAI API, OCR API, provider,
+  object-storage, and backup credential references without storing secrets.
+- Defined safe credential ref prefixes `env:`, `keyring:`, `secret:`, and
+  `wallet:` so archive records can point to local secret stores without
+  containing the secret value.
+- Kept the boundary conservative: the plan writes nothing, reads no environment
+  variables, opens no OS keyring, starts no OAuth, calls no providers, calls no
+  OpenAI or paid OCR APIs, and blanks invalid raw secret inputs before returning
+  structured output.
+- Added `wom-kit/docs/credential-store-contract.md` plus CLI/MCP/docs tests for
+  dry-run-only behavior, allowed-root enforcement, raw-secret redaction, and
+  public documentation coverage.
+
 ## v0.3.19 - 2026-06-14
 
 - Added read-only CLI `archive imap-mailbox-plan --dry-run` and MCP
