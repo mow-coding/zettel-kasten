@@ -73,7 +73,8 @@ SENSITIVE_SHARE_CATEGORIES = {"medical", "psychological", "journal", "relationsh
 SENSITIVE_CATEGORY_ALIASES = {"diary": "journal", "therapy": "psychological", "mental-health": "psychological"}
 EXTERNAL_IMPORT_SOURCES = {"notion", "google_drive"}
 EXTERNAL_IMPORT_EXTENSIONS = {".md", ".markdown", ".txt"}
-SOURCE_TYPES = {"local_folder", "external_ssd", "notion_export", "google_drive_export", "object_manifest"}
+SOURCE_TYPES = {"local_folder", "external_ssd", "notion_export", "google_drive_export", "object_manifest", "imap_mailbox"}
+IMAP_MAILBOX_SOURCE_TYPE = "imap_mailbox"
 PROFILE_REGISTRY_VERSION = "wom-profile-registry/v0.1"
 PROFILE_REGISTRY_ARCHIVE_TYPES = {"personal", "company", "family", "project", "relationship", "child", "business_unit"}
 PROFILE_RESOLUTION_STATES = {"resolved", "ambiguous", "not_found", "token_missing"}
@@ -942,6 +943,37 @@ OBJECT_STORAGE_PROVIDER_TOKEN_ENVS = {
     "google-cloud-storage": "GCS_OBJECT_STORAGE_TOKEN",
     "generic-s3": "OBJECT_STORAGE_TOKEN",
 }
+IMAP_MAILBOX_ALLOWED_PROVIDERS = {"generic_imap", "gmail", "naver"}
+IMAP_MAILBOX_ALLOWED_AUTH_MODES = {"app_password_ref", "oauth_token_ref"}
+IMAP_MAILBOX_DEFAULTS = {
+    "gmail": {
+        "host": "imap.gmail.com",
+        "port": 993,
+        "ssl": True,
+        "recommended_auth_modes": ["oauth_token_ref", "app_password_ref"],
+        "policy_note": "Gmail IMAP uses SSL on imap.gmail.com:993; Google Workspace third-party access is moving toward OAuth, with app passwords as a constrained exception.",
+    },
+    "naver": {
+        "host": "imap.naver.com",
+        "port": 993,
+        "ssl": True,
+        "recommended_auth_modes": ["app_password_ref"],
+        "policy_note": "Naver IMAP uses SSL on imap.naver.com:993; POP3/IMAP/SMTP requires two-step verification and an application password under the current policy.",
+    },
+    "generic_imap": {
+        "host": None,
+        "port": 993,
+        "ssl": True,
+        "recommended_auth_modes": ["app_password_ref", "oauth_token_ref"],
+        "policy_note": "Generic IMAP requires a human-reviewed host label and credential references before any future live scan.",
+    },
+}
+IMAP_HOST_RE = re.compile(
+    r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z][A-Za-z0-9-]{1,62}$"
+)
+IMAP_CREDENTIAL_REF_PREFIXES = ("env:", "keyring:", "secret:", "wallet:")
+IMAP_ACCOUNT_REF_PREFIXES = ("imap:account:", "mail:account:")
+IMAP_MAILBOX_REF_PREFIXES = ("imap:mailbox:", "mail:mailbox:")
 ONBOARDING_PROVIDER_PROFILES = {
     "local_only": {
         "description": "Local archive plus physical/local backup and external secret vault guidance.",
@@ -1437,13 +1469,16 @@ def zettel_objet_links(
 
 def resolve_zettel_path(archive_root: Path, zettel_id: str | None, relative_path: str | None) -> Path:
     if relative_path:
+        zettel_path_hint = "unsafe zettel path. Zettel path must be archive-relative inside inbox/ or zettels/ (for example: inbox/foo.md). Use --zettel-id if you are unsure."
+        if Path(relative_path).expanduser().is_absolute():
+            raise ArchiveServiceError(zettel_path_hint)
         try:
             candidate = resolve_archive_relative_path(archive_root, relative_path)
         except ArchivePathError as exc:
-            raise ArchiveServiceError(f"Zettel path is unsafe: {exc}") from exc
+            raise ArchiveServiceError(zettel_path_hint) from exc
         relative = archive_relative_path(candidate, archive_root)
         if not relative.startswith(VALID_ZETTEL_FOLDERS) or candidate.suffix.lower() != ".md":
-            raise ArchiveServiceError("Zettel path must point to a Markdown file inside inbox/ or zettels/.")
+            raise ArchiveServiceError(zettel_path_hint)
         if not candidate.is_file():
             raise ArchiveServiceError(f"Zettel path not found: {relative_path}")
         return candidate
@@ -10524,6 +10559,221 @@ def human_artifact_store_plan(
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
+
+
+def imap_mailbox_plan(
+    archive_root: Path | str,
+    *,
+    source_id: str,
+    provider: str | None = None,
+    imap_host: str | None = None,
+    imap_port: int | None = None,
+    account_ref: str | None = None,
+    username_ref: str | None = None,
+    auth_mode: str | None = None,
+    app_password_ref: str | None = None,
+    oauth_token_ref: str | None = None,
+    mailbox_ref: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("imap-mailbox-plan is dry-run only; pass --dry-run.")
+
+    resolved_source_id = (source_id or "").strip()
+    if not resolved_source_id:
+        blockers.append("source_id is required.")
+    elif not safe_source_intake_plan_scalar(resolved_source_id):
+        blockers.append("source_id must be a safe non-secret source label such as imap:personal-mail.")
+        resolved_source_id = ""
+
+    resolved_provider = normalize_imap_mailbox_provider(provider)
+    if resolved_provider not in IMAP_MAILBOX_ALLOWED_PROVIDERS:
+        blockers.append("provider must be one of: " + ", ".join(sorted(IMAP_MAILBOX_ALLOWED_PROVIDERS)) + ".")
+        resolved_provider = "generic_imap"
+
+    defaults = IMAP_MAILBOX_DEFAULTS[resolved_provider]
+    resolved_host = (imap_host or str(defaults.get("host") or "")).strip().lower()
+    if not resolved_host:
+        blockers.append("imap_host is required for generic_imap.")
+    elif not safe_imap_host(resolved_host):
+        blockers.append("imap_host must be a safe host label, not a URL, email, path, token, or secret.")
+
+    try:
+        resolved_port = int(imap_port or defaults.get("port") or 993)
+    except (TypeError, ValueError):
+        blockers.append("imap_port must be an integer between 1 and 65535.")
+        resolved_port = int(defaults.get("port") or 993)
+    if resolved_port < 1 or resolved_port > 65535:
+        blockers.append("imap_port must be between 1 and 65535.")
+
+    resolved_account_ref = (account_ref or "").strip()
+    if not safe_imap_ref(resolved_account_ref, prefixes=IMAP_ACCOUNT_REF_PREFIXES):
+        blockers.append("account_ref must be a safe account reference such as imap:account:personal-mail; do not pass an email address.")
+        resolved_account_ref = ""
+
+    resolved_username_ref = (username_ref or "").strip()
+    if not safe_imap_ref(resolved_username_ref, prefixes=IMAP_CREDENTIAL_REF_PREFIXES):
+        blockers.append("username_ref must be an env/keyring/secret/wallet reference, not a raw email address or username.")
+        resolved_username_ref = ""
+
+    resolved_auth_mode = (auth_mode or "app_password_ref").strip().lower().replace("-", "_")
+    if resolved_auth_mode not in IMAP_MAILBOX_ALLOWED_AUTH_MODES:
+        blockers.append("auth_mode must be one of: " + ", ".join(sorted(IMAP_MAILBOX_ALLOWED_AUTH_MODES)) + ".")
+        resolved_auth_mode = "app_password_ref"
+
+    resolved_app_password_ref = (app_password_ref or "").strip()
+    resolved_oauth_token_ref = (oauth_token_ref or "").strip()
+    credential_ref: str | None = None
+    if resolved_auth_mode == "app_password_ref":
+        if not safe_imap_ref(resolved_app_password_ref, prefixes=IMAP_CREDENTIAL_REF_PREFIXES):
+            blockers.append("app_password_ref must be an env/keyring/secret/wallet reference, not a raw app password.")
+            resolved_app_password_ref = ""
+        credential_ref = resolved_app_password_ref or None
+    if resolved_auth_mode == "oauth_token_ref":
+        if not safe_imap_ref(resolved_oauth_token_ref, prefixes=IMAP_CREDENTIAL_REF_PREFIXES):
+            blockers.append("oauth_token_ref must be an env/keyring/secret/wallet reference, not a raw OAuth token.")
+            resolved_oauth_token_ref = ""
+        credential_ref = resolved_oauth_token_ref or None
+
+    resolved_mailbox_ref = (mailbox_ref or "imap:mailbox:inbox").strip()
+    if not safe_imap_ref(resolved_mailbox_ref, prefixes=IMAP_MAILBOX_REF_PREFIXES):
+        blockers.append("mailbox_ref must be a safe mailbox reference such as imap:mailbox:inbox; do not pass private folder names.")
+        resolved_mailbox_ref = "imap:mailbox:inbox"
+
+    if resolved_provider == "gmail" and resolved_auth_mode == "app_password_ref":
+        warnings.append("Gmail app-password IMAP may be account/workspace-policy dependent; OAuth token refs are the preferred future path.")
+    if resolved_provider == "naver" and resolved_auth_mode != "app_password_ref":
+        warnings.append("Naver IMAP currently expects application-password style access for external IMAP clients.")
+
+    source_binding_preview = {
+        "source_id": resolved_source_id,
+        "source_type": IMAP_MAILBOX_SOURCE_TYPE,
+        "enabled": True,
+        "description": f"{resolved_provider} IMAP mailbox source {resolved_source_id}",
+        "root_ref": resolved_account_ref or None,
+        "connection": {
+            "provider": resolved_provider,
+            "imap_host": resolved_host or None,
+            "imap_port": resolved_port,
+            "ssl_required": bool(defaults.get("ssl", True)),
+            "account_ref": resolved_account_ref or None,
+            "username_ref": resolved_username_ref or None,
+            "auth_mode": resolved_auth_mode,
+            "credential_ref": credential_ref,
+            "mailbox_ref": resolved_mailbox_ref,
+        },
+        "scope_policy": {
+            "mode": "imap_header_metadata_only_planned",
+            "mailbox_ref": resolved_mailbox_ref,
+            "max_items": 2000,
+        },
+        "visibility": default_private_visibility(),
+        "provenance": {
+            "registered_by": "archive:imap-mailbox-plan",
+        },
+    }
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "imap_mailbox_plan",
+        "archive_id": archive_id,
+        "source_id": resolved_source_id,
+        "source_type": IMAP_MAILBOX_SOURCE_TYPE,
+        "provider": resolved_provider,
+        "server": {
+            "imap_host": resolved_host or None,
+            "imap_port": resolved_port,
+            "ssl_required": bool(defaults.get("ssl", True)),
+            "host_source": "operator_provided" if imap_host else "provider_default",
+            "policy_note": defaults.get("policy_note"),
+        },
+        "auth": {
+            "auth_mode": resolved_auth_mode,
+            "account_ref": resolved_account_ref or None,
+            "username_ref": resolved_username_ref or None,
+            "credential_ref": credential_ref,
+            "recommended_auth_modes": defaults.get("recommended_auth_modes", []),
+        },
+        "source_binding_preview": source_binding_preview,
+        "current_capability": {
+            "source_type_recognized": True,
+            "source_registration_plan_available": True,
+            "live_imap_scan_implemented": False,
+            "message_header_preview_implemented": False,
+            "rfc822_eml_capture_implemented": False,
+            "attachment_capture_implemented": False,
+            "derived_text_extraction_implemented": False,
+        },
+        "future_workflow": [
+            "Register imap_mailbox as a source only after reviewing the credential refs.",
+            "Future scan-source IMAP mode should SELECT the mailbox read-only and fetch headers only for dry-run.",
+            "Future approved fetch should preserve each RFC822 message as a .eml source objet.",
+            "Future attachment handling should split MIME attachments into separate objets.",
+            "Future derived-text capture should extract text/plain and reviewed text/html separately from the .eml source objet.",
+        ],
+        "closed_actions": {
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "mailbox_selected": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "emails_sent": False,
+            "messages_deleted": False,
+            "message_flags_changed": False,
+            "writes": False,
+        },
+        "privacy_guards": {
+            "email_addresses_echoed": False,
+            "username_values_echoed": False,
+            "credential_values_echoed": False,
+            "mailbox_names_echoed": False,
+            "message_headers_echoed": False,
+            "message_bodies_echoed": False,
+            "attachment_names_echoed": False,
+            "provider_urls_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def normalize_imap_mailbox_provider(value: str | None) -> str:
+    text = (value or "generic_imap").strip().lower().replace("-", "_")
+    return text or "generic_imap"
+
+
+def safe_imap_host(value: str) -> bool:
+    text = value.strip().lower()
+    if not text or not text.isascii():
+        return False
+    if any(item in text for item in ["://", "/", "\\", "@", "#", "?", "&", "="]):
+        return False
+    if contains_forbidden_location_reference(text) or source_intake_secret_like(text):
+        return False
+    return bool(IMAP_HOST_RE.match(text))
+
+
+def safe_imap_ref(value: str, *, prefixes: tuple[str, ...]) -> bool:
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    lower = text.lower()
+    if not any(lower.startswith(prefix) for prefix in prefixes):
+        return False
+    if any(item in text for item in ["@", "://", "/", "\\", "#", "?", "&", "="]):
+        return False
+    if contains_forbidden_location_reference(text):
+        return False
+    return bool(OBJECT_STORAGE_REF_RE.match(text))
 
 
 def human_artifact_surface_contract(surface_kind: str | None) -> dict[str, Any]:
@@ -21077,6 +21327,21 @@ def source_mount_step(binding: dict[str, Any], *, local_profile_present: bool) -
     source_type = str(binding.get("source_type") or "")
     root_ref = str(binding.get("root_ref") or "")
     container_root = f"/sources/{safe_slug(source_id)}"
+    if source_type == IMAP_MAILBOX_SOURCE_TYPE:
+        return {
+            "source_id": source_id,
+            "source_type": source_type,
+            "root_ref": root_ref,
+            "enabled": binding.get("enabled") is not False,
+            "needs_host_mount": False,
+            "local_profile_present": False,
+            "container_source_root": None,
+            "compose_volume_hint": None,
+            "host_native_scan_command": f"archive imap-mailbox-plan <archive> --source-id {source_id} --dry-run",
+            "docker_scan_command": None,
+            "manual_required": True,
+            "note": "IMAP mailbox sources use credential refs and future provider access, not host folder mounts.",
+        }
     archive_relative = root_ref.startswith("archive:") or source_type == "object_manifest"
     if archive_relative:
         container_root = root_ref.removeprefix("archive:") if root_ref.startswith("archive:") else "objects/manifests/files.jsonl"
@@ -22331,6 +22596,17 @@ def resolve_source_scan_root(
         if not manifest_path.is_file():
             blockers.append("Object manifest source requires objects/manifests/files.jsonl.")
         return manifest_path, resolution
+    if source_type == IMAP_MAILBOX_SOURCE_TYPE:
+        resolution.update(
+            {
+                "method": "imap_mailbox_planned",
+                "exists": False,
+                "path_recorded": False,
+                "credential_refs_required": True,
+            }
+        )
+        blockers.append("IMAP mailbox live scans are not implemented in this release; run imap-mailbox-plan to review safe refs first.")
+        return None, resolution
 
     candidate: Path | None = None
     if source_root is not None:

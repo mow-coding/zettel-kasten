@@ -115,6 +115,7 @@ Onboarding and setup plans:
 - [Project Intake Session](project-intake-session.md)
 - [Project Intake Cookbook](project-intake-cookbook.md)
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
+- [IMAP Mailbox Source](imap-mailbox-source.md)
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)
 - [Objet Ref Resolution](objet-ref-resolution.md)
 - [Zettel Objet Links](zettel-objet-links.md)

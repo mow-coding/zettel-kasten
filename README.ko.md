@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.3.18 pre-release
+v0.3.19 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -91,6 +91,7 @@ v0.3.18 pre-release
 - [v0.2.x Freeze And v0.3.0 Entry Boundary](wom-kit/docs/v02x-freeze-v03-entry-boundary.md)
 - [공개 문서 지도](wom-kit/docs/public-documentation-map.ko.md)
 - [Human Artifact Store Contract](wom-kit/docs/human-artifact-store-contract.md)
+- [IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)
 - [Zettel Objet Links](wom-kit/docs/zettel-objet-links.md)
 
 공개 프로젝트 기록은 의도적으로 다음처럼 분리합니다.
@@ -196,6 +197,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.3.19
 v0.3.18
 v0.3.17
 v0.3.16

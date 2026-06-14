@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.19 - 2026-06-14
+
+- Added read-only CLI `archive imap-mailbox-plan --dry-run` and MCP
+  `imap_mailbox_plan` for provider-neutral IMAP mailbox source planning across
+  Gmail, Naver, and generic IMAP hosts.
+- Added `imap_mailbox` as a registered source type while keeping live IMAP
+  scans fail-closed in this release; `scan-source` now directs operators back
+  to the planning step for safe credential refs.
+- Kept the mail boundary conservative: the plan writes nothing, connects to no
+  server, attempts no login, reads no headers, bodies, or attachments, sends no
+  mail, deletes no mail, changes no flags, and accepts credential refs instead
+  of raw usernames, emails, passwords, or tokens.
+- Added `wom-kit/docs/imap-mailbox-source.md` plus CLI/MCP/source-map tests for
+  dry-run-only behavior, registration shape, scan blocking, and private-value
+  redaction.
+- Tightened zettel path guidance so absolute `--path` inputs point users back to
+  archive-relative `inbox/` or `zettels/` paths and `--zettel-id`.
+
 ## v0.3.18 - 2026-06-14
 
 - Added read-only CLI `archive zettel-objet-links --path <zet.md>|--zettel-id

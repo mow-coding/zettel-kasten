@@ -11,6 +11,7 @@ FREEZE_DOC_PATH = KIT_ROOT / "docs" / "v02x-freeze-v03-entry-boundary.md"
 PROJECT_INTAKE_COOKBOOK_PATH = KIT_ROOT / "docs" / "project-intake-cookbook.md"
 HUMAN_ARTIFACT_STORE_CONTRACT_PATH = KIT_ROOT / "docs" / "human-artifact-store-contract.md"
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
+IMAP_MAILBOX_SOURCE_PATH = KIT_ROOT / "docs" / "imap-mailbox-source.md"
 NOTION_PAGE_SNAPSHOT_MODEL_PATH = KIT_ROOT / "docs" / "notion-page-snapshot-model.md"
 OBJET_REF_RESOLUTION_PATH = KIT_ROOT / "docs" / "objet-ref-resolution.md"
 ZETTEL_OBJET_LINKS_PATH = KIT_ROOT / "docs" / "zettel-objet-links.md"
@@ -46,6 +47,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Attestation statement draft preview",
             "Attestation statement draft write",
             "Projection plan",
+            "IMAP mailbox source plan",
             "Notion page snapshot model",
             "Objet ref resolver",
             "Publication surface baseline",
@@ -267,7 +269,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, resolver_text)
         for phrase in (
-            "Status: v0.3.18 zettel objet link preview checkpoint",
+            "Status: v0.3.19 IMAP mailbox source planning checkpoint",
             "Objet ref resolver",
             "archive resolve-objet-ref --object-id sha256:<hex> --dry-run",
             "MCP `resolve_objet_ref`",
@@ -276,7 +278,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.18 pre-release",
+            "v0.3.19 pre-release",
             "[Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)",
             "read-only objet reference resolution",
         ):
@@ -322,6 +324,62 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         self.assertIn("[Zettel Objet Links](zettel-objet-links.md)", public_map_text)
+
+    def test_imap_mailbox_source_doc_and_matrix_keep_read_only_boundaries(self) -> None:
+        imap_text = IMAP_MAILBOX_SOURCE_PATH.read_text(encoding="utf-8")
+        source_maps_text = (KIT_ROOT / "docs" / "source-maps.md").read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.19 read-only source planning baseline",
+            "imap_mailbox",
+            "archive.py imap-mailbox-plan",
+            "imap_mailbox_plan",
+            "gmail",
+            "naver",
+            "generic_imap",
+            "imap.gmail.com",
+            "imap.naver.com",
+            "Credential Refs Only",
+            "Do not pass real emails",
+            "does not connect",
+            "read no message headers",
+            "read no message bodies",
+            "read no attachments",
+            "send no email",
+            "delete no email",
+            "change no message flags",
+            "Actual mail reading remains future",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, imap_text)
+        for phrase in (
+            "imap_mailbox",
+            "archive.py imap-mailbox-plan",
+            "does not connect, login, read headers, read bodies",
+            "imap_mailbox_plan",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, source_maps_text)
+        for phrase in (
+            "IMAP mailbox source plan",
+            "archive imap-mailbox-plan --dry-run",
+            "MCP `imap_mailbox_plan`",
+            "`imap_mailbox` source",
+            "scan-source` fails closed",
+            "reads no headers, bodies, or attachments",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.19 pre-release",
+            "[IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)",
+            "read-only IMAP mailbox source planning",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        self.assertIn("[IMAP Mailbox Source](imap-mailbox-source.md)", public_map_text)
 
     def test_v02x_freeze_boundary_doc_covers_public_proof_and_non_goals(self) -> None:
         text = FREEZE_DOC_PATH.read_text(encoding="utf-8")

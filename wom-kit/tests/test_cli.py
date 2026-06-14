@@ -1499,6 +1499,77 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertTrue(any("surface_ref" in blocker for blocker in result["blockers"]))
 
+    def test_imap_mailbox_plan_is_read_only_and_blocks_secret_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "imap-mailbox-plan",
+                    str(archive_root),
+                    "--source-id",
+                    "imap:gmail",
+                    "--provider",
+                    "gmail",
+                    "--account-ref",
+                    "imap:account:gmail-personal",
+                    "--username-ref",
+                    "env:WOM_GMAIL_USERNAME",
+                    "--auth-mode",
+                    "oauth_token_ref",
+                    "--oauth-token-ref",
+                    "keyring:gmail-oauth",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "imap_mailbox_plan")
+            self.assertEqual(result["source_type"], "imap_mailbox")
+            self.assertEqual(result["server"]["imap_host"], "imap.gmail.com")
+            self.assertEqual(result["server"]["imap_port"], 993)
+            self.assertFalse(result["current_capability"]["live_imap_scan_implemented"])
+            self.assertFalse(result["closed_actions"]["imap_connection_opened"])
+            self.assertFalse(result["closed_actions"]["message_headers_read"])
+            self.assertFalse(result["privacy_guards"]["email_addresses_echoed"])
+            self.assertFalse(result["privacy_guards"]["credential_values_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            bad_code, bad_output = self.run_cli(
+                [
+                    "imap-mailbox-plan",
+                    str(archive_root),
+                    "--source-id",
+                    "imap:gmail",
+                    "--provider",
+                    "gmail",
+                    "--account-ref",
+                    "imap:account:gmail-personal",
+                    "--username-ref",
+                    "person@example.com",
+                    "--app-password-ref",
+                    "abcdabcdabcdabcd",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            bad_result = json.loads(bad_output)
+            self.assertEqual(bad_code, 1, bad_output)
+            self.assertFalse(bad_result["ok"])
+            self.assertTrue(any("username_ref" in blocker for blocker in bad_result["blockers"]))
+            self.assertTrue(any("app_password_ref" in blocker for blocker in bad_result["blockers"]))
+            self.assertNotIn("person@example.com", bad_output)
+            self.assertNotIn("abcdabcdabcdabcd", bad_output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
     def test_zet_surface_prototype_four_surface_plans_are_read_only(self) -> None:
         expected = {
             "wordpress": ("projection_surface", "remote_rest_api", "site_ref"),
@@ -10893,6 +10964,14 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("inbox/ or zettels", output)
 
+    def test_read_zettel_rejects_absolute_path_with_archive_relative_guidance(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        zettel_path = (archive_root / "zettels" / "zet_20240504_fake_lunch_thought.md").resolve()
+        code, output = self.run_cli(["read-zettel", str(archive_root), "--path", str(zettel_path)])
+        self.assertEqual(code, 1)
+        self.assertIn("archive-relative inside inbox/ or zettels", output)
+        self.assertIn("--zettel-id", output)
+
     def test_create_draft_writes_to_inbox(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "personal-archive"
@@ -12233,6 +12312,50 @@ class ArchiveCliTests(unittest.TestCase):
 
             doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
             self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_imap_mailbox_source_can_be_registered_but_scan_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:imap-source")
+            self.assertEqual(init_code, 0, init_output)
+
+            add_code, add_output = self.run_cli(
+                [
+                    "add-source",
+                    str(archive_root),
+                    "--source-id",
+                    "imap:gmail",
+                    "--type",
+                    "imap_mailbox",
+                    "--root-ref",
+                    "imap:account:gmail-personal",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(add_code, 0, add_output)
+
+            scan_code, scan_output = self.run_cli(
+                [
+                    "scan-source",
+                    str(archive_root),
+                    "--source",
+                    "imap:gmail",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(scan_output)
+            self.assertEqual(scan_code, 1, scan_output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["source_type"], "imap_mailbox")
+            self.assertEqual(result["source_root_resolution"]["method"], "imap_mailbox_planned")
+            self.assertTrue(any("IMAP mailbox live scans are not implemented" in item for item in result["blockers"]))
 
     def test_add_source_blocks_duplicate_and_absolute_root_ref(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
