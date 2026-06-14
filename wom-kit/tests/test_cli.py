@@ -1608,10 +1608,12 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertEqual(result["lifecycle_action"], "prehashed_objet_ledger_preview")
             self.assertEqual(result["store_kind"], "notion_source_export")
+            self.assertEqual(result["ledger"]["ledger_file_count"], 1)
             self.assertEqual(result["ledger"]["row_count"], 4)
             self.assertEqual(result["ledger"]["valid_object_count"], 3)
             self.assertEqual(result["ledger"]["unique_sha256_count"], 2)
             self.assertEqual(result["ledger"]["duplicate_sha256_count"], 1)
+            self.assertEqual(result["ledger"]["skipped_row_count"], 0)
             self.assertEqual(result["ledger"]["invalid_row_count"], 1)
             self.assertEqual(result["ledger"]["total_declared_bytes"], 29)
             self.assertFalse(result["current_capability"]["objet_capture_can_import_prehashed_external_store_without_rehashing"])
@@ -1626,6 +1628,109 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn("private-notion-export-name.pdf", output)
             self.assertNotIn("https://example.com/private", output)
             self.assertNotIn("LOCAL_DEVICE_PLACEHOLDER", output)
+
+    def test_prehashed_objet_ledger_repeated_ledgers_dedup_and_skip_null_sha(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            ledger_a = Path(tmp) / "retrieval-ledger.jsonl"
+            ledger_b = Path(tmp) / "workspace-dl-ledger.jsonl"
+            sha_a = "1" * 64
+            sha_b = "2" * 64
+            sha_c = "3" * 64
+            ledger_a.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"sha256": sha_a, "bytes": 11}),
+                        json.dumps({"sha256": sha_b, "bytes": 22}),
+                        json.dumps({"sha256": None, "bytes": 22, "via": "aid-dedup"}),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            ledger_b.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"sha256": "sha256:" + sha_b, "bytes": "22"}),
+                        json.dumps({"sha256": sha_c, "bytes": 33}),
+                        json.dumps({"sha256": "", "bytes": 33, "via": "aid-dedup"}),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "prehashed-objet-ledger",
+                    str(archive_root),
+                    "--ledger",
+                    str(ledger_a),
+                    "--ledger",
+                    str(ledger_b),
+                    "--store-kind",
+                    "notion_source_export",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(dry_code, 0, dry_output)
+            dry = json.loads(dry_output)
+            self.assertTrue(dry["ok"], dry)
+            self.assertEqual(dry["ledger"]["ledger_file_count"], 2)
+            self.assertEqual(dry["ledger"]["row_count"], 6)
+            self.assertEqual(dry["ledger"]["valid_object_count"], 4)
+            self.assertEqual(dry["ledger"]["unique_sha256_count"], 3)
+            self.assertEqual(dry["ledger"]["duplicate_sha256_count"], 1)
+            self.assertEqual(dry["ledger"]["skipped_row_count"], 2)
+            self.assertEqual(dry["ledger"]["skipped_reasons"], {"sha256_missing_or_null": 2})
+            self.assertEqual(dry["ledger"]["invalid_row_count"], 0)
+            self.assertEqual(dry["registration"]["would_append_manifest_records"], 3)
+            self.assertFalse(dry["privacy_guards"]["row_values_echoed"])
+            self.assertNotIn(str(ledger_a), dry_output)
+            self.assertNotIn(str(ledger_b), dry_output)
+            self.assertNotIn("aid-dedup", dry_output)
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "prehashed-objet-ledger",
+                    str(archive_root),
+                    "--ledger",
+                    str(ledger_a),
+                    "--ledger",
+                    str(ledger_b),
+                    "--store-kind",
+                    "notion_source_export",
+                    "--store-ref",
+                    "notion-export-20260614",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(approve_code, 0, approve_output)
+            approved = json.loads(approve_output)
+            self.assertTrue(approved["ok"], approved)
+            self.assertEqual(approved["registration"]["appended_manifest_records"], 3)
+            self.assertEqual(approved["ledger"]["skipped_row_count"], 2)
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [
+                json.loads(line)
+                for line in manifest_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            added = {
+                record["object_id"]
+                for record in records
+                if record.get("provenance", {}).get("store_ref") == "notion-export-20260614"
+            }
+            self.assertEqual(added, {f"sha256:{sha_a}", f"sha256:{sha_b}", f"sha256:{sha_c}"})
+            receipt = json.loads((archive_root / approved["registration"]["receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(receipt["summary"]["skipped_row_count"], 2)
+            self.assertEqual(receipt["summary"]["appended_manifest_records"], 3)
 
     def test_prehashed_objet_ledger_approve_appends_external_manifest_records_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

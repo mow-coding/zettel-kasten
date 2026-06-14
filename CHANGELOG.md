@@ -6,6 +6,15 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.11 - 2026-06-14
+
+- Extended `archive prehashed-objet-ledger` so CLI `--ledger` may be repeated,
+  allowing retrieval, deep, and workspace download ledgers to be deduped across
+  one dry-run/approval pass.
+- Added skipped-row accounting for prehashed ledger rows with null or empty
+  `sha256`, so aid-dedup style rows can be ignored without blocking approval;
+  malformed non-empty sha values remain invalid.
+
 ## v0.3.10 - 2026-06-14
 
 - Added `wom-kit/docs/project-intake-cookbook.md`, a fake-archive rehearsal
