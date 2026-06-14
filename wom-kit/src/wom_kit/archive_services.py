@@ -1011,6 +1011,7 @@ CREDENTIAL_REF_ALLOWED_PROVIDERS = {
     "backblaze_b2",
     "generic_provider",
 }
+CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE = "profiles/local/credential-refs.local.yml"
 ONBOARDING_PROVIDER_PROFILES = {
     "local_only": {
         "description": "Local archive plus physical/local backup and external secret vault guidance.",
@@ -10650,7 +10651,13 @@ def imap_mailbox_plan(
 
     resolved_account_ref = (account_ref or "").strip()
     if not safe_imap_ref(resolved_account_ref, prefixes=IMAP_ACCOUNT_REF_PREFIXES):
-        blockers.append("account_ref must be a safe account reference such as imap:account:personal-mail; do not pass an email address.")
+        if credential_ref_store(resolved_account_ref):
+            blockers.append(
+                "account_ref is a non-secret account label, not a credential store ref. "
+                "Use imap:account:personal-mail for account_ref, and put keyring:/env:/secret:/wallet: refs in username_ref, app_password_ref, or oauth_token_ref."
+            )
+        else:
+            blockers.append("account_ref must be a safe account reference such as imap:account:personal-mail; do not pass an email address.")
         resolved_account_ref = ""
 
     resolved_username_ref = (username_ref or "").strip()
@@ -10910,6 +10917,287 @@ def credential_ref_plan(
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
+
+
+def credential_ref_inventory(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    credentials: list[dict[str, Any]] = []
+    sources_checked: list[dict[str, Any]] = []
+
+    if not dry_run:
+        blockers.append("credential-ref-inventory is read-only and requires --dry-run.")
+
+    provider_path = archive_internal_path(root, "provider-bindings.yml")
+    sources_checked.append({"path": "provider-bindings.yml", "present": provider_path.is_file(), "scope": "archive"})
+    if provider_path.is_file():
+        try:
+            provider_doc = load_provider_bindings(root)
+            for index, binding in enumerate(provider_bindings_list(provider_doc), start=1):
+                provider = str(binding.get("provider") or "generic_provider").strip().lower().replace("-", "_")
+                credentials.extend(
+                    discover_credential_refs_in_value(
+                        binding,
+                        document="provider-bindings.yml",
+                        base_id=f"provider-{index:04d}",
+                        provider=provider if provider in CREDENTIAL_REF_ALLOWED_PROVIDERS else "generic_provider",
+                        context={"binding_kind": str(binding.get("kind") or "provider")},
+                    )
+                )
+        except (ArchiveServiceError, OSError, UnicodeError) as exc:
+            blockers.append(f"provider-bindings.yml could not be read safely: {exc}")
+
+    source_path = archive_internal_path(root, "source-bindings.yml")
+    sources_checked.append({"path": "source-bindings.yml", "present": source_path.is_file(), "scope": "archive"})
+    if source_path.is_file():
+        try:
+            source_doc = load_source_bindings(root)
+            for index, binding in enumerate(source_bindings_list(source_doc), start=1):
+                source_type = str(binding.get("source_type") or "")
+                provider = "generic_imap" if source_type == IMAP_MAILBOX_SOURCE_TYPE else "generic_provider"
+                credentials.extend(
+                    discover_credential_refs_in_value(
+                        binding,
+                        document="source-bindings.yml",
+                        base_id=f"source-{index:04d}",
+                        provider=provider,
+                        context={"source_type": source_type or "unknown"},
+                    )
+                )
+        except (ArchiveServiceError, OSError, UnicodeError) as exc:
+            blockers.append(f"source-bindings.yml could not be read safely: {exc}")
+
+    local_path = archive_internal_path(root, CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE)
+    sources_checked.append(
+        {
+            "path": CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE,
+            "present": local_path.is_file(),
+            "scope": "local_ignored",
+        }
+    )
+    if local_path.is_file():
+        try:
+            local_doc = load_yaml(local_path.read_text(encoding="utf-8"))
+            if not isinstance(local_doc, dict):
+                blockers.append(f"{CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE} must be a YAML object.")
+            else:
+                credentials.extend(local_credential_inventory_entries(local_doc, blockers))
+        except (OSError, UnicodeError) as exc:
+            blockers.append(f"{CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE} could not be read safely: {exc}")
+
+    deduped = dedupe_credential_inventory(credentials)
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "credential_ref_inventory",
+        "archive_id": archive_id,
+        "credential_count": len(deduped),
+        "credentials": deduped,
+        "sources_checked": sources_checked,
+        "local_inventory_path": CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE,
+        "current_capability": {
+            "read_only_inventory_available": True,
+            "local_inventory_file_read_supported": True,
+            "secret_value_read_implemented": False,
+            "secret_value_write_implemented": False,
+            "os_keyring_open_implemented": False,
+            "provider_api_call_implemented": False,
+        },
+        "closed_actions": {
+            "secret_value_read": False,
+            "secret_value_written": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "provider_api_called": False,
+            "oauth_started": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "credential_ref_values_echoed": False,
+            "secret_values_echoed": False,
+            "email_addresses_echoed": False,
+            "tokens_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "writes": False,
+        },
+        "next_safe_actions": [
+            "Use a password manager or OS keyring for the actual secret values.",
+            f"Optionally maintain {CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE} as an ignored local catalog of refs.",
+            "Use credential-ref-plan to validate a new ref before adding it to a binding or local inventory.",
+            "Use imap:account:* for mail account labels and keyring:/env:/secret:/wallet: only for usernames, app passwords, OAuth tokens, and API keys.",
+        ],
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def local_credential_inventory_entries(doc: dict[str, Any], blockers: list[str]) -> list[dict[str, Any]]:
+    raw_items = doc.get("credentials") or []
+    if not isinstance(raw_items, list):
+        blockers.append(f"{CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE}.credentials must be a list.")
+        return []
+    entries: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_items, start=1):
+        if not isinstance(item, dict):
+            blockers.append(f"{CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE}.credentials[{index}] must be an object.")
+            continue
+        credential_id = str(item.get("credential_id") or item.get("id") or f"local-credential-{index:04d}").strip()
+        if not safe_source_intake_plan_scalar(credential_id):
+            blockers.append(f"{CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE}.credentials[{index}].credential_id must be safe and non-secret.")
+            credential_id = f"local-credential-{index:04d}"
+        credential_kind = str(item.get("credential_kind") or item.get("kind") or "generic_secret").strip().lower().replace("-", "_")
+        if credential_kind not in CREDENTIAL_REF_ALLOWED_KINDS:
+            blockers.append(f"{CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE}.credentials[{index}].credential_kind is unsupported.")
+            credential_kind = "generic_secret"
+        purpose = str(item.get("purpose") or default_credential_ref_purpose(credential_kind)).strip().lower().replace("-", "_")
+        if purpose not in CREDENTIAL_REF_ALLOWED_PURPOSES:
+            blockers.append(f"{CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE}.credentials[{index}].purpose is unsupported.")
+            purpose = default_credential_ref_purpose(credential_kind)
+        provider = str(item.get("provider") or default_credential_ref_provider(credential_kind)).strip().lower().replace("-", "_")
+        if provider not in CREDENTIAL_REF_ALLOWED_PROVIDERS:
+            blockers.append(f"{CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE}.credentials[{index}].provider is unsupported.")
+            provider = "generic_provider"
+        credential_ref = str(item.get("credential_ref") or item.get("ref") or "").strip()
+        store = credential_ref_store(credential_ref) if safe_credential_ref(credential_ref) else None
+        if store is None:
+            blockers.append(f"{CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE}.credentials[{index}].credential_ref must be a safe ref, not a raw secret.")
+        entries.append(
+            {
+                "credential_id": credential_id,
+                "credential_kind": credential_kind,
+                "purpose": purpose,
+                "provider": provider,
+                "ref_store": store,
+                "ref_prefix": f"{store}:" if store else None,
+                "source": {
+                    "document": CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE,
+                    "scope": "local_ignored",
+                    "entry_index": index,
+                },
+                "secret_value_present": False,
+            }
+        )
+    return entries
+
+
+def discover_credential_refs_in_value(
+    value: Any,
+    *,
+    document: str,
+    base_id: str,
+    provider: str,
+    context: dict[str, str],
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+
+    def walk(node: Any, field_path: list[str]) -> None:
+        if isinstance(node, dict):
+            for key, child in node.items():
+                walk(child, field_path + [str(key)])
+            return
+        if isinstance(node, list):
+            for idx, child in enumerate(node):
+                walk(child, field_path + [str(idx)])
+            return
+        if not isinstance(node, str):
+            return
+        field_name = field_path[-1] if field_path else "value"
+        store = credential_ref_store_from_binding_value(field_name, node)
+        if store is None:
+            return
+        field_key = ".".join(field_path)
+        kind = infer_credential_kind_from_field(field_key, provider, context)
+        purpose = default_credential_ref_purpose(kind)
+        entries.append(
+            {
+                "credential_id": f"credential-ref:{base_id}:{len(entries) + 1:04d}",
+                "credential_kind": kind,
+                "purpose": purpose,
+                "provider": provider if provider in CREDENTIAL_REF_ALLOWED_PROVIDERS else "generic_provider",
+                "ref_store": store,
+                "ref_prefix": f"{store}:",
+                "source": {
+                    "document": document,
+                    "scope": "archive",
+                    "field_path": field_key,
+                    **context,
+                },
+                "secret_value_present": False,
+            }
+        )
+
+    walk(value, [])
+    return entries
+
+
+def credential_ref_store_from_binding_value(field_name: str, value: str) -> str | None:
+    text = value.strip()
+    if safe_credential_ref(text):
+        return credential_ref_store(text)
+    normalized = field_name.strip().lower()
+    if normalized.endswith("_env") and safe_environment_ref_name(text):
+        return "env"
+    return None
+
+
+def safe_environment_ref_name(value: str) -> bool:
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    if "@" in text or "://" in text or "/" in text or "\\" in text:
+        return False
+    if contains_forbidden_location_reference(text):
+        return False
+    return bool(re.match(r"^[A-Z][A-Z0-9_]{2,80}$", text))
+
+
+def infer_credential_kind_from_field(field_key: str, provider: str, context: dict[str, str]) -> str:
+    text = field_key.lower()
+    source_type = (context.get("source_type") or "").lower()
+    if "username" in text and (source_type == IMAP_MAILBOX_SOURCE_TYPE or "mail" in provider):
+        return "mail_username"
+    if "oauth" in text or "refresh_token" in text or "access_token" in text:
+        return "mail_oauth_token" if source_type == IMAP_MAILBOX_SOURCE_TYPE or "mail" in provider else "provider_api_key"
+    if "app_password" in text or ("password" in text and (source_type == IMAP_MAILBOX_SOURCE_TYPE or "mail" in provider)):
+        return "mail_app_password"
+    if provider == "openai" or "openai" in text:
+        return "openai_api_key"
+    if "ocr" in text or provider in {"generic_ocr", "google_cloud_vision", "azure_ai_vision", "aws_textract"}:
+        return "ocr_api_key"
+    if "backup" in text or "restic" in text:
+        return "backup_password"
+    if "object" in text or "storage" in text or provider in {"cloudflare_r2", "backblaze_b2"}:
+        return "object_storage_token"
+    if "api" in text or "token" in text or "key" in text:
+        return "provider_api_key"
+    return "generic_secret"
+
+
+def dedupe_credential_inventory(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for entry in entries:
+        source = entry.get("source") if isinstance(entry.get("source"), dict) else {}
+        key = (
+            str(entry.get("credential_kind") or ""),
+            str(entry.get("purpose") or ""),
+            str(entry.get("provider") or ""),
+            str(entry.get("ref_store") or ""),
+            str(source.get("document") or "") + ":" + str(source.get("field_path") or source.get("entry_index") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(json_safe(entry))
+    return deduped
 
 
 def default_credential_ref_purpose(credential_kind: str) -> str:

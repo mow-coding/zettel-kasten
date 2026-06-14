@@ -101,6 +101,20 @@ checks the reference shape and records the intended boundary.
 v0.3.20 does not store passwords, OAuth tokens, OpenAI API keys, OCR API keys,
 or provider credentials.
 
+v0.3.21 adds a read-only inventory companion:
+
+```powershell
+python cli\archive.py credential-ref-inventory .\my-archive `
+  --dry-run `
+  --format json
+```
+
+See [Credential Ref Inventory And Onboarding](credential-ref-inventory-and-onboarding.md).
+
+The inventory helps a human remember which refs exist without turning WOM into
+a password vault. It scans provider bindings, source bindings, and the ignored
+local catalog `profiles/local/credential-refs.local.yml`, but it does not echo the exact ref value or read the secret behind it.
+
 ## Mail Sources
 
 Mail source access should use refs such as:

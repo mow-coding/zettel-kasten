@@ -25,6 +25,8 @@ Commands:
           Plan a read-only IMAP mailbox source without connecting or storing secrets.
   credential-ref-plan
           Plan a local credential reference without reading or storing secret values.
+  credential-ref-inventory
+          List known credential refs without echoing ref values or secrets.
   source-intake
           Plan safe source/objet refs before draft creation.
   source-intake-record
@@ -1960,6 +1962,47 @@ def command_credential_ref_plan(args: argparse.Namespace) -> int:
         print(f"Provider: {result.get('provider') or '-'}")
         print(f"Store: {result.get('credential_store') or '-'}")
         print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_credential_ref_inventory(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("credential-ref-inventory is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.credential_ref_inventory(
+            Path(args.archive_root),
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        print(f"Credential ref inventory {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Credentials: {result.get('credential_count', 0)}")
+        for item in result.get("credentials") or []:
+            if not isinstance(item, dict):
+                continue
+            print(
+                "- "
+                f"{item.get('credential_id') or '-'} "
+                f"{item.get('credential_kind') or '-'} "
+                f"{item.get('provider') or '-'} "
+                f"{item.get('ref_prefix') or '-'}"
+            )
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -6115,6 +6158,16 @@ def build_parser() -> argparse.ArgumentParser:
     credential_ref_plan.add_argument("--dry-run", action="store_true", help="Required; plan only.")
     credential_ref_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_ref_plan.set_defaults(func=command_credential_ref_plan)
+
+    credential_ref_inventory = subcommands.add_parser(
+        "credential-ref-inventory",
+        aliases=["credentials", "credential-status"],
+        help="List known credential refs without echoing ref values or secrets.",
+    )
+    credential_ref_inventory.add_argument("archive_root", help="Archive root to inspect.")
+    credential_ref_inventory.add_argument("--dry-run", action="store_true", help="Required; read-only inventory.")
+    credential_ref_inventory.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    credential_ref_inventory.set_defaults(func=command_credential_ref_inventory)
 
     source_intake = subcommands.add_parser(
         "source-intake",
