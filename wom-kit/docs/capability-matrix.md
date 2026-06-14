@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.7 project intake and human artifact planning checkpoint
-Date: 2026-06-13
-Version: v0.3.7, release candidate
+Status: v0.3.8 human-guided intake and ZET surface prototype checkpoint
+Date: 2026-06-14
+Version: v0.3.8, release candidate
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
