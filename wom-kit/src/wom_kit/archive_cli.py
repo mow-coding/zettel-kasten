@@ -29,6 +29,8 @@ Commands:
           List known credential refs without echoing ref values or secrets.
   credential-store-recommendation
           Recommend a secret store class for a human scenario without reading secrets.
+  credential-vault-onboarding-plan
+          Plan safe human vault onboarding without opening or reading a vault.
   credential-access-broker-plan
           Plan a future approved credential broker request without retrieving secrets.
   credential-access-approval-plan
@@ -2073,6 +2075,49 @@ def command_credential_store_recommendation(args: argparse.Namespace) -> int:
         print(f"Platform: {result.get('platform') or '-'}")
         print(f"Primary: {primary.get('store_id') or '-'} ({primary.get('store_class') or '-'})")
         print(f"WOM ref prefix: {primary.get('wom_ref_prefix') or '-'}")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_credential_vault_onboarding_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("credential-vault-onboarding-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.credential_vault_onboarding_plan(
+            Path(args.archive_root),
+            scenario=args.scenario,
+            store_id=args.store_id,
+            credential_id=args.credential_id,
+            credential_kind=args.credential_kind,
+            provider=args.provider,
+            action_kind=args.action_kind,
+            platform=args.platform,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        store = result.get("selected_store") if isinstance(result.get("selected_store"), dict) else {}
+        credential = result.get("credential_plan") if isinstance(result.get("credential_plan"), dict) else {}
+        print(f"Credential vault onboarding plan {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Scenario: {result.get('scenario') or '-'}")
+        print(f"Store: {store.get('store_id') or '-'} ({store.get('store_class') or '-'})")
+        print(f"WOM ref prefix: {credential.get('safe_ref_prefix_to_record') or '-'}")
         print("Writes: none")
         if result.get("blockers"):
             print("Blockers:")
@@ -6486,6 +6531,50 @@ def build_parser() -> argparse.ArgumentParser:
     credential_store_recommendation.add_argument("--dry-run", action="store_true", help="Required; read-only recommendation.")
     credential_store_recommendation.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_store_recommendation.set_defaults(func=command_credential_store_recommendation)
+
+    credential_vault_onboarding_plan = subcommands.add_parser(
+        "credential-vault-onboarding-plan",
+        aliases=["credential-vault-onboarding", "secret-vault-onboarding-plan"],
+        help="Plan safe human vault onboarding without opening or reading a vault.",
+    )
+    credential_vault_onboarding_plan.add_argument("archive_root", help="Archive root to inspect.")
+    credential_vault_onboarding_plan.add_argument(
+        "--scenario",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS),
+        required=True,
+        help="Human secret-vault usage scenario.",
+    )
+    credential_vault_onboarding_plan.add_argument(
+        "--store-id",
+        choices=sorted(archive_services.CREDENTIAL_VAULT_ONBOARDING_STORE_IDS),
+        default="recommended",
+        help="Selected external vault/store family. Defaults to the scenario recommendation.",
+    )
+    credential_vault_onboarding_plan.add_argument("--credential-id", help="Optional safe credential label, e.g. cred:openai-api.")
+    credential_vault_onboarding_plan.add_argument(
+        "--credential-kind",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+        help="Optional credential kind; defaults from action kind.",
+    )
+    credential_vault_onboarding_plan.add_argument(
+        "--provider",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+        help="Optional provider context.",
+    )
+    credential_vault_onboarding_plan.add_argument(
+        "--action-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_ACTIONS),
+        help="Optional future action; defaults from scenario.",
+    )
+    credential_vault_onboarding_plan.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Host platform for OS keyring wording.",
+    )
+    credential_vault_onboarding_plan.add_argument("--dry-run", action="store_true", help="Required; read-only onboarding plan.")
+    credential_vault_onboarding_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    credential_vault_onboarding_plan.set_defaults(func=command_credential_vault_onboarding_plan)
 
     credential_access_broker_plan = subcommands.add_parser(
         "credential-access-broker-plan",
