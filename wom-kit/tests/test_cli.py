@@ -1904,6 +1904,78 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(any("credential_ref must be" in blocker for blocker in bad_result["blockers"]))
             self.assertNotIn(raw_secret, bad_output)
 
+    def test_credential_access_approval_plan_previews_receipt_without_writes_or_secret_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "credential-access-approval-plan",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--credential-ref",
+                    "secret:keepassxc-openai-api",
+                    "--action-kind",
+                    "model_api_call",
+                    "--decision",
+                    "approve_once",
+                    "--store-kind",
+                    "password_manager",
+                    "--consumer",
+                    "wom:adapter:model-api",
+                    "--reviewed-by",
+                    "human:tester",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "credential_access_approval_plan")
+            self.assertEqual(result["decision"], "approve_once")
+            self.assertTrue(result["proposed_receipt_path"].startswith("receipts/credentials/access-approvals/"))
+            self.assertEqual(result["receipt_preview"]["receipt_kind"], "credential_access_approval")
+            self.assertFalse(result["receipt_preview"]["secret_material"]["secret_value_included"])
+            self.assertFalse(result["receipt_preview"]["secret_material"]["credential_ref_value_included"])
+            self.assertFalse(result["receipt_preview"]["approval_constraints"]["secret_value_return_to_ai"])
+            self.assertTrue(result["receipt_preview"]["approval_constraints"]["single_action_only"])
+            self.assertFalse(result["closed_actions"]["approval_receipt_written"])
+            self.assertFalse(result["closed_actions"]["secret_value_read"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("secret:keepassxc-openai-api", output)
+            self.assertNotIn("sk-proj-", output)
+            self.assertFalse((archive_root / result["proposed_receipt_path"]).exists())
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            raw_secret = "sk" + "-proj-" + "abcdefghijklmnopqrstuvwxyz1234567890"
+            bad_code, bad_output = self.run_cli(
+                [
+                    "credential-access-approval-plan",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:bad-openai",
+                    "--credential-ref",
+                    raw_secret,
+                    "--action-kind",
+                    "model_api_call",
+                    "--decision",
+                    "approve_once",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            bad_result = json.loads(bad_output)
+            self.assertEqual(bad_code, 1, bad_output)
+            self.assertFalse(bad_result["ok"])
+            self.assertTrue(any("credential_ref must be" in blocker for blocker in bad_result["blockers"]))
+            self.assertNotIn(raw_secret, bad_output)
+
     def test_zet_surface_prototype_four_surface_plans_are_read_only(self) -> None:
         expected = {
             "wordpress": ("projection_surface", "remote_rest_api", "site_ref"),
@@ -16534,6 +16606,44 @@ class ArchiveCliTests(unittest.TestCase):
             code, output = self.run_cli(["doctor", str(archive_root)])
             self.assertEqual(code, 1)
             self.assertIn("secret_value_detected", output)
+
+    def test_validate_allows_declared_credential_refs_in_local_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:credential-ref-scan")
+            self.assertEqual(init_code, 0, init_output)
+
+            local_inventory = archive_root / "profiles" / "local" / "credential-refs.local.yml"
+            local_inventory.parent.mkdir(parents=True, exist_ok=True)
+            local_inventory.write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "credentials": [
+                            {
+                                "credential_id": "cred:personal-mail",
+                                "credential_kind": "mail_app_password",
+                                "provider": "naver",
+                                "purpose": "mail_access",
+                                "credential_ref": "secret:keepassxc-personal-mail",
+                            },
+                            {
+                                "credential_id": "cred:openai-api",
+                                "credential_kind": "openai_api_key",
+                                "provider": "openai",
+                                "purpose": "model_api",
+                                "credential_ref": "keyring:openai-api-key",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(["validate", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertNotIn("secret_value_detected", output)
 
     def test_doctor_warns_when_local_profile_contains_env_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

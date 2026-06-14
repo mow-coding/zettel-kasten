@@ -114,6 +114,7 @@
 - [Credential Ref Inventory And Onboarding](credential-ref-inventory-and-onboarding.md)
 - [Credential Store Recommendations](credential-store-recommendations.md)
 - [Credential Access Broker Plan](credential-access-broker-plan.md)
+- [Credential Access Approval Plan](credential-access-approval-plan.md)
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
 - [IMAP Mailbox Source](imap-mailbox-source.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)

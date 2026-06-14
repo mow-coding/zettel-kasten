@@ -344,6 +344,49 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "credential_access_approval_plan",
+        "description": "Preview a future credential access approval receipt without writing or retrieving secrets. Read-only; never opens vaults, keyrings, browser stores, files, or environment variables.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "credential_id": {"type": "string"},
+                "credential_ref": {"type": "string"},
+                "credential_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+                },
+                "provider": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+                },
+                "action_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ACCESS_BROKER_ACTIONS),
+                },
+                "decision": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ACCESS_APPROVAL_DECISIONS),
+                    "default": "needs_review",
+                },
+                "store_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+                    "default": "password_manager",
+                },
+                "consumer": {"type": "string", "default": "wom_local_adapter"},
+                "reviewed_by": {"type": "string", "default": "human:pending-review"},
+                "platform": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+                    "default": "windows",
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "credential_id", "action_kind"],
+        },
+    },
+    {
         "name": "zet_surface_prototype_plan",
         "description": "Plan a user-selected ZET surface prototype for WordPress, Joplin, Notion, or Obsidian. Read-only; never calls providers, requests tokens, writes notes, publishes, syncs, mints, or transports.",
         "inputSchema": {
@@ -1504,6 +1547,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_credential_store_recommendation(arguments)
     if name == "credential_access_broker_plan":
         return tool_credential_access_broker_plan(arguments)
+    if name == "credential_access_approval_plan":
+        return tool_credential_access_approval_plan(arguments)
     if name == "zet_surface_prototype_plan":
         return tool_zet_surface_prototype_plan(arguments)
     if name == "prehashed_objet_ledger_preview":
@@ -1894,6 +1939,32 @@ def tool_credential_access_broker_plan(arguments: dict[str, Any]) -> dict[str, A
     request = result.get("broker_request") if isinstance(result.get("broker_request"), dict) else {}
     return tool_success_result(
         f"credential_access_broker_plan: {state}, action={request.get('action_kind') or '-'}.",
+        result,
+    )
+
+
+def tool_credential_access_approval_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("credential_access_approval_plan is read-only and requires dry-run.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.credential_access_approval_plan,
+        archive_root,
+        credential_id=require_string_arg(arguments, "credential_id"),
+        credential_ref=optional_string_arg(arguments, "credential_ref"),
+        credential_kind=optional_string_arg(arguments, "credential_kind"),
+        provider=optional_string_arg(arguments, "provider"),
+        action_kind=require_string_arg(arguments, "action_kind"),
+        decision=optional_string_arg(arguments, "decision") or "needs_review",
+        store_kind=optional_string_arg(arguments, "store_kind") or "password_manager",
+        consumer=optional_string_arg(arguments, "consumer") or "wom_local_adapter",
+        reviewed_by=optional_string_arg(arguments, "reviewed_by") or "human:pending-review",
+        platform=optional_string_arg(arguments, "platform") or "windows",
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(
+        f"credential_access_approval_plan: {state}, decision={result.get('decision') or '-'}.",
         result,
     )
 

@@ -31,6 +31,8 @@ Commands:
           Recommend a secret store class for a human scenario without reading secrets.
   credential-access-broker-plan
           Plan a future approved credential broker request without retrieving secrets.
+  credential-access-approval-plan
+          Preview a future credential access approval receipt without writing or reading secrets.
   source-intake
           Plan safe source/objet refs before draft creation.
   source-intake-record
@@ -246,6 +248,9 @@ SECRET_VALUE_RE = re.compile(
     r"|-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----"
     r"|\bAKIA[0-9A-Z]{16}\b"
 )
+SECRET_ASSIGNMENT_VALUE_RE = re.compile(
+    r"(?i)\A(?:api[_-]?key|secret|token|password|credential|aws_secret_access_key)\s*[:=]\s*['\"]?([A-Za-z0-9_./+=:-]{12,})['\"]?\Z"
+)
 SECRET_SCAN_EXTENSIONS = {
     ".conf",
     ".env",
@@ -256,6 +261,24 @@ SECRET_SCAN_EXTENSIONS = {
     ".yaml",
     ".yml",
 }
+
+
+def contains_secret_value(text: str) -> bool:
+    for match in SECRET_VALUE_RE.finditer(text):
+        if secret_match_is_declared_credential_ref(match.group(0)):
+            continue
+        return True
+    return False
+
+
+def secret_match_is_declared_credential_ref(match_text: str) -> bool:
+    text = match_text.strip().strip("'\"")
+    if archive_services.safe_credential_ref(text):
+        return True
+    assignment = SECRET_ASSIGNMENT_VALUE_RE.match(text)
+    if not assignment:
+        return False
+    return archive_services.safe_credential_ref(assignment.group(1).strip("'\""))
 RECOMMENDED_GITIGNORE_PATTERNS = [
     ".env",
     ".env.*",
@@ -549,7 +572,7 @@ class Doctor:
             for index, child in enumerate(value):
                 self._check_provider_binding_secret_refs(child, path, f"{field_path}[{index}]")
             return
-        if isinstance(value, str) and SECRET_VALUE_RE.search(f"value: {value}"):
+        if isinstance(value, str) and contains_secret_value(f"value: {value}"):
             self.error(
                 "provider_bindings_secret_value",
                 f"Provider binding appears to contain a secret-like value at {field_path}. Use an *_env or keyring reference instead.",
@@ -619,7 +642,7 @@ class Doctor:
             for index, child in enumerate(value):
                 self._check_source_binding_secret_refs(child, path, f"{field_path}[{index}]")
             return
-        if isinstance(value, str) and SECRET_VALUE_RE.search(f"value: {value}"):
+        if isinstance(value, str) and contains_secret_value(f"value: {value}"):
             self.error(
                 "source_bindings_secret_value",
                 f"Source binding appears to contain a secret-like value at {field_path}. Use an env/keyring reference instead.",
@@ -1328,7 +1351,7 @@ class Doctor:
                     text = path.read_text(encoding="utf-8")
                 except UnicodeDecodeError:
                     continue
-                if SECRET_VALUE_RE.search(text):
+                if contains_secret_value(text):
                     self.error("secret_value_detected", f"Secret-like value found in archive file: {relative}", path)
             if self._is_local_profile_path(path):
                 self._check_local_profile_file(path)
@@ -2089,6 +2112,52 @@ def command_credential_access_broker_plan(args: argparse.Namespace) -> int:
         print(f"Action: {request.get('action_kind') or '-'}")
         print(f"Store: {request.get('store_kind') or '-'}")
         print(f"Secret returned to AI: {request.get('secret_value_return_to_ai')}")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_credential_access_approval_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("credential-access-approval-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.credential_access_approval_plan(
+            Path(args.archive_root),
+            credential_id=args.credential_id,
+            credential_ref=args.credential_ref,
+            credential_kind=args.credential_kind,
+            provider=args.provider,
+            action_kind=args.action_kind,
+            decision=args.decision,
+            store_kind=args.store_kind,
+            consumer=args.consumer,
+            reviewed_by=args.reviewed_by,
+            platform=args.platform,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        summary = result.get("broker_plan_summary") if isinstance(result.get("broker_plan_summary"), dict) else {}
+        print(f"Credential access approval plan {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Decision: {result.get('decision') or '-'}")
+        print(f"Action: {summary.get('action_kind') or '-'}")
+        print(f"Credential: {summary.get('credential_id') or '-'}")
+        print(f"Receipt: {result.get('proposed_receipt_path') or '-'}")
         print("Writes: none")
         if result.get("blockers"):
             print("Blockers:")
@@ -6318,6 +6387,54 @@ def build_parser() -> argparse.ArgumentParser:
     credential_access_broker_plan.add_argument("--dry-run", action="store_true", help="Required; read-only broker plan.")
     credential_access_broker_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_access_broker_plan.set_defaults(func=command_credential_access_broker_plan)
+
+    credential_access_approval_plan = subcommands.add_parser(
+        "credential-access-approval-plan",
+        aliases=["credential-access-approval", "secret-access-approval-plan"],
+        help="Preview a future credential access approval receipt without writing or reading secrets.",
+    )
+    credential_access_approval_plan.add_argument("archive_root", help="Archive root to inspect.")
+    credential_access_approval_plan.add_argument("--credential-id", required=True, help="Safe credential label, e.g. cred:openai-api.")
+    credential_access_approval_plan.add_argument("--credential-ref", help="Optional env/keyring/secret/wallet ref; exact value is not echoed.")
+    credential_access_approval_plan.add_argument(
+        "--credential-kind",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+        help="Credential kind; defaults from action kind.",
+    )
+    credential_access_approval_plan.add_argument(
+        "--provider",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+        help="Optional provider context.",
+    )
+    credential_access_approval_plan.add_argument(
+        "--action-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_ACTIONS),
+        required=True,
+        help="Future action that would need a credential capability.",
+    )
+    credential_access_approval_plan.add_argument(
+        "--decision",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_APPROVAL_DECISIONS),
+        default="needs_review",
+        help="Human decision to preview in the future approval receipt.",
+    )
+    credential_access_approval_plan.add_argument(
+        "--store-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+        default="password_manager",
+        help="External store class that would hold the real secret.",
+    )
+    credential_access_approval_plan.add_argument("--consumer", default="wom_local_adapter", help="Safe label for the tool/adapter asking to use the credential.")
+    credential_access_approval_plan.add_argument("--reviewed-by", default="human:pending-review", help="Safe non-secret reviewer label.")
+    credential_access_approval_plan.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Host platform for OS keyring wording.",
+    )
+    credential_access_approval_plan.add_argument("--dry-run", action="store_true", help="Required; read-only approval receipt preview.")
+    credential_access_approval_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    credential_access_approval_plan.set_defaults(func=command_credential_access_approval_plan)
 
     source_intake = subcommands.add_parser(
         "source-intake",

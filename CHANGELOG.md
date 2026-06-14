@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.24 - 2026-06-15
+
+- Added read-only CLI `archive credential-access-approval-plan --dry-run` and
+  MCP `credential_access_approval_plan` for previewing a future
+  human-reviewed credential access approval receipt.
+- Added preview decisions `needs_review`, `approve_once`, and `deny`; even
+  `approve_once` remains a non-mutating preview and grants no live access in
+  this release.
+- Kept exact credential ref values and secret values out of the receipt preview;
+  the preview reports only safe metadata such as credential id, kind, provider,
+  purpose, ref store, ref prefix, action kind, store kind, and consumer label.
+- Added `wom-kit/docs/credential-access-approval-plan.md` plus CLI/MCP/docs
+  tests for dry-run-only behavior, allowed-root enforcement, no-write behavior,
+  exact-ref non-echo, and raw-secret redaction.
+- Fixed the secret scanner so declared credential refs such as
+  `secret:keepassxc-personal-mail` and `keyring:openai-api-key` do not trigger
+  `secret_value_detected` when recorded in the local credential-ref catalog.
+  Raw secret-like values are still detected.
+
 ## v0.3.23 - 2026-06-15
 
 - Added read-only CLI `archive credential-access-broker-plan --dry-run` and
