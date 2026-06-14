@@ -15930,10 +15930,31 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertTrue(intake_plan["ok"], intake_plan)
             self.assertEqual(intake_plan["folder_summary"]["top_level_file_count"], 1)
 
-            project_receipt = self._project_intake_receipt(tmp, archive_root)
+            answer_path = Path(tmp) / "scope-answer.json"
+            answer_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/project-intake-answer/v0.1",
+                        "checklist_id": "scope.single_project",
+                        "answer": "yes",
+                        "notes": "One staged project only.",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            answer_result = archive_services.project_intake_record_answer(
+                archive_root,
+                answer_path,
+                session_id="roundtrip-project-20260614",
+                approve=True,
+                reviewed_by="person:test",
+            )
+            self.assertTrue(answer_result["ok"], answer_result)
+            project_receipt = answer_result["receipt_path"]
             status = archive_services.project_intake_status(archive_root, project_receipt, dry_run=True)
             self.assertTrue(status["ok"], status)
             self.assertEqual(status["checklist_coverage"]["answered_count"], 1)
+            self.assertFalse(status["privacy_guards"]["decision_values_echoed"])
 
             source_plan = archive_services.source_intake_plan(
                 archive_root,

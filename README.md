@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.9 pre-release
+v0.3.10 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -97,6 +97,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Release Readiness Gate](wom-kit/docs/release-readiness-gate.md)
 - [Main Branch Protection Readiness](wom-kit/docs/main-branch-protection-readiness.md)
 - [Public Documentation Map](wom-kit/docs/public-documentation-map.md)
+- [Project Intake Cookbook](wom-kit/docs/project-intake-cookbook.md)
 
 The public project records are intentionally separated into:
 
@@ -213,6 +214,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.10
 v0.3.9
 v0.3.8
 v0.3.7

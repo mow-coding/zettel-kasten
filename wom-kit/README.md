@@ -86,6 +86,7 @@ docs/security-hardening.md
 docs/security-audit-2026-05-21.md
 docs/new-user-flow.md
 docs/project-intake-session.md
+docs/project-intake-cookbook.md
 docs/human-artifact-store-contract.md
 docs/zet-surface-prototypes.md
 docs/notion-source-export-three-store-example.md
