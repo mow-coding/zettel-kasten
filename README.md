@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.28 pre-release
+v0.3.29 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -39,7 +39,7 @@ What exists today:
 - approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
 - approval-gated `.gitignore` repair for missing WOM-kit safe defaults,
 - human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
-- read-only credential reference planning, inventory, external store recommendation, vault onboarding planning, future access broker planning, approval receipt preview, adapter readiness planning, adapter manifest preview, and adapter audit receipt preview for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
+- read-only credential reference planning, inventory, external store recommendation, vault onboarding planning, plaintext migration planning, future access broker planning, approval receipt preview, adapter readiness planning, adapter manifest preview, and adapter audit receipt preview for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
 - read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces,
 - read-only IMAP mailbox source planning for Gmail, Naver, and generic IMAP account refs,
 - documented Notion page snapshot and `store-ref` boundaries for page/block JSON exports,
@@ -108,6 +108,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Credential Ref Inventory And Onboarding](wom-kit/docs/credential-ref-inventory-and-onboarding.md)
 - [Credential Store Recommendations](wom-kit/docs/credential-store-recommendations.md)
 - [Credential Vault Onboarding Plan](wom-kit/docs/credential-vault-onboarding-plan.md)
+- [Credential Plaintext Migration Plan](wom-kit/docs/credential-plaintext-migration-plan.md)
 - [Credential Access Broker Plan](wom-kit/docs/credential-access-broker-plan.md)
 - [Credential Access Approval Plan](wom-kit/docs/credential-access-approval-plan.md)
 - [Credential Adapter Readiness Plan](wom-kit/docs/credential-adapter-readiness-plan.md)
@@ -236,6 +237,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.29
 v0.3.28
 v0.3.27
 v0.3.26

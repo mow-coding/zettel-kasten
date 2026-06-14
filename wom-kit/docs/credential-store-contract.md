@@ -140,6 +140,10 @@ v0.3.28 adds [Credential Vault Onboarding Plan](credential-vault-onboarding-plan
 so WOM can plan human setup for an external vault/keyring without opening it or
 reading any secret value.
 
+v0.3.29 adds [Credential Plaintext Migration Plan](credential-plaintext-migration-plan.md)
+so WOM can plan pathless migration from a human-selected plaintext note without
+reading the note or writing a vault entry.
+
 ## Mail Sources
 
 Mail source access should use refs such as:

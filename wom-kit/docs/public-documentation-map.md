@@ -118,6 +118,7 @@ Onboarding and setup plans:
 - [Credential Ref Inventory And Onboarding](credential-ref-inventory-and-onboarding.md)
 - [Credential Store Recommendations](credential-store-recommendations.md)
 - [Credential Vault Onboarding Plan](credential-vault-onboarding-plan.md)
+- [Credential Plaintext Migration Plan](credential-plaintext-migration-plan.md)
 - [Credential Access Broker Plan](credential-access-broker-plan.md)
 - [Credential Access Approval Plan](credential-access-approval-plan.md)
 - [Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md)

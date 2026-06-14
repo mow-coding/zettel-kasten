@@ -163,3 +163,6 @@ credential-store-recommendation
 
 v0.3.28 plans the human-facing setup layer. It still does not store, read,
 return, migrate, or use the secret value.
+
+v0.3.29 adds a read-only pathless migration planner for old plaintext notes.
+See [Credential Plaintext Migration Plan](credential-plaintext-migration-plan.md).

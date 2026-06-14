@@ -643,6 +643,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("credential_ref_inventory", tool_names)
             self.assertIn("credential_store_recommendation", tool_names)
             self.assertIn("credential_vault_onboarding_plan", tool_names)
+            self.assertIn("credential_plaintext_migration_plan", tool_names)
             self.assertIn("credential_access_broker_plan", tool_names)
             self.assertIn("credential_access_approval_plan", tool_names)
             self.assertIn("credential_adapter_readiness_plan", tool_names)
@@ -2024,6 +2025,108 @@ class McpServerTests(unittest.TestCase):
                             "arguments": {
                                 "archive_root": str(allowed_archive),
                                 "scenario": "personal_local_first",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_credential_plaintext_migration_plan_tool_is_pathless_and_non_mutating(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_plaintext_migration_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "source_label": "plaintext-note-001",
+                                "credential_id": "cred:openai-api",
+                                "target_store_id": "os_keyring",
+                                "credential_kind": "openai_api_key",
+                                "provider": "openai",
+                                "platform": "windows",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                serialized = json.dumps(structured)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "credential_plaintext_migration_plan")
+                self.assertEqual(structured["source"]["source_label"], "plaintext-note-001")
+                self.assertEqual(structured["target"]["selected_store_id"], "os_keyring")
+                self.assertEqual(structured["target"]["adapter_kind"], "windows_credential_manager")
+                self.assertFalse(structured["source"]["source_file_path_echoed"])
+                self.assertFalse(structured["source"]["source_file_read"])
+                self.assertFalse(structured["source"]["secret_detection_run"])
+                self.assertFalse(structured["closed_actions"]["plaintext_file_read"])
+                self.assertFalse(structured["closed_actions"]["secret_value_written"])
+                self.assertFalse(structured["privacy_guards"]["secret_values_echoed"])
+                self.assertNotIn("sk-proj-", serialized)
+                self.assertNotIn("keyring:openai-api-key", serialized)
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_plaintext_migration_plan",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "source_label": "plaintext-note-001",
+                                "credential_id": "cred:openai-api",
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_plaintext_migration_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "source_label": "plaintext-note-001",
+                                "credential_id": "cred:openai-api",
                                 "dry_run": False,
                             },
                         },
