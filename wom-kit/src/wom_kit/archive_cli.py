@@ -33,6 +33,8 @@ Commands:
           Show the next safe human-guided project intake step without writing files.
   project-intake-unpack-queue
           Queue top-level staged items for human-guided unpacking without exposing names.
+  project-intake-unpack-choice
+          Record one human-confirmed unpack choice without exposing names or paths.
   project-intake-next-question
           Return the next human-review question for a project intake session.
   project-intake-decision-template
@@ -1908,6 +1910,68 @@ def print_project_intake_unpack_queue_result(result: dict[str, Any], output_form
         print("Warnings:")
         for warning in result["warnings"]:
             print(f"- {warning}")
+
+
+def command_project_intake_unpack_choice(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.project_intake_unpack_choice(
+            Path(args.archive_root),
+            Path(args.choice),
+            receipt=args.receipt,
+            staged_folder=Path(args.staged_folder),
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_project_intake_unpack_choice_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def print_project_intake_unpack_choice_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    mode = "dry-run ready" if result.get("dry_run") else "recorded"
+    if not result.get("ok", True):
+        mode = "blocked"
+    choice = result.get("choice_summary") if isinstance(result.get("choice_summary"), dict) else {}
+    queue = result.get("queue_context") if isinstance(result.get("queue_context"), dict) else {}
+    selected = queue.get("selected_item") if isinstance(queue.get("selected_item"), dict) else {}
+    print(f"Project intake unpack choice {mode}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Session: {result.get('session_id') or '-'}")
+    print(f"Project intake receipt: {result.get('project_intake_receipt') or '-'}")
+    print(f"Selected item ref: {choice.get('item_ref') or '-'}")
+    print(f"Intended action: {choice.get('intended_action') or '-'}")
+    print(f"Selected kind: {selected.get('kind') or '-'}")
+    print(f"Queue digest: {queue.get('queue_sha256') or '-'}")
+    if result.get("receipt_path"):
+        print(f"Receipt: {result['receipt_path']}")
+    else:
+        print(f"Proposed receipt: {result.get('proposed_receipt_path') or '-'}")
+    writes = result.get("files_written") or []
+    if writes:
+        print("Files written:")
+        for path in writes:
+            print(f"- {path}")
+    else:
+        print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
 
 
 def print_prehashed_objet_ledger_result(result: dict[str, Any], output_format: str) -> None:
@@ -6722,6 +6786,20 @@ def build_parser() -> argparse.ArgumentParser:
     project_intake_unpack_queue.add_argument("--dry-run", action="store_true", help="Required; queue without writing files.")
     project_intake_unpack_queue.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     project_intake_unpack_queue.set_defaults(func=command_project_intake_unpack_queue)
+
+    project_intake_unpack_choice = subcommands.add_parser(
+        "project-intake-unpack-choice",
+        help="Record one human-confirmed unpack choice without exposing staged entry names.",
+    )
+    project_intake_unpack_choice.add_argument("archive_root", help="Archive root to update.")
+    project_intake_unpack_choice.add_argument("--choice", required=True, help="Reviewed unpack-choice JSON file.")
+    project_intake_unpack_choice.add_argument("--receipt", required=True, help="Archive-relative project intake decisions receipt.")
+    project_intake_unpack_choice.add_argument("--staged-folder", required=True, help="One staged project folder whose queue contains item_ref.")
+    project_intake_unpack_choice.add_argument("--dry-run", action="store_true", help="Preview validation without writing files.")
+    project_intake_unpack_choice.add_argument("--approve", action="store_true", help="Write the reviewed unpack-choice receipt.")
+    project_intake_unpack_choice.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
+    project_intake_unpack_choice.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    project_intake_unpack_choice.set_defaults(func=command_project_intake_unpack_choice)
 
     project_intake_decisions = subcommands.add_parser(
         "project-intake-decisions",

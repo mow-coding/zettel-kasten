@@ -642,6 +642,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("prehashed_objet_ledger_preview", tool_names)
             self.assertIn("project_intake_plan", tool_names)
             self.assertIn("project_intake_unpack_queue", tool_names)
+            self.assertIn("project_intake_unpack_choice", tool_names)
             self.assertIn("project_intake_staging_guide", tool_names)
             self.assertIn("project_intake_session_guide", tool_names)
             self.assertIn("project_intake_status", tool_names)

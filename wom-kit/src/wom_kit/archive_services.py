@@ -392,10 +392,14 @@ RESTORE_DRILL_RECEIPTS_DIR = "receipts/recovery"
 PROJECT_INTAKE_DECISION_SCHEMA = "wom-kit/project-intake-decisions/v0.1"
 PROJECT_INTAKE_DECISION_RECEIPT_SCHEMA = "wom-kit/project-intake-decisions-receipt/v0.1"
 PROJECT_INTAKE_ANSWER_SCHEMA = "wom-kit/project-intake-answer/v0.1"
+PROJECT_INTAKE_UNPACK_CHOICE_SCHEMA = "wom-kit/project-intake-unpack-choice/v0.1"
+PROJECT_INTAKE_UNPACK_CHOICE_RECEIPT_SCHEMA = "wom-kit/project-intake-unpack-choice-receipt/v0.1"
 PROJECT_INTAKE_DECISION_RECEIPTS_DIR = "receipts/project-intake"
+PROJECT_INTAKE_UNPACK_CHOICE_RECEIPTS_DIR = "receipts/project-intake-unpack"
 PROJECT_INTAKE_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 PROJECT_INTAKE_ACTOR_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,199}$")
 PROJECT_INTAKE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
+PROJECT_INTAKE_ITEM_REF_RE = re.compile(r"^item-\d{4}$")
 PROJECT_INTAKE_MAX_STRING_LENGTH = 4000
 MINT_RECEIPTS_DIR = "receipts/mint"
 MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
@@ -17255,6 +17259,11 @@ def project_intake_unpack_queue(
         "command_guidance": {
             "review_project_questions_first": "archive project-intake-next-question <archive-root> --staged-folder <staged-folder> --dry-run --format json",
             "record_project_answer_with": "archive project-intake-record-answer <archive-root> --answer <answer-json> --dry-run, then --approve after human review",
+            "record_unpack_choice_with": (
+                "archive project-intake-unpack-choice <archive-root> --choice <choice-json> "
+                "--receipt <project-intake-receipt> --staged-folder <staged-folder> "
+                "--dry-run, then --approve after human review"
+            ),
             "after_human_selects_file": (
                 "archive project-intake-item-plan <archive-root> --receipt <project-intake-receipt> "
                 "--local-path <human-selected-local-path> --dry-run --format json"
@@ -17407,6 +17416,7 @@ def project_intake_unpack_queue_safe_actions(state: str) -> list[str]:
     actions = [
         "Ask the human to choose exactly one item_ref and one intended action.",
         "Have the human map the item_ref to the local staged item; this queue does not expose names or paths.",
+        "Record the reviewed item_ref and intended action with project-intake-unpack-choice before per-item source-intake planning.",
         "Run project-intake-item-plan only after a reviewed project-intake receipt exists and one local file is selected.",
         "Keep capture, drafting, minting, provider sync, and cleanup as separate approval gates.",
     ]
@@ -17415,6 +17425,317 @@ def project_intake_unpack_queue_safe_actions(state: str) -> list[str]:
     elif state == "needs_more_project_review":
         actions.insert(0, "Finish the remaining project-intake questions before using the queue for source-intake.")
     return actions
+
+
+def project_intake_unpack_choice_allowed_actions() -> list[str]:
+    return [
+        "inspect_next",
+        "preserve_as_objet",
+        "draft_from",
+        "defer",
+        "mark_noise_after_review",
+        "split_session",
+        "stop",
+    ]
+
+
+def load_project_intake_unpack_choice_payload(choice_path: Path | str) -> dict[str, Any]:
+    path = Path(choice_path).expanduser().resolve()
+    if not path.is_file():
+        raise ArchiveServiceError("Project intake unpack choice file does not exist or is not a file.")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ArchiveServiceError("Project intake unpack choice file must contain one JSON object.") from exc
+    except OSError as exc:
+        raise ArchiveServiceError("Project intake unpack choice file could not be read.") from exc
+    if not isinstance(data, dict):
+        raise ArchiveServiceError("Project intake unpack choice file must contain one JSON object.")
+    return data
+
+
+def normalize_project_intake_unpack_choice_payload(payload: dict[str, Any], blockers: list[str]) -> dict[str, Any]:
+    schema = payload.get("schema")
+    if schema != PROJECT_INTAKE_UNPACK_CHOICE_SCHEMA:
+        blockers.append(f"Project intake unpack choice schema must be {PROJECT_INTAKE_UNPACK_CHOICE_SCHEMA}.")
+
+    allowed_keys = {"schema", "item_ref", "intended_action", "human_confirmed", "notes"}
+    unknown_keys = sorted(set(str(key) for key in payload) - allowed_keys)
+    if unknown_keys:
+        blockers.append("Project intake unpack choice contains unsupported field(s).")
+
+    item_ref = payload.get("item_ref")
+    if not isinstance(item_ref, str) or not PROJECT_INTAKE_ITEM_REF_RE.match(item_ref) or item_ref == "item-0000":
+        blockers.append("Project intake unpack choice item_ref must look like item-0001.")
+        item_ref = "item-0000"
+
+    intended_action = payload.get("intended_action")
+    if not isinstance(intended_action, str) or intended_action not in set(project_intake_unpack_choice_allowed_actions()):
+        blockers.append("Project intake unpack choice intended_action must be one of the allowed unpack actions.")
+        intended_action = "invalid"
+
+    if payload.get("human_confirmed") is not True:
+        blockers.append("Project intake unpack choice requires human_confirmed: true.")
+
+    normalized: dict[str, Any] = {
+        "item_ref": item_ref,
+        "intended_action": intended_action,
+        "human_confirmed": payload.get("human_confirmed") is True,
+    }
+    if "notes" in payload and payload.get("notes") is not None:
+        if not isinstance(payload.get("notes"), str):
+            blockers.append("Project intake unpack choice notes must be a string when provided.")
+        else:
+            normalized["notes"] = validate_project_intake_safe_value(payload.get("notes"), blockers, "$.notes")
+    return normalized
+
+
+def project_intake_unpack_choice_receipt_path(session_id: str, choice_sha256: str) -> str:
+    session_slug = safe_slug(session_id)
+    return (
+        f"{PROJECT_INTAKE_UNPACK_CHOICE_RECEIPTS_DIR}/"
+        f"{session_slug}-{choice_sha256[:16]}.project-intake-unpack-choice.json"
+    )
+
+
+def project_intake_unpack_queue_digest(queue: dict[str, Any]) -> str:
+    items = queue.get("items") if isinstance(queue.get("items"), list) else []
+    digest_items = []
+    for item in items:
+        if isinstance(item, dict):
+            digest_items.append(
+                {
+                    "item_ref": item.get("item_ref"),
+                    "kind": item.get("kind"),
+                    "extension": item.get("extension"),
+                    "size_bucket": item.get("size_bucket"),
+                }
+            )
+    return sha256_json_hex(
+        {
+            "queue_kind": queue.get("queue_kind"),
+            "item_ref_policy": queue.get("item_ref_policy"),
+            "total_item_count": queue.get("total_item_count"),
+            "returned_item_count": queue.get("returned_item_count"),
+            "truncated": queue.get("truncated"),
+            "items": digest_items,
+        }
+    )
+
+
+def project_intake_unpack_choice_safe_actions(blocked: bool, intended_action: str) -> list[str]:
+    if blocked:
+        return [
+            "Fix the choice file, project-intake receipt, staged folder, or approval mode before writing an unpack choice receipt.",
+            "Do not run source-intake, capture, drafting, minting, provider sync, or cleanup from a blocked unpack choice.",
+        ]
+    if intended_action in {"preserve_as_objet", "draft_from", "inspect_next"}:
+        return [
+            "Use this choice receipt only as human-reviewed context for the next local item discussion.",
+            "Have the human map the chosen item_ref to one actual local staged item before project-intake-item-plan.",
+            "Run project-intake-item-plan and source-intake as separate dry-runs; this receipt does not authorize capture or drafting.",
+            "Keep capture, drafting, minting, provider sync, and cleanup as later approval gates.",
+        ]
+    if intended_action == "split_session":
+        return [
+            "Start a separate project-intake session for the selected box before source-intake or capture.",
+            "Do not treat this choice receipt as permission to move, copy, upload, or delete staged files.",
+        ]
+    return [
+        "Record the human choice as session context only.",
+        "Do not run source-intake, capture, drafting, minting, provider sync, or cleanup for a deferred, noise, or stopped item.",
+    ]
+
+
+def project_intake_unpack_choice(
+    archive_root: Path | str,
+    choice_path: Path | str,
+    *,
+    receipt: str,
+    staged_folder: Path | str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+
+    reviewer = safe_project_intake_actor_id(reviewed_by)
+    if approve and reviewer is None:
+        blockers.append("Project intake unpack choice approval requires --reviewed-by with a safe actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    status = project_intake_status(root, receipt, dry_run=True)
+    blockers.extend(str(item) for item in status.get("blockers", []))
+    warnings.extend(str(item) for item in status.get("warnings", []))
+    coverage = status.get("checklist_coverage") if isinstance(status.get("checklist_coverage"), dict) else {}
+    if not coverage.get("complete"):
+        blockers.append("Project intake checklist must be complete before recording an unpack choice.")
+
+    queue_result = project_intake_unpack_queue(root, staged_folder, receipt=receipt, max_items=100, dry_run=True)
+    blockers.extend(str(item) for item in queue_result.get("blockers", []))
+    warnings.extend(str(item) for item in queue_result.get("warnings", []))
+    queue = queue_result.get("unpack_queue") if isinstance(queue_result.get("unpack_queue"), dict) else {}
+
+    choice_payload = load_project_intake_unpack_choice_payload(choice_path)
+    normalized_choice = normalize_project_intake_unpack_choice_payload(choice_payload, blockers)
+    item_ref = normalized_choice["item_ref"]
+    intended_action = normalized_choice["intended_action"]
+
+    queue_items = [item for item in queue.get("items", []) if isinstance(item, dict)]
+    selected_item = next((item for item in queue_items if item.get("item_ref") == item_ref), None)
+    if selected_item is None:
+        blockers.append("Project intake unpack choice item_ref must match the current unpack queue.")
+
+    selected_item_context = None
+    if selected_item is not None:
+        selected_item_context = {
+            "item_ref": selected_item.get("item_ref"),
+            "kind": selected_item.get("kind"),
+            "extension": selected_item.get("extension"),
+            "size_bucket": selected_item.get("size_bucket"),
+            "entry_name_included": False,
+            "local_path_included": False,
+            "file_body_read": False,
+            "content_hash_calculated": False,
+        }
+
+    queue_sha256 = project_intake_unpack_queue_digest(queue)
+    session_id = status.get("session_id") if isinstance(status.get("session_id"), str) else "invalid-session"
+    project_receipt_path = status.get("receipt_path") if isinstance(status.get("receipt_path"), str) else receipt
+    choice_record = {
+        "schema": PROJECT_INTAKE_UNPACK_CHOICE_SCHEMA,
+        "session_id": session_id,
+        "project_intake_receipt": project_receipt_path,
+        "queue_sha256": queue_sha256,
+        "choice": normalized_choice,
+        "selected_item_context": selected_item_context,
+    }
+    choice_sha256 = sha256_json_hex(choice_record)
+    receipt_relative = project_intake_unpack_choice_receipt_path(session_id, choice_sha256)
+    receipt_path = archive_internal_path(root, receipt_relative)
+    if approve and receipt_path.exists():
+        blockers.append("Project intake unpack choice receipt already exists for this session and choice hash.")
+
+    privacy_guards = {
+        "choice_file_read": True,
+        "project_intake_receipt_read": True,
+        "staged_folder_scanned_top_level_only": True,
+        "entry_names_included": False,
+        "local_paths_included": False,
+        "choice_notes_echoed": False,
+        "decision_values_included": False,
+        "file_bodies_read": False,
+        "content_hashes_calculated": False,
+        "provider_calls": False,
+        "writes": approve and not blockers,
+    }
+    closed_actions = {
+        "source_intake_run": False,
+        "objet_capture_run": False,
+        "derived_text_capture_run": False,
+        "draft_created": False,
+        "zet_minted": False,
+        "staged_cleanup_performed": False,
+        "provider_api_called": False,
+        "automatic_classification": False,
+    }
+    result: dict[str, Any] = {
+        "ok": not blockers,
+        "dry_run": dry_run,
+        "action": "archive_project_intake_unpack_choice",
+        "archive_root": str(root),
+        "archive_id": archive_id,
+        "session_id": session_id,
+        "project_intake_receipt": project_receipt_path,
+        "reviewed_by": reviewer,
+        "choice_sha256": choice_sha256,
+        "choice_summary": {
+            "item_ref": item_ref,
+            "intended_action": intended_action,
+            "human_confirmed": normalized_choice.get("human_confirmed") is True,
+            "notes_recorded": "notes" in normalized_choice,
+            "notes_included_in_output": False,
+        },
+        "queue_context": {
+            "queue_sha256": queue_sha256,
+            "total_item_count": queue.get("total_item_count"),
+            "returned_item_count": queue.get("returned_item_count"),
+            "truncated": queue.get("truncated"),
+            "selected_item": selected_item_context,
+            "entry_names_included": False,
+            "local_paths_included": False,
+        },
+        "privacy_guards": privacy_guards,
+        "closed_actions": closed_actions,
+        "proposed_receipt_path": receipt_relative,
+        "would_change": [receipt_relative] if dry_run and not blockers else [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "next_safe_actions": project_intake_unpack_choice_safe_actions(bool(blockers), intended_action),
+    }
+    if blockers or dry_run:
+        return result
+
+    assert reviewer is not None
+    reviewed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    receipt_doc = {
+        "schema": PROJECT_INTAKE_UNPACK_CHOICE_RECEIPT_SCHEMA,
+        "receipt_id": f"receipt:project-intake-unpack-choice:{safe_slug(session_id)}:{choice_sha256[:16]}",
+        "receipt_kind": "project_intake_unpack_choice",
+        "receipt_path": receipt_relative,
+        "action": "archive_project_intake_unpack_choice",
+        "dry_run": False,
+        "timestamp": reviewed_at,
+        "archive_id": archive_id,
+        "session_id": session_id,
+        "project_intake_receipt": project_receipt_path,
+        "project_intake_decision_sha256": status.get("decision_sha256"),
+        "reviewed_by": reviewer,
+        "reviewed_at": reviewed_at,
+        "choice_sha256": choice_sha256,
+        "source_choice_schema": PROJECT_INTAKE_UNPACK_CHOICE_SCHEMA,
+        "choice": normalized_choice,
+        "queue_context": result["queue_context"],
+        "privacy_guards": privacy_guards,
+        "closed_actions": closed_actions,
+        "files_written": [receipt_relative],
+        "blockers": [],
+        "warnings": unique_preserve_order(warnings),
+    }
+
+    created_dirs = missing_parent_dirs_before_write(root, [receipt_path])
+    created_paths: list[Path] = []
+    try:
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_new_file(receipt_path, receipt_doc)
+        created_paths.append(receipt_path)
+    except Exception:
+        for path in created_paths:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        cleanup_created_empty_dirs(root, created_dirs)
+        raise
+
+    result.update(
+        {
+            "ok": True,
+            "dry_run": False,
+            "receipt_path": receipt_relative,
+            "files_written": [receipt_relative],
+            "would_change": [],
+            "privacy_guards": privacy_guards,
+        }
+    )
+    return result
 
 
 def project_intake_staging_convention(archive_root: Path, staged_folder: Path) -> dict[str, Any]:
@@ -17635,6 +17956,15 @@ def project_intake_session_guide(
                 "archive project-intake-decision-template <archive-root> "
                 "--receipt <project-intake-receipt> --dry-run --format json"
             ),
+            "queue_unpack_items_with": (
+                "archive project-intake-unpack-queue <archive-root> "
+                "--staged-folder <staged-folder> --receipt <project-intake-receipt> --dry-run --format json"
+            ),
+            "record_unpack_choice_with": (
+                "archive project-intake-unpack-choice <archive-root> --choice <choice-json> "
+                "--receipt <project-intake-receipt> --staged-folder <staged-folder> "
+                "--dry-run, then --approve after human review"
+            ),
             "plan_one_selected_item_with": (
                 "archive project-intake-item-plan <archive-root> "
                 "--receipt <project-intake-receipt> --local-path <human-selected-file> --dry-run --format json"
@@ -17691,7 +18021,9 @@ def project_intake_session_guide_safe_actions(state: str) -> list[str]:
         ]
     if state == "ready_for_item_selection":
         return [
-            "Ask the human to select exactly one file for the next item plan.",
+            "Ask the human to select exactly one opaque item_ref and intended action from project-intake-unpack-queue.",
+            "Record the reviewed selection with project-intake-unpack-choice before per-item planning.",
+            "Have the human map that item_ref to exactly one local file for the next item plan.",
             "Run project-intake-item-plan for that selected file before source-intake recording or capture selection.",
             "Keep capture, drafting, minting, provider sync, and cleanup as separate approval gates.",
         ]

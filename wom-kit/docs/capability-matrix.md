@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.14 project intake unpack queue checkpoint
+Status: v0.3.15 project intake unpack choice checkpoint
 Date: 2026-06-14
-Version: v0.3.14, release candidate
+Version: v0.3.15, release candidate
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -52,6 +52,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Project intake session guide | `read-only preview` | none | CLI `archive project-intake-session-guide --dry-run` and MCP `project_intake_session_guide` show the next safe human-guided step from a project slug, staged folder, or existing decisions receipt. They write nothing, echo no decision values, read no file bodies, capture nothing, draft nothing, mint nothing, upload nothing, clean nothing, and authorize no automatic execution. |
 | Project intake planner | `read-only preview` | none | CLI `archive project-intake-plan --dry-run` and MCP `project_intake_plan` plan one staged folder session with top-level counts, human review checklist, suggested classification labels, and a draft decision-record template. It does not include entry names, read bodies, recurse, classify automatically, write, upload, mint, or clean. |
 | Project intake unpack queue | `read-only preview` | none | CLI `archive project-intake-unpack-queue --dry-run` and MCP `project_intake_unpack_queue` queue top-level staged items as opaque `item-0001` refs with kind, safe extension, and size-bucket hints. They expose no entry names or local paths, read no bodies, hash nothing, classify nothing automatically, write nothing, and only help the AI ask which item the human wants to unpack next. |
+| Project intake unpack choice | `approval-gated write` | dry-run validates first; CLI approve writes one local unpack-choice receipt | CLI `archive project-intake-unpack-choice --dry-run|--approve` and MCP `project_intake_unpack_choice` record one human-confirmed opaque queue choice after a completed project-intake receipt. They validate the current queue and write `receipts/project-intake-unpack/*.project-intake-unpack-choice.json` on approval without exposing staged entry names, local paths, file bodies, or choice notes in command output. They do not run source intake, capture objets, derive text, create drafts, mint zets, call providers, or clean staged folders. |
 | Project intake next question | `read-only preview` | none | CLI `archive project-intake-next-question --dry-run` and MCP `project_intake_next_question` return exactly the next human-review question for a new staged folder or continuing receipt. They do not echo decision values, write decisions, capture, draft, mint, upload, or clean. |
 | Project intake decision template | `read-only preview` | none | CLI `archive project-intake-decision-template --dry-run` and MCP `project_intake_decision_template` build a JSON template for the next human-reviewed answer. They leave `answer` empty, do not echo previous answer values, and do not approve or write receipts. |
 | Project intake answer recording | `approval-gated write` | dry-run validates first; CLI approve writes one local decisions receipt | `archive project-intake-record-answer` appends exactly one human-reviewed answer file to a new session or existing decisions receipt. It does not echo current or previous answer values, run source intake, capture objets, derive text, create drafts, mint zets, call providers, or clean staged folders. |

@@ -6,6 +6,18 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.15 - 2026-06-14
+
+- Added approval-gated CLI `archive project-intake-unpack-choice
+  --dry-run|--approve` and MCP `project_intake_unpack_choice` so a human can
+  record one reviewed `item-0001` style unpack choice after the queue step.
+- The new choice receipt stores the opaque item ref, intended action, completed
+  project-intake receipt link, and public-safe queue digest without exposing
+  staged entry names, local paths, file bodies, or choice notes in command
+  output.
+- Kept source-intake, capture, drafting, minting, provider sync, and cleanup as
+  separate gates after the human choice receipt.
+
 ## v0.3.14 - 2026-06-14
 
 - Added read-only CLI `archive project-intake-unpack-queue --dry-run` and MCP

@@ -133,6 +133,28 @@ not expose staged entry names, read bodies, hash content, classify
 automatically, capture, draft, mint, upload, or clean. The human still chooses
 the actual local item before `project-intake-item-plan`.
 
+Record that one reviewed choice before planning the local file:
+
+```powershell
+@'
+{
+  "schema": "wom-kit/project-intake-unpack-choice/v0.1",
+  "item_ref": "item-0001",
+  "intended_action": "preserve_as_objet",
+  "human_confirmed": true,
+  "notes": "The human chose the first opaque rehearsal item."
+}
+'@ | Set-Content -Path "$tmp\unpack-choice.json" -Encoding utf8
+
+archive project-intake-unpack-choice "$tmp\archive" --choice "$tmp\unpack-choice.json" --receipt $projectReceipt --staged-folder "$tmp\archive\staging\incoming" --dry-run --format json
+archive project-intake-unpack-choice "$tmp\archive" --choice "$tmp\unpack-choice.json" --receipt $projectReceipt --staged-folder "$tmp\archive\staging\incoming" --approve --reviewed-by person:test --format json
+$unpackChoiceReceipt = "<receipt_path from the approved unpack-choice command>"
+```
+
+The unpack-choice receipt records the human's opaque `item_ref` and intended
+action. Command output still does not echo choice notes, staged entry names, or
+local paths, and it does not run source-intake or capture.
+
 ```powershell
 archive project-intake-item-plan "$tmp\archive" --receipt $projectReceipt --local-path "$tmp\archive\staging\incoming\project-note.txt" --dry-run --format json
 archive source-intake "$tmp\archive" --dry-run --local-path "$tmp\archive\staging\incoming\project-note.txt" --project-intake-receipt $projectReceipt --redact-local-paths --format json

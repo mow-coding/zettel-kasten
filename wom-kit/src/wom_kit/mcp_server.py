@@ -280,6 +280,23 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "project_intake_unpack_choice",
+        "description": "Record one human-confirmed unpack choice. Approval-gated; validates a choice file, completed project-intake receipt, and current opaque queue without exposing staged entry names or local paths.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "choice": {"type": "string", "description": "Path to one reviewed unpack-choice JSON file."},
+                "receipt": {"type": "string", "description": "Archive-relative project-intake decisions receipt."},
+                "staged_folder": {"type": "string", "description": "Path to one staged project folder."},
+                "dry_run": {"type": "boolean", "default": True},
+                "approve": {"type": "boolean", "default": False},
+                "reviewed_by": {"type": "string", "description": "Reviewer id required when approve is true."},
+            },
+            "required": ["archive_root", "choice", "receipt", "staged_folder"],
+        },
+    },
+    {
         "name": "project_intake_staging_guide",
         "description": "Show where to stage one project folder before a project intake session. Read-only; never creates folders, moves files, uploads, captures, drafts, mints, or cleans.",
         "inputSchema": {
@@ -1330,6 +1347,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_project_intake_plan(arguments)
     if name == "project_intake_unpack_queue":
         return tool_project_intake_unpack_queue(arguments)
+    if name == "project_intake_unpack_choice":
+        return tool_project_intake_unpack_choice(arguments)
     if name == "project_intake_staging_guide":
         return tool_project_intake_staging_guide(arguments)
     if name == "project_intake_session_guide":
@@ -1671,6 +1690,26 @@ def tool_project_intake_unpack_queue(arguments: dict[str, Any]) -> dict[str, Any
     )
     state = str(result.get("state") or ("passed" if result["ok"] else "blocked"))
     return tool_success_result(f"project_intake_unpack_queue: {state}.", result)
+
+
+def tool_project_intake_unpack_choice(arguments: dict[str, Any]) -> dict[str, Any]:
+    dry_run = bool(arguments.get("dry_run", True))
+    approve = bool(arguments.get("approve", False))
+    archive_root = require_path_arg(arguments, "archive_root")
+    choice = require_path_arg(arguments, "choice")
+    staged_folder = require_path_arg(arguments, "staged_folder")
+    result = call_service(
+        archive_services.project_intake_unpack_choice,
+        archive_root,
+        choice,
+        receipt=require_string_arg(arguments, "receipt"),
+        staged_folder=staged_folder,
+        dry_run=dry_run,
+        approve=approve,
+        reviewed_by=optional_string_arg(arguments, "reviewed_by"),
+    )
+    state = "recorded" if result.get("ok") and not result.get("dry_run") else ("ready" if result.get("ok") else "blocked")
+    return tool_success_result(f"project_intake_unpack_choice: {state}.", result)
 
 
 def tool_project_intake_staging_guide(arguments: dict[str, Any]) -> dict[str, Any]:

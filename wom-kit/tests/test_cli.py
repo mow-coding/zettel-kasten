@@ -12468,6 +12468,194 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("requires --dry-run", output)
 
+    def test_project_intake_unpack_choice_dry_run_records_choice_without_leaks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            staged = Path(tmp) / "archive-objets" / "intake" / "alpha-project"
+            staged.mkdir(parents=True)
+            selected = staged / "private-file-name.md"
+            selected.write_text("SUPER_SECRET_BODY", encoding="utf-8")
+            decisions_path = Path(tmp) / "decisions.json"
+            decisions_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/project-intake-decisions/v0.1",
+                        "session_id": "alpha-project-20260613",
+                        "decisions": [
+                            {"checklist_id": checklist_id, "answer": f"reviewed-{index}"}
+                            for index, checklist_id in enumerate(archive_services.project_intake_checklist_order(), start=1)
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            approve_code, approve_output = self.run_cli(
+                [
+                    "project-intake-decisions",
+                    str(archive_root),
+                    "--decisions",
+                    str(decisions_path),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            receipt_path = json.loads(approve_output)["receipt_path"]
+            choice_path = Path(tmp) / "choice.json"
+            choice_note = "Human reviewed the first opaque queue item."
+            choice_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/project-intake-unpack-choice/v0.1",
+                        "item_ref": "item-0001",
+                        "intended_action": "preserve_as_objet",
+                        "human_confirmed": True,
+                        "notes": choice_note,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            before_archive = self.snapshot_archive_files(archive_root)
+            before_staged = sorted(path.relative_to(staged).as_posix() for path in staged.rglob("*"))
+
+            code, output = self.run_cli(
+                [
+                    "project-intake-unpack-choice",
+                    str(archive_root),
+                    "--choice",
+                    str(choice_path),
+                    "--receipt",
+                    receipt_path,
+                    "--staged-folder",
+                    str(staged),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before_archive)
+            self.assertEqual(sorted(path.relative_to(staged).as_posix() for path in staged.rglob("*")), before_staged)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["action"], "archive_project_intake_unpack_choice")
+            self.assertEqual(result["choice_summary"]["item_ref"], "item-0001")
+            self.assertEqual(result["choice_summary"]["intended_action"], "preserve_as_objet")
+            self.assertEqual(result["queue_context"]["selected_item"]["kind"], "file")
+            self.assertEqual(result["queue_context"]["selected_item"]["extension"], ".md")
+            self.assertTrue(result["proposed_receipt_path"].startswith("receipts/project-intake-unpack/"))
+            self.assertEqual(result["would_change"], [result["proposed_receipt_path"]])
+            self.assertTrue(result["privacy_guards"]["choice_file_read"])
+            self.assertTrue(result["privacy_guards"]["project_intake_receipt_read"])
+            self.assertFalse(result["privacy_guards"]["entry_names_included"])
+            self.assertFalse(result["privacy_guards"]["local_paths_included"])
+            self.assertFalse(result["privacy_guards"]["choice_notes_echoed"])
+            self.assertFalse(result["privacy_guards"]["file_bodies_read"])
+            self.assertFalse(result["privacy_guards"]["content_hashes_calculated"])
+            self.assertFalse(result["closed_actions"]["source_intake_run"])
+            self.assertFalse(result["closed_actions"]["objet_capture_run"])
+            self.assertFalse(result["closed_actions"]["draft_created"])
+            self.assertNotIn("private-file-name.md", output)
+            self.assertNotIn("SUPER_SECRET_BODY", output)
+            self.assertNotIn(str(staged), output)
+            self.assertNotIn(choice_note, output)
+
+    def test_project_intake_unpack_choice_approve_writes_receipt_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            staged = Path(tmp) / "archive-objets" / "intake" / "alpha-project"
+            staged.mkdir(parents=True)
+            (staged / "private-file-name.md").write_text("SUPER_SECRET_BODY", encoding="utf-8")
+            decisions_path = Path(tmp) / "decisions.json"
+            decisions_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/project-intake-decisions/v0.1",
+                        "session_id": "alpha-project-20260613",
+                        "decisions": [
+                            {"checklist_id": checklist_id, "answer": f"reviewed-{index}"}
+                            for index, checklist_id in enumerate(archive_services.project_intake_checklist_order(), start=1)
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            approve_code, approve_output = self.run_cli(
+                [
+                    "project-intake-decisions",
+                    str(archive_root),
+                    "--decisions",
+                    str(decisions_path),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            receipt_path = json.loads(approve_output)["receipt_path"]
+            choice_path = Path(tmp) / "choice.json"
+            choice_note = "Preserve this reviewed opaque queue item."
+            choice_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/project-intake-unpack-choice/v0.1",
+                        "item_ref": "item-0001",
+                        "intended_action": "preserve_as_objet",
+                        "human_confirmed": True,
+                        "notes": choice_note,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "project-intake-unpack-choice",
+                    str(archive_root),
+                    "--choice",
+                    str(choice_path),
+                    "--receipt",
+                    receipt_path,
+                    "--staged-folder",
+                    str(staged),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["files_written"], [result["receipt_path"]])
+            written = archive_root / result["receipt_path"]
+            self.assertTrue(written.is_file())
+            receipt = json.loads(written.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["schema"], "wom-kit/project-intake-unpack-choice-receipt/v0.1")
+            self.assertEqual(receipt["receipt_kind"], "project_intake_unpack_choice")
+            self.assertEqual(receipt["choice"]["item_ref"], "item-0001")
+            self.assertEqual(receipt["choice"]["intended_action"], "preserve_as_objet")
+            self.assertEqual(receipt["choice"]["notes"], choice_note)
+            self.assertFalse(receipt["queue_context"]["entry_names_included"])
+            self.assertFalse(receipt["queue_context"]["local_paths_included"])
+            self.assertFalse(receipt["closed_actions"]["source_intake_run"])
+            self.assertFalse(receipt["closed_actions"]["objet_capture_run"])
+            self.assertNotIn("private-file-name.md", output)
+            self.assertNotIn("SUPER_SECRET_BODY", output)
+            self.assertNotIn(str(staged), output)
+            self.assertNotIn(choice_note, output)
+
     def test_project_intake_plan_requires_dry_run(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         staged = archive_root
