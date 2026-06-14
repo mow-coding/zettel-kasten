@@ -646,6 +646,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("credential_access_approval_plan", tool_names)
             self.assertIn("credential_adapter_readiness_plan", tool_names)
             self.assertIn("credential_adapter_manifest_plan", tool_names)
+            self.assertIn("credential_adapter_audit_plan", tool_names)
             self.assertIn("zet_surface_prototype_plan", tool_names)
             self.assertIn("prehashed_objet_ledger_preview", tool_names)
             self.assertIn("resolve_objet_ref", tool_names)
@@ -2329,6 +2330,118 @@ class McpServerTests(unittest.TestCase):
                                 "archive_root": str(allowed_archive),
                                 "adapter_id": "win-keyring",
                                 "adapter_kind": "windows_credential_manager",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_credential_adapter_audit_plan_tool_previews_receipt_without_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_adapter_audit_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "adapter_id": "win-keyring",
+                                "adapter_kind": "windows_credential_manager",
+                                "operation": "resolve_for_approved_action",
+                                "credential_id": "cred:openai-api",
+                                "credential_kind": "openai_api_key",
+                                "provider": "openai",
+                                "action_kind": "model_api_call",
+                                "result_status": "not_run",
+                                "platform": "windows",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                serialized = json.dumps(structured)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "credential_adapter_audit_plan")
+                self.assertTrue(structured["proposed_receipt_path"].startswith("receipts/credentials/adapter-audits/"))
+                receipt = structured["receipt_preview"]
+                self.assertEqual(receipt["receipt_kind"], "credential_adapter_audit")
+                self.assertEqual(receipt["result_status"], "not_run")
+                self.assertFalse(receipt["secret_material"]["secret_value_included"])
+                self.assertFalse(receipt["secret_material"]["credential_ref_value_included"])
+                self.assertFalse(structured["closed_actions"]["audit_receipt_written"])
+                self.assertFalse(structured["closed_actions"]["live_adapter_executed"])
+                self.assertFalse(structured["closed_actions"]["secret_value_read"])
+                self.assertNotIn("keyring:openai-api-key", serialized)
+                self.assertNotIn("sk-proj-", serialized)
+                self.assertFalse((allowed_archive / structured["proposed_receipt_path"]).exists())
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_adapter_audit_plan",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "adapter_id": "win-keyring",
+                                "adapter_kind": "windows_credential_manager",
+                                "operation": "resolve_for_approved_action",
+                                "credential_id": "cred:openai-api",
+                                "action_kind": "model_api_call",
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_adapter_audit_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "adapter_id": "win-keyring",
+                                "adapter_kind": "windows_credential_manager",
+                                "operation": "resolve_for_approved_action",
+                                "credential_id": "cred:openai-api",
+                                "action_kind": "model_api_call",
                                 "dry_run": False,
                             },
                         },

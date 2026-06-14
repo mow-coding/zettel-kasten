@@ -37,6 +37,8 @@ Commands:
           Preview whether a future credential adapter contract is safe to implement.
   credential-adapter-manifest-plan
           Preview a non-secret future credential adapter manifest without writing it.
+  credential-adapter-audit-plan
+          Preview a non-secret future credential adapter audit receipt without writing it.
   source-intake
           Plan safe source/objet refs before draft creation.
   source-intake-record
@@ -2249,6 +2251,53 @@ def command_credential_adapter_manifest_plan(args: argparse.Namespace) -> int:
         print(f"Adapter: {manifest.get('adapter_id') or '-'} ({manifest.get('adapter_kind') or '-'})")
         print(f"Manifest: {result.get('proposed_manifest_path') or '-'}")
         print(f"Schema valid: {schema.get('ok')}")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_credential_adapter_audit_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("credential-adapter-audit-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.credential_adapter_audit_plan(
+            Path(args.archive_root),
+            adapter_id=args.adapter_id,
+            adapter_kind=args.adapter_kind,
+            operation=args.operation,
+            credential_id=args.credential_id,
+            credential_kind=args.credential_kind,
+            provider=args.provider,
+            action_kind=args.action_kind,
+            result_status=args.result_status,
+            store_kind=args.store_kind,
+            consumer=args.consumer,
+            platform=args.platform,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        receipt = result.get("receipt_preview") if isinstance(result.get("receipt_preview"), dict) else {}
+        adapter = receipt.get("adapter") if isinstance(receipt.get("adapter"), dict) else {}
+        print(f"Credential adapter audit plan {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Adapter: {adapter.get('adapter_id') or '-'} ({adapter.get('adapter_kind') or '-'})")
+        print(f"Receipt: {result.get('proposed_receipt_path') or '-'}")
+        print(f"Result status: {receipt.get('result_status') or '-'}")
         print("Writes: none")
         if result.get("blockers"):
             print("Blockers:")
@@ -6613,6 +6662,64 @@ def build_parser() -> argparse.ArgumentParser:
     credential_adapter_manifest_plan.add_argument("--dry-run", action="store_true", help="Required; read-only manifest preview.")
     credential_adapter_manifest_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_adapter_manifest_plan.set_defaults(func=command_credential_adapter_manifest_plan)
+
+    credential_adapter_audit_plan = subcommands.add_parser(
+        "credential-adapter-audit-plan",
+        aliases=["credential-adapter-audit", "secret-adapter-audit-plan"],
+        help="Preview a non-secret future credential adapter audit receipt without writing it.",
+    )
+    credential_adapter_audit_plan.add_argument("archive_root", help="Archive root to inspect.")
+    credential_adapter_audit_plan.add_argument("--adapter-id", required=True, help="Safe adapter id path segment, e.g. win-keyring.")
+    credential_adapter_audit_plan.add_argument(
+        "--adapter-kind",
+        choices=sorted(archive_services.CREDENTIAL_ADAPTER_KINDS),
+        required=True,
+        help="Future local adapter class to audit.",
+    )
+    credential_adapter_audit_plan.add_argument(
+        "--operation",
+        choices=sorted(archive_services.CREDENTIAL_ADAPTER_OPERATIONS),
+        required=True,
+        help="Future adapter operation to audit.",
+    )
+    credential_adapter_audit_plan.add_argument("--credential-id", required=True, help="Safe credential label, e.g. cred:openai-api.")
+    credential_adapter_audit_plan.add_argument(
+        "--credential-kind",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+        help="Credential kind; defaults from action kind.",
+    )
+    credential_adapter_audit_plan.add_argument(
+        "--provider",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+        help="Optional provider context.",
+    )
+    credential_adapter_audit_plan.add_argument(
+        "--action-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_ACTIONS),
+        required=True,
+        help="Future action that would need a credential capability.",
+    )
+    credential_adapter_audit_plan.add_argument(
+        "--result-status",
+        choices=sorted(archive_services.CREDENTIAL_ADAPTER_AUDIT_RESULT_STATUSES),
+        default="not_run",
+        help="Non-secret future adapter outcome status to preview.",
+    )
+    credential_adapter_audit_plan.add_argument(
+        "--store-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+        help="External store class; defaults from adapter kind.",
+    )
+    credential_adapter_audit_plan.add_argument("--consumer", help="Safe label for the future local adapter.")
+    credential_adapter_audit_plan.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Host platform for OS keyring wording.",
+    )
+    credential_adapter_audit_plan.add_argument("--dry-run", action="store_true", help="Required; read-only audit receipt preview.")
+    credential_adapter_audit_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    credential_adapter_audit_plan.set_defaults(func=command_credential_adapter_audit_plan)
 
     source_intake = subcommands.add_parser(
         "source-intake",

@@ -2150,6 +2150,84 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(any("adapter_id must be" in blocker for blocker in bad_result["blockers"]))
             self.assertNotIn("C:/Users/example/secret", bad_output)
 
+    def test_credential_adapter_audit_plan_previews_receipt_without_execution_or_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "credential-adapter-audit-plan",
+                    str(archive_root),
+                    "--adapter-id",
+                    "win-keyring",
+                    "--adapter-kind",
+                    "windows_credential_manager",
+                    "--operation",
+                    "resolve_for_approved_action",
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--credential-kind",
+                    "openai_api_key",
+                    "--provider",
+                    "openai",
+                    "--action-kind",
+                    "model_api_call",
+                    "--result-status",
+                    "not_run",
+                    "--platform",
+                    "windows",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "credential_adapter_audit_plan")
+            self.assertTrue(result["proposed_receipt_path"].startswith("receipts/credentials/adapter-audits/"))
+            receipt = result["receipt_preview"]
+            self.assertEqual(receipt["receipt_kind"], "credential_adapter_audit")
+            self.assertEqual(receipt["result_status"], "not_run")
+            self.assertEqual(receipt["adapter"]["adapter_id"], "win-keyring")
+            self.assertEqual(receipt["adapter"]["store_kind"], "os_keyring")
+            self.assertEqual(receipt["operation"]["credential_id"], "cred:openai-api")
+            self.assertFalse(receipt["approval"]["approval_receipt_ref_included"])
+            self.assertFalse(receipt["manifest"]["manifest_ref_included"])
+            self.assertFalse(receipt["secret_material"]["secret_value_included"])
+            self.assertFalse(receipt["secret_material"]["credential_ref_value_included"])
+            self.assertFalse(result["closed_actions"]["audit_receipt_written"])
+            self.assertFalse(result["closed_actions"]["live_adapter_executed"])
+            self.assertFalse(result["closed_actions"]["secret_value_read"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertEqual(result["would_change"], [])
+            self.assertFalse((archive_root / result["proposed_receipt_path"]).exists())
+            self.assertNotIn("keyring:openai-api-key", output)
+            self.assertNotIn("sk-proj-", output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "credential-adapter-audit-plan",
+                    str(archive_root),
+                    "--adapter-id",
+                    "win-keyring",
+                    "--adapter-kind",
+                    "windows_credential_manager",
+                    "--operation",
+                    "resolve_for_approved_action",
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--action-kind",
+                    "model_api_call",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_zet_surface_prototype_four_surface_plans_are_read_only(self) -> None:
         expected = {
             "wordpress": ("projection_surface", "remote_rest_api", "site_ref"),

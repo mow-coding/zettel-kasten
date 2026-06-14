@@ -149,3 +149,7 @@ What non-secret adapter declaration would be safe to review later?
 ```
 
 Both stay dry-run only in v0.3.26.
+
+Next layer:
+
+- [Credential Adapter Audit Plan](credential-adapter-audit-plan.md)
