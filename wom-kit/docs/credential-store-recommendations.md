@@ -117,6 +117,9 @@ human selects the file in a local UI
 v0.3.22 does not implement that migration or broker. It only defines the
 recommendation and compatibility boundary.
 
+v0.3.23 adds a read-only broker request planner. See
+[Credential Access Broker Plan](credential-access-broker-plan.md).
+
 ## WOM Compatibility Rules
 
 Use:

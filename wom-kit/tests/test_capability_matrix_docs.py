@@ -12,6 +12,7 @@ PROJECT_INTAKE_COOKBOOK_PATH = KIT_ROOT / "docs" / "project-intake-cookbook.md"
 CREDENTIAL_STORE_CONTRACT_PATH = KIT_ROOT / "docs" / "credential-store-contract.md"
 CREDENTIAL_REF_INVENTORY_PATH = KIT_ROOT / "docs" / "credential-ref-inventory-and-onboarding.md"
 CREDENTIAL_STORE_RECOMMENDATIONS_PATH = KIT_ROOT / "docs" / "credential-store-recommendations.md"
+CREDENTIAL_ACCESS_BROKER_PATH = KIT_ROOT / "docs" / "credential-access-broker-plan.md"
 HUMAN_ARTIFACT_STORE_CONTRACT_PATH = KIT_ROOT / "docs" / "human-artifact-store-contract.md"
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
 IMAP_MAILBOX_SOURCE_PATH = KIT_ROOT / "docs" / "imap-mailbox-source.md"
@@ -53,6 +54,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Credential ref plan",
             "Credential ref inventory",
             "Credential store recommendation",
+            "Credential access broker plan",
             "IMAP mailbox source plan",
             "Notion page snapshot model",
             "Objet ref resolver",
@@ -275,7 +277,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, resolver_text)
         for phrase in (
-            "Status: v0.3.22 credential store recommendation checkpoint",
+            "Status: v0.3.23 credential access broker planning checkpoint",
             "Objet ref resolver",
             "archive resolve-objet-ref --object-id sha256:<hex> --dry-run",
             "MCP `resolve_objet_ref`",
@@ -284,7 +286,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.22 pre-release",
+            "v0.3.23 pre-release",
             "[Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)",
             "read-only objet reference resolution",
         ):
@@ -379,7 +381,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.22 pre-release",
+            "v0.3.23 pre-release",
             "[IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)",
             "read-only IMAP mailbox source planning",
         ):
@@ -428,7 +430,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.22 pre-release",
+            "v0.3.23 pre-release",
             "[Credential Store Contract](wom-kit/docs/credential-store-contract.md)",
             "read-only credential reference planning",
         ):
@@ -485,7 +487,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.22 pre-release",
+            "v0.3.23 pre-release",
             "[Credential Ref Inventory And Onboarding](wom-kit/docs/credential-ref-inventory-and-onboarding.md)",
             "read-only credential reference planning, inventory",
         ):
@@ -540,7 +542,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.22 pre-release",
+            "v0.3.23 pre-release",
             "[Credential Store Recommendations](wom-kit/docs/credential-store-recommendations.md)",
             "external store recommendation",
         ):
@@ -548,6 +550,63 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, readme_text)
         self.assertIn("[Credential Store Recommendations](credential-store-recommendations.md)", public_map_text)
         self.assertIn("[Credential Store Recommendations](credential-store-recommendations.md)", public_map_ko_text)
+
+    def test_credential_access_broker_doc_and_matrix_keep_secret_values_out_of_ai(self) -> None:
+        broker_text = CREDENTIAL_ACCESS_BROKER_PATH.read_text(encoding="utf-8")
+        contract_text = CREDENTIAL_STORE_CONTRACT_PATH.read_text(encoding="utf-8")
+        recommendation_text = CREDENTIAL_STORE_RECOMMENDATIONS_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.23 read-only broker planning baseline",
+            "credential-access-broker-plan",
+            "credential-broker-plan",
+            "secret-access-broker-plan",
+            "credential_access_broker_plan",
+            "The exact `credential_ref` value is not echoed back.",
+            "mail_source_read",
+            "model_api_call",
+            "ocr_api_call",
+            "object_storage_request",
+            "cli_token_auth",
+            "browser_login_fill",
+            "plaintext_secret_migration",
+            "human chooses a plaintext note through a local UI",
+            "read a plaintext secret note",
+            "It is a broker contract planner, not a broker adapter.",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, broker_text)
+        for phrase in (
+            "Credential Access Broker Plan",
+            "future approved secret use",
+            "without implementing secret retrieval",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, contract_text)
+        self.assertIn("[Credential Access Broker Plan](credential-access-broker-plan.md)", recommendation_text)
+        for phrase in (
+            "Credential access broker plan",
+            "archive credential-access-broker-plan --action-kind <action> --dry-run",
+            "MCP `credential_access_broker_plan`",
+            "plaintext secret migration planning",
+            "read no plaintext secret note",
+            "echo no exact credential ref values",
+            "return no secret values to AI",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.23 pre-release",
+            "[Credential Access Broker Plan](wom-kit/docs/credential-access-broker-plan.md)",
+            "future access broker planning",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        self.assertIn("[Credential Access Broker Plan](credential-access-broker-plan.md)", public_map_text)
+        self.assertIn("[Credential Access Broker Plan](credential-access-broker-plan.md)", public_map_ko_text)
 
     def test_v02x_freeze_boundary_doc_covers_public_proof_and_non_goals(self) -> None:
         text = FREEZE_DOC_PATH.read_text(encoding="utf-8")
