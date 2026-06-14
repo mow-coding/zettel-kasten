@@ -8,6 +8,11 @@ zet projection may later appear. Posting, syncing, or writing to one of these
 surfaces is not minting, not ZET transport, and not a replacement for WOM
 receipts, manifests, or source maps.
 
+Before an app-specific adapter writes anything, it must satisfy the shared
+[Human Artifact Store Contract](human-artifact-store-contract.md). The prototype
+command only describes a possible surface; the contract describes what a future
+adapter must prove before it can safely write.
+
 ## Current Command
 
 ```bash
@@ -37,6 +42,20 @@ attachments, creates projection receipts, mints zets, or runs ZET transport.
 | Joplin | local Data API | working note store | note in a notebook |
 | Notion | remote workspace API | human artifact store | page or database item |
 | Obsidian | local vault or URI | working note store | vault-relative Markdown file or URI |
+
+## Shared Contract Questions
+
+For each surface, a future adapter must name:
+
+- the surface role for this archive action,
+- the stable external ref format that can be stored safely,
+- the allowed template or projection shape,
+- whether the adapter can list, read, write, update, retire, delete, or attach
+  binaries,
+- how the human-facing artifact links back to WOM object ids, zets, receipts,
+  manifests, or source maps,
+- which provider credentials, local paths, account data, and private URLs stay
+  outside public records.
 
 ## Source Notes
 
