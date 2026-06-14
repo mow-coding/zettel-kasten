@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.8 human-guided intake and ZET surface prototype checkpoint
+Status: v0.3.9 project-intake answer recording checkpoint
 Date: 2026-06-14
-Version: v0.3.8, release candidate
+Version: v0.3.9, release candidate
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -53,6 +53,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Project intake planner | `read-only preview` | none | CLI `archive project-intake-plan --dry-run` and MCP `project_intake_plan` plan one staged folder session with top-level counts, human review checklist, suggested classification labels, and a draft decision-record template. It does not include entry names, read bodies, recurse, classify automatically, write, upload, mint, or clean. |
 | Project intake next question | `read-only preview` | none | CLI `archive project-intake-next-question --dry-run` and MCP `project_intake_next_question` return exactly the next human-review question for a new staged folder or continuing receipt. They do not echo decision values, write decisions, capture, draft, mint, upload, or clean. |
 | Project intake decision template | `read-only preview` | none | CLI `archive project-intake-decision-template --dry-run` and MCP `project_intake_decision_template` build a JSON template for the next human-reviewed answer. They leave `answer` empty, do not echo previous answer values, and do not approve or write receipts. |
+| Project intake answer recording | `approval-gated write` | dry-run validates first; CLI approve writes one local decisions receipt | `archive project-intake-record-answer` appends exactly one human-reviewed answer file to a new session or existing decisions receipt. It does not echo current or previous answer values, run source intake, capture objets, derive text, create drafts, mint zets, call providers, or clean staged folders. |
 | Project intake decision recording | `approval-gated write` | dry-run validates first; CLI approve writes one local receipt | `archive project-intake-decisions` records human-reviewed checklist decisions under `receipts/project-intake/`. It does not run source intake, capture objets, derive text, create drafts, mint zets, call providers, or clean staged folders. |
 | Project intake decision status | `read-only preview` | none | CLI `archive project-intake-status --dry-run` and MCP `project_intake_status` check one approved decisions receipt for integrity, coverage, next safe actions, and missing-question `next_review_prompts`. It does not echo answer values or authorize automatic execution. |
 | Project intake item plan | `read-only preview` | none | CLI `archive project-intake-item-plan --dry-run` and MCP `project_intake_item_plan` preview the next `source-intake --dry-run` route for one human-selected file. They redact local paths, do not read file bodies or calculate content hashes, and do not generate capture selection manifests. |
