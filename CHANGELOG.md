@@ -6,6 +6,8 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.8 - 2026-06-14
+
 - Added read-only CLI `archive project-intake-staging-guide --dry-run` and MCP
   `project_intake_staging_guide` to show the recommended local objet-store
   intake path for one project slug without creating folders, moving files,
