@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.19 pre-release
+v0.3.20 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -39,6 +39,7 @@ What exists today:
 - approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
 - approval-gated `.gitignore` repair for missing WOM-kit safe defaults,
 - human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
+- read-only credential reference planning for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
 - read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces,
 - read-only IMAP mailbox source planning for Gmail, Naver, and generic IMAP account refs,
 - documented Notion page snapshot and `store-ref` boundaries for page/block JSON exports,
@@ -52,6 +53,7 @@ For a status-by-capability view, see the [WOM-kit Capability Matrix](wom-kit/doc
 What does not exist yet:
 
 - production-grade installation and platform support,
+- real OS keyring read/write adapters, secret retrieval, OAuth flows, OpenAI API calls, or paid OCR API calls,
 - live provider integrations or provider API sync,
 - live IMAP login, mailbox header scans, message capture, attachment capture, or email-derived text extraction,
 - production `ZET` transport, sharing service, feed update, or mirroring delivery,
@@ -102,6 +104,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Main Branch Protection Readiness](wom-kit/docs/main-branch-protection-readiness.md)
 - [Public Documentation Map](wom-kit/docs/public-documentation-map.md)
 - [Project Intake Cookbook](wom-kit/docs/project-intake-cookbook.md)
+- [Credential Store Contract](wom-kit/docs/credential-store-contract.md)
 - [Human Artifact Store Contract](wom-kit/docs/human-artifact-store-contract.md)
 - [IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)
 - [Notion Page Snapshot Model](wom-kit/docs/notion-page-snapshot-model.md)
@@ -225,6 +228,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.20
 v0.3.19
 v0.3.18
 v0.3.17

@@ -9,6 +9,7 @@ REPO_ROOT = KIT_ROOT.parent
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 FREEZE_DOC_PATH = KIT_ROOT / "docs" / "v02x-freeze-v03-entry-boundary.md"
 PROJECT_INTAKE_COOKBOOK_PATH = KIT_ROOT / "docs" / "project-intake-cookbook.md"
+CREDENTIAL_STORE_CONTRACT_PATH = KIT_ROOT / "docs" / "credential-store-contract.md"
 HUMAN_ARTIFACT_STORE_CONTRACT_PATH = KIT_ROOT / "docs" / "human-artifact-store-contract.md"
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
 IMAP_MAILBOX_SOURCE_PATH = KIT_ROOT / "docs" / "imap-mailbox-source.md"
@@ -47,6 +48,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Attestation statement draft preview",
             "Attestation statement draft write",
             "Projection plan",
+            "Credential ref plan",
             "IMAP mailbox source plan",
             "Notion page snapshot model",
             "Objet ref resolver",
@@ -269,7 +271,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, resolver_text)
         for phrase in (
-            "Status: v0.3.19 IMAP mailbox source planning checkpoint",
+            "Status: v0.3.20 credential reference planning checkpoint",
             "Objet ref resolver",
             "archive resolve-objet-ref --object-id sha256:<hex> --dry-run",
             "MCP `resolve_objet_ref`",
@@ -278,7 +280,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.19 pre-release",
+            "v0.3.20 pre-release",
             "[Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)",
             "read-only objet reference resolution",
         ):
@@ -373,13 +375,62 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.19 pre-release",
+            "v0.3.20 pre-release",
             "[IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)",
             "read-only IMAP mailbox source planning",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         self.assertIn("[IMAP Mailbox Source](imap-mailbox-source.md)", public_map_text)
+
+    def test_credential_store_contract_doc_and_matrix_keep_secret_boundaries(self) -> None:
+        contract_text = CREDENTIAL_STORE_CONTRACT_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.20 read-only credential reference baseline",
+            "archive.py credential-ref-plan",
+            "credential_ref_plan",
+            "env:NAME",
+            "keyring:name",
+            "secret:name",
+            "wallet:name",
+            "mail_app_password",
+            "mail_oauth_token",
+            "openai_api_key",
+            "ocr_api_key",
+            "Windows Credential Manager",
+            "does not implement any read/write adapter",
+            "does not store passwords",
+            "read from any keyring",
+            "read environment variables",
+            "call OpenAI",
+            "call OCR providers",
+            "never appears in Git, zets, receipts, logs, source maps",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, contract_text)
+        for phrase in (
+            "Credential ref plan",
+            "archive credential-ref-plan --dry-run",
+            "MCP `credential_ref_plan`",
+            "OpenAI API keys",
+            "OCR API keys",
+            "read no environment variables",
+            "open no OS keyring",
+            "never echo raw keys",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.20 pre-release",
+            "[Credential Store Contract](wom-kit/docs/credential-store-contract.md)",
+            "read-only credential reference planning",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        self.assertIn("[Credential Store Contract](credential-store-contract.md)", public_map_text)
 
     def test_v02x_freeze_boundary_doc_covers_public_proof_and_non_goals(self) -> None:
         text = FREEZE_DOC_PATH.read_text(encoding="utf-8")

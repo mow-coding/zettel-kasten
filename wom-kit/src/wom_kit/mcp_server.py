@@ -247,6 +247,33 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "credential_ref_plan",
+        "description": "Plan a local credential reference for mail, model APIs, OCR APIs, storage, or backups. Dry-run only; never reads, writes, prompts for, or echoes secret values.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "credential_id": {"type": "string"},
+                "credential_ref": {"type": "string"},
+                "credential_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+                    "default": "generic_secret",
+                },
+                "purpose": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_PURPOSES),
+                },
+                "provider": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "credential_id", "credential_ref"],
+        },
+    },
+    {
         "name": "zet_surface_prototype_plan",
         "description": "Plan a user-selected ZET surface prototype for WordPress, Joplin, Notion, or Obsidian. Read-only; never calls providers, requests tokens, writes notes, publishes, syncs, mints, or transports.",
         "inputSchema": {
@@ -1399,6 +1426,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_human_artifact_store_plan(arguments)
     if name == "imap_mailbox_plan":
         return tool_imap_mailbox_plan(arguments)
+    if name == "credential_ref_plan":
+        return tool_credential_ref_plan(arguments)
     if name == "zet_surface_prototype_plan":
         return tool_zet_surface_prototype_plan(arguments)
     if name == "prehashed_objet_ledger_preview":
@@ -1716,6 +1745,24 @@ def tool_imap_mailbox_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"imap_mailbox_plan: {state}.", result)
+
+
+def tool_credential_ref_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("credential_ref_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.credential_ref_plan,
+        archive_root,
+        credential_id=require_string_arg(arguments, "credential_id"),
+        credential_ref=require_string_arg(arguments, "credential_ref"),
+        credential_kind=optional_string_arg(arguments, "credential_kind") or "generic_secret",
+        purpose=optional_string_arg(arguments, "purpose"),
+        provider=optional_string_arg(arguments, "provider"),
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"credential_ref_plan: {state}.", result)
 
 
 def tool_zet_surface_prototype_plan(arguments: dict[str, Any]) -> dict[str, Any]:
