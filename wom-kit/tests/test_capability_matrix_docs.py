@@ -15,6 +15,8 @@ CREDENTIAL_STORE_RECOMMENDATIONS_PATH = KIT_ROOT / "docs" / "credential-store-re
 CREDENTIAL_ACCESS_BROKER_PATH = KIT_ROOT / "docs" / "credential-access-broker-plan.md"
 CREDENTIAL_ACCESS_APPROVAL_PATH = KIT_ROOT / "docs" / "credential-access-approval-plan.md"
 CREDENTIAL_ADAPTER_READINESS_PATH = KIT_ROOT / "docs" / "credential-adapter-readiness-plan.md"
+CREDENTIAL_ADAPTER_MANIFEST_PATH = KIT_ROOT / "docs" / "credential-adapter-manifest-plan.md"
+CREDENTIAL_ADAPTER_MANIFEST_SCHEMA_PATH = KIT_ROOT / "schemas" / "credential-adapter-manifest.schema.json"
 HUMAN_ARTIFACT_STORE_CONTRACT_PATH = KIT_ROOT / "docs" / "human-artifact-store-contract.md"
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
 IMAP_MAILBOX_SOURCE_PATH = KIT_ROOT / "docs" / "imap-mailbox-source.md"
@@ -59,6 +61,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Credential access broker plan",
             "Credential access approval plan",
             "Credential adapter readiness plan",
+            "Credential adapter manifest plan",
             "IMAP mailbox source plan",
             "Notion page snapshot model",
             "Objet ref resolver",
@@ -281,7 +284,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, resolver_text)
         for phrase in (
-            "Status: v0.3.25 credential adapter readiness planning checkpoint",
+            "Status: v0.3.26 credential adapter manifest planning checkpoint",
             "Objet ref resolver",
             "archive resolve-objet-ref --object-id sha256:<hex> --dry-run",
             "MCP `resolve_objet_ref`",
@@ -290,7 +293,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.25 pre-release",
+            "v0.3.26 pre-release",
             "[Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)",
             "read-only objet reference resolution",
         ):
@@ -385,7 +388,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.25 pre-release",
+            "v0.3.26 pre-release",
             "[IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)",
             "read-only IMAP mailbox source planning",
         ):
@@ -434,7 +437,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.25 pre-release",
+            "v0.3.26 pre-release",
             "[Credential Store Contract](wom-kit/docs/credential-store-contract.md)",
             "read-only credential reference planning",
         ):
@@ -491,7 +494,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.25 pre-release",
+            "v0.3.26 pre-release",
             "[Credential Ref Inventory And Onboarding](wom-kit/docs/credential-ref-inventory-and-onboarding.md)",
             "read-only credential reference planning, inventory",
         ):
@@ -546,7 +549,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.25 pre-release",
+            "v0.3.26 pre-release",
             "[Credential Store Recommendations](wom-kit/docs/credential-store-recommendations.md)",
             "external store recommendation",
         ):
@@ -603,7 +606,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.25 pre-release",
+            "v0.3.26 pre-release",
             "[Credential Access Broker Plan](wom-kit/docs/credential-access-broker-plan.md)",
             "future access broker planning",
         ):
@@ -656,7 +659,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.25 pre-release",
+            "v0.3.26 pre-release",
             "[Credential Access Approval Plan](wom-kit/docs/credential-access-approval-plan.md)",
             "approval receipt preview",
         ):
@@ -710,7 +713,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.25 pre-release",
+            "v0.3.26 pre-release",
             "[Credential Adapter Readiness Plan](wom-kit/docs/credential-adapter-readiness-plan.md)",
             "adapter readiness planning",
         ):
@@ -718,6 +721,60 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, readme_text)
         self.assertIn("[Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md)", public_map_text)
         self.assertIn("[Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md)", public_map_ko_text)
+
+    def test_credential_adapter_manifest_doc_schema_and_matrix_are_non_secret_preview(self) -> None:
+        manifest_text = CREDENTIAL_ADAPTER_MANIFEST_PATH.read_text(encoding="utf-8")
+        readiness_text = CREDENTIAL_ADAPTER_READINESS_PATH.read_text(encoding="utf-8")
+        contract_text = CREDENTIAL_STORE_CONTRACT_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        schema_text = CREDENTIAL_ADAPTER_MANIFEST_SCHEMA_PATH.read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.26 read-only adapter manifest preview baseline",
+            "credential-adapter-manifest-plan",
+            "credential-adapter-manifest",
+            "secret-adapter-manifest-plan",
+            "credential_adapter_manifest_plan",
+            "credential-adapter-manifest.schema.json",
+            "config/credential-adapters/<adapter-id>.credential-adapter.json",
+            "must not contain",
+            "does not write adapter manifests",
+            "It is a manifest preview and schema baseline",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, manifest_text)
+        for phrase in (
+            "wom-kit/credential-adapter-manifest/v0.1",
+            "credential_adapter_manifest",
+            "adapter_kind",
+            "supported_operations",
+            "privacy_contract",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, schema_text)
+        self.assertIn("[Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md)", readiness_text)
+        self.assertIn("[Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md)", contract_text)
+        for phrase in (
+            "Credential adapter manifest plan",
+            "archive credential-adapter-manifest-plan --adapter-id <id> --adapter-kind <adapter> --dry-run",
+            "MCP `credential_adapter_manifest_plan`",
+            "credential-adapter-manifest.schema.json",
+            "write no adapter manifests",
+            "include no secret values",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.26 pre-release",
+            "[Credential Adapter Manifest Plan](wom-kit/docs/credential-adapter-manifest-plan.md)",
+            "adapter manifest preview",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        self.assertIn("[Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md)", public_map_text)
+        self.assertIn("[Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md)", public_map_ko_text)
 
     def test_v02x_freeze_boundary_doc_covers_public_proof_and_non_goals(self) -> None:
         text = FREEZE_DOC_PATH.read_text(encoding="utf-8")

@@ -2079,6 +2079,77 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(any("credential_ref must be" in blocker for blocker in bad_result["blockers"]))
             self.assertNotIn(raw_secret, bad_output)
 
+    def test_credential_adapter_manifest_plan_previews_schema_valid_manifest_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "credential-adapter-manifest-plan",
+                    str(archive_root),
+                    "--adapter-id",
+                    "win-keyring",
+                    "--adapter-kind",
+                    "windows_credential_manager",
+                    "--operation",
+                    "resolve_for_approved_action",
+                    "--operation",
+                    "list_metadata_only",
+                    "--platform",
+                    "windows",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "credential_adapter_manifest_plan")
+            self.assertEqual(result["proposed_manifest_path"], "config/credential-adapters/win-keyring.credential-adapter.json")
+            manifest = result["manifest_preview"]
+            self.assertEqual(manifest["schema"], archive_services.CREDENTIAL_ADAPTER_MANIFEST_SCHEMA)
+            self.assertEqual(manifest["manifest_kind"], "credential_adapter_manifest")
+            self.assertEqual(manifest["adapter_id"], "win-keyring")
+            self.assertEqual(manifest["adapter_kind"], "windows_credential_manager")
+            self.assertEqual(manifest["store_kind"], "os_keyring")
+            self.assertEqual(manifest["expected_ref_prefixes"], ["keyring:"])
+            self.assertEqual(manifest["supported_operations"], ["resolve_for_approved_action", "list_metadata_only"])
+            self.assertTrue(manifest["requires"]["approval_receipt_before_use"])
+            self.assertFalse(manifest["privacy_contract"]["secret_values_in_manifest"])
+            self.assertFalse(manifest["privacy_contract"]["exact_credential_refs_in_manifest"])
+            self.assertFalse(manifest["closed_actions"]["adapter_manifest_written"])
+            self.assertFalse(result["closed_actions"]["os_keyring_opened"])
+            self.assertFalse(result["closed_actions"]["secret_value_read"])
+            self.assertFalse(result["current_capability"]["adapter_manifest_write_implemented"])
+            self.assertTrue(result["schema_validation"]["ok"])
+            self.assertEqual(archive_cli.validate_schema(manifest, "credential-adapter-manifest.schema.json"), [])
+            self.assertEqual(result["would_change"], [])
+            self.assertFalse((archive_root / result["proposed_manifest_path"]).exists())
+            self.assertNotIn("keyring:openai-api-key", output)
+            self.assertNotIn("sk-proj-", output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            bad_code, bad_output = self.run_cli(
+                [
+                    "credential-adapter-manifest-plan",
+                    str(archive_root),
+                    "--adapter-id",
+                    "C:/Users/example/secret",
+                    "--adapter-kind",
+                    "windows_credential_manager",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            bad_result = json.loads(bad_output)
+            self.assertEqual(bad_code, 1, bad_output)
+            self.assertFalse(bad_result["ok"])
+            self.assertTrue(any("adapter_id must be" in blocker for blocker in bad_result["blockers"]))
+            self.assertNotIn("C:/Users/example/secret", bad_output)
+
     def test_zet_surface_prototype_four_surface_plans_are_read_only(self) -> None:
         expected = {
             "wordpress": ("projection_surface", "remote_rest_api", "site_ref"),

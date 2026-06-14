@@ -431,6 +431,40 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "credential_adapter_manifest_plan",
+        "description": "Preview a non-secret future credential adapter manifest without writing it. Read-only; never opens keyrings, vaults, browser stores, files, or environment variables.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "adapter_id": {"type": "string"},
+                "adapter_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ADAPTER_KINDS),
+                },
+                "operations": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": sorted(archive_services.CREDENTIAL_ADAPTER_OPERATIONS),
+                    },
+                },
+                "store_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+                },
+                "consumer": {"type": "string"},
+                "platform": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+                    "default": "windows",
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "adapter_id", "adapter_kind"],
+        },
+    },
+    {
         "name": "zet_surface_prototype_plan",
         "description": "Plan a user-selected ZET surface prototype for WordPress, Joplin, Notion, or Obsidian. Read-only; never calls providers, requests tokens, writes notes, publishes, syncs, mints, or transports.",
         "inputSchema": {
@@ -1595,6 +1629,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_credential_access_approval_plan(arguments)
     if name == "credential_adapter_readiness_plan":
         return tool_credential_adapter_readiness_plan(arguments)
+    if name == "credential_adapter_manifest_plan":
+        return tool_credential_adapter_manifest_plan(arguments)
     if name == "zet_surface_prototype_plan":
         return tool_zet_surface_prototype_plan(arguments)
     if name == "prehashed_objet_ledger_preview":
@@ -2038,6 +2074,32 @@ def tool_credential_adapter_readiness_plan(arguments: dict[str, Any]) -> dict[st
     adapter = result.get("adapter") if isinstance(result.get("adapter"), dict) else {}
     return tool_success_result(
         f"credential_adapter_readiness_plan: {state}, adapter={adapter.get('adapter_kind') or '-'}.",
+        result,
+    )
+
+
+def tool_credential_adapter_manifest_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("credential_adapter_manifest_plan is read-only and requires dry-run.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    operations = arguments.get("operations")
+    if operations is not None and not isinstance(operations, list):
+        raise ToolError("operations must be an array when provided.")
+    result = call_service(
+        archive_services.credential_adapter_manifest_plan,
+        archive_root,
+        adapter_id=require_string_arg(arguments, "adapter_id"),
+        adapter_kind=require_string_arg(arguments, "adapter_kind"),
+        operations=[str(item) for item in operations] if isinstance(operations, list) else None,
+        store_kind=optional_string_arg(arguments, "store_kind"),
+        consumer=optional_string_arg(arguments, "consumer"),
+        platform=optional_string_arg(arguments, "platform") or "windows",
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    manifest = result.get("manifest_preview") if isinstance(result.get("manifest_preview"), dict) else {}
+    return tool_success_result(
+        f"credential_adapter_manifest_plan: {state}, adapter={manifest.get('adapter_id') or '-'}.",
         result,
     )
 
