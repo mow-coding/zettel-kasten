@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.16 - 2026-06-14
+
+- Added `wom-kit/docs/notion-page-snapshot-model.md` to define Notion
+  `recordMap` / `blocks` JSON as provider page snapshot source objets, separate
+  from extracted derived text and human-authored zets.
+- Clarified `store_ref` semantics for prehashed external objet ledgers:
+  `object_id` identifies the bytes, `store_kind` names the storage family, and
+  `store_ref` is only a reviewed safe external-store label, not a raw path,
+  URL, token, or proof of byte availability.
+- Linked the model from the Notion three-store example, source objet storage
+  policy, text provenance hierarchy, README, public documentation map, and
+  capability matrix without adding Notion API calls, provider sync, extraction
+  helpers, page-snapshot schemas, or byte materialization adapters.
+
 ## v0.3.15 - 2026-06-14
 
 - Added approval-gated CLI `archive project-intake-unpack-choice
