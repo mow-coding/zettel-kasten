@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.11 prehashed multi-ledger checkpoint
+Status: v0.3.12 project-intake bulk bridge checkpoint
 Date: 2026-06-14
-Version: v0.3.11, release candidate
+Version: v0.3.12, release candidate
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 

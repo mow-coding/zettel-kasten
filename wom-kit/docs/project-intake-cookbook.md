@@ -15,6 +15,39 @@ WOM-kit records one receipt.
 The next command uses that receipt only as context.
 ```
 
+## Bulk Raw First, Selective Promotion Later
+
+For thousands or tens of thousands of already-hashed files, do not run this
+cookbook once per raw file. Split the migration into two layers:
+
+```text
+already-hashed raw store
+        |
+        v
+archive prehashed-objet-ledger --ledger ... --approve
+        |
+        v
+raw bytes are represented in the object manifest
+        |
+        v
+human selects a small meaningful subset
+        |
+        v
+this cookbook: ask, record, capture selection, draft, mint
+```
+
+`prehashed-objet-ledger` is the bulk raw-preservation bridge. It can register
+one or more external content-addressed ledgers without reading blob bytes,
+copying objects, drafting, minting, uploading, or cleaning. This cookbook is the
+human-guided promotion spine for the selected subset that should become visible
+drafts or zets.
+
+The example commands below use `archive-objets/` as a recommended local staging
+root for new intake rehearsals. That does not mean an existing external
+content-addressed store must be moved there. Keep raw stores outside the
+Git-tracked archive unless your archive policy says otherwise, and use a safe
+`--store-ref` label when registering an externally verified prehashed ledger.
+
 ## 1. Copy The Fake Archive
 
 Use a temporary folder outside the repository:
@@ -103,16 +136,24 @@ archive source-intake-record "$tmp\archive" --source-intake-plan $sourcePlan --d
 archive source-intake-record "$tmp\archive" --source-intake-plan $sourcePlan --approve --reviewed-by person:test --format json
 ```
 
+Save the approved command's returned `receipt_path` as `$sourceIntakeReceipt`
+for the capture-selection commands:
+
+```powershell
+$sourceIntakeReceipt = "<receipt_path from the approved source-intake-record command>"
+```
+
 ## 6. Capture Only After A Separate Selection
 
 Use `objet-capture-selection` to prepare a reviewed selection manifest for one
 staged file, then pass that selection to `objet-capture`.
 
 ```powershell
-archive objet-capture-selection "$tmp\archive" --staged-path staging/incoming/project-note.txt --source-intake-receipt <source-intake-record-path> --dry-run --format json
-archive objet-capture-selection "$tmp\archive" --staged-path staging/incoming/project-note.txt --source-intake-receipt <source-intake-record-path> --approve --reviewed-by person:test --format json
-archive objet-capture "$tmp\archive" --selection <selection-json> --project-intake-receipt $projectReceipt --dry-run --format json
-archive objet-capture "$tmp\archive" --selection <selection-json> --project-intake-receipt $projectReceipt --approve --reviewed-by person:test --format json
+archive objet-capture-selection "$tmp\archive" --staged-path staging/incoming/project-note.txt --source-intake-receipt $sourceIntakeReceipt --dry-run --format json
+archive objet-capture-selection "$tmp\archive" --staged-path staging/incoming/project-note.txt --source-intake-receipt $sourceIntakeReceipt --approve --reviewed-by person:test --format json
+$selectionJson = "<selection path from the approved objet-capture-selection command>"
+archive objet-capture "$tmp\archive" --selection $selectionJson --project-intake-receipt $projectReceipt --dry-run --format json
+archive objet-capture "$tmp\archive" --selection $selectionJson --project-intake-receipt $projectReceipt --approve --reviewed-by person:test --format json
 ```
 
 Capture still does not draft, mint, upload, or clean.

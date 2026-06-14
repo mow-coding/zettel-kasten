@@ -6,6 +6,19 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.12 - 2026-06-14
+
+- Updated `wom-kit/docs/project-intake-cookbook.md` with a bulk raw-preservation
+  to selective promotion bridge for large already-hashed migrations:
+  `prehashed-objet-ledger` registers raw object manifests first, while the
+  project-intake cookbook remains the human-guided path for selected drafts and
+  zets.
+- Clarified that `archive-objets/` is the recommended local staging root in the
+  cookbook rehearsal, not a requirement to move an existing external
+  content-addressed store.
+- Added copy/paste-friendly `$sourceIntakeReceipt` and `$selectionJson`
+  placeholders for the source-intake-record to capture-selection handoff.
+
 ## v0.3.11 - 2026-06-14
 
 - Extended `archive prehashed-objet-ledger` so CLI `--ledger` may be repeated,
