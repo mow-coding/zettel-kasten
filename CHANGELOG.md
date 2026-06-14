@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.25 - 2026-06-15
+
+- Added read-only CLI `archive credential-adapter-readiness-plan --dry-run`
+  and MCP `credential_adapter_readiness_plan` for previewing the contract a
+  future local credential adapter must satisfy before using a password manager,
+  OS keyring, browser/platform password manager, developer secret manager,
+  environment injection surface, or future wallet.
+- Added CLI aliases `archive credential-adapter-plan --dry-run` and
+  `archive secret-adapter-readiness --dry-run`.
+- Added adapter readiness coverage for resolving a credential for one approved
+  action, writing a new secret, rotating a secret, plaintext secret migration,
+  browser login fill, and metadata-only listing.
+- Kept the release strictly non-mutating: it opens no vaults, keyrings, browser
+  stores, environment variables, plaintext secret files, provider APIs,
+  approval receipt writers, or audit receipt writers, and it never echoes exact
+  credential refs or secret values.
+- Added `wom-kit/docs/credential-adapter-readiness-plan.md` plus CLI/MCP/docs
+  tests for dry-run-only behavior, allowed-root enforcement, no-write behavior,
+  exact-ref non-echo, and raw-secret redaction.
+
 ## v0.3.24 - 2026-06-15
 
 - Added read-only CLI `archive credential-access-approval-plan --dry-run` and

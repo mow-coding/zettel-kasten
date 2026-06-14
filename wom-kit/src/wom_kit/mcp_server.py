@@ -387,6 +387,50 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "credential_adapter_readiness_plan",
+        "description": "Preview a future credential adapter contract without opening keyrings, vaults, browser stores, files, or environment variables. Read-only; never retrieves, writes, or echoes secrets.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "adapter_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ADAPTER_KINDS),
+                },
+                "operation": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ADAPTER_OPERATIONS),
+                },
+                "credential_id": {"type": "string"},
+                "credential_ref": {"type": "string"},
+                "credential_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+                },
+                "provider": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+                },
+                "action_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ACCESS_BROKER_ACTIONS),
+                },
+                "store_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+                },
+                "consumer": {"type": "string"},
+                "platform": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+                    "default": "windows",
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "adapter_kind", "operation", "credential_id", "action_kind"],
+        },
+    },
+    {
         "name": "zet_surface_prototype_plan",
         "description": "Plan a user-selected ZET surface prototype for WordPress, Joplin, Notion, or Obsidian. Read-only; never calls providers, requests tokens, writes notes, publishes, syncs, mints, or transports.",
         "inputSchema": {
@@ -1549,6 +1593,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_credential_access_broker_plan(arguments)
     if name == "credential_access_approval_plan":
         return tool_credential_access_approval_plan(arguments)
+    if name == "credential_adapter_readiness_plan":
+        return tool_credential_adapter_readiness_plan(arguments)
     if name == "zet_surface_prototype_plan":
         return tool_zet_surface_prototype_plan(arguments)
     if name == "prehashed_objet_ledger_preview":
@@ -1965,6 +2011,33 @@ def tool_credential_access_approval_plan(arguments: dict[str, Any]) -> dict[str,
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(
         f"credential_access_approval_plan: {state}, decision={result.get('decision') or '-'}.",
+        result,
+    )
+
+
+def tool_credential_adapter_readiness_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("credential_adapter_readiness_plan is read-only and requires dry-run.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.credential_adapter_readiness_plan,
+        archive_root,
+        adapter_kind=require_string_arg(arguments, "adapter_kind"),
+        operation=require_string_arg(arguments, "operation"),
+        credential_id=require_string_arg(arguments, "credential_id"),
+        credential_ref=optional_string_arg(arguments, "credential_ref"),
+        credential_kind=optional_string_arg(arguments, "credential_kind"),
+        provider=optional_string_arg(arguments, "provider"),
+        action_kind=require_string_arg(arguments, "action_kind"),
+        store_kind=optional_string_arg(arguments, "store_kind"),
+        consumer=optional_string_arg(arguments, "consumer"),
+        platform=optional_string_arg(arguments, "platform") or "windows",
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    adapter = result.get("adapter") if isinstance(result.get("adapter"), dict) else {}
+    return tool_success_result(
+        f"credential_adapter_readiness_plan: {state}, adapter={adapter.get('adapter_kind') or '-'}.",
         result,
     )
 

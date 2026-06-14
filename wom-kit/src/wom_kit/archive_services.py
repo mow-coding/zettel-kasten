@@ -1041,6 +1041,26 @@ CREDENTIAL_ACCESS_BROKER_STORE_KINDS = {
 }
 CREDENTIAL_ACCESS_APPROVAL_DECISIONS = {"needs_review", "approve_once", "deny"}
 CREDENTIAL_ACCESS_APPROVAL_RECEIPTS_DIR = "receipts/credentials/access-approvals"
+CREDENTIAL_ADAPTER_KINDS = {
+    "keepassxc_cli",
+    "bitwarden_cli",
+    "onepassword_cli",
+    "windows_credential_manager",
+    "macos_keychain",
+    "linux_secret_service",
+    "browser_platform_manager",
+    "developer_secret_manager",
+    "environment_injection",
+    "future_wallet",
+}
+CREDENTIAL_ADAPTER_OPERATIONS = {
+    "resolve_for_approved_action",
+    "write_new_secret",
+    "rotate_secret",
+    "plaintext_secret_migration",
+    "browser_login_fill",
+    "list_metadata_only",
+}
 ONBOARDING_PROVIDER_PROFILES = {
     "local_only": {
         "description": "Local archive plus physical/local backup and external secret vault guidance.",
@@ -11744,6 +11764,197 @@ def credential_access_approval_case_id(
     return f"credential-access-{digest}"
 
 
+def credential_adapter_readiness_plan(
+    archive_root: Path | str,
+    *,
+    adapter_kind: str,
+    operation: str,
+    credential_id: str,
+    action_kind: str,
+    store_kind: str | None = None,
+    credential_ref: str | None = None,
+    credential_kind: str | None = None,
+    provider: str | None = None,
+    consumer: str | None = None,
+    platform: str = "windows",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("credential-adapter-readiness-plan is read-only and requires --dry-run.")
+
+    resolved_adapter = (adapter_kind or "").strip().lower().replace("-", "_")
+    if resolved_adapter not in CREDENTIAL_ADAPTER_KINDS:
+        blockers.append("adapter_kind must be one of: " + ", ".join(sorted(CREDENTIAL_ADAPTER_KINDS)) + ".")
+        resolved_adapter = "keepassxc_cli"
+
+    resolved_operation = (operation or "").strip().lower().replace("-", "_")
+    if resolved_operation not in CREDENTIAL_ADAPTER_OPERATIONS:
+        blockers.append("operation must be one of: " + ", ".join(sorted(CREDENTIAL_ADAPTER_OPERATIONS)) + ".")
+        resolved_operation = "resolve_for_approved_action"
+
+    resolved_platform = (platform or "windows").strip().lower().replace("-", "_")
+    if resolved_platform not in CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS:
+        blockers.append("platform must be one of: " + ", ".join(sorted(CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS)) + ".")
+        resolved_platform = "cross_platform"
+
+    adapter_profile = credential_adapter_profile(resolved_adapter, resolved_platform)
+    inferred_store = str(adapter_profile["store_kind"])
+    resolved_store = (store_kind or inferred_store).strip().lower().replace("-", "_")
+    if resolved_store not in CREDENTIAL_ACCESS_BROKER_STORE_KINDS:
+        blockers.append("store_kind must be one of: " + ", ".join(sorted(CREDENTIAL_ACCESS_BROKER_STORE_KINDS)) + ".")
+        resolved_store = inferred_store
+    if resolved_store != inferred_store:
+        warnings.append(f"adapter_kind={resolved_adapter} normally maps to store_kind={inferred_store}.")
+
+    supported_operations = credential_adapter_supported_operations(resolved_adapter)
+    if resolved_operation not in supported_operations:
+        warnings.append(f"adapter_kind={resolved_adapter} does not normally support operation={resolved_operation}.")
+    if resolved_operation == "browser_login_fill" and resolved_store != "browser_platform_manager":
+        warnings.append("browser_login_fill normally requires a browser/platform password manager adapter.")
+    if resolved_operation in {"write_new_secret", "rotate_secret", "plaintext_secret_migration"}:
+        warnings.append("Secret write and migration operations need a future local UI and explicit human confirmation before any adapter can run.")
+
+    approval_preview = credential_access_approval_plan(
+        root,
+        credential_id=credential_id,
+        credential_ref=credential_ref,
+        credential_kind=credential_kind,
+        provider=provider,
+        action_kind=action_kind,
+        decision="needs_review",
+        store_kind=resolved_store,
+        consumer=consumer or adapter_profile["default_consumer"],
+        reviewed_by="human:pending-review",
+        platform=resolved_platform,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in approval_preview.get("blockers") or [])
+    warnings.extend(str(item) for item in approval_preview.get("warnings") or [])
+
+    broker_summary = approval_preview.get("broker_plan_summary") if isinstance(approval_preview.get("broker_plan_summary"), dict) else {}
+    receipt_preview = approval_preview.get("receipt_preview") if isinstance(approval_preview.get("receipt_preview"), dict) else {}
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "credential_adapter_readiness_plan",
+        "archive_id": archive_id,
+        "adapter": {
+            "adapter_kind": resolved_adapter,
+            "adapter_family": adapter_profile["adapter_family"],
+            "store_kind": resolved_store,
+            "expected_ref_prefixes": adapter_profile["expected_ref_prefixes"],
+            "platform": resolved_platform,
+            "default_consumer": adapter_profile["default_consumer"],
+            "secret_values_supported_by_store": True,
+            "secret_values_returned_to_ai": False,
+            "exact_ref_value_echoed": False,
+        },
+        "operation": {
+            "operation": resolved_operation,
+            "action_kind": broker_summary.get("action_kind"),
+            "credential_id": broker_summary.get("credential_id"),
+            "credential_kind": broker_summary.get("credential_kind"),
+            "provider": receipt_preview.get("credential", {}).get("provider") if isinstance(receipt_preview.get("credential"), dict) else None,
+            "ref_store": broker_summary.get("ref_store"),
+            "ref_prefix": broker_summary.get("ref_prefix"),
+        },
+        "readiness": {
+            "status": "planned_not_implemented",
+            "adapter_manifest_required": True,
+            "approval_receipt_required_before_use": True,
+            "policy_gate_required": True,
+            "local_human_ui_required": resolved_operation in {"write_new_secret", "rotate_secret", "plaintext_secret_migration", "browser_login_fill"},
+            "non_echo_contract_required": True,
+            "audit_receipt_required_after_use": True,
+            "supported_future_operations": supported_operations,
+        },
+        "adapter_contract_preview": {
+            "inputs_allowed": [
+                "credential_id",
+                "credential_kind",
+                "provider",
+                "purpose",
+                "ref_store",
+                "ref_prefix",
+                "action_kind",
+                "approval_receipt_ref",
+                "consumer",
+            ],
+            "inputs_forbidden": [
+                "raw password",
+                "raw token",
+                "raw API key",
+                "exact credential_ref value in AI-visible output",
+                "absolute vault path",
+                "browser profile path",
+                "provider account email",
+            ],
+            "outputs_allowed": [
+                "operation status",
+                "provider/service label",
+                "cost class",
+                "source object ids",
+                "derived text receipt refs",
+                "audit receipt ref",
+            ],
+            "outputs_forbidden": [
+                "secret value",
+                "password",
+                "token",
+                "API key",
+                "private URL unless separately approved",
+                "local secret file path",
+            ],
+        },
+        "approval_dependency": {
+            "approval_plan_available": True,
+            "decision_preview": approval_preview.get("decision"),
+            "proposed_receipt_path": approval_preview.get("proposed_receipt_path"),
+            "approval_receipt_written": False,
+        },
+        "implementation_steps": credential_adapter_implementation_steps(resolved_adapter, resolved_operation),
+        "current_capability": {
+            "adapter_readiness_plan_available": True,
+            "adapter_manifest_schema_implemented": False,
+            "live_adapter_implemented": False,
+            "secret_value_read_implemented": False,
+            "secret_value_write_implemented": False,
+            "approval_receipt_write_implemented": False,
+        },
+        "closed_actions": {
+            "secret_prompted_in_chat": False,
+            "secret_value_read": False,
+            "secret_value_written": False,
+            "password_manager_opened": False,
+            "browser_password_store_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "plaintext_file_read": False,
+            "provider_api_called": False,
+            "oauth_started": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "credential_ref_values_echoed": False,
+            "email_addresses_echoed": False,
+            "tokens_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
 def credential_access_action_profile(action_kind: str) -> dict[str, Any]:
     profiles: dict[str, dict[str, Any]] = {
         "mail_source_read": {
@@ -11804,6 +12015,126 @@ def credential_access_store_surfaces(store_kind: str, platform_keyring: str) -> 
     if store_kind == "future_wallet":
         return ["future WOM wallet/local custody surface"]
     return ["KeePassXC", "Bitwarden", "1Password", "other reviewed password manager"]
+
+
+def credential_adapter_profile(adapter_kind: str, platform: str) -> dict[str, Any]:
+    platform_keyring = {
+        "windows": "Windows Credential Manager",
+        "macos": "macOS Keychain",
+        "linux": "Linux Secret Service compatible keyring",
+        "cross_platform": "OS credential manager/keyring",
+    }.get(platform, "OS credential manager/keyring")
+    profiles: dict[str, dict[str, Any]] = {
+        "keepassxc_cli": {
+            "adapter_family": "local_password_manager_cli",
+            "store_kind": "password_manager",
+            "expected_ref_prefixes": ["secret:"],
+            "default_consumer": "wom:adapter:keepassxc",
+            "human_surface": "KeePassXC-style local vault UI/CLI",
+        },
+        "bitwarden_cli": {
+            "adapter_family": "syncing_password_manager_cli",
+            "store_kind": "password_manager",
+            "expected_ref_prefixes": ["secret:"],
+            "default_consumer": "wom:adapter:bitwarden",
+            "human_surface": "Bitwarden-style vault UI/CLI",
+        },
+        "onepassword_cli": {
+            "adapter_family": "syncing_password_manager_cli",
+            "store_kind": "password_manager",
+            "expected_ref_prefixes": ["secret:"],
+            "default_consumer": "wom:adapter:onepass",
+            "human_surface": "1Password-style vault UI/CLI",
+        },
+        "windows_credential_manager": {
+            "adapter_family": "os_keyring",
+            "store_kind": "os_keyring",
+            "expected_ref_prefixes": ["keyring:"],
+            "default_consumer": "wom:adapter:win-keyring",
+            "human_surface": "Windows Credential Manager",
+        },
+        "macos_keychain": {
+            "adapter_family": "os_keyring",
+            "store_kind": "os_keyring",
+            "expected_ref_prefixes": ["keyring:"],
+            "default_consumer": "wom:adapter:macos-keychain",
+            "human_surface": "macOS Keychain",
+        },
+        "linux_secret_service": {
+            "adapter_family": "os_keyring",
+            "store_kind": "os_keyring",
+            "expected_ref_prefixes": ["keyring:"],
+            "default_consumer": "wom:adapter:linux-secret-service",
+            "human_surface": "Linux Secret Service compatible keyring",
+        },
+        "browser_platform_manager": {
+            "adapter_family": "browser_or_platform_password_manager",
+            "store_kind": "browser_platform_manager",
+            "expected_ref_prefixes": ["secret:"],
+            "default_consumer": "wom:adapter:browser-platform",
+            "human_surface": "Browser/platform password manager or passkey surface",
+        },
+        "developer_secret_manager": {
+            "adapter_family": "developer_secret_manager",
+            "store_kind": "developer_secret_manager",
+            "expected_ref_prefixes": ["secret:", "env:"],
+            "default_consumer": "wom:adapter:dev-store",
+            "human_surface": "Developer secret manager",
+        },
+        "environment_injection": {
+            "adapter_family": "runtime_environment",
+            "store_kind": "environment",
+            "expected_ref_prefixes": ["env:"],
+            "default_consumer": "wom:adapter:env",
+            "human_surface": "Process environment supplied outside the archive",
+        },
+        "future_wallet": {
+            "adapter_family": "future_local_custody",
+            "store_kind": "future_wallet",
+            "expected_ref_prefixes": ["wallet:"],
+            "default_consumer": "wom:adapter:future-wallet",
+            "human_surface": "Future WOM wallet/local custody surface",
+        },
+    }
+    profile = dict(profiles.get(adapter_kind) or profiles["keepassxc_cli"])
+    if adapter_kind in {"windows_credential_manager", "macos_keychain", "linux_secret_service"}:
+        profile["platform_keyring"] = platform_keyring
+    return json_safe(profile)
+
+
+def credential_adapter_supported_operations(adapter_kind: str) -> list[str]:
+    if adapter_kind == "browser_platform_manager":
+        return ["browser_login_fill", "plaintext_secret_migration", "list_metadata_only"]
+    if adapter_kind in {"environment_injection", "developer_secret_manager"}:
+        return ["resolve_for_approved_action", "rotate_secret", "list_metadata_only"]
+    if adapter_kind == "future_wallet":
+        return ["list_metadata_only"]
+    return [
+        "resolve_for_approved_action",
+        "write_new_secret",
+        "rotate_secret",
+        "plaintext_secret_migration",
+        "list_metadata_only",
+    ]
+
+
+def credential_adapter_implementation_steps(adapter_kind: str, operation: str) -> list[str]:
+    steps = [
+        "Define a local-only adapter manifest with adapter_kind, store_kind, supported operations, and non-echo guarantees.",
+        "Require a credential access approval receipt before any live secret resolution.",
+        "Resolve only the approved credential ref inside the local adapter boundary.",
+        "Use the secret for the approved action without returning it to AI-visible output.",
+        "Write only non-secret audit metadata after the action.",
+    ]
+    if adapter_kind in {"keepassxc_cli", "bitwarden_cli", "onepassword_cli"}:
+        steps.insert(1, "Keep vault unlock and item selection in the password manager's human-facing surface.")
+    if adapter_kind in {"windows_credential_manager", "macos_keychain", "linux_secret_service"}:
+        steps.insert(1, "Use the OS-mediated keyring prompt/session boundary instead of chat-based secret entry.")
+    if adapter_kind == "browser_platform_manager":
+        steps.insert(1, "Treat browser/platform managers as login/autofill surfaces, not generic API-key vaults.")
+    if operation == "plaintext_secret_migration":
+        steps.append("Show masked migration candidates locally and require human confirmation for each destination ref.")
+    return steps
 
 
 def credential_plaintext_migration_flow() -> list[str]:

@@ -126,6 +126,10 @@ v0.3.24 adds [Credential Access Approval Plan](credential-access-approval-plan.m
 so WOM can preview the human-reviewed approval receipt without writing it or
 granting live access.
 
+v0.3.25 adds [Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md)
+so WOM can preview the future local adapter contract without opening a keyring
+or vault.
+
 ## Mail Sources
 
 Mail source access should use refs such as:

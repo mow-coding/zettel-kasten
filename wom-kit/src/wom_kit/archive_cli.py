@@ -33,6 +33,8 @@ Commands:
           Plan a future approved credential broker request without retrieving secrets.
   credential-access-approval-plan
           Preview a future credential access approval receipt without writing or reading secrets.
+  credential-adapter-readiness-plan
+          Preview whether a future credential adapter contract is safe to implement.
   source-intake
           Plan safe source/objet refs before draft creation.
   source-intake-record
@@ -2158,6 +2160,51 @@ def command_credential_access_approval_plan(args: argparse.Namespace) -> int:
         print(f"Action: {summary.get('action_kind') or '-'}")
         print(f"Credential: {summary.get('credential_id') or '-'}")
         print(f"Receipt: {result.get('proposed_receipt_path') or '-'}")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_credential_adapter_readiness_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("credential-adapter-readiness-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.credential_adapter_readiness_plan(
+            Path(args.archive_root),
+            adapter_kind=args.adapter_kind,
+            operation=args.operation,
+            credential_id=args.credential_id,
+            credential_ref=args.credential_ref,
+            credential_kind=args.credential_kind,
+            provider=args.provider,
+            action_kind=args.action_kind,
+            store_kind=args.store_kind,
+            consumer=args.consumer,
+            platform=args.platform,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        adapter = result.get("adapter") if isinstance(result.get("adapter"), dict) else {}
+        operation = result.get("operation") if isinstance(result.get("operation"), dict) else {}
+        print(f"Credential adapter readiness plan {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Adapter: {adapter.get('adapter_kind') or '-'} ({adapter.get('store_kind') or '-'})")
+        print(f"Operation: {operation.get('operation') or '-'} / {operation.get('action_kind') or '-'}")
         print("Writes: none")
         if result.get("blockers"):
             print("Blockers:")
@@ -6435,6 +6482,58 @@ def build_parser() -> argparse.ArgumentParser:
     credential_access_approval_plan.add_argument("--dry-run", action="store_true", help="Required; read-only approval receipt preview.")
     credential_access_approval_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_access_approval_plan.set_defaults(func=command_credential_access_approval_plan)
+
+    credential_adapter_readiness_plan = subcommands.add_parser(
+        "credential-adapter-readiness-plan",
+        aliases=["credential-adapter-plan", "secret-adapter-readiness"],
+        help="Preview a future credential adapter contract without opening keyrings or vaults.",
+    )
+    credential_adapter_readiness_plan.add_argument("archive_root", help="Archive root to inspect.")
+    credential_adapter_readiness_plan.add_argument(
+        "--adapter-kind",
+        choices=sorted(archive_services.CREDENTIAL_ADAPTER_KINDS),
+        required=True,
+        help="Future local adapter class to evaluate.",
+    )
+    credential_adapter_readiness_plan.add_argument(
+        "--operation",
+        choices=sorted(archive_services.CREDENTIAL_ADAPTER_OPERATIONS),
+        required=True,
+        help="Future adapter operation to evaluate.",
+    )
+    credential_adapter_readiness_plan.add_argument("--credential-id", required=True, help="Safe credential label, e.g. cred:openai-api.")
+    credential_adapter_readiness_plan.add_argument("--credential-ref", help="Optional env/keyring/secret/wallet ref; exact value is not echoed.")
+    credential_adapter_readiness_plan.add_argument(
+        "--credential-kind",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+        help="Credential kind; defaults from action kind.",
+    )
+    credential_adapter_readiness_plan.add_argument(
+        "--provider",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+        help="Optional provider context.",
+    )
+    credential_adapter_readiness_plan.add_argument(
+        "--action-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_ACTIONS),
+        required=True,
+        help="Future action that would need a credential capability.",
+    )
+    credential_adapter_readiness_plan.add_argument(
+        "--store-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+        help="External store class; defaults from adapter kind.",
+    )
+    credential_adapter_readiness_plan.add_argument("--consumer", help="Safe label for the future local adapter.")
+    credential_adapter_readiness_plan.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Host platform for OS keyring wording.",
+    )
+    credential_adapter_readiness_plan.add_argument("--dry-run", action="store_true", help="Required; read-only adapter readiness preview.")
+    credential_adapter_readiness_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    credential_adapter_readiness_plan.set_defaults(func=command_credential_adapter_readiness_plan)
 
     source_intake = subcommands.add_parser(
         "source-intake",
