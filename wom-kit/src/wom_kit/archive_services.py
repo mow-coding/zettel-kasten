@@ -143,6 +143,8 @@ PREHASHED_OBJET_LEDGER_STORE_KINDS = {
     "generic_content_addressed_store",
     "notion_source_export",
 }
+PREHASHED_OBJET_LEDGER_RECEIPT_SCHEMA = "wom-kit/prehashed-objet-ledger-receipt/v0.1"
+PREHASHED_OBJET_LEDGER_RECEIPTS_DIR = "receipts/prehashed-objet-ledger"
 ZET_SHARED_UPDATE_RECORD_EXPECTED_KIND = "zet_shared_update_record_preview"
 ZET_SHARED_UPDATE_REVIEW_INDEX_MAX_LIMIT = 100
 ZET_SHARED_UPDATE_ATTESTATION_REVIEW_DECISIONS = {"attest", "needs_more_review", "reject"}
@@ -10353,12 +10355,45 @@ def prehashed_objet_ledger_preview(
     dry_run: bool = True,
     max_rows: int = 100000,
 ) -> dict[str, Any]:
+    return prehashed_objet_ledger_register(
+        archive_root,
+        ledger,
+        store_kind=store_kind,
+        store_ref=None,
+        sha256_field=sha256_field,
+        size_field=size_field,
+        dry_run=True,
+        approve=False,
+        reviewed_by=None,
+        max_rows=max_rows,
+    )
+
+
+def prehashed_objet_ledger_register(
+    archive_root: Path | str,
+    ledger: Path | str,
+    *,
+    store_kind: str = "generic_content_addressed_store",
+    store_ref: str | None = None,
+    sha256_field: str = "sha256",
+    size_field: str = "bytes",
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    max_rows: int = 100000,
+) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
     warnings: list[str] = []
-    if not dry_run:
-        blockers.append("prehashed-objet-ledger is dry-run only; pass --dry-run.")
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+
+    reviewer = safe_project_intake_actor_id(reviewed_by)
+    if approve and reviewer is None:
+        blockers.append("Prehashed objet ledger registration requires --reviewed-by with a safe actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
 
     normalized_store = str(store_kind or "").strip().lower().replace("-", "_")
     if normalized_store not in PREHASHED_OBJET_LEDGER_STORE_KINDS:
@@ -10366,88 +10401,95 @@ def prehashed_objet_ledger_preview(
             "store_kind must be one of: " + ", ".join(sorted(PREHASHED_OBJET_LEDGER_STORE_KINDS)) + "."
         )
         normalized_store = "generic_content_addressed_store"
+    normalized_store_ref = str(store_ref or "").strip()
+    if normalized_store_ref and not safe_source_intake_ref(normalized_store_ref):
+        blockers.append("store_ref must be a safe label/ref, not a URL, email, token, secret, or path.")
+        normalized_store_ref = ""
+    if approve and not normalized_store_ref:
+        blockers.append("Prehashed objet ledger registration requires --store-ref with a safe external store label.")
     safe_sha_field = prehashed_ledger_safe_field_name(sha256_field, "sha256_field", blockers) or "sha256"
     safe_size_field = prehashed_ledger_safe_field_name(size_field, "size_field", blockers) or "bytes"
-    capped_max_rows = max(1, min(int(max_rows), 100000))
+    try:
+        capped_max_rows = max(1, min(int(max_rows), 100000))
+    except (TypeError, ValueError):
+        blockers.append("max_rows must be an integer.")
+        capped_max_rows = 100000
 
     ledger_path = Path(ledger).expanduser().resolve()
-    if not ledger_path.is_file():
-        blockers.append("ledger must be an existing JSONL file.")
+    ledger_summary = read_prehashed_objet_ledger(
+        ledger_path,
+        sha256_field=safe_sha_field,
+        size_field=safe_size_field,
+        max_rows=capped_max_rows,
+    )
+    blockers.extend(ledger_summary["blockers"])
+    warnings.extend(ledger_summary["warnings"])
 
-    row_count = 0
-    valid_count = 0
-    invalid_count = 0
-    duplicate_count = 0
-    total_bytes = 0
-    seen_sha256: set[str] = set()
-    invalid_reasons: dict[str, int] = {}
-    if ledger_path.is_file() and not blockers:
-        try:
-            with ledger_path.open("r", encoding="utf-8") as handle:
-                for line_number, raw_line in enumerate(handle, start=1):
-                    if line_number > capped_max_rows:
-                        warnings.append("prehashed objet ledger preview stopped at max_rows.")
-                        break
-                    line = raw_line.strip()
-                    if not line:
-                        continue
-                    row_count += 1
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
-                        invalid_count += 1
-                        invalid_reasons["invalid_json"] = invalid_reasons.get("invalid_json", 0) + 1
-                        continue
-                    if not isinstance(row, dict):
-                        invalid_count += 1
-                        invalid_reasons["row_not_object"] = invalid_reasons.get("row_not_object", 0) + 1
-                        continue
-                    row_sha = normalize_prehashed_ledger_sha256(row.get(safe_sha_field))
-                    if row_sha is None:
-                        invalid_count += 1
-                        invalid_reasons["sha256_missing_or_invalid"] = invalid_reasons.get("sha256_missing_or_invalid", 0) + 1
-                        continue
-                    row_size = normalize_prehashed_ledger_size(row.get(safe_size_field))
-                    if row_size is None:
-                        invalid_count += 1
-                        invalid_reasons["size_missing_or_invalid"] = invalid_reasons.get("size_missing_or_invalid", 0) + 1
-                        continue
-                    if row_sha in seen_sha256:
-                        duplicate_count += 1
-                    else:
-                        seen_sha256.add(row_sha)
-                    valid_count += 1
-                    total_bytes += row_size
-        except (OSError, UnicodeError):
-            blockers.append("ledger could not be read safely as UTF-8 JSONL.")
-
-    if row_count == 0 and not blockers:
+    if ledger_summary["row_count"] == 0 and not blockers:
         blockers.append("ledger must contain at least one JSON object row.")
-    if invalid_count:
+    if ledger_summary["invalid_row_count"]:
         warnings.append("Some ledger rows are invalid and were counted without echoing row values.")
+        if approve:
+            blockers.append("prehashed objet ledger registration blocks when any ledger row is invalid.")
+    if ledger_summary["truncated"] and approve:
+        blockers.append("prehashed objet ledger registration blocks when max_rows truncates the ledger.")
 
-    return {
+    existing_object_ids = {
+        str(record.get("object_id") or "").lower()
+        for record in load_manifest_records(root)
+        if isinstance(record.get("object_id"), str)
+    }
+    unique_objects = ledger_summary["unique_objects"]
+    candidates = [
+        item for item in unique_objects if f"sha256:{item['sha256']}" not in existing_object_ids
+    ]
+    skipped_existing = len(unique_objects) - len(candidates)
+    manifest_relative = "objects/manifests/files.jsonl"
+    timestamp_compact = re.sub(r"[^0-9TZ]", "", datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+    proposed_receipt_path = f"{PREHASHED_OBJET_LEDGER_RECEIPTS_DIR}/{timestamp_compact}-{secrets.token_hex(6)}.json"
+    planned_writes: list[str] = []
+    if candidates:
+        planned_writes.append(f"{manifest_relative} (+{len(candidates)} line(s))")
+    planned_writes.append(proposed_receipt_path)
+
+    result: dict[str, Any] = {
         "ok": not blockers,
-        "dry_run": True,
-        "lifecycle_action": "prehashed_objet_ledger_preview",
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "prehashed_objet_ledger_preview" if dry_run else "prehashed_objet_ledger_register",
         "archive_id": archive_id,
         "store_kind": normalized_store,
+        "store_ref": normalized_store_ref or None,
         "ledger": {
             "format": "jsonl",
             "ledger_path_included": False,
+            "ledger_file_sha256": ledger_summary["ledger_file_sha256"],
             "sha256_field": safe_sha_field,
             "size_field": safe_size_field,
-            "row_count": row_count,
-            "valid_object_count": valid_count,
-            "invalid_row_count": invalid_count,
-            "duplicate_sha256_count": duplicate_count,
-            "unique_sha256_count": len(seen_sha256),
-            "total_declared_bytes": total_bytes,
-            "invalid_reasons": invalid_reasons,
+            "row_count": ledger_summary["row_count"],
+            "valid_object_count": ledger_summary["valid_object_count"],
+            "invalid_row_count": ledger_summary["invalid_row_count"],
+            "duplicate_sha256_count": ledger_summary["duplicate_sha256_count"],
+            "unique_sha256_count": len(unique_objects),
+            "total_declared_bytes": ledger_summary["total_declared_bytes"],
+            "invalid_reasons": ledger_summary["invalid_reasons"],
+            "truncated": ledger_summary["truncated"],
+        },
+        "registration": {
+            "manifest_path": manifest_relative,
+            "receipt_path": None,
+            "store_ref_required_on_approve": True,
+            "existing_manifest_object_count": len(existing_object_ids),
+            "skipped_existing_object_count": skipped_existing,
+            "would_append_manifest_records": len(candidates) if dry_run else 0,
+            "appended_manifest_records": 0,
+            "writes_receipt": approve and not blockers,
+            "object_ids_echoed": False,
+            "row_values_echoed": False,
+            "byte_verification_by_wom_kit": False,
         },
         "current_capability": {
             "objet_capture_can_import_prehashed_external_store_without_rehashing": False,
-            "manifest_registration_from_prehashed_ledger_implemented": False,
+            "manifest_registration_from_prehashed_ledger_implemented": True,
             "this_preview_reads_blob_bytes": False,
             "this_preview_registers_manifest_records": False,
         },
@@ -10466,18 +10508,278 @@ def prehashed_objet_ledger_preview(
             "local_paths_echoed": False,
             "blob_bytes_read": False,
             "provider_calls": False,
-            "writes": False,
+            "writes": approve and not blockers,
         },
         "next_safe_actions": [
-            "Keep this as a planning preview; do not feed prehashed ledgers directly to objet-capture yet.",
+            "Use --dry-run first, then --approve --reviewed-by <actor> --store-ref <safe-label> only after human review.",
             "Use project-intake and source-intake records to bind human-reviewed migration context.",
-            "Design a separate approval-gated manifest registration command before any no-rehash import path.",
+            "Use the registered object_ids as manifest references; this path does not prove or copy external bytes.",
             "If capture is needed today, use objet-capture on staged files so WOM-kit can verify bytes itself.",
         ],
-        "would_change": [],
+        "would_change": planned_writes if dry_run and not blockers else [],
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
+    if blockers or dry_run:
+        return result
+
+    registered_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    records = [
+        prehashed_objet_manifest_record(
+            item,
+            archive_id=archive_id,
+            store_kind=normalized_store,
+            store_ref=normalized_store_ref,
+            reviewed_by=reviewer,
+            registered_at=registered_at,
+            ledger_sha256=ledger_summary["ledger_file_sha256"],
+            sha256_field=safe_sha_field,
+            size_field=safe_size_field,
+        )
+        for item in candidates
+    ]
+    append_blockers: list[str] = []
+    appended_count = 0
+    try:
+        with _ObjetCaptureManifestLock(root):
+            manifest_path = archive_internal_path(root, manifest_relative)
+            manifest_handle: Any = None
+            try:
+                if records:
+                    needs_newline = _objet_capture_manifest_needs_leading_newline(manifest_path)
+                    manifest_handle = manifest_path.open("a", encoding="utf-8", newline="\n")
+                    if needs_newline:
+                        manifest_handle.write("\n")
+                    for record in records:
+                        manifest_handle.write(
+                            json.dumps(record, ensure_ascii=False, default=str, separators=(",", ":")) + "\n"
+                        )
+                        appended_count += 1
+            finally:
+                if manifest_handle is not None:
+                    manifest_handle.flush()
+                    os.fsync(manifest_handle.fileno())
+                    manifest_handle.close()
+    except OSError:
+        append_blockers.append("manifest_append_failed")
+
+    receipt = {
+        "receipt_id": None,
+        "schema": PREHASHED_OBJET_LEDGER_RECEIPT_SCHEMA,
+        "dry_run": False,
+        "ok": not append_blockers,
+        "archive_id": archive_id,
+        "store_kind": normalized_store,
+        "store_ref": normalized_store_ref,
+        "reviewed_by": reviewer,
+        "registered_at": registered_at,
+        "ledger_file_sha256": ledger_summary["ledger_file_sha256"],
+        "ledger_path_included": False,
+        "sha256_field": safe_sha_field,
+        "size_field": safe_size_field,
+        "summary": {
+            "row_count": ledger_summary["row_count"],
+            "valid_object_count": ledger_summary["valid_object_count"],
+            "unique_sha256_count": len(unique_objects),
+            "duplicate_sha256_count": ledger_summary["duplicate_sha256_count"],
+            "invalid_row_count": ledger_summary["invalid_row_count"],
+            "skipped_existing_object_count": skipped_existing,
+            "appended_manifest_records": appended_count,
+        },
+        "privacy_guards": {
+            "ledger_path_echoed": False,
+            "row_values_echoed": False,
+            "filenames_echoed": False,
+            "urls_echoed": False,
+            "local_paths_echoed": False,
+            "blob_bytes_read": False,
+            "provider_calls": False,
+        },
+        "blockers": append_blockers,
+        "warnings": unique_preserve_order(warnings),
+    }
+    receipt_path = prehashed_objet_ledger_write_receipt(root, receipt, registered_at)
+    files_written = [receipt_path]
+    if appended_count:
+        files_written.insert(0, manifest_relative)
+    result.update(
+        {
+            "ok": not append_blockers,
+            "dry_run": False,
+            "registration": {
+                **result["registration"],
+                "receipt_path": receipt_path,
+                "would_append_manifest_records": 0,
+                "appended_manifest_records": appended_count,
+                "writes_receipt": True,
+            },
+            "privacy_guards": {**result["privacy_guards"], "writes": True},
+            "files_written": files_written,
+            "would_change": [],
+            "blockers": unique_preserve_order(append_blockers),
+            "warnings": unique_preserve_order(warnings),
+        }
+    )
+    return result
+
+
+def read_prehashed_objet_ledger(
+    ledger_path: Path,
+    *,
+    sha256_field: str,
+    size_field: str,
+    max_rows: int,
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not ledger_path.is_file():
+        blockers.append("ledger must be an existing JSONL file.")
+        return {
+            "ledger_file_sha256": None,
+            "row_count": 0,
+            "valid_object_count": 0,
+            "invalid_row_count": 0,
+            "duplicate_sha256_count": 0,
+            "total_declared_bytes": 0,
+            "invalid_reasons": {},
+            "unique_objects": [],
+            "truncated": False,
+            "blockers": blockers,
+            "warnings": warnings,
+        }
+
+    row_count = 0
+    valid_count = 0
+    invalid_count = 0
+    duplicate_count = 0
+    total_bytes = 0
+    truncated = False
+    seen_sizes: dict[str, int] = {}
+    invalid_reasons: dict[str, int] = {}
+    try:
+        ledger_file_sha256 = "sha256:" + sha256_path(ledger_path)
+        with ledger_path.open("r", encoding="utf-8") as handle:
+            for line_number, raw_line in enumerate(handle, start=1):
+                if line_number > max_rows:
+                    truncated = True
+                    warnings.append("prehashed objet ledger preview stopped at max_rows.")
+                    break
+                line = raw_line.strip()
+                if not line:
+                    continue
+                row_count += 1
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    invalid_count += 1
+                    invalid_reasons["invalid_json"] = invalid_reasons.get("invalid_json", 0) + 1
+                    continue
+                if not isinstance(row, dict):
+                    invalid_count += 1
+                    invalid_reasons["row_not_object"] = invalid_reasons.get("row_not_object", 0) + 1
+                    continue
+                row_sha = normalize_prehashed_ledger_sha256(row.get(sha256_field))
+                if row_sha is None:
+                    invalid_count += 1
+                    invalid_reasons["sha256_missing_or_invalid"] = invalid_reasons.get("sha256_missing_or_invalid", 0) + 1
+                    continue
+                row_size = normalize_prehashed_ledger_size(row.get(size_field))
+                if row_size is None:
+                    invalid_count += 1
+                    invalid_reasons["size_missing_or_invalid"] = invalid_reasons.get("size_missing_or_invalid", 0) + 1
+                    continue
+                if row_sha in seen_sizes:
+                    duplicate_count += 1
+                    if seen_sizes[row_sha] != row_size:
+                        invalid_count += 1
+                        invalid_reasons["duplicate_size_mismatch"] = invalid_reasons.get("duplicate_size_mismatch", 0) + 1
+                        continue
+                else:
+                    seen_sizes[row_sha] = row_size
+                valid_count += 1
+                total_bytes += row_size
+    except (OSError, UnicodeError):
+        blockers.append("ledger could not be read safely as UTF-8 JSONL.")
+        ledger_file_sha256 = None
+
+    return {
+        "ledger_file_sha256": ledger_file_sha256,
+        "row_count": row_count,
+        "valid_object_count": valid_count,
+        "invalid_row_count": invalid_count,
+        "duplicate_sha256_count": duplicate_count,
+        "total_declared_bytes": total_bytes,
+        "invalid_reasons": invalid_reasons,
+        "unique_objects": [{"sha256": digest, "size_bytes": size} for digest, size in seen_sizes.items()],
+        "truncated": truncated,
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+
+def prehashed_objet_manifest_record(
+    item: dict[str, Any],
+    *,
+    archive_id: str,
+    store_kind: str,
+    store_ref: str,
+    reviewed_by: str | None,
+    registered_at: str,
+    ledger_sha256: str | None,
+    sha256_field: str,
+    size_field: str,
+) -> dict[str, Any]:
+    digest = str(item["sha256"])
+    logical_key = f"objects/external/prehashed/{store_kind}/{digest[:2]}/{digest}"
+    return {
+        "object_id": f"sha256:{digest}",
+        "sha256": digest,
+        "logical_key": logical_key,
+        "mime": "application/octet-stream",
+        "size_bytes": int(item["size_bytes"]),
+        "locations": [
+            {
+                "provider": "external_prehashed",
+                "store_kind": store_kind,
+                "store_ref": store_ref,
+                "availability": "declared_external",
+                "content_addressed": True,
+                "byte_verification_by_wom_kit": False,
+            }
+        ],
+        "provenance": {
+            "created_in": archive_id,
+            "source": "prehashed_external_objet_ledger",
+            "registered_at": registered_at,
+            "registered_by": reviewed_by,
+            "store_kind": store_kind,
+            "store_ref": store_ref,
+            "ledger_file_sha256": ledger_sha256,
+            "ledger_path_included": False,
+            "sha256_field": sha256_field,
+            "size_field": size_field,
+            "row_values_ingested": False,
+            "byte_verification_by_wom_kit": False,
+        },
+    }
+
+
+def prehashed_objet_ledger_write_receipt(root: Path, receipt: dict[str, Any], registered_at: str) -> str:
+    receipts_dir = archive_internal_path(root, PREHASHED_OBJET_LEDGER_RECEIPTS_DIR)
+    receipts_dir.mkdir(parents=True, exist_ok=True)
+    timestamp_compact = re.sub(r"[^0-9TZ]", "", registered_at)
+    while True:
+        receipt_id = f"{timestamp_compact}-{secrets.token_hex(6)}"
+        receipt_path = receipts_dir / f"{receipt_id}.json"
+        receipt["receipt_id"] = f"receipt:prehashed-objet-ledger:{receipt_id}"
+        try:
+            write_json_new_file(receipt_path, receipt)
+        except FileExistsError:
+            continue
+        except OSError:
+            receipt_path.unlink(missing_ok=True)
+            raise
+        return f"{PREHASHED_OBJET_LEDGER_RECEIPTS_DIR}/{receipt_id}.json"
 
 
 def prehashed_ledger_safe_field_name(value: str | None, label: str, blockers: list[str]) -> str | None:

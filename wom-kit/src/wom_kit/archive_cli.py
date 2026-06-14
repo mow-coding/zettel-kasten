@@ -18,7 +18,7 @@ Commands:
   object-storage
           Plan object storage metadata for WOM objets.
   prehashed-objet-ledger
-          Preview an already-hashed external objet ledger without reading blob bytes.
+          Preview or approve-register an already-hashed external objet ledger without reading blob bytes.
   source-intake
           Plan safe source/objet refs before draft creation.
   source-intake-record
@@ -1825,18 +1825,24 @@ def command_human_artifact_store(args: argparse.Namespace) -> int:
 
 
 def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
-    if not args.dry_run:
-        print("prehashed-objet-ledger is read-only and requires --dry-run.", file=sys.stderr)
+    if args.dry_run == args.approve:
+        print("prehashed-objet-ledger requires exactly one of --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("prehashed-objet-ledger requires --reviewed-by when --approve is used.", file=sys.stderr)
         return 1
 
     try:
-        result = archive_services.prehashed_objet_ledger_preview(
+        result = archive_services.prehashed_objet_ledger_register(
             Path(args.archive_root),
             Path(args.ledger),
             store_kind=args.store_kind,
+            store_ref=args.store_ref,
             sha256_field=args.sha256_field,
             size_field=args.size_field,
             dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
             max_rows=args.max_rows,
         )
     except (archive_services.ArchiveServiceError, OSError) as exc:
@@ -1860,7 +1866,13 @@ def print_prehashed_objet_ledger_result(result: dict[str, Any], output_format: s
     print(f"Valid objects: {ledger.get('valid_object_count', 0)}")
     print(f"Invalid rows: {ledger.get('invalid_row_count', 0)}")
     print(f"Duplicate sha256 rows: {ledger.get('duplicate_sha256_count', 0)}")
-    print("Writes: none")
+    registration = result.get("registration") if isinstance(result.get("registration"), dict) else {}
+    if result.get("dry_run"):
+        print(f"Would append manifest records: {registration.get('would_append_manifest_records', 0)}")
+        print("Writes: none")
+    else:
+        print(f"Appended manifest records: {registration.get('appended_manifest_records', 0)}")
+        print(f"Receipt: {registration.get('receipt_path') or '-'}")
     if result.get("blockers"):
         print("Blockers:")
         for blocker in result["blockers"]:
@@ -5464,10 +5476,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="generic_content_addressed_store",
         help="External store context for the preview.",
     )
+    prehashed_objet_ledger.add_argument("--store-ref", help="Safe external store label/ref required when --approve is used.")
     prehashed_objet_ledger.add_argument("--sha256-field", default="sha256", help="JSONL field containing sha256 or sha256:<hex>.")
     prehashed_objet_ledger.add_argument("--size-field", default="bytes", help="JSONL field containing byte size.")
     prehashed_objet_ledger.add_argument("--max-rows", type=int, default=100000, help="Maximum rows to inspect.")
-    prehashed_objet_ledger.add_argument("--dry-run", action="store_true", help="Required; preview only.")
+    prehashed_objet_ledger.add_argument("--dry-run", action="store_true", help="Preview ledger registration without writing.")
+    prehashed_objet_ledger.add_argument("--approve", action="store_true", help="Append reviewed external manifest records and write a receipt.")
+    prehashed_objet_ledger.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
     prehashed_objet_ledger.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     prehashed_objet_ledger.set_defaults(func=command_prehashed_objet_ledger)
 

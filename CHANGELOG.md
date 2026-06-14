@@ -26,11 +26,13 @@ This project uses semantic versioning for public compatibility checkpoints.
   to validate a reviewed `source-intake --dry-run` JSON file and preserve the
   redacted plan under `receipts/sources/` for later capture evidence without
   reading file bodies, calculating content hashes, or calling providers.
-- Added read-only CLI `archive prehashed-objet-ledger --dry-run` and MCP
-  `prehashed_objet_ledger_preview` to preview already-hashed external
-  content-addressed ledgers, including Notion source-export ledgers, without
-  echoing row values, reading blob bytes, registering manifests, or claiming
-  that `objet-capture` can skip byte verification today.
+- Added CLI `archive prehashed-objet-ledger --dry-run|--approve` for
+  already-hashed external content-addressed ledgers, including Notion
+  source-export ledgers. Dry-run previews registration without echoing row
+  values; approved mode appends external manifest records and writes a receipt
+  without reading blob bytes, copying objects, uploading, drafting, minting, or
+  claiming that `objet-capture` can skip byte verification today. MCP remains a
+  read-only `prehashed_objet_ledger_preview`.
 
 ## v0.3.7 - 2026-06-13
 

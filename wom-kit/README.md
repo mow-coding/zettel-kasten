@@ -138,7 +138,7 @@ human-artifact-store
   Plan a user-facing note/workspace/publication surface such as WordPress, Joplin, Notion, Obsidian, Evernote, or generic Markdown. Dry-run only; writes nothing, calls no providers, creates no notes, publishes no posts, and keeps system/AI artifacts separate from human-readable artifacts.
 
 prehashed-objet-ledger
-  Preview an already-hashed external content-addressed object/objet ledger. Dry-run only; counts sha256/byte-size rows without reading blob bytes or registering manifest records. MCP exposes the same read-only preview as prehashed_objet_ledger_preview.
+  Preview or approve-register an already-hashed external content-addressed object/objet ledger. Dry-run counts sha256/byte-size rows and planned manifest writes without reading blob bytes. Approved mode appends external manifest records and writes a receipt. MCP exposes only the read-only preview as prehashed_objet_ledger_preview.
 
 source-intake
   Classify one source/objet locator before draft creation. Dry-run only; returns safe source refs without reading bodies, hashing, copying, uploading, importing, OCR, transcription, extraction, or provider API calls. It can optionally validate a project-intake decisions receipt as session context only.
@@ -482,7 +482,7 @@ For external project migrations, the intended manual spine is:
 
 MCP exposes the same read-only preview as `human_artifact_store_plan`.
 
-`archive prehashed-objet-ledger --ledger <jsonl> --dry-run` previews an already-hashed external content-addressed store ledger, including a Notion source-export ledger. MCP exposes the same read-only preview as `prehashed_objet_ledger_preview`. By default it expects `sha256` and `bytes` fields, counts valid, invalid, duplicate, and total declared bytes, and echoes no row values, filenames, URLs, or local paths. It does not read blob bytes, register manifest records, capture objets, create drafts, mint zets, call providers, upload, or clean. Today, `objet-capture` still verifies bytes itself from staged files; a no-rehash manifest registration path remains future work.
+`archive prehashed-objet-ledger --ledger <jsonl> --dry-run` previews an already-hashed external content-addressed store ledger, including a Notion source-export ledger. By default it expects `sha256` and `bytes` fields, counts valid, invalid, duplicate, and total declared bytes, and echoes no row values, filenames, URLs, or local paths. `--approve --reviewed-by <actor> --store-ref <safe-label>` appends external manifest records to `objects/manifests/files.jsonl` and writes a receipt under `receipts/prehashed-objet-ledger/` without reading blob bytes, copying objects, uploading, drafting, minting, or cleaning. MCP exposes only the read-only preview as `prehashed_objet_ledger_preview`. `objet-capture` still verifies bytes itself from staged files; this is a separate manifest-registration path for externally verified stores.
 
 `archive create-draft --source-intake-plan <json-file>` consumes a successful source-intake dry-run JSON file, validates that it is metadata-only and blocker-free, then merges safe `source_refs_for_draft` into draft `source_refs`. If the source-intake plan carries a valid `project_intake_context`, the draft `source_intake.project_intake_context` preserves that receipt evidence through mint preview/receipts without copying decision answer values. The plan file path is not stored in frontmatter, and WOM-kit does not follow local paths inside the plan.
 
