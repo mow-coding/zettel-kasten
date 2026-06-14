@@ -6,6 +6,14 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.9 - 2026-06-14
+
+- Added approval-gated CLI `archive project-intake-record-answer --dry-run|--approve`
+  to append exactly one human-reviewed project-intake answer to a new or
+  existing decisions receipt without echoing current or previous answer values,
+  running source intake, capturing objets, drafting, minting, calling providers,
+  or cleaning staged folders.
+
 ## v0.3.8 - 2026-06-14
 
 - Added read-only CLI `archive project-intake-staging-guide --dry-run` and MCP

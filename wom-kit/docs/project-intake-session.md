@@ -43,7 +43,7 @@ project-intake-staging-guide
 project-intake-plan
 -> project-intake-next-question
 -> project-intake-decision-template
--> project-intake-decisions
+-> project-intake-record-answer
 -> project-intake-status
 -> project-intake-next-question
 -> project-intake-decision-template
@@ -132,6 +132,7 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Session planning | `archive project-intake-plan --dry-run` / MCP `project_intake_plan` | Plans one staged project folder session with top-level counts, human review checklist, suggested classification labels, and no writes. |
 | Next question | `archive project-intake-next-question --dry-run` / MCP `project_intake_next_question` | Returns exactly one next human-review question for a new staged folder or continuing receipt. It includes placeholders only, does not echo decision values, and writes nothing. |
 | Decision template | `archive project-intake-decision-template --dry-run` / MCP `project_intake_decision_template` | Builds the JSON shape for the next human-reviewed answer. It leaves `answer` empty, does not echo previous answers, and writes nothing. |
+| Answer recording | `archive project-intake-record-answer --dry-run|--approve` | Appends one human-reviewed answer file to a new or existing session and writes a new decisions receipt on approval. It does not echo current or previous answer values, run capture, draft, mint, provider calls, or cleanup. |
 | Decision recording | `archive project-intake-decisions --dry-run|--approve` | Validates a user-reviewed checklist JSON file; approved mode writes a local receipt under `receipts/project-intake/` without running capture, drafting, minting, provider calls, or cleanup. |
 | Decision status | `archive project-intake-status --dry-run` / MCP `project_intake_status` | Reviews one approved decisions receipt for checklist coverage and integrity, and returns `next_review_prompts` for missing checklist ids without echoing answer text or authorizing automatic execution. |
 | Item plan | `archive project-intake-item-plan --dry-run` / MCP `project_intake_item_plan` | Previews the next `source-intake --dry-run` route for one human-selected local file. It redacts local paths, reads no file body, calculates no content hash, creates no selection manifest, and writes nothing. |
@@ -149,7 +150,8 @@ WOM-kit already has safe primitives that can support parts of this flow:
 These primitives now include a dry-run staging guide, a one-screen session guide,
 a session planner with
 human review prompts, a one-question-at-a-time prompt surface, a next-answer
-decision JSON template, a receipt writer for reviewed answers, a read-only
+answer JSON template, a one-answer receipt writer, a batch receipt writer for
+reviewed answers, a read-only
 receipt status check, a one-item source-intake route preview, source-intake
 plan recording for later capture evidence, an optional source-intake
 session-context link, missing-question prompts for the next human review turn,

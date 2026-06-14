@@ -4252,6 +4252,71 @@ def print_project_intake_decisions_result(result: dict[str, Any], output_format:
             print(f"- {warning}")
 
 
+def command_project_intake_record_answer(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.project_intake_record_answer(
+            Path(args.archive_root),
+            Path(args.answer),
+            receipt=args.receipt,
+            session_id=args.session_id,
+            staged_folder_ref=args.staged_folder_ref,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_project_intake_record_answer_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def print_project_intake_record_answer_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    mode = "dry-run ready" if result.get("dry_run") else "recorded"
+    if not result.get("ok", True):
+        mode = "blocked"
+    print(f"Project intake answer {mode}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Session: {result.get('session_id') or '-'}")
+    print(f"Previous answers: {result.get('previous_answer_count', 0)}")
+    print(f"New checklist id: {result.get('new_answer_checklist_id') or '-'}")
+    print(f"Expected next checklist id: {result.get('expected_next_checklist_id') or '-'}")
+    print(f"Answer count: {result.get('answer_count', 0)}")
+    print(f"Decision SHA-256: {result.get('decision_sha256') or '-'}")
+    if result.get("checklist_ids"):
+        print("Checklist ids:")
+        for checklist_id in result["checklist_ids"]:
+            print(f"- {checklist_id}")
+    if result.get("receipt_path"):
+        print(f"Receipt: {result['receipt_path']}")
+    else:
+        print(f"Proposed receipt: {result.get('proposed_receipt_path') or '-'}")
+    writes = result.get("files_written") or []
+    if writes:
+        print("Files written:")
+        for path in writes:
+            print(f"- {path}")
+    else:
+        print("Writes: none")
+    print("Answer values echoed: no")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
+
+
 def command_project_intake_status(args: argparse.Namespace) -> int:
     try:
         result = archive_services.project_intake_status(
@@ -6599,6 +6664,22 @@ def build_parser() -> argparse.ArgumentParser:
     project_intake_decisions.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
     project_intake_decisions.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     project_intake_decisions.set_defaults(func=command_project_intake_decisions)
+
+    project_intake_record_answer = subcommands.add_parser(
+        "project-intake-record-answer",
+        help="Append one reviewed project intake answer to a decisions receipt.",
+    )
+    project_intake_record_answer.add_argument("archive_root", help="Archive root to update.")
+    project_intake_record_answer.add_argument("--answer", required=True, help="Reviewed single-answer JSON file.")
+    project_intake_record_answer_source = project_intake_record_answer.add_mutually_exclusive_group(required=True)
+    project_intake_record_answer_source.add_argument("--receipt", help="Existing project-intake decisions receipt to continue.")
+    project_intake_record_answer_source.add_argument("--session-id", help="Safe session id when recording the first answer.")
+    project_intake_record_answer.add_argument("--staged-folder-ref", help="Optional non-secret staged folder reference for a new session.")
+    project_intake_record_answer.add_argument("--dry-run", action="store_true", help="Preview validation without writing files.")
+    project_intake_record_answer.add_argument("--approve", action="store_true", help="Write the updated decisions receipt.")
+    project_intake_record_answer.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
+    project_intake_record_answer.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    project_intake_record_answer.set_defaults(func=command_project_intake_record_answer)
 
     project_intake_status = subcommands.add_parser(
         "project-intake-status",

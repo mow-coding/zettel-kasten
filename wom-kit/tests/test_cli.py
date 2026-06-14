@@ -12479,6 +12479,162 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["files_written"], [result["receipt_path"]])
             self.assertNotIn("One project only", output)
 
+    def test_project_intake_record_answer_dry_run_starts_session_without_echoing_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            answer_path = Path(tmp) / "answer.json"
+            answer_text = "Keep this as one project bundle."
+            answer_note = "Human reviewed the scope."
+            answer_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/project-intake-answer/v0.1",
+                        "checklist_id": "scope.single_project",
+                        "answer": answer_text,
+                        "notes": answer_note,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "project-intake-record-answer",
+                    str(archive_root),
+                    "--answer",
+                    str(answer_path),
+                    "--session-id",
+                    "alpha-project-20260613",
+                    "--staged-folder-ref",
+                    "intake:alpha-project",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["action"], "archive_project_intake_record_answer")
+            self.assertEqual(result["session_id"], "alpha-project-20260613")
+            self.assertEqual(result["previous_answer_count"], 0)
+            self.assertEqual(result["new_answer_checklist_id"], "scope.single_project")
+            self.assertEqual(result["expected_next_checklist_id"], "scope.single_project")
+            self.assertEqual(result["answer_count"], 1)
+            self.assertEqual(result["would_change"], [result["proposed_receipt_path"]])
+            self.assertFalse(result["privacy_guards"]["answer_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["previous_decision_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            self.assertNotIn(answer_text, output)
+            self.assertNotIn(answer_note, output)
+
+    def test_project_intake_record_answer_approve_appends_to_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            first_answer = Path(tmp) / "first-answer.json"
+            first_text = "One project only."
+            first_answer.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/project-intake-answer/v0.1",
+                        "checklist_id": "scope.single_project",
+                        "answer": first_text,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            first_code, first_output = self.run_cli(
+                [
+                    "project-intake-record-answer",
+                    str(archive_root),
+                    "--answer",
+                    str(first_answer),
+                    "--session-id",
+                    "alpha-project-20260613",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(first_code, 0, first_output)
+            first_receipt = json.loads(first_output)["receipt_path"]
+
+            second_answer = Path(tmp) / "second-answer.json"
+            second_text = "Continue from the reviewed staging folder."
+            second_answer.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/project-intake-answer/v0.1",
+                        "checklist_id": "staging.location",
+                        "answer": second_text,
+                        "notes": "No restage needed.",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "project-intake-record-answer",
+                    str(archive_root),
+                    "--answer",
+                    str(second_answer),
+                    "--receipt",
+                    first_receipt,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["previous_receipt_path"], first_receipt)
+            self.assertEqual(result["previous_answer_count"], 1)
+            self.assertEqual(result["new_answer_checklist_id"], "staging.location")
+            self.assertEqual(result["answer_count"], 2)
+            self.assertNotEqual(result["receipt_path"], first_receipt)
+            receipt_path = archive_root / result["receipt_path"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["schema"], "wom-kit/project-intake-decisions-receipt/v0.1")
+            self.assertEqual(receipt["action"], "archive_project_intake_decisions")
+            self.assertEqual(receipt["source_answer_schema"], "wom-kit/project-intake-answer/v0.1")
+            self.assertEqual(receipt["answer_count"], 2)
+            self.assertEqual([item["checklist_id"] for item in receipt["decisions"]], ["scope.single_project", "staging.location"])
+            self.assertEqual(receipt["decisions"][0]["answer"], first_text)
+            self.assertEqual(receipt["decisions"][1]["answer"], second_text)
+            self.assertFalse(receipt["closed_actions"]["objet_capture_run"])
+            self.assertNotIn(first_text, output)
+            self.assertNotIn(second_text, output)
+
+            status_code, status_output = self.run_cli(
+                [
+                    "project-intake-status",
+                    str(archive_root),
+                    "--receipt",
+                    result["receipt_path"],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(status_code, 0, status_output)
+            status = json.loads(status_output)
+            self.assertEqual(status["checklist_coverage"]["answered_count"], 2)
+            self.assertIn("privacy.sensitive_items", status["checklist_coverage"]["missing_checklist_ids"])
+            self.assertNotIn(first_text, status_output)
+            self.assertNotIn(second_text, status_output)
+
     def test_project_intake_status_summarizes_receipt_without_echoing_answers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "archive"
