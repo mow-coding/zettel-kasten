@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.28 - 2026-06-15
+
+- Added read-only CLI `archive credential-vault-onboarding-plan --dry-run`
+  and MCP `credential_vault_onboarding_plan` for planning how a human-selected
+  external vault, password manager, platform password manager, OS keyring,
+  developer secret manager, or environment injection surface should fit WOM.
+- Added CLI aliases `archive credential-vault-onboarding --dry-run` and
+  `archive secret-vault-onboarding-plan --dry-run`.
+- Added safe store-id routing for `recommended`, `keepassxc`, `bitwarden`,
+  `1password`, `browser_or_platform_password_manager`, `os_keyring`,
+  `developer_secret_manager`, and `environment_variable`.
+- Linked the onboarding layer to credential refs, inventory, broker planning,
+  approval previews, adapter readiness, adapter manifests, and adapter audit
+  previews without opening or reading any real vault/keyring/store.
+- Kept the release strictly non-mutating and non-secret: it opens no password
+  managers, browser stores, OS keyrings, environment variables, plaintext
+  secret files, provider APIs, OAuth flows, or adapter runners; writes no
+  files; and includes no secret values, exact credential refs, usernames, email
+  addresses, tokens, local paths, provider URLs, passwords, or API keys.
+- Added `wom-kit/docs/credential-vault-onboarding-plan.md` plus CLI/MCP/docs
+  tests for dry-run-only behavior, allowed-root enforcement, no-write behavior,
+  planner-chain linkage, and privacy boundaries.
+
 ## v0.3.27 - 2026-06-15
 
 - Added read-only CLI `archive credential-adapter-audit-plan --dry-run` and

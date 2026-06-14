@@ -136,6 +136,10 @@ so WOM can preview a non-secret future adapter manifest without writing it.
 v0.3.27 adds [Credential Adapter Audit Plan](credential-adapter-audit-plan.md)
 so WOM can preview a non-secret future adapter audit receipt without writing it.
 
+v0.3.28 adds [Credential Vault Onboarding Plan](credential-vault-onboarding-plan.md)
+so WOM can plan human setup for an external vault/keyring without opening it or
+reading any secret value.
+
 ## Mail Sources
 
 Mail source access should use refs such as:

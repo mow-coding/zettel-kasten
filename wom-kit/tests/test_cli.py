@@ -1817,6 +1817,93 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_credential_vault_onboarding_plan_links_vault_choice_without_opening_stores(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "credential-vault-onboarding-plan",
+                    str(archive_root),
+                    "--scenario",
+                    "personal_local_first",
+                    "--store-id",
+                    "keepassxc",
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--credential-kind",
+                    "openai_api_key",
+                    "--provider",
+                    "openai",
+                    "--action-kind",
+                    "model_api_call",
+                    "--platform",
+                    "windows",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "credential_vault_onboarding_plan")
+            self.assertEqual(result["selected_store_id"], "keepassxc")
+            self.assertEqual(result["selected_store"]["store_kind"], "password_manager")
+            self.assertEqual(result["selected_store"]["adapter_kind"], "keepassxc_cli")
+            self.assertEqual(result["credential_plan"]["safe_ref_prefix_to_record"], "secret:")
+            self.assertEqual(result["broker_plan_summary"]["action_kind"], "model_api_call")
+            self.assertEqual(result["adapter_readiness_summary"]["adapter_kind"], "keepassxc_cli")
+            self.assertFalse(result["broker_plan_summary"]["exact_ref_value_echoed"])
+            self.assertFalse(result["closed_actions"]["password_manager_opened"])
+            self.assertFalse(result["closed_actions"]["os_keyring_opened"])
+            self.assertFalse(result["closed_actions"]["secret_value_read"])
+            self.assertFalse(result["privacy_guards"]["secret_values_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("sk-proj-", output)
+            self.assertNotIn("keyring:openai-api-key", output)
+            self.assertNotIn("secret:real", output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            browser_code, browser_output = self.run_cli(
+                [
+                    "credential-vault-onboarding-plan",
+                    str(archive_root),
+                    "--scenario",
+                    "browser_or_platform_password_manager",
+                    "--store-id",
+                    "recommended",
+                    "--credential-id",
+                    "cred:web-login",
+                    "--platform",
+                    "windows",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            browser_result = json.loads(browser_output)
+            self.assertEqual(browser_code, 0, browser_output)
+            self.assertEqual(browser_result["selected_store_id"], "browser_or_platform_password_manager")
+            self.assertEqual(browser_result["selected_store"]["adapter_kind"], "browser_platform_manager")
+            self.assertEqual(browser_result["credential_plan"]["action_kind"], "browser_login_fill")
+            self.assertTrue(any("Silent password database reads" in item for item in browser_result["selected_store"]["not_suitable_for"]))
+            self.assertFalse(browser_result["closed_actions"]["browser_password_store_opened"])
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "credential-vault-onboarding-plan",
+                    str(archive_root),
+                    "--scenario",
+                    "personal_local_first",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_credential_access_broker_plan_is_read_only_and_never_echoes_refs_or_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

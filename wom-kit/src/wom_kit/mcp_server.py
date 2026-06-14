@@ -307,6 +307,45 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "credential_vault_onboarding_plan",
+        "description": "Plan safe human vault/keyring onboarding without opening password managers, browser stores, keyrings, files, environment variables, or providers.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "scenario": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS),
+                },
+                "store_id": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_VAULT_ONBOARDING_STORE_IDS),
+                    "default": "recommended",
+                },
+                "credential_id": {"type": "string"},
+                "credential_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+                },
+                "provider": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+                },
+                "action_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ACCESS_BROKER_ACTIONS),
+                },
+                "platform": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+                    "default": "windows",
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "scenario"],
+        },
+    },
+    {
         "name": "credential_access_broker_plan",
         "description": "Plan a future approved credential broker request without retrieving secrets. Read-only; never opens password managers, browser stores, keyrings, files, or environment variables.",
         "inputSchema": {
@@ -1672,6 +1711,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_credential_ref_inventory(arguments)
     if name == "credential_store_recommendation":
         return tool_credential_store_recommendation(arguments)
+    if name == "credential_vault_onboarding_plan":
+        return tool_credential_vault_onboarding_plan(arguments)
     if name == "credential_access_broker_plan":
         return tool_credential_access_broker_plan(arguments)
     if name == "credential_access_approval_plan":
@@ -2047,6 +2088,30 @@ def tool_credential_store_recommendation(arguments: dict[str, Any]) -> dict[str,
     primary = result.get("primary_recommendation") if isinstance(result.get("primary_recommendation"), dict) else {}
     return tool_success_result(
         f"credential_store_recommendation: {state}, primary={primary.get('store_id') or '-'}.",
+        result,
+    )
+
+
+def tool_credential_vault_onboarding_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("credential_vault_onboarding_plan is read-only and requires dry-run.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.credential_vault_onboarding_plan,
+        archive_root,
+        scenario=require_string_arg(arguments, "scenario"),
+        store_id=optional_string_arg(arguments, "store_id") or "recommended",
+        credential_id=optional_string_arg(arguments, "credential_id"),
+        credential_kind=optional_string_arg(arguments, "credential_kind"),
+        provider=optional_string_arg(arguments, "provider"),
+        action_kind=optional_string_arg(arguments, "action_kind"),
+        platform=optional_string_arg(arguments, "platform") or "windows",
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    store = result.get("selected_store") if isinstance(result.get("selected_store"), dict) else {}
+    return tool_success_result(
+        f"credential_vault_onboarding_plan: {state}, store={store.get('store_id') or '-'}.",
         result,
     )
 
