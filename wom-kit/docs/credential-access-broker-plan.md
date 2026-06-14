@@ -24,6 +24,9 @@ v0.3.23 does not implement secret retrieval. It only plans the broker request.
 v0.3.24 adds a read-only approval receipt preview. See
 [Credential Access Approval Plan](credential-access-approval-plan.md).
 
+v0.3.25 adds a read-only adapter readiness preview. See
+[Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md).
+
 ## Read-Only Planner
 
 ```powershell

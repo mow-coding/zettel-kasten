@@ -107,3 +107,7 @@ The preview must not include:
 - mint zets.
 
 It is an approval receipt preview, not an approval writer.
+
+Next layer:
+
+- [Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md)

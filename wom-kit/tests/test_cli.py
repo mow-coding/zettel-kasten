@@ -1976,6 +1976,109 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(any("credential_ref must be" in blocker for blocker in bad_result["blockers"]))
             self.assertNotIn(raw_secret, bad_output)
 
+    def test_credential_adapter_readiness_plan_is_read_only_and_non_echoing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "credential-adapter-readiness-plan",
+                    str(archive_root),
+                    "--adapter-kind",
+                    "windows_credential_manager",
+                    "--operation",
+                    "resolve_for_approved_action",
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--credential-ref",
+                    "keyring:openai-api-key",
+                    "--credential-kind",
+                    "openai_api_key",
+                    "--provider",
+                    "openai",
+                    "--action-kind",
+                    "model_api_call",
+                    "--platform",
+                    "windows",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "credential_adapter_readiness_plan")
+            self.assertEqual(result["adapter"]["adapter_kind"], "windows_credential_manager")
+            self.assertEqual(result["adapter"]["store_kind"], "os_keyring")
+            self.assertEqual(result["adapter"]["expected_ref_prefixes"], ["keyring:"])
+            self.assertEqual(result["operation"]["operation"], "resolve_for_approved_action")
+            self.assertEqual(result["operation"]["action_kind"], "model_api_call")
+            self.assertFalse(result["adapter"]["secret_values_returned_to_ai"])
+            self.assertFalse(result["adapter"]["exact_ref_value_echoed"])
+            self.assertTrue(result["readiness"]["adapter_manifest_required"])
+            self.assertTrue(result["readiness"]["approval_receipt_required_before_use"])
+            self.assertFalse(result["approval_dependency"]["approval_receipt_written"])
+            self.assertFalse(result["current_capability"]["live_adapter_implemented"])
+            self.assertFalse(result["closed_actions"]["os_keyring_opened"])
+            self.assertFalse(result["closed_actions"]["secret_value_read"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("keyring:openai-api-key", output)
+            self.assertNotIn("sk-proj-", output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            migration_code, migration_output = self.run_cli(
+                [
+                    "credential-adapter-readiness-plan",
+                    str(archive_root),
+                    "--adapter-kind",
+                    "keepassxc_cli",
+                    "--operation",
+                    "plaintext_secret_migration",
+                    "--credential-id",
+                    "cred:migration-target",
+                    "--action-kind",
+                    "plaintext_secret_migration",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            migration = json.loads(migration_output)
+            self.assertEqual(migration_code, 0, migration_output)
+            self.assertEqual(migration["adapter"]["store_kind"], "password_manager")
+            self.assertTrue(migration["readiness"]["local_human_ui_required"])
+            self.assertTrue(any("masked migration candidates" in step for step in migration["implementation_steps"]))
+            self.assertFalse(migration["closed_actions"]["plaintext_file_read"])
+
+            raw_secret = "sk" + "-proj-" + "abcdefghijklmnopqrstuvwxyz1234567890"
+            bad_code, bad_output = self.run_cli(
+                [
+                    "credential-adapter-readiness-plan",
+                    str(archive_root),
+                    "--adapter-kind",
+                    "keepassxc_cli",
+                    "--operation",
+                    "resolve_for_approved_action",
+                    "--credential-id",
+                    "cred:bad-openai",
+                    "--credential-ref",
+                    raw_secret,
+                    "--action-kind",
+                    "model_api_call",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            bad_result = json.loads(bad_output)
+            self.assertEqual(bad_code, 1, bad_output)
+            self.assertFalse(bad_result["ok"])
+            self.assertTrue(any("credential_ref must be" in blocker for blocker in bad_result["blockers"]))
+            self.assertNotIn(raw_secret, bad_output)
+
     def test_zet_surface_prototype_four_surface_plans_are_read_only(self) -> None:
         expected = {
             "wordpress": ("projection_surface", "remote_rest_api", "site_ref"),
