@@ -641,6 +641,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("zet_surface_prototype_plan", tool_names)
             self.assertIn("prehashed_objet_ledger_preview", tool_names)
             self.assertIn("resolve_objet_ref", tool_names)
+            self.assertIn("zettel_objet_links", tool_names)
             self.assertIn("project_intake_plan", tool_names)
             self.assertIn("project_intake_unpack_queue", tool_names)
             self.assertIn("project_intake_unpack_choice", tool_names)
@@ -1835,6 +1836,119 @@ class McpServerTests(unittest.TestCase):
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
                 self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_zettel_objet_links_tool_previews_links_without_echoing_private_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            payload = b"mcp link target\n"
+            digest = hashlib.sha256(payload).hexdigest()
+            local_relative = f"objects/sha256/{digest[:2]}/{digest}"
+            local_path = allowed_archive / local_relative
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_bytes(payload)
+            manifest_path = allowed_archive / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "object_id": f"sha256:{digest}",
+                        "sha256": digest,
+                        "logical_key": local_relative,
+                        "mime": "text/plain",
+                        "size_bytes": len(payload),
+                        "locations": [{"provider": "local", "path": local_relative, "availability": "available"}],
+                        "provenance": {"source": "b4_local_objet_capture"},
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            zettel_path = allowed_archive / "inbox" / "zet_mcp_objet_links.md"
+            zettel_path.write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_mcp_objet_links",
+                        "status: draft",
+                        "title: MCP private link title",
+                        "---",
+                        "",
+                        "MCP private body text must not be echoed.",
+                        f"Use objet:sha256:{digest}.",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8", errors="ignore")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "zettel_objet_links",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "path": "inbox/zet_mcp_objet_links.md",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"], structured)
+                self.assertEqual(structured["lifecycle_action"], "zettel_objet_links")
+                self.assertEqual(structured["count"], 1)
+                self.assertEqual(structured["links"][0]["resolution_state"], "local_available")
+                self.assertEqual(structured["links"][0]["link_candidates"][0]["archive_relative_path"], local_relative)
+                self.assertFalse(structured["privacy_guards"]["body_text_echoed"])
+                self.assertFalse(structured["privacy_guards"]["frontmatter_values_echoed"])
+                self.assertFalse(structured["privacy_guards"]["writes"])
+                structured_dump = json.dumps(structured)
+                self.assertNotIn("MCP private body text", structured_dump)
+                self.assertNotIn("MCP private link title", structured_dump)
+                self.assertNotIn(str(allowed_archive), structured_dump)
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8", errors="ignore")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "zettel_objet_links",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "path": "inbox/zet_mcp_objet_links.md",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                self.assertTrue(dry_run_response["result"]["isError"])
+                self.assertIn("dry-run only", dry_run_response["result"]["structuredContent"]["error"])
             finally:
                 self.stop_server(process)
 

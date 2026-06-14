@@ -2221,6 +2221,61 @@ def command_read_zettel(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_zettel_objet_links(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("zettel-objet-links is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.zettel_objet_links(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            relative_path=args.path,
+            dry_run=True,
+            max_refs=args.max_refs,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        zettel = result.get("zettel") if isinstance(result.get("zettel"), dict) else {}
+        print(f"Zettel objet links: {result.get('count', 0)}")
+        print(f"Zettel: {zettel.get('id') or zettel.get('path') or '-'}")
+        for link in result.get("links", []):
+            if not isinstance(link, dict):
+                continue
+            print(f"- {link.get('object_id')}: {link.get('resolution_state')}")
+            for candidate in link.get("link_candidates", []):
+                if not isinstance(candidate, dict):
+                    continue
+                if candidate.get("kind") == "archive_relative_path":
+                    state = "exists" if candidate.get("exists") else "missing"
+                    print(f"  local: {candidate.get('archive_relative_path') or '-'} ({state})")
+                elif candidate.get("kind") == "external_store_label":
+                    print(
+                        "  external: "
+                        f"{candidate.get('provider') or '-'} "
+                        f"{candidate.get('store_kind') or '-'} "
+                        f"{candidate.get('store_ref') or '-'}"
+                    )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+        print("Writes: none")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_create_draft(args: argparse.Namespace) -> int:
     try:
         body = read_body_arg(args)
@@ -5978,6 +6033,19 @@ def build_parser() -> argparse.ArgumentParser:
     read_target.add_argument("--path", help="Archive-relative zettel path to read.")
     read_zettel.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     read_zettel.set_defaults(func=command_read_zettel)
+
+    zettel_objet_links = subcommands.add_parser(
+        "zettel-objet-links",
+        help="Preview safe objet link candidates referenced by one zettel.",
+    )
+    zettel_objet_links.add_argument("archive_root", help="Archive root to inspect.")
+    zettel_objet_target = zettel_objet_links.add_mutually_exclusive_group(required=True)
+    zettel_objet_target.add_argument("--zettel-id", help="Zettel id to inspect.")
+    zettel_objet_target.add_argument("--path", help="Archive-relative zettel path to inspect.")
+    zettel_objet_links.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing and open nothing.")
+    zettel_objet_links.add_argument("--max-refs", type=int, default=100, help="Maximum distinct object refs to resolve.")
+    zettel_objet_links.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    zettel_objet_links.set_defaults(func=command_zettel_objet_links)
 
     block_header = subcommands.add_parser("block-header", help="Preview the derived block header for one zet.")
     block_header.add_argument("archive_root", help="Archive root to inspect.")

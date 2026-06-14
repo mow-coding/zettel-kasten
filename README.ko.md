@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.3.17 pre-release
+v0.3.18 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -35,6 +35,7 @@ v0.3.17 pre-release
 - doctor, draft, mint, delegate, receipt, search, metadata review 같은 private archive lifecycle 도구,
 - runtime context, profile, source/objet intake, block header, prompt boundary, foreign block review, projection, shared update review/index, shared update route preview, ZET would-transport planning을 위한 read-only preview layer,
 - 사람 승인 뒤에만 동작하는 일부 local write path,
+- read-only objet reference resolution 및 zettel objet link preview,
 - public link, Korean product language, privacy, release readiness, branch-protection planning을 위한 local hygiene tool.
 
 각 기능이 실제 구현인지, read-only preview인지, 승인 write인지, 문서만 있는지 보려면 [WOM-kit Capability Matrix](wom-kit/docs/capability-matrix.md)를 보세요.
@@ -90,6 +91,7 @@ v0.3.17 pre-release
 - [v0.2.x Freeze And v0.3.0 Entry Boundary](wom-kit/docs/v02x-freeze-v03-entry-boundary.md)
 - [공개 문서 지도](wom-kit/docs/public-documentation-map.ko.md)
 - [Human Artifact Store Contract](wom-kit/docs/human-artifact-store-contract.md)
+- [Zettel Objet Links](wom-kit/docs/zettel-objet-links.md)
 
 공개 프로젝트 기록은 의도적으로 다음처럼 분리합니다.
 
@@ -194,6 +196,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.3.18
 v0.3.17
 v0.3.16
 v0.3.15

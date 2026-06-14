@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.18 - 2026-06-14
+
+- Added read-only CLI `archive zettel-objet-links --path <zet.md>|--zettel-id
+  <id> --dry-run` and MCP `zettel_objet_links` for zettel-level objet link
+  previews.
+- The preview scans one non-redacted zettel for `sha256:<hex>` and
+  `objet:sha256:<hex>` refs, then reuses `resolve-objet-ref` to return safe
+  local archive-relative candidates and external store labels.
+- Kept the preview conservative: it writes nothing, echoes no zettel body text
+  or frontmatter values, echoes no absolute local paths or provider URLs, reads
+  no object bytes, calls no providers, creates no presigned URLs, and blocks
+  redacted zettels.
+- Added `wom-kit/docs/zettel-objet-links.md` and tests for CLI/MCP behavior,
+  dry-run-only enforcement, and privacy boundaries.
+
 ## v0.3.17 - 2026-06-14
 
 - Added read-only CLI `archive resolve-objet-ref --object-id sha256:<hex>

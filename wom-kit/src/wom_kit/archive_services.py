@@ -419,6 +419,7 @@ MINT_CHECKLIST_VERSION = "zet-mint/v0.2"
 SOURCE_SCAN_MODE = "metadata_only"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 OBJECT_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+OBJET_REF_TOKEN_RE = re.compile(r"\b(?P<prefix>objet:)?sha256:(?P<digest>[0-9a-fA-F]{64})\b")
 DRAFT_CREATION_MODES = {"human_written", "ai_assisted", "ai_generated", "imported", "derived"}
 SOURCE_INTAKE_ROLES = {"primary_source", "context", "attachment", "derived_context"}
 SOURCE_INTAKE_DEFAULT_ROLE = "primary_source"
@@ -1188,6 +1189,249 @@ def read_zettel(
         "path": archive_relative_path(path, root),
         "frontmatter": frontmatter,
         "body": body,
+    }
+
+
+def objet_ref_occurrences_in_text(text: str, *, source: str, field: str | None = None) -> list[dict[str, Any]]:
+    occurrences: list[dict[str, Any]] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        for match in OBJET_REF_TOKEN_RE.finditer(line):
+            digest = match.group("digest").lower()
+            occurrences.append(
+                {
+                    "source": source,
+                    "line": line_number,
+                    "field": field,
+                    "token_kind": "objet_ref" if match.group("prefix") else "object_id",
+                    "object_id": f"sha256:{digest}",
+                }
+            )
+    return occurrences
+
+
+def safe_objet_ref_field_segment(value: Any) -> str:
+    text = str(value).strip()
+    if not text:
+        return "field"
+    if contains_forbidden_location_reference(text) or source_intake_has_provider_url(text) or source_intake_secret_like(text):
+        return "redacted_field"
+    sanitized = re.sub(r"[^A-Za-z0-9_-]+", "_", text).strip("_")
+    return sanitized[:80] if sanitized else "field"
+
+
+def objet_ref_occurrences_in_value(value: Any, *, field: str) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        occurrences: list[dict[str, Any]] = []
+        for key, child in value.items():
+            key_text = safe_objet_ref_field_segment(key)
+            child_field = f"{field}.{key_text}" if field else key_text
+            occurrences.extend(objet_ref_occurrences_in_value(child, field=child_field))
+        return occurrences
+    if isinstance(value, list):
+        occurrences = []
+        for index, child in enumerate(value):
+            child_field = f"{field}[{index}]"
+            occurrences.extend(objet_ref_occurrences_in_value(child, field=child_field))
+        return occurrences
+    if isinstance(value, str):
+        return objet_ref_occurrences_in_text(value, source="frontmatter", field=field)
+    return []
+
+
+def zettel_objet_links(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    dry_run: bool = True,
+    max_refs: int = 100,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("zettel-objet-links is read-only; pass --dry-run.")
+    if not zettel_id and not relative_path:
+        blockers.append("Provide zettel_id or path.")
+        return {
+            "ok": False,
+            "dry_run": True,
+            "lifecycle_action": "zettel_objet_links",
+            "archive_id": archive_id,
+            "zettel": {"path": None, "redacted": False},
+            "count": 0,
+            "links": [],
+            "truncated": False,
+            "privacy_guards": {
+                "body_text_echoed": False,
+                "frontmatter_values_echoed": False,
+                "absolute_local_paths_echoed": False,
+                "provider_urls_echoed": False,
+                "provider_api_called": False,
+                "presigned_url_created": False,
+                "download_performed": False,
+                "object_file_bytes_read": False,
+                "object_file_hash_verified_now": False,
+                "writes": False,
+            },
+            "would_change": [],
+            "next_safe_actions": ["Fix blockers before rendering objet links."],
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+        }
+
+    path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
+    text = path.read_text(encoding="utf-8")
+    frontmatter, body = split_zettel_text(text)
+    safe_frontmatter = json_safe(frontmatter)
+    zettel_summary_value = {
+        "path": archive_relative_path(path, root),
+        "redacted": safe_frontmatter.get("status") == "redacted",
+    }
+    if safe_frontmatter.get("status") == "redacted":
+        blockers.append("zettel_is_redacted")
+        return {
+            "ok": False,
+            "dry_run": True,
+            "lifecycle_action": "zettel_objet_links",
+            "archive_id": archive_id,
+            "zettel": zettel_summary_value,
+            "count": 0,
+            "links": [],
+            "truncated": False,
+            "privacy_guards": {
+                "body_text_echoed": False,
+                "frontmatter_values_echoed": False,
+                "absolute_local_paths_echoed": False,
+                "provider_urls_echoed": False,
+                "provider_api_called": False,
+                "presigned_url_created": False,
+                "download_performed": False,
+                "object_file_bytes_read": False,
+                "object_file_hash_verified_now": False,
+                "writes": False,
+            },
+            "would_change": [],
+            "next_safe_actions": ["Redacted zettels do not expose objet link previews."],
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+        }
+
+    max_refs = max(1, min(int(max_refs), 500))
+    occurrences: list[dict[str, Any]] = []
+    occurrences.extend(objet_ref_occurrences_in_value(safe_frontmatter, field="frontmatter"))
+    occurrences.extend(objet_ref_occurrences_in_text(body, source="body"))
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for occurrence in occurrences:
+        object_id_value = str(occurrence.get("object_id") or "")
+        if object_id_value not in grouped:
+            grouped[object_id_value] = []
+            order.append(object_id_value)
+        grouped[object_id_value].append(occurrence)
+
+    truncated = len(order) > max_refs
+    links: list[dict[str, Any]] = []
+    for object_id_value in order[:max_refs]:
+        object_occurrences = grouped[object_id_value]
+        resolution = resolve_objet_ref(root, object_id=object_id_value, dry_run=True)
+        link_candidates: list[dict[str, Any]] = []
+        for candidate in resolution.get("local_candidates", []):
+            if not isinstance(candidate, dict):
+                continue
+            link_candidates.append(
+                {
+                    "kind": "archive_relative_path",
+                    "label": "local archive candidate",
+                    "archive_relative_path": candidate.get("archive_relative_path"),
+                    "exists": bool(candidate.get("exists")),
+                    "availability": candidate.get("availability"),
+                    "clickable_in_local_client": bool(candidate.get("exists")),
+                    "href_kind": "archive_relative",
+                }
+            )
+        for candidate in resolution.get("external_candidates", []):
+            if not isinstance(candidate, dict):
+                continue
+            link_candidates.append(
+                {
+                    "kind": "external_store_label",
+                    "label": "manual external store label",
+                    "provider": candidate.get("provider"),
+                    "store_kind": candidate.get("store_kind"),
+                    "store_ref": candidate.get("store_ref"),
+                    "availability": candidate.get("availability"),
+                    "clickable_in_local_client": False,
+                    "href_kind": "label_only",
+                }
+            )
+        links.append(
+            {
+                "object_id": object_id_value,
+                "occurrence_count": len(object_occurrences),
+                "occurrences": [
+                    {
+                        "source": occurrence.get("source"),
+                        "line": occurrence.get("line"),
+                        "field": occurrence.get("field"),
+                        "token_kind": occurrence.get("token_kind"),
+                    }
+                    for occurrence in object_occurrences[:10]
+                ],
+                "occurrences_truncated": len(object_occurrences) > 10,
+                "resolution_state": resolution.get("resolution_state"),
+                "resolution_ok": bool(resolution.get("ok")),
+                "manifest_record_count": resolution.get("manifest_record_count"),
+                "local_openable": bool(resolution.get("local_openable")),
+                "external_declared": bool(resolution.get("external_declared")),
+                "link_candidates": link_candidates,
+                "resolver_blockers": resolution.get("blockers", []),
+                "resolver_warnings": resolution.get("warnings", []),
+                "command_hints": [
+                    f"archive resolve-objet-ref <archive-root> --object-id {object_id_value} --dry-run"
+                ],
+            }
+        )
+
+    if truncated:
+        warnings.append("objet_ref_link_preview_truncated")
+
+    next_safe_actions: list[str] = []
+    if links:
+        next_safe_actions.append("Render local archive-relative candidates as local-client links when they exist.")
+        next_safe_actions.append("Keep external store labels non-clickable until an explicit provider URL policy exists.")
+    else:
+        next_safe_actions.append("No objet refs were found in this zettel.")
+    if blockers:
+        next_safe_actions.append("Fix blockers before rendering objet links.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "zettel_objet_links",
+        "archive_id": archive_id,
+        "zettel": zettel_summary_value,
+        "count": len(links),
+        "links": links,
+        "truncated": truncated,
+        "privacy_guards": {
+            "body_text_echoed": False,
+            "frontmatter_values_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "provider_api_called": False,
+            "presigned_url_created": False,
+            "download_performed": False,
+            "object_file_bytes_read": False,
+            "object_file_hash_verified_now": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": next_safe_actions,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
     }
 
 
