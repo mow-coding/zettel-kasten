@@ -101,6 +101,9 @@ github_repository_setup_plan
 object_storage_setup_plan
   Plan private object storage metadata for WOM objets. This is read-only and never creates buckets/containers, starts OAuth, calls provider APIs, uploads, syncs, copies, hashes, or imports source files.
 
+zet_surface_prototype_plan
+  Preview a user-selected ZET surface prototype for WordPress, Joplin, Notion, or Obsidian. This is read-only and never calls providers, requests tokens, writes notes, writes vault files, publishes posts, creates projection receipts, mints, syncs, or runs ZET transport.
+
 source_intake_plan
   Classify one source/objet locator and return safe draft refs. This is read-only and never reads file bodies, calculates full hashes, copies, uploads, imports, OCRs, transcribes, extracts, calls provider APIs, creates drafts, or mints.
 
@@ -170,6 +173,9 @@ foreign_block_attestation_statement_draft_decision_preview
 
 zet_projection_plan_check
   Read-only dry-run projection plan preview for one local zet and one operator-declared surface kind. It writes nothing, emits no full body text, creates no projection receipt, calls no provider, publishes nothing, and runs no ZET transport.
+
+zet_surface_prototype_plan
+  Read-only dry-run prototype preview for one user-selected ZET surface kind: `wordpress`, `joplin`, `notion`, or `obsidian`. It writes nothing, calls no provider, requests no token, creates no note, writes no vault file, publishes no post, creates no projection receipt, mints nothing, and runs no ZET transport.
 
 zet_shared_update_record_review_preview
   Read-only dry-run preview for one local archive-contained ZET shared update record JSON before receiver-side renewal. `dry_run` must be boolean `true`; the tool writes nothing, echoes no body text or local absolute paths, blocks true mutation/write/transport/provider/trust flags, and never updates feeds, trusts, imports, attests, signs, anchors, calls providers, writes receipts, projects, or runs ZET transport.
@@ -276,6 +282,7 @@ ownership_transfer_check
 - `foreign_block_attestation_statement_draft_review_index` is read-only and writes nothing. Its style and scope filters do not relax consistency validation, `case_id` scopes the verdict to one case, and included receipt summaries are sanitized. MCP rejects any `dry_run` value other than boolean `true` and exposes no statement draft review apply, write, approve, accept, import, trust, attest, sign, receipt write, auto-accept, auto-import, transport, or full-auto tool.
 - `foreign_block_attestation_statement_draft_decision_preview` is read-only and writes nothing. MCP rejects any `dry_run` value other than boolean `true`, treats review notes as preview context only, and exposes no decision write/apply, statement draft accept, import, trust, attest, sign, receipt write, WordPress publishing, provider sync, auto-accept, auto-import, transport, or full-auto tool.
 - `zet_projection_plan_check` is read-only and requires `dry_run: true`. MCP exposes no projection-plan apply/write, projection receipt write, WordPress publishing, provider publishing, ZET transport, or automatic posting tool.
+- `zet_surface_prototype_plan` is read-only and requires `dry_run: true`. MCP exposes no ZET surface apply/write, provider call, OAuth/token prompt, note creation, vault write, post publishing, projection receipt write, sync, minting, cleanup, or transport tool.
 - `zet_transport_would_plan` is read-only and requires `dry_run: true`. MCP exposes no ZET transport apply/write/send/deliver/publish, key creation, radio-frequency access creation, mirroring delivery, queue/worker, receipt write, provider, trust/import/attest/sign/anchor, or full-auto tool.
 - v0.2.48 radio-frequency recommendation is documentation-only. MCP exposes no recommendation fetch/rank/update, selector execution, provider, projection, receipt, or feed mutation tool.
 - v0.3.0 shared update attestation/review recording is CLI-only. MCP exposes no boundary apply/write/approve, receiver-side renewal write, public proof anchor, DID/wallet/key custody, transport, provider sync, trust mutation, token, governance, or full-auto tool.

@@ -121,6 +121,7 @@ ZET_PROJECTION_SURFACE_KINDS = {
     "rss_feed",
     "generic_surface",
 }
+ZET_SURFACE_PROTOTYPE_KINDS = {"wordpress", "joplin", "notion", "obsidian"}
 ZET_PROJECTION_VISIBILITIES = {"private", "team", "public", "unknown"}
 ZET_PROJECTION_FORMATS = {"metadata_only", "safe_html_summary", "plain_text_summary"}
 HUMAN_ARTIFACT_SURFACE_KINDS = {
@@ -10343,6 +10344,227 @@ def human_artifact_surface_contract(surface_kind: str | None) -> dict[str, Any]:
 
 def safe_human_artifact_surface_ref(value: str) -> bool:
     return safe_source_intake_ref(value)
+
+
+def zet_surface_prototype_plan(
+    archive_root: Path | str,
+    *,
+    surface_kind: str | None,
+    surface_ref: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("zet-surface-prototype is dry-run only; pass --dry-run.")
+
+    normalized_surface = str(surface_kind or "").strip().lower().replace("-", "_")
+    if normalized_surface not in ZET_SURFACE_PROTOTYPE_KINDS:
+        blockers.append(
+            "surface_kind must be one of: " + ", ".join(sorted(ZET_SURFACE_PROTOTYPE_KINDS)) + "."
+        )
+        normalized_surface = "wordpress"
+
+    normalized_ref = str(surface_ref or "").strip()
+    if normalized_ref and not safe_human_artifact_surface_ref(normalized_ref):
+        blockers.append("surface_ref must be a safe label/ref, not a URL, email, token, secret, or path.")
+        normalized_ref = ""
+
+    prototype = zet_surface_prototype_contract(normalized_surface)
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "zet_surface_prototype_plan",
+        "archive_id": archive_id,
+        "prototype_status": "planned_not_configured",
+        "surface": {
+            "surface_kind": normalized_surface,
+            "surface_ref": normalized_ref or None,
+            "role": prototype["role"],
+            "role_status": "operator_declared_not_verified",
+        },
+        "zet_layer_boundary": {
+            "surface_is_not_canonical_archive": True,
+            "projection_is_not_minting": True,
+            "surface_locator_is_not_zet_identity": True,
+            "adapter_receipt_required_before_future_write": True,
+            "human_review_required_before_publish_or_sync": True,
+        },
+        "prototype": prototype,
+        "settings_schema_preview": zet_surface_settings_schema_preview(normalized_surface),
+        "common_receipt_requirements": [
+            "archive_id",
+            "zet_id_or_source_path",
+            "surface_kind",
+            "surface_ref",
+            "projection_format",
+            "visibility_intent",
+            "source_body_sha256_or_render_sha256",
+            "human_reviewed_by",
+            "human_reviewed_at",
+            "external_action_status",
+        ],
+        "future_adapter_steps": [
+            "preview local zet scope with projection-plan",
+            "choose this surface prototype and safe surface_ref",
+            "render a WOM Safe HTML or Markdown-compatible projection in a later dry-run",
+            "review a future projection receipt before any provider or vault write",
+            "keep provider tokens and local vault paths outside public archive records",
+        ],
+        "closed_scope_gates": [
+            "provider API call",
+            "OAuth or token prompt",
+            "note creation",
+            "note update",
+            "file write into vault",
+            "post publish",
+            "attachment upload",
+            "projection receipt write",
+            "ZET transport",
+            "minting",
+            "automatic sync",
+            "cleanup",
+        ],
+        "external_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "token_requested": False,
+            "note_created": False,
+            "note_updated": False,
+            "post_published": False,
+            "vault_file_written": False,
+            "attachment_uploaded": False,
+            "projection_receipt_created": False,
+            "zet_transport_performed": False,
+            "minted": False,
+            "cleanup_performed": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def zet_surface_prototype_contract(surface_kind: str) -> dict[str, Any]:
+    contracts: dict[str, dict[str, Any]] = {
+        "wordpress": {
+            "role": "projection_surface",
+            "integration_family": "remote_rest_api",
+            "body_model": "post_or_page_content_future",
+            "identity_model": "site_ref_plus_remote_post_id_future",
+            "auth_model": "application_password_or_oauth_future",
+            "best_for": ["selected publication", "private blog", "public post surface"],
+            "primary_risks": [
+                "publishing is easy to confuse with minting",
+                "post URLs are not canonical zet identity",
+                "HTML/block rendering needs a safety profile before posting",
+            ],
+            "minimum_future_adapter": [
+                "site capability check",
+                "draft-only post preview",
+                "human approval before publish",
+                "projection receipt with remote post id",
+            ],
+        },
+        "joplin": {
+            "role": "working_note_store",
+            "integration_family": "local_data_api",
+            "body_model": "markdown_note_future",
+            "identity_model": "profile_ref_plus_note_id_future",
+            "auth_model": "local_web_clipper_token_future",
+            "best_for": ["living notes", "offline review", "local handoff notebooks"],
+            "primary_risks": [
+                "local token must never enter public records",
+                "Joplin note ids are external surface ids, not zet ids",
+                "sync state is outside WOM's manifest guarantees",
+            ],
+            "minimum_future_adapter": [
+                "local service reachability check",
+                "notebook target preview",
+                "note create/update receipt",
+                "reverse link back to WOM object or zet id",
+            ],
+        },
+        "notion": {
+            "role": "human_artifact_store",
+            "integration_family": "remote_workspace_api",
+            "body_model": "page_or_block_tree_future",
+            "identity_model": "workspace_ref_plus_page_or_data_source_parent_future",
+            "auth_model": "integration_token_or_oauth_future",
+            "best_for": ["workspace review", "database-backed artifact tracking", "team notes"],
+            "primary_risks": [
+                "export intake and workspace writes are different roles",
+                "workspace permissions decide what a connection can access",
+                "page or data source parent selection must be explicit",
+            ],
+            "minimum_future_adapter": [
+                "parent page/data-source target preview",
+                "database property mapping preview",
+                "block tree render preview",
+                "projection receipt with Notion page id",
+            ],
+        },
+        "obsidian": {
+            "role": "working_note_store",
+            "integration_family": "local_vault_or_uri",
+            "body_model": "markdown_file_future",
+            "identity_model": "vault_ref_plus_note_path_or_uri_future",
+            "auth_model": "local_filesystem_or_advanced_uri_future",
+            "best_for": ["local markdown vaults", "wiki links", "human browsing"],
+            "primary_risks": [
+                "vault paths are private local configuration",
+                "file writes can look canonical when they are only mirrors",
+                "Advanced URI is a plugin-mediated control surface, not core WOM transport",
+            ],
+            "minimum_future_adapter": [
+                "vault target preview without absolute path echo",
+                "frontmatter/link mapping preview",
+                "optional Advanced URI strategy check",
+                "projection receipt with vault-relative path or stable URI ref",
+            ],
+        },
+    }
+    return json_safe(contracts[surface_kind])
+
+
+def zet_surface_settings_schema_preview(surface_kind: str) -> dict[str, Any]:
+    common = {
+        "surface_ref": "safe label/ref only; no URL, email, token, or local path",
+        "visibility_intent": sorted(ZET_PROJECTION_VISIBILITIES),
+        "projection_format": sorted(ZET_PROJECTION_FORMATS),
+        "reviewed_by": "safe actor id required before future write",
+    }
+    by_surface = {
+        "wordpress": {
+            "site_ref": "safe site label, not a URL",
+            "target_type": ["post", "page"],
+            "post_status_intent": ["draft", "private", "publish_future"],
+            "credential_ref": "local secret handle only",
+        },
+        "joplin": {
+            "profile_ref": "safe local profile label",
+            "notebook_ref": "safe notebook label/id",
+            "api_base_ref": "local endpoint label, not raw URL",
+            "token_ref": "local secret handle only",
+        },
+        "notion": {
+            "workspace_ref": "safe workspace label",
+            "parent_ref": "safe page/data-source parent label",
+            "target_shape": ["page", "database_item"],
+            "integration_ref": "local secret handle only",
+        },
+        "obsidian": {
+            "vault_ref": "safe vault label, not absolute path",
+            "folder_ref": "safe vault-relative folder label",
+            "link_strategy": ["wikilink", "markdown_link", "advanced_uri_future"],
+            "uri_plugin": ["none", "advanced_uri_future"],
+        },
+    }
+    result = dict(common)
+    result.update(by_surface[surface_kind])
+    return result
 
 
 def prehashed_objet_ledger_preview(

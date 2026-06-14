@@ -217,6 +217,20 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "zet_surface_prototype_plan",
+        "description": "Plan a user-selected ZET surface prototype for WordPress, Joplin, Notion, or Obsidian. Read-only; never calls providers, requests tokens, writes notes, publishes, syncs, mints, or transports.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "surface_kind": {"type": "string", "enum": sorted(archive_services.ZET_SURFACE_PROTOTYPE_KINDS)},
+                "surface_ref": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "surface_kind"],
+        },
+    },
+    {
         "name": "prehashed_objet_ledger_preview",
         "description": "Preview an already-hashed external content-addressed objet ledger. Read-only; never echoes row values, reads blob bytes, registers manifests, writes, uploads, or calls providers.",
         "inputSchema": {
@@ -1276,6 +1290,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_provider_setup_status(arguments)
     if name == "human_artifact_store_plan":
         return tool_human_artifact_store_plan(arguments)
+    if name == "zet_surface_prototype_plan":
+        return tool_zet_surface_prototype_plan(arguments)
     if name == "prehashed_objet_ledger_preview":
         return tool_prehashed_objet_ledger_preview(arguments)
     if name == "project_intake_plan":
@@ -1558,6 +1574,21 @@ def tool_human_artifact_store_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"human_artifact_store_plan: {state}.", result)
+
+
+def tool_zet_surface_prototype_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("zet_surface_prototype_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.zet_surface_prototype_plan,
+        archive_root,
+        surface_kind=require_string_arg(arguments, "surface_kind"),
+        surface_ref=optional_string_arg(arguments, "surface_ref"),
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"zet_surface_prototype_plan: {state}.", result)
 
 
 def tool_prehashed_objet_ledger_preview(arguments: dict[str, Any]) -> dict[str, Any]:

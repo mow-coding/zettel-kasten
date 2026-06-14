@@ -125,6 +125,7 @@ Onboarding and setup plans:
 - [WOM-kit Capability Matrix](capability-matrix.md)
 - [ZET Publication Surface Baseline](zet-publication-surface-baseline.md)
 - [ZET Projection Plan Preview](zet-projection-plan-preview.md)
+- [ZET Surface Prototypes](zet-surface-prototypes.md)
 - [ZET Closed Sharing Model Baseline](zet-closed-sharing-model-baseline.md)
 - [ZET Radio-Frequency Recommendation Model](zet-radio-frequency-recommendation-model.md)
 - [ZET Shared Update Record Baseline](zet-shared-update-record-baseline.md)

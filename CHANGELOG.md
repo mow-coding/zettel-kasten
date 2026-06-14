@@ -39,6 +39,12 @@ This project uses semantic versioning for public compatibility checkpoints.
   without reading blob bytes, copying objects, uploading, drafting, minting, or
   claiming that `objet-capture` can skip byte verification today. MCP remains a
   read-only `prehashed_objet_ledger_preview`.
+- Added read-only CLI `archive zet-surface-prototype --dry-run` and MCP
+  `zet_surface_prototype_plan` for user-selected ZET surface prototypes across
+  WordPress, Joplin, Notion, and Obsidian. The preview returns surface-specific
+  settings, risks, and future adapter steps without provider calls, token
+  prompts, note writes, vault writes, post publishing, projection receipts,
+  minting, cleanup, or ZET transport.
 
 ## v0.3.7 - 2026-06-13
 
