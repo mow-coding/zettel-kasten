@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.13 - 2026-06-14
+
+- Strengthened `wom-kit/docs/human-artifact-store-contract.md` as the shared
+  contract for user-selected surfaces such as WordPress, Joplin, Notion,
+  Obsidian, and generic Markdown/workspace apps.
+- Added a role matrix and adapter questions that separate raw data stores,
+  human-readable artifacts, projection surfaces, and system/AI records so app
+  names do not become implicit WOM architecture.
+- Added a capture-action shape for future note/report/handoff workflows:
+  explicit human capture first, then a separate local WOM receipt/source-map
+  record outside the app.
+- Linked the contract from README and the public documentation maps, and pointed
+  ZET surface prototypes back to the shared contract before future app-specific
+  adapters write anything.
+
 ## v0.3.12 - 2026-06-14
 
 - Updated `wom-kit/docs/project-intake-cookbook.md` with a bulk raw-preservation

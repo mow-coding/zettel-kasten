@@ -9,6 +9,8 @@ REPO_ROOT = KIT_ROOT.parent
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 FREEZE_DOC_PATH = KIT_ROOT / "docs" / "v02x-freeze-v03-entry-boundary.md"
 PROJECT_INTAKE_COOKBOOK_PATH = KIT_ROOT / "docs" / "project-intake-cookbook.md"
+HUMAN_ARTIFACT_STORE_CONTRACT_PATH = KIT_ROOT / "docs" / "human-artifact-store-contract.md"
+ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
 
 
 class CapabilityMatrixDocsTests(unittest.TestCase):
@@ -105,6 +107,40 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "$selectionJson",
             "Treat receipts as context, not automatic permission.",
             "WOM-kit still never deletes it for you.",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+
+    def test_human_artifact_store_contract_separates_surface_from_system_records(self) -> None:
+        text = HUMAN_ARTIFACT_STORE_CONTRACT_PATH.read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.13 contract baseline",
+            "Raw data store",
+            "Human artifact store",
+            "System/AI artifact store",
+            "The app name is never enough.",
+            "| WordPress | projection surface |",
+            "| Joplin | working note store / human artifact store |",
+            "| Notion | workspace note / source export, depending on context |",
+            "| Obsidian | local Markdown vault / working note store |",
+            "Capture Action Shape",
+            "human explicitly asks to capture a note/report/handoff",
+            "system/AI artifact store records refs, source maps, receipts, and hashes",
+            "automatically a manifest, source map, receipt, index entry, or trusted memory",
+            "Write a separate local WOM receipt describing what changed.",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+
+    def test_zet_surface_prototypes_point_to_shared_human_artifact_contract(self) -> None:
+        text = ZET_SURFACE_PROTOTYPES_PATH.read_text(encoding="utf-8")
+        for phrase in (
+            "[Human Artifact Store Contract](human-artifact-store-contract.md)",
+            "contract describes what a future",
+            "adapter must prove before it can safely write",
+            "Shared Contract Questions",
+            "how the human-facing artifact links back to WOM object ids, zets, receipts",
+            "which provider credentials, local paths, account data, and private URLs stay",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)
