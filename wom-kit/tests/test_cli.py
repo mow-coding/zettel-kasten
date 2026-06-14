@@ -1551,14 +1551,122 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["ledger"]["invalid_row_count"], 1)
             self.assertEqual(result["ledger"]["total_declared_bytes"], 29)
             self.assertFalse(result["current_capability"]["objet_capture_can_import_prehashed_external_store_without_rehashing"])
+            self.assertTrue(result["current_capability"]["manifest_registration_from_prehashed_ledger_implemented"])
             self.assertFalse(result["privacy_guards"]["row_values_echoed"])
             self.assertFalse(result["privacy_guards"]["blob_bytes_read"])
-            self.assertEqual(result["would_change"], [])
+            self.assertEqual(result["registration"]["would_append_manifest_records"], 2)
+            self.assertTrue(any("objects/manifests/files.jsonl" in item for item in result["would_change"]))
+            self.assertTrue(any("receipts/prehashed-objet-ledger/" in item for item in result["would_change"]))
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
             self.assertNotIn(str(ledger), output)
             self.assertNotIn("private-notion-export-name.pdf", output)
             self.assertNotIn("https://example.com/private", output)
             self.assertNotIn("LOCAL_DEVICE_PLACEHOLDER", output)
+
+    def test_prehashed_objet_ledger_approve_appends_external_manifest_records_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            ledger = Path(tmp) / "retrieval-ledger.jsonl"
+            sha_a = "c" * 64
+            sha_b = "d" * 64
+            ledger.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"sha256": sha_a, "bytes": 12, "filename": "private-notion-export-name.pdf"}),
+                        json.dumps({"sha256": "sha256:" + sha_b, "bytes": "5", "url": "https://example.com/private"}),
+                        json.dumps({"sha256": sha_a, "bytes": 12}),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "prehashed-objet-ledger",
+                    str(archive_root),
+                    "--ledger",
+                    str(ledger),
+                    "--store-kind",
+                    "notion_source_export",
+                    "--store-ref",
+                    "notion-export-20260613",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "prehashed_objet_ledger_register")
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["registration"]["appended_manifest_records"], 2)
+            self.assertFalse(result["registration"]["object_ids_echoed"])
+            self.assertNotIn(str(ledger), output)
+            self.assertNotIn("private-notion-export-name.pdf", output)
+            self.assertNotIn("https://example.com/private", output)
+
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [json.loads(line) for line in manifest_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            added = {record["object_id"]: record for record in records if record.get("provenance", {}).get("source") == "prehashed_external_objet_ledger"}
+            self.assertEqual(set(added), {f"sha256:{sha_a}", f"sha256:{sha_b}"})
+            record = added[f"sha256:{sha_a}"]
+            self.assertEqual(record["logical_key"], f"objects/external/prehashed/notion_source_export/{sha_a[:2]}/{sha_a}")
+            self.assertFalse((archive_root / record["logical_key"]).exists())
+            self.assertEqual(record["locations"][0]["provider"], "external_prehashed")
+            self.assertEqual(record["locations"][0]["store_ref"], "notion-export-20260613")
+            self.assertFalse(record["locations"][0]["byte_verification_by_wom_kit"])
+            self.assertEqual(record["provenance"]["created_in"], "archive:personal:fake-life")
+
+            receipt_path = archive_root / Path(result["registration"]["receipt_path"])
+            self.assertTrue(receipt_path.is_file())
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["schema"], archive_services.PREHASHED_OBJET_LEDGER_RECEIPT_SCHEMA)
+            self.assertEqual(receipt["summary"]["appended_manifest_records"], 2)
+            self.assertFalse(receipt["ledger_path_included"])
+            self.assertFalse(receipt["privacy_guards"]["row_values_echoed"])
+
+    def test_prehashed_objet_ledger_approve_blocks_invalid_rows_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            ledger = Path(tmp) / "retrieval-ledger.jsonl"
+            ledger.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"sha256": "e" * 64, "bytes": 1}),
+                        json.dumps({"sha256": "not-a-sha", "bytes": 2}),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "prehashed-objet-ledger",
+                    str(archive_root),
+                    "--ledger",
+                    str(ledger),
+                    "--store-kind",
+                    "notion_source_export",
+                    "--store-ref",
+                    "notion-export-20260613",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertIn("prehashed objet ledger registration blocks when any ledger row is invalid.", result["blockers"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
     def test_object_storage_invalid_provider_bucket_slug_and_secret_refs_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

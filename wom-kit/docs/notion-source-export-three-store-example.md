@@ -101,22 +101,38 @@ archive prehashed-objet-ledger <archive-root> \
   --format json
 ```
 
-This second command only checks ledger shape and counts. It does not read blob
-bytes, register object manifests, call Notion, upload, sync, draft, mint, or
-clean.
+If the dry-run is reviewed and the external store should be declared as a WOM
+objet source, approve the manifest registration with a safe store label:
 
-MCP exposes the same read-only preview as `prehashed_objet_ledger_preview`.
+```bash
+archive prehashed-objet-ledger <archive-root> \
+  --ledger retrieval-ledger.jsonl \
+  --store-kind notion_source_export \
+  --store-ref notion-export-20260613 \
+  --approve \
+  --reviewed-by person:me \
+  --format json
+```
+
+Approved mode appends external records to `objects/manifests/files.jsonl` and
+writes a receipt under `receipts/prehashed-objet-ledger/`. It still does not
+read blob bytes, copy objects, call Notion, upload, sync, draft, mint, or clean.
+
+MCP exposes only the read-only preview as `prehashed_objet_ledger_preview`.
 
 ## Current Boundary
 
-Today, `objet-capture` still verifies bytes from staged local files. It does
-not yet import an already-hashed external content-addressed store without
-rehashing. A future no-rehash path needs a separate approval-gated manifest
-registration command with its own receipts.
+Today, `objet-capture` still verifies bytes from staged local files. The
+prehashed ledger path is separate: it can register externally verified object
+IDs in the manifest without re-reading blob bytes, but it does not prove,
+copy, or materialize those bytes inside the archive.
 
-Until that exists:
+Recommended order:
 
 - keep the external source-export ledger as raw evidence,
 - preview it with `prehashed-objet-ledger --dry-run`,
+- approve it with `--approve --reviewed-by <actor> --store-ref <safe-label>`
+  only after human review,
 - use project-intake and source-intake receipts for human-reviewed context,
-- use `objet-capture` only when WOM-kit is allowed to verify staged bytes.
+- use `objet-capture` only when WOM-kit is allowed to verify staged bytes and
+  store local content-addressed copies.
