@@ -286,6 +286,27 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "credential_store_recommendation",
+        "description": "Recommend a password manager, OS keyring, or secret manager class for a human scenario. Read-only; never reads, writes, prompts for, or echoes secrets.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "scenario": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS),
+                },
+                "platform": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+                    "default": "windows",
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "scenario"],
+        },
+    },
+    {
         "name": "zet_surface_prototype_plan",
         "description": "Plan a user-selected ZET surface prototype for WordPress, Joplin, Notion, or Obsidian. Read-only; never calls providers, requests tokens, writes notes, publishes, syncs, mints, or transports.",
         "inputSchema": {
@@ -1442,6 +1463,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_credential_ref_plan(arguments)
     if name == "credential_ref_inventory":
         return tool_credential_ref_inventory(arguments)
+    if name == "credential_store_recommendation":
+        return tool_credential_store_recommendation(arguments)
     if name == "zet_surface_prototype_plan":
         return tool_zet_surface_prototype_plan(arguments)
     if name == "prehashed_objet_ledger_preview":
@@ -1790,6 +1813,25 @@ def tool_credential_ref_inventory(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"credential_ref_inventory: {state}, {result['credential_count']} ref(s).", result)
+
+
+def tool_credential_store_recommendation(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("credential_store_recommendation is read-only and requires dry-run.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.credential_store_recommendation,
+        archive_root,
+        scenario=require_string_arg(arguments, "scenario"),
+        platform=optional_string_arg(arguments, "platform") or "windows",
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    primary = result.get("primary_recommendation") if isinstance(result.get("primary_recommendation"), dict) else {}
+    return tool_success_result(
+        f"credential_store_recommendation: {state}, primary={primary.get('store_id') or '-'}.",
+        result,
+    )
 
 
 def tool_zet_surface_prototype_plan(arguments: dict[str, Any]) -> dict[str, Any]:

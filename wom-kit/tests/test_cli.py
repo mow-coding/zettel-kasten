@@ -1752,6 +1752,71 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(any("credential_ref must be a safe ref" in blocker for blocker in bad_result["blockers"]))
             self.assertNotIn(raw_secret, bad_output)
 
+    def test_credential_store_recommendation_routes_human_scenarios_without_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "credential-store-recommendation",
+                    str(archive_root),
+                    "--scenario",
+                    "personal_local_first",
+                    "--platform",
+                    "windows",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "credential_store_recommendation")
+            self.assertEqual(result["primary_recommendation"]["store_id"], "keepassxc")
+            self.assertEqual(result["primary_recommendation"]["wom_ref_prefix"], "secret:")
+            self.assertTrue(any(item["prefix"] == "keyring:" for item in result["wom_compatibility"]["credential_ref_prefixes"]))
+            self.assertFalse(result["wom_compatibility"]["wom_stores_secret_values"])
+            self.assertFalse(result["closed_actions"]["password_manager_opened"])
+            self.assertFalse(result["closed_actions"]["secret_value_read"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("sk-proj-", output)
+            self.assertNotIn("@", json.dumps(result["primary_recommendation"]))
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            browser_code, browser_output = self.run_cli(
+                [
+                    "credential-store-recommendation",
+                    str(archive_root),
+                    "--scenario",
+                    "browser_or_platform_password_manager",
+                    "--platform",
+                    "windows",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            browser_result = json.loads(browser_output)
+            self.assertEqual(browser_code, 0, browser_output)
+            self.assertEqual(browser_result["primary_recommendation"]["store_class"], "browser_platform_password_manager")
+            self.assertTrue(any("broker" in action for action in browser_result["next_safe_actions"]))
+            self.assertFalse(browser_result["current_capability"]["password_manager_adapter_implemented"])
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "credential-store-recommendation",
+                    str(archive_root),
+                    "--scenario",
+                    "personal_local_first",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_zet_surface_prototype_four_surface_plans_are_read_only(self) -> None:
         expected = {
             "wordpress": ("projection_surface", "remote_rest_api", "site_ref"),

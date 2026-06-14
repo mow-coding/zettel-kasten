@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.22 - 2026-06-14
+
+- Added read-only CLI `archive credential-store-recommendation --dry-run` and
+  MCP `credential_store_recommendation` for scenario-based recommendations
+  across KeePassXC-style offline vaults, Bitwarden/1Password-style syncing
+  managers, browser/platform password managers, OS keyrings, developer secret
+  managers, automation env refs, local app adapters, and institutional mail.
+- Defined WOM compatibility rules for `secret:`, `keyring:`, `env:`, and
+  future `wallet:` refs in the context of human password vault choice.
+- Documented the future credential access broker boundary: AI should request a
+  credential capability by purpose/ref, while a local approved adapter uses the
+  secret without echoing it into chat, zets, receipts, logs, prompts, or public
+  docs.
+- Added `wom-kit/docs/credential-store-recommendations.md` plus CLI/MCP/docs
+  tests for read-only behavior, scenario coverage, allowed-root enforcement,
+  no-write behavior, and non-echo guarantees.
+
 ## v0.3.21 - 2026-06-14
 
 - Added read-only CLI `archive credential-ref-inventory --dry-run` and MCP

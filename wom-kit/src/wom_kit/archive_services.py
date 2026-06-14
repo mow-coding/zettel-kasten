@@ -1012,6 +1012,16 @@ CREDENTIAL_REF_ALLOWED_PROVIDERS = {
     "generic_provider",
 }
 CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE = "profiles/local/credential-refs.local.yml"
+CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS = {
+    "personal_local_first",
+    "multi_device_sync",
+    "team_or_family_sharing",
+    "browser_or_platform_password_manager",
+    "automation_or_dev_secrets",
+    "local_app_adapter",
+    "institutional_mail",
+}
+CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS = {"windows", "macos", "linux", "cross_platform"}
 ONBOARDING_PROVIDER_PROFILES = {
     "local_only": {
         "description": "Local archive plus physical/local backup and external secret vault guidance.",
@@ -11036,6 +11046,336 @@ def credential_ref_inventory(
         "would_change": [],
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
+    }
+
+
+def credential_store_recommendation(
+    archive_root: Path | str,
+    *,
+    scenario: str,
+    platform: str = "windows",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("credential-store-recommendation is read-only and requires --dry-run.")
+
+    resolved_scenario = (scenario or "").strip().lower().replace("-", "_")
+    if resolved_scenario not in CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS:
+        blockers.append(
+            "scenario must be one of: "
+            + ", ".join(sorted(CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS))
+            + "."
+        )
+        resolved_scenario = "personal_local_first"
+
+    resolved_platform = (platform or "windows").strip().lower().replace("-", "_")
+    if resolved_platform not in CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS:
+        blockers.append(
+            "platform must be one of: "
+            + ", ".join(sorted(CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS))
+            + "."
+        )
+        resolved_platform = "cross_platform"
+
+    platform_keyring = {
+        "windows": "Windows Credential Manager",
+        "macos": "macOS Keychain",
+        "linux": "Linux Secret Service compatible keyring",
+        "cross_platform": "OS credential manager/keyring",
+    }[resolved_platform]
+
+    profiles = credential_store_scenario_profiles(platform_keyring)
+    selected = profiles[resolved_scenario]
+
+    if resolved_scenario == "automation_or_dev_secrets":
+        warnings.append("Environment variables are suitable for short-lived automation shells, not long-lived personal password storage.")
+    if resolved_scenario == "local_app_adapter":
+        warnings.append("OS keyring adapters should stay behind explicit policy checks and human approval before any future read.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "credential_store_recommendation",
+        "archive_id": archive_id,
+        "scenario": resolved_scenario,
+        "platform": resolved_platform,
+        "human_need": selected["human_need"],
+        "recommendation_summary": selected["summary"],
+        "primary_recommendation": selected["primary"],
+        "secondary_recommendations": selected["secondary"],
+        "wom_compatibility": {
+            "wom_stores_secret_values": False,
+            "wom_stores_refs_and_catalog_only": True,
+            "credential_ref_prefixes": [
+                {
+                    "prefix": "secret:",
+                    "meaning": "External password manager or secret manager entry label.",
+                    "best_for": "KeePassXC, Bitwarden, 1Password, Bitwarden Secrets Manager, and similar external vaults.",
+                },
+                {
+                    "prefix": "keyring:",
+                    "meaning": "Operating-system credential manager entry label.",
+                    "best_for": platform_keyring + " and future local app adapters.",
+                },
+                {
+                    "prefix": "env:",
+                    "meaning": "Environment variable supplied outside the archive.",
+                    "best_for": "Short-lived automation shells and CI-style runtime injection.",
+                },
+                {
+                    "prefix": "wallet:",
+                    "meaning": "Future WOM wallet/local custody reference.",
+                    "best_for": "Not implemented; reserved for future local custody design.",
+                },
+            ],
+            "inventory_command": "archive credential-ref-inventory --dry-run",
+            "validation_command": "archive credential-ref-plan --dry-run",
+            "local_inventory_path": CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE,
+        },
+        "selection_logic": [
+            "If local-first control matters more than sync, prefer KeePassXC-style offline vaults.",
+            "If multi-device sync and sharing matter most, prefer Bitwarden or 1Password-style managed vaults.",
+            "If the secret already lives in a browser/platform manager, treat it as a login/autofill source, not a general API-key vault.",
+            "If a local WOM adapter must retrieve a secret without chat copy/paste, prefer the OS keyring surface.",
+            "If automation needs injection, prefer a secrets manager or short-lived environment variable over committed files.",
+            "If the value is a mail/app/API secret, WOM should store only a credential ref and purpose metadata.",
+        ],
+        "non_goals": [
+            "Do not build a plaintext WOM password vault.",
+            "Do not put real usernames, passwords, app passwords, OAuth tokens, or API keys in zets.",
+            "Do not put secrets in Git, receipts, logs, source maps, screenshots, prompts, or public docs.",
+            "Do not ask the user to paste secrets into chat.",
+            "Do not read a keyring, password manager, or environment variable in this release.",
+        ],
+        "next_safe_actions": selected["next_safe_actions"],
+        "current_capability": {
+            "scenario_recommendation_available": True,
+            "credential_ref_contract_available": True,
+            "credential_ref_inventory_available": True,
+            "password_manager_adapter_implemented": False,
+            "os_keyring_adapter_implemented": False,
+            "secret_value_storage_implemented": False,
+            "secret_value_retrieval_implemented": False,
+        },
+        "closed_actions": {
+            "secret_prompted_in_chat": False,
+            "secret_value_read": False,
+            "secret_value_written": False,
+            "os_keyring_opened": False,
+            "password_manager_opened": False,
+            "environment_read": False,
+            "provider_api_called": False,
+            "oauth_started": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "credential_ref_values_echoed": False,
+            "email_addresses_echoed": False,
+            "tokens_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def credential_store_scenario_profiles(platform_keyring: str) -> dict[str, dict[str, Any]]:
+    keepassxc = {
+        "store_id": "keepassxc",
+        "store_class": "offline_password_manager",
+        "fit": "primary",
+        "wom_ref_prefix": "secret:",
+        "example_ref_shape": "secret:keepassxc-personal-mail",
+        "why": [
+            "Matches WOM local-first expectations.",
+            "Keeps the encrypted vault outside Git, zets, search indexes, and AI context.",
+            "Can be used manually today and may later support approved local adapter work.",
+        ],
+        "tradeoffs": [
+            "Human must manage the encrypted database, backup, and master passphrase.",
+            "Sync is a separate choice rather than the default product behavior.",
+        ],
+    }
+    os_keyring = {
+        "store_id": "os_keyring",
+        "store_class": "operating_system_credential_store",
+        "fit": "secondary",
+        "wom_ref_prefix": "keyring:",
+        "example_ref_shape": "keyring:wom-mail-access",
+        "why": [
+            f"Uses the host platform credential surface: {platform_keyring}.",
+            "Best fit for a future trusted local WOM adapter that needs OS-mediated retrieval.",
+        ],
+        "tradeoffs": [
+            "Less pleasant as a human-facing password notebook than a dedicated password manager.",
+            "Any future read adapter must remain policy-gated and non-echoing.",
+        ],
+    }
+    bitwarden = {
+        "store_id": "bitwarden",
+        "store_class": "syncing_password_manager",
+        "fit": "primary",
+        "wom_ref_prefix": "secret:",
+        "example_ref_shape": "secret:bitwarden-mail-access",
+        "why": [
+            "Good fit when multi-device sync, browser autofill, and sharing are part of the user story.",
+            "Can later split human passwords from developer secrets through dedicated vault/project boundaries.",
+        ],
+        "tradeoffs": [
+            "Cloud or self-hosted account lifecycle becomes part of the user's security model.",
+            "WOM should still store only refs and catalog metadata.",
+        ],
+    }
+    onepassword = {
+        "store_id": "1password",
+        "store_class": "managed_password_manager",
+        "fit": "primary",
+        "wom_ref_prefix": "secret:",
+        "example_ref_shape": "secret:onepassword-mail-access",
+        "why": [
+            "Good fit when paid usability, family/team sharing, and managed recovery expectations matter.",
+            "Keeps the WOM archive away from direct custody of the secret value.",
+        ],
+        "tradeoffs": [
+            "Commercial account dependency and pricing are part of the choice.",
+            "WOM integration should remain a ref contract unless a reviewed adapter is built later.",
+        ],
+    }
+    secrets_manager = {
+        "store_id": "bitwarden_secrets_manager_or_cloud_secret_manager",
+        "store_class": "developer_secret_manager",
+        "fit": "primary",
+        "wom_ref_prefix": "secret:",
+        "example_ref_shape": "secret:dev-openai-api",
+        "why": [
+            "Best fit for API keys, CI-like injection, object storage tokens, and service credentials.",
+            "Separates human login convenience from automation secret lifecycle.",
+        ],
+        "tradeoffs": [
+            "Requires explicit project/access-token lifecycle management outside WOM.",
+            "More operational overhead than a personal password manager.",
+        ],
+    }
+    browser_platform = {
+        "store_id": "browser_or_platform_password_manager",
+        "store_class": "browser_platform_password_manager",
+        "fit": "primary",
+        "wom_ref_prefix": "secret:",
+        "example_ref_shape": "secret:platform-login-mail",
+        "why": [
+            "Good fit for website logins, passkeys, and autofill surfaces the user already relies on.",
+            "Matches the user's expectation that Chrome, Edge, Windows Hello, Android, iOS, or similar surfaces remember logins.",
+            "Can be compatible with WOM only through explicit broker/adapter contracts, not by scraping browser databases.",
+        ],
+        "tradeoffs": [
+            "Usually not a general-purpose API key, CLI token, or automation secret store.",
+            "Export/import and programmatic access vary by ecosystem and may require user-visible approval.",
+        ],
+    }
+    env = {
+        "store_id": "environment_variable",
+        "store_class": "runtime_injection",
+        "fit": "secondary",
+        "wom_ref_prefix": "env:",
+        "example_ref_shape": "env:WOM_OPENAI_API_KEY",
+        "why": [
+            "Useful for short-lived local shells and automation processes.",
+            "Keeps the literal secret out of archive files when supplied externally.",
+        ],
+        "tradeoffs": [
+            "Not a good long-term human password notebook.",
+            "The surrounding shell, logs, and process environment need separate care.",
+        ],
+    }
+
+    return {
+        "personal_local_first": {
+            "human_need": "A personal archive owner wants one trusted local vault and minimal cloud dependency.",
+            "summary": "Prefer KeePassXC for the real vault; use WOM `secret:` refs and inventory metadata.",
+            "primary": keepassxc,
+            "secondary": [os_keyring],
+            "next_safe_actions": [
+                "Create a KeePassXC database outside the WOM archive.",
+                "Create boring entry labels that do not include real account values.",
+                "Record only `secret:` or `keyring:` refs in WOM credential inventory.",
+                "Run credential-ref-plan and credential-ref-inventory as read-only checks.",
+            ],
+        },
+        "multi_device_sync": {
+            "human_need": "A user wants passwords available across desktop, mobile, and browsers.",
+            "summary": "Prefer Bitwarden or 1Password; use WOM `secret:` refs for external vault entries.",
+            "primary": bitwarden,
+            "secondary": [onepassword, os_keyring],
+            "next_safe_actions": [
+                "Choose a syncing password manager outside WOM.",
+                "Keep WOM entry labels generic and provider-scoped.",
+                "Use `secret:` refs in WOM and avoid recording account names or vault URLs.",
+            ],
+        },
+        "team_or_family_sharing": {
+            "human_need": "Several people need controlled access to selected credentials.",
+            "summary": "Prefer Bitwarden or 1Password sharing features; WOM records refs only.",
+            "primary": onepassword,
+            "secondary": [bitwarden],
+            "next_safe_actions": [
+                "Use the password manager's native sharing controls.",
+                "Keep WOM refs scoped to purpose and provider.",
+                "Do not model shared secret values as zets or receipts.",
+            ],
+        },
+        "browser_or_platform_password_manager": {
+            "human_need": "A user already trusts Chrome, Edge, Windows Hello, Android, iOS, Samsung, or another platform login surface.",
+            "summary": "Use platform/browser managers for login/autofill; route WOM access through a future broker instead of direct AI reading.",
+            "primary": browser_platform,
+            "secondary": [os_keyring, bitwarden, onepassword],
+            "next_safe_actions": [
+                "Classify browser/platform credentials as website login/passkey material, not generic API key storage.",
+                "For API keys and CLI tokens, use a password manager, OS keyring, or developer secrets manager instead.",
+                "Design future WOM access as an approved broker call that uses the secret without echoing it to chat.",
+            ],
+        },
+        "automation_or_dev_secrets": {
+            "human_need": "A local tool, OCR/model adapter, or provider setup needs API keys or tokens.",
+            "summary": "Prefer a dedicated secrets manager; use `env:` only for short-lived runtime injection.",
+            "primary": secrets_manager,
+            "secondary": [env, os_keyring],
+            "next_safe_actions": [
+                "Separate human login passwords from automation/API credentials.",
+                "Use a secrets manager or OS keyring for long-lived tokens.",
+                "Use `env:` refs only when the runtime injects values outside Git and logs.",
+            ],
+        },
+        "local_app_adapter": {
+            "human_need": "A future WOM desktop/CLI adapter needs to retrieve a secret locally after approval.",
+            "summary": f"Prefer {platform_keyring} for adapter retrieval; keep KeePassXC as the human vault if desired.",
+            "primary": os_keyring,
+            "secondary": [keepassxc],
+            "next_safe_actions": [
+                "Keep the current release at ref planning only.",
+                "Design adapter reads as explicit, policy-gated, local-only, and non-echoing.",
+                "Return provider result metadata, not the secret value.",
+            ],
+        },
+        "institutional_mail": {
+            "human_need": "A student, company worker, or institution account holder needs mail access planning.",
+            "summary": "Use the provider's required credential mode; keep account labels separate from secret refs.",
+            "primary": os_keyring,
+            "secondary": [keepassxc, bitwarden],
+            "next_safe_actions": [
+                "Use `imap:account:*` for non-secret account labels.",
+                "Use `keyring:`, `secret:`, or `env:` only for username, app-password, OAuth-token, or API-key refs.",
+                "If IMAP is unavailable, treat Microsoft Graph, SAML, or browser webmail as separate future adapters.",
+            ],
+        },
     }
 
 

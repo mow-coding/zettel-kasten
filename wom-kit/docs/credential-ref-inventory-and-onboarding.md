@@ -118,6 +118,9 @@ for short-lived automation shells.
 WOM-kit v0.3.21 does not write to any of those stores. It only documents and
 validates refs.
 
+For scenario-based store choice, see
+[Credential Store Recommendations](credential-store-recommendations.md).
+
 ## Mail Account Labels
 
 `account_ref` is not a secret.
