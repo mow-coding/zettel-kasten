@@ -39,6 +39,8 @@ Commands:
           Preview the derived block header for one draft or canonical zet.
   projection-plan
           Preview a dry-run ZET publication/projection plan for one local zet.
+  zet-surface-prototype
+          Preview a user-selected ZET surface prototype for WordPress, Joplin, Notion, or Obsidian.
   shared-update-record-review
           Preview a local ZET shared update record before any renewal action.
   shared-update-record-review-index
@@ -2156,6 +2158,43 @@ def command_projection_plan(args: argparse.Namespace) -> int:
         print(f"Archive: {result.get('archive_id') or '-'}")
         print(f"zet: {zet.get('zettel_id') or zet.get('source_path') or '-'}")
         print(f"Surface: {surface.get('surface_kind') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_zet_surface_prototype(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("zet-surface-prototype is dry-run only; pass --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.zet_surface_prototype_plan(
+            Path(args.archive_root),
+            surface_kind=args.surface_kind,
+            surface_ref=args.surface_ref,
+            dry_run=args.dry_run,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        surface = result.get("surface") if isinstance(result.get("surface"), dict) else {}
+        prototype = result.get("prototype") if isinstance(result.get("prototype"), dict) else {}
+        print(f"ZET surface prototype {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Surface: {surface.get('surface_kind') or '-'}")
+        print(f"Role: {surface.get('role') or '-'}")
+        print(f"Integration family: {prototype.get('integration_family') or '-'}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -5657,6 +5696,22 @@ def build_parser() -> argparse.ArgumentParser:
     projection_plan.add_argument("--dry-run", action="store_true", help="Preview only; write nothing.")
     projection_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     projection_plan.set_defaults(func=command_projection_plan)
+
+    zet_surface_prototype = subcommands.add_parser(
+        "zet-surface-prototype",
+        help="Preview a user-selected ZET surface prototype without provider calls or writes.",
+    )
+    zet_surface_prototype.add_argument("archive_root", help="Archive root to inspect.")
+    zet_surface_prototype.add_argument(
+        "--surface-kind",
+        choices=sorted(archive_services.ZET_SURFACE_PROTOTYPE_KINDS),
+        required=True,
+        help="Surface prototype kind.",
+    )
+    zet_surface_prototype.add_argument("--surface-ref", help="Optional safe label/ref; never pass a URL, email, token, or local path.")
+    zet_surface_prototype.add_argument("--dry-run", action="store_true", help="Required; preview only.")
+    zet_surface_prototype.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    zet_surface_prototype.set_defaults(func=command_zet_surface_prototype)
 
     shared_update_record_review = subcommands.add_parser(
         "shared-update-record-review",

@@ -1499,6 +1499,70 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertTrue(any("surface_ref" in blocker for blocker in result["blockers"]))
 
+    def test_zet_surface_prototype_four_surface_plans_are_read_only(self) -> None:
+        expected = {
+            "wordpress": ("projection_surface", "remote_rest_api", "site_ref"),
+            "joplin": ("working_note_store", "local_data_api", "notebook_ref"),
+            "notion": ("human_artifact_store", "remote_workspace_api", "parent_ref"),
+            "obsidian": ("working_note_store", "local_vault_or_uri", "vault_ref"),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            for surface, (role, family, schema_key) in expected.items():
+                with self.subTest(surface=surface):
+                    before = self.snapshot_archive_files(archive_root)
+                    code, output = self.run_cli(
+                        [
+                            "zet-surface-prototype",
+                            str(archive_root),
+                            "--surface-kind",
+                            surface,
+                            "--surface-ref",
+                            f"{surface}:example",
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+
+                    self.assertEqual(code, 0, output)
+                    result = json.loads(output)
+                    self.assertTrue(result["ok"], result)
+                    self.assertEqual(result["lifecycle_action"], "zet_surface_prototype_plan")
+                    self.assertEqual(result["surface"]["surface_kind"], surface)
+                    self.assertEqual(result["surface"]["role"], role)
+                    self.assertEqual(result["prototype"]["integration_family"], family)
+                    self.assertIn(schema_key, result["settings_schema_preview"])
+                    self.assertTrue(result["zet_layer_boundary"]["surface_is_not_canonical_archive"])
+                    self.assertFalse(result["external_actions"]["provider_api_called"])
+                    self.assertFalse(result["external_actions"]["note_created"])
+                    self.assertFalse(result["external_actions"]["post_published"])
+                    self.assertFalse(result["external_actions"]["vault_file_written"])
+                    self.assertEqual(result["would_change"], [])
+                    self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+    def test_zet_surface_prototype_blocks_unsafe_surface_ref(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+
+        code, output = self.run_cli(
+            [
+                "zet-surface-prototype",
+                str(archive_root),
+                "--surface-kind",
+                "obsidian",
+                "--surface-ref",
+                "LOCAL_DEVICE\\secret\\Vault",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+
+        result = json.loads(output)
+        self.assertEqual(code, 1, output)
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("surface_ref" in blocker for blocker in result["blockers"]))
+
     def test_prehashed_objet_ledger_preview_counts_without_echoing_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
