@@ -1841,7 +1841,7 @@ def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
     try:
         result = archive_services.prehashed_objet_ledger_register(
             Path(args.archive_root),
-            Path(args.ledger),
+            [Path(item) for item in args.ledger],
             store_kind=args.store_kind,
             store_ref=args.store_ref,
             sha256_field=args.sha256_field,
@@ -1868,8 +1868,10 @@ def print_prehashed_objet_ledger_result(result: dict[str, Any], output_format: s
     print(f"Prehashed objet ledger preview {state}.")
     print(f"Archive: {result.get('archive_id') or '-'}")
     print(f"Store kind: {result.get('store_kind') or '-'}")
+    print(f"Ledger files: {ledger.get('ledger_file_count', 0)}")
     print(f"Rows: {ledger.get('row_count', 0)}")
     print(f"Valid objects: {ledger.get('valid_object_count', 0)}")
+    print(f"Skipped rows: {ledger.get('skipped_row_count', 0)}")
     print(f"Invalid rows: {ledger.get('invalid_row_count', 0)}")
     print(f"Duplicate sha256 rows: {ledger.get('duplicate_sha256_count', 0)}")
     registration = result.get("registration") if isinstance(result.get("registration"), dict) else {}
@@ -5684,7 +5686,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Preview an already-hashed external objet ledger without reading blob bytes.",
     )
     prehashed_objet_ledger.add_argument("archive_root", help="Archive root to plan for.")
-    prehashed_objet_ledger.add_argument("--ledger", required=True, help="UTF-8 JSONL ledger with sha256 and byte-size fields.")
+    prehashed_objet_ledger.add_argument(
+        "--ledger",
+        action="append",
+        required=True,
+        help="UTF-8 JSONL ledger with sha256 and byte-size fields. May be repeated.",
+    )
     prehashed_objet_ledger.add_argument(
         "--store-kind",
         choices=sorted(archive_services.PREHASHED_OBJET_LEDGER_STORE_KINDS),

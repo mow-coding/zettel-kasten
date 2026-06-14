@@ -10570,7 +10570,7 @@ def zet_surface_settings_schema_preview(surface_kind: str) -> dict[str, Any]:
 
 def prehashed_objet_ledger_preview(
     archive_root: Path | str,
-    ledger: Path | str,
+    ledger: Path | str | list[Path | str] | tuple[Path | str, ...],
     *,
     store_kind: str = "generic_content_addressed_store",
     sha256_field: str = "sha256",
@@ -10594,7 +10594,7 @@ def prehashed_objet_ledger_preview(
 
 def prehashed_objet_ledger_register(
     archive_root: Path | str,
-    ledger: Path | str,
+    ledger: Path | str | list[Path | str] | tuple[Path | str, ...],
     *,
     store_kind: str = "generic_content_addressed_store",
     store_ref: str | None = None,
@@ -10638,9 +10638,9 @@ def prehashed_objet_ledger_register(
         blockers.append("max_rows must be an integer.")
         capped_max_rows = 100000
 
-    ledger_path = Path(ledger).expanduser().resolve()
-    ledger_summary = read_prehashed_objet_ledger(
-        ledger_path,
+    ledger_paths = prehashed_objet_ledger_input_paths(ledger)
+    ledger_summary = read_prehashed_objet_ledgers(
+        ledger_paths,
         sha256_field=safe_sha_field,
         size_field=safe_size_field,
         max_rows=capped_max_rows,
@@ -10685,15 +10685,19 @@ def prehashed_objet_ledger_register(
         "ledger": {
             "format": "jsonl",
             "ledger_path_included": False,
+            "ledger_file_count": ledger_summary["ledger_file_count"],
             "ledger_file_sha256": ledger_summary["ledger_file_sha256"],
+            "ledger_file_sha256es": ledger_summary["ledger_file_sha256es"],
             "sha256_field": safe_sha_field,
             "size_field": safe_size_field,
             "row_count": ledger_summary["row_count"],
             "valid_object_count": ledger_summary["valid_object_count"],
+            "skipped_row_count": ledger_summary["skipped_row_count"],
             "invalid_row_count": ledger_summary["invalid_row_count"],
             "duplicate_sha256_count": ledger_summary["duplicate_sha256_count"],
             "unique_sha256_count": len(unique_objects),
             "total_declared_bytes": ledger_summary["total_declared_bytes"],
+            "skipped_reasons": ledger_summary["skipped_reasons"],
             "invalid_reasons": ledger_summary["invalid_reasons"],
             "truncated": ledger_summary["truncated"],
         },
@@ -10797,6 +10801,8 @@ def prehashed_objet_ledger_register(
         "reviewed_by": reviewer,
         "registered_at": registered_at,
         "ledger_file_sha256": ledger_summary["ledger_file_sha256"],
+        "ledger_file_sha256es": ledger_summary["ledger_file_sha256es"],
+        "ledger_file_count": ledger_summary["ledger_file_count"],
         "ledger_path_included": False,
         "sha256_field": safe_sha_field,
         "size_field": safe_size_field,
@@ -10805,6 +10811,8 @@ def prehashed_objet_ledger_register(
             "valid_object_count": ledger_summary["valid_object_count"],
             "unique_sha256_count": len(unique_objects),
             "duplicate_sha256_count": ledger_summary["duplicate_sha256_count"],
+            "skipped_row_count": ledger_summary["skipped_row_count"],
+            "skipped_reasons": ledger_summary["skipped_reasons"],
             "invalid_row_count": ledger_summary["invalid_row_count"],
             "skipped_existing_object_count": skipped_existing,
             "appended_manifest_records": appended_count,
@@ -10846,8 +10854,18 @@ def prehashed_objet_ledger_register(
     return result
 
 
-def read_prehashed_objet_ledger(
-    ledger_path: Path,
+def prehashed_objet_ledger_input_paths(
+    ledger: Path | str | list[Path | str] | tuple[Path | str, ...],
+) -> list[Path]:
+    if isinstance(ledger, (list, tuple)):
+        values = list(ledger)
+    else:
+        values = [ledger]
+    return [Path(value).expanduser().resolve() for value in values]
+
+
+def read_prehashed_objet_ledgers(
+    ledger_paths: list[Path],
     *,
     sha256_field: str,
     size_field: str,
@@ -10855,15 +10873,19 @@ def read_prehashed_objet_ledger(
 ) -> dict[str, Any]:
     blockers: list[str] = []
     warnings: list[str] = []
-    if not ledger_path.is_file():
-        blockers.append("ledger must be an existing JSONL file.")
+    if not ledger_paths:
+        blockers.append("at least one ledger must be provided.")
         return {
             "ledger_file_sha256": None,
+            "ledger_file_sha256es": [],
+            "ledger_file_count": 0,
             "row_count": 0,
             "valid_object_count": 0,
+            "skipped_row_count": 0,
             "invalid_row_count": 0,
             "duplicate_sha256_count": 0,
             "total_declared_bytes": 0,
+            "skipped_reasons": {},
             "invalid_reasons": {},
             "unique_objects": [],
             "truncated": False,
@@ -10873,65 +10895,95 @@ def read_prehashed_objet_ledger(
 
     row_count = 0
     valid_count = 0
+    skipped_count = 0
     invalid_count = 0
     duplicate_count = 0
     total_bytes = 0
     truncated = False
     seen_sizes: dict[str, int] = {}
+    ledger_hashes: list[str] = []
+    skipped_reasons: dict[str, int] = {}
     invalid_reasons: dict[str, int] = {}
-    try:
-        ledger_file_sha256 = "sha256:" + sha256_path(ledger_path)
-        with ledger_path.open("r", encoding="utf-8") as handle:
-            for line_number, raw_line in enumerate(handle, start=1):
-                if line_number > max_rows:
-                    truncated = True
-                    warnings.append("prehashed objet ledger preview stopped at max_rows.")
-                    break
-                line = raw_line.strip()
-                if not line:
-                    continue
-                row_count += 1
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    invalid_count += 1
-                    invalid_reasons["invalid_json"] = invalid_reasons.get("invalid_json", 0) + 1
-                    continue
-                if not isinstance(row, dict):
-                    invalid_count += 1
-                    invalid_reasons["row_not_object"] = invalid_reasons.get("row_not_object", 0) + 1
-                    continue
-                row_sha = normalize_prehashed_ledger_sha256(row.get(sha256_field))
-                if row_sha is None:
-                    invalid_count += 1
-                    invalid_reasons["sha256_missing_or_invalid"] = invalid_reasons.get("sha256_missing_or_invalid", 0) + 1
-                    continue
-                row_size = normalize_prehashed_ledger_size(row.get(size_field))
-                if row_size is None:
-                    invalid_count += 1
-                    invalid_reasons["size_missing_or_invalid"] = invalid_reasons.get("size_missing_or_invalid", 0) + 1
-                    continue
-                if row_sha in seen_sizes:
-                    duplicate_count += 1
-                    if seen_sizes[row_sha] != row_size:
-                        invalid_count += 1
-                        invalid_reasons["duplicate_size_mismatch"] = invalid_reasons.get("duplicate_size_mismatch", 0) + 1
+    for ledger_path in ledger_paths:
+        if not ledger_path.is_file():
+            blockers.append("ledger must be an existing JSONL file.")
+            continue
+        try:
+            ledger_hashes.append("sha256:" + sha256_path(ledger_path))
+            with ledger_path.open("r", encoding="utf-8") as handle:
+                for raw_line in handle:
+                    if row_count >= max_rows:
+                        truncated = True
+                        warnings.append("prehashed objet ledger preview stopped at max_rows.")
+                        break
+                    line = raw_line.strip()
+                    if not line:
                         continue
-                else:
-                    seen_sizes[row_sha] = row_size
-                valid_count += 1
-                total_bytes += row_size
-    except (OSError, UnicodeError):
-        blockers.append("ledger could not be read safely as UTF-8 JSONL.")
+                    row_count += 1
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        invalid_count += 1
+                        invalid_reasons["invalid_json"] = invalid_reasons.get("invalid_json", 0) + 1
+                        continue
+                    if not isinstance(row, dict):
+                        invalid_count += 1
+                        invalid_reasons["row_not_object"] = invalid_reasons.get("row_not_object", 0) + 1
+                        continue
+                    raw_sha = row.get(sha256_field)
+                    if raw_sha is None or (isinstance(raw_sha, str) and not raw_sha.strip()):
+                        skipped_count += 1
+                        skipped_reasons["sha256_missing_or_null"] = skipped_reasons.get("sha256_missing_or_null", 0) + 1
+                        continue
+                    row_sha = normalize_prehashed_ledger_sha256(raw_sha)
+                    if row_sha is None:
+                        invalid_count += 1
+                        invalid_reasons["sha256_invalid"] = invalid_reasons.get("sha256_invalid", 0) + 1
+                        continue
+                    row_size = normalize_prehashed_ledger_size(row.get(size_field))
+                    if row_size is None:
+                        invalid_count += 1
+                        invalid_reasons["size_missing_or_invalid"] = invalid_reasons.get("size_missing_or_invalid", 0) + 1
+                        continue
+                    if row_sha in seen_sizes:
+                        duplicate_count += 1
+                        if seen_sizes[row_sha] != row_size:
+                            invalid_count += 1
+                            invalid_reasons["duplicate_size_mismatch"] = invalid_reasons.get("duplicate_size_mismatch", 0) + 1
+                            continue
+                    else:
+                        seen_sizes[row_sha] = row_size
+                    valid_count += 1
+                    total_bytes += row_size
+            if truncated:
+                break
+        except (OSError, UnicodeError):
+            blockers.append("ledger could not be read safely as UTF-8 JSONL.")
+
+    if len(ledger_hashes) == 1:
+        ledger_file_sha256 = ledger_hashes[0]
+    elif ledger_hashes:
+        ledger_file_sha256 = "sha256:" + sha256_json_hex(
+            {
+                "ledger_file_sha256es": ledger_hashes,
+                "sha256_field": sha256_field,
+                "size_field": size_field,
+            }
+        )
+    else:
         ledger_file_sha256 = None
 
     return {
         "ledger_file_sha256": ledger_file_sha256,
+        "ledger_file_sha256es": ledger_hashes,
+        "ledger_file_count": len(ledger_hashes),
         "row_count": row_count,
         "valid_object_count": valid_count,
+        "skipped_row_count": skipped_count,
         "invalid_row_count": invalid_count,
         "duplicate_sha256_count": duplicate_count,
         "total_declared_bytes": total_bytes,
+        "skipped_reasons": skipped_reasons,
         "invalid_reasons": invalid_reasons,
         "unique_objects": [{"sha256": digest, "size_bytes": size} for digest, size in seen_sizes.items()],
         "truncated": truncated,

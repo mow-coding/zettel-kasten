@@ -96,10 +96,18 @@ counts:
 ```bash
 archive prehashed-objet-ledger <archive-root> \
   --ledger retrieval-ledger.jsonl \
+  --ledger deep-ledger.jsonl \
+  --ledger workspace-dl-ledger.jsonl \
   --store-kind notion_source_export \
   --dry-run \
   --format json
 ```
+
+`--ledger` may be repeated. WOM-kit dedupes sha256 values across all provided
+ledgers in one run. Rows whose sha256 field is null or empty, such as
+`via: aid-dedup` rows that point to an object already represented elsewhere, are
+counted as skipped rows rather than invalid rows. Malformed non-empty sha values
+still count as invalid.
 
 If the dry-run is reviewed and the external store should be declared as a WOM
 objet source, approve the manifest registration with a safe store label:
@@ -107,6 +115,8 @@ objet source, approve the manifest registration with a safe store label:
 ```bash
 archive prehashed-objet-ledger <archive-root> \
   --ledger retrieval-ledger.jsonl \
+  --ledger deep-ledger.jsonl \
+  --ledger workspace-dl-ledger.jsonl \
   --store-kind notion_source_export \
   --store-ref notion-export-20260613 \
   --approve \
