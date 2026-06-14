@@ -49,6 +49,7 @@ Examples:
 - audio recording
 - video recording
 - original `.txt` or `.md` source file
+- provider page snapshot JSON such as Notion `recordMap` / `blocks`
 
 This is the object that should receive an `object_id`.
 
@@ -65,6 +66,7 @@ Examples:
 - text inside `.docx`,
 - text inside `.hwp` / `.hwpx`,
 - text layer inside a digitally generated PDF.
+- authored block text stored inside a provider page snapshot.
 
 This has higher authority than OCR because the text was already present as text.
 
@@ -78,6 +80,7 @@ Examples:
 - extracting text from `.hwpx`,
 - extracting embedded PDF text,
 - reading cells from `.xlsx`.
+- extracting readable block text from a Notion page snapshot JSON.
 
 This is still derived, so the extraction tool and version should be recorded.
 
@@ -134,11 +137,23 @@ For document and capture sources:
 
 ```text
 original file/capture -> object layer
+provider page snapshot JSON -> object layer
 born-digital or extracted text -> derived text layer
 OCR/AI transcript -> derived text layer with weaker authority
 human-reviewed transcript -> reviewed derived text layer
 minted zet -> zettel layer
 ```
+
+For provider exports, keep the page snapshot and the readable text separate:
+
+```text
+Notion recordMap/blocks JSON -> source/original objet
+extracted block text -> derived text record
+human summary/decision -> minted zet
+```
+
+The raw JSON snapshot preserves provider structure and evidence. It is not a
+human-readable zet just because it contains text fields.
 
 ## 4. Why This Matters
 
@@ -214,3 +229,6 @@ But the `zet` should know whether it is based on:
 - human-reviewed correction.
 
 That distinction belongs in provenance.
+
+See also `notion-page-snapshot-model.md` for the provider page snapshot
+boundary.

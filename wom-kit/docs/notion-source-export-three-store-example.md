@@ -22,6 +22,7 @@ may produce:
 - a retrieval ledger with sha256 and byte-size fields,
 - an attachment catalog,
 - a deep crawl tree,
+- page/block snapshot JSON such as `recordMap` or `blocks`,
 - Markdown/CSV/HTML pages for human review,
 - operator notes about what changed between DB versions.
 
@@ -36,6 +37,7 @@ Examples:
 - exported attachment binaries,
 - content-addressed blob files,
 - original Markdown/CSV/HTML export files,
+- page/block snapshot JSON that preserves provider structure,
 - raw retrieval ledgers that prove which external objects were present.
 
 These are objets or source-export inputs. They are not canonical zets by
@@ -129,6 +131,26 @@ writes a receipt under `receipts/prehashed-objet-ledger/`. It still does not
 read blob bytes, copy objects, call Notion, upload, sync, draft, mint, or clean.
 
 MCP exposes only the read-only preview as `prehashed_objet_ledger_preview`.
+
+## Page Snapshot JSON
+
+Notion page/block JSON is a provider page snapshot. It is not a minted `zet`,
+not a receipt, and not automatically a derived text body.
+
+Use this model:
+
+```text
+recordMap / blocks JSON -> source/original objet
+extracted readable block text -> derived text record
+human-reviewed conclusion -> draft or minted zet
+```
+
+If the snapshot bytes are already in an externally verified
+content-addressed store, include them in the prehashed ledger and approve them
+with a safe `--store-ref` label. If WOM-kit should hash and copy a staged JSON
+file itself, use the separate `objet-capture` path.
+
+See [Notion Page Snapshot Model](notion-page-snapshot-model.md).
 
 ## Current Boundary
 

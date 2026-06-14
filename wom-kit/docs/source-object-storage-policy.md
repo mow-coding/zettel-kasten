@@ -48,6 +48,7 @@ Document files can also be stored as objets:
 - `.csv`
 - `.pptx`
 - exported Notion files
+- exported Notion page/block snapshot JSON
 - exported Google Drive files
 
 The key question is not "is this media?"
@@ -239,7 +240,48 @@ but one logical identity:
 sha256:...
 ```
 
-## 7. AI Drafting Flow
+## 7. Store Ref Semantics
+
+For external prehashed ledgers, WOM-kit records three different ideas:
+
+```text
+object_id  -> what bytes are being identified
+store_kind -> what storage family supplied the external ledger
+store_ref  -> which reviewed external store label contains those bytes
+```
+
+`store_ref` is a safe label such as `notion-export-20260614` or
+`retrieval-ledger-batch-001`. It must not be a raw local absolute path, private
+URL, account id, token, email address, or secret.
+
+Today, `archive prehashed-objet-ledger --approve` records external manifest
+entries and a receipt. It does not read blob bytes, copy objects, upload, call
+providers, or prove that the external bytes are still available. Use
+`objet-capture` when WOM-kit should verify staged bytes and keep a local
+content-addressed copy.
+
+## 8. Provider Page Snapshots
+
+Provider exports can include structured page snapshots as well as attachments.
+
+For Notion, page/block JSON such as `recordMap`, `blocks`, page properties,
+database row metadata, crawl trees, and attachment refs should be treated as
+source/original objets when they are preserved as evidence.
+
+The layering rule is:
+
+```text
+page snapshot JSON -> source/original objet
+extracted block text -> derived text record
+human conclusion -> draft/minted zet
+```
+
+The raw page snapshot JSON is not itself a minted zet or a human-reviewed
+derived text body.
+
+See `notion-page-snapshot-model.md`.
+
+## 9. AI Drafting Flow
 
 For document files, the typical flow is:
 
@@ -255,7 +297,7 @@ register source file
 
 The original document remains an objet. The minted zet becomes durable archive memory.
 
-## 8. v0.2.21 Setup Planner
+## 10. v0.2.21 Setup Planner
 
 WOM-kit v0.2.21 adds a dry-run-first setup planner for the technical object storage provider layer:
 
@@ -282,7 +324,7 @@ archives/<archive_id>/objets/
 
 Dry-run writes nothing and calls no provider APIs. Approved mode writes only safe local provider metadata and a setup receipt. It still does not create buckets, run OAuth, upload, sync, copy source files, hash files, or import source content.
 
-## 9. v0.2.22 Source Intake Planner
+## 11. v0.2.22 Source Intake Planner
 
 WOM-kit v0.2.22 adds a dry-run-only source intake planner:
 
@@ -294,7 +336,7 @@ Use it before `create-draft --dry-run` when a draft is based on a presentation, 
 
 The planner returns safe `source_refs_for_draft`, `objet_status`, object storage context, and content access flags. It writes nothing and does not read file bodies, calculate full hashes, copy, upload, import, OCR, transcribe, extract, call provider APIs, create drafts, or mint.
 
-## 10. Text Provenance Hierarchy
+## 12. Text Provenance Hierarchy
 
 The archive should preserve the difference between:
 

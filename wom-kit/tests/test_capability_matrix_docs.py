@@ -11,6 +11,10 @@ FREEZE_DOC_PATH = KIT_ROOT / "docs" / "v02x-freeze-v03-entry-boundary.md"
 PROJECT_INTAKE_COOKBOOK_PATH = KIT_ROOT / "docs" / "project-intake-cookbook.md"
 HUMAN_ARTIFACT_STORE_CONTRACT_PATH = KIT_ROOT / "docs" / "human-artifact-store-contract.md"
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
+NOTION_PAGE_SNAPSHOT_MODEL_PATH = KIT_ROOT / "docs" / "notion-page-snapshot-model.md"
+SOURCE_OBJECT_STORAGE_POLICY_PATH = KIT_ROOT / "docs" / "source-object-storage-policy.md"
+TEXT_PROVENANCE_HIERARCHY_PATH = KIT_ROOT / "docs" / "text-provenance-hierarchy.md"
+NOTION_THREE_STORE_EXAMPLE_PATH = KIT_ROOT / "docs" / "notion-source-export-three-store-example.md"
 
 
 class CapabilityMatrixDocsTests(unittest.TestCase):
@@ -40,6 +44,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Attestation statement draft preview",
             "Attestation statement draft write",
             "Projection plan",
+            "Notion page snapshot model",
             "Publication surface baseline",
             "Closed sharing model",
             "Radio-frequency recommendation model",
@@ -148,6 +153,93 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)
+
+    def test_notion_page_snapshot_model_keeps_snapshot_text_and_zet_layers_separate(self) -> None:
+        text = NOTION_PAGE_SNAPSHOT_MODEL_PATH.read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.16 model baseline",
+            "A provider page snapshot is a source/original objet.",
+            "recordMap",
+            "blocks",
+            "It is not automatically:",
+            "a derived text body",
+            "Notion export / retrieval",
+            "page snapshot JSON as source/original objet",
+            "extracted readable block text as derived text",
+            "human-reviewed note or conclusion as draft/minted zet",
+            "archive prehashed-objet-ledger <archive-root>",
+            "--store-kind notion_source_export",
+            "--store-ref notion-export-20260614",
+            "Do not treat raw page snapshot JSON as the derived text body.",
+            "archive derive-text capture <archive-root>",
+            "object_id  -> what bytes are being identified",
+            "store_kind -> what storage family supplied the external ledger",
+            "store_ref  -> which reviewed external store label contains those bytes",
+            "must not be a raw local",
+            "absolute path, private URL, account id, token, email address, or secret",
+            "does not prove byte availability by itself",
+            "None of those are implemented in v0.3.16",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+
+    def test_storage_and_provenance_docs_link_notion_snapshot_and_store_ref_policy(self) -> None:
+        storage_text = SOURCE_OBJECT_STORAGE_POLICY_PATH.read_text(encoding="utf-8")
+        provenance_text = TEXT_PROVENANCE_HIERARCHY_PATH.read_text(encoding="utf-8")
+        notion_example_text = NOTION_THREE_STORE_EXAMPLE_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+        expected_pairs = (
+            (
+                storage_text,
+                (
+                    "Store Ref Semantics",
+                    "object_id  -> what bytes are being identified",
+                    "store_ref  -> which reviewed external store label contains those bytes",
+                    "Provider Page Snapshots",
+                    "page snapshot JSON -> source/original objet",
+                    "See `notion-page-snapshot-model.md`.",
+                ),
+            ),
+            (
+                provenance_text,
+                (
+                    "provider page snapshot JSON such as Notion `recordMap` / `blocks`",
+                    "Notion recordMap/blocks JSON -> source/original objet",
+                    "extracted block text -> derived text record",
+                    "human summary/decision -> minted zet",
+                ),
+            ),
+            (
+                notion_example_text,
+                (
+                    "Page Snapshot JSON",
+                    "recordMap / blocks JSON -> source/original objet",
+                    "[Notion Page Snapshot Model](notion-page-snapshot-model.md)",
+                ),
+            ),
+            (
+                matrix_text,
+                (
+                    "Status: v0.3.16 Notion page snapshot and store-ref checkpoint",
+                    "Notion page snapshot model",
+                    "No Notion API, provider sync, page-snapshot schema, extraction helper, or byte materialization adapter exists",
+                ),
+            ),
+            (
+                readme_text,
+                (
+                    "v0.3.16 pre-release",
+                    "[Notion Page Snapshot Model](wom-kit/docs/notion-page-snapshot-model.md)",
+                    "provider page/block snapshot JSON",
+                ),
+            ),
+        )
+        for doc_text, phrases in expected_pairs:
+            for phrase in phrases:
+                with self.subTest(phrase=phrase):
+                    self.assertIn(phrase, doc_text)
 
     def test_v02x_freeze_boundary_doc_covers_public_proof_and_non_goals(self) -> None:
         text = FREEZE_DOC_PATH.read_text(encoding="utf-8")
