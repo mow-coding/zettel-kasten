@@ -23,6 +23,8 @@ Commands:
           Plan safe source/objet refs before draft creation.
   source-intake-record
           Record a reviewed source-intake dry-run plan under receipts/sources/.
+  objet-capture-selection
+          Build a reviewed objet-capture selection manifest from a staged file and source-intake receipt.
   project-intake-plan
           Plan one staged project folder intake session without writing files.
   project-intake-staging-guide
@@ -3241,6 +3243,59 @@ def command_staged_cleanup_check(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") and result.get("safe_to_cleanup") else 1
 
 
+def command_objet_capture_selection(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print("objet-capture-selection requires exactly one of --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("objet-capture-selection requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.objet_capture_selection_manifest(
+            Path(args.archive_root),
+            staged_path=args.staged_path,
+            source_intake_receipt=args.source_intake_receipt,
+            item_id=args.item_id,
+            manifest_id=args.manifest_id,
+            project_intake_receipt=args.project_intake_receipt,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_objet_capture_selection_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def print_objet_capture_selection_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    state = "passed" if result.get("ok") else "blocked"
+    item = result.get("item") if isinstance(result.get("item"), dict) else {}
+    print(f"Objet capture selection {state}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Manifest id: {result.get('selection_manifest_id') or '-'}")
+    print(f"Object id: {item.get('approved_object_id') or '-'}")
+    if result.get("dry_run"):
+        print(f"Proposed selection: {result.get('proposed_selection_path') or '-'}")
+        print("Writes: none")
+    else:
+        print(f"Selection: {result.get('selection_path') or '-'}")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+
+
 def command_objet_capture(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -6164,6 +6219,22 @@ def build_parser() -> argparse.ArgumentParser:
     staged_cleanup.add_argument("--dry-run", action="store_true", help="Required: report-only and never deletes; exits 0 only when safe_to_cleanup is true.")
     staged_cleanup.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     staged_cleanup.set_defaults(func=command_staged_cleanup_check)
+
+    objet_capture_selection = subcommands.add_parser(
+        "objet-capture-selection",
+        help="Build a reviewed objet-capture selection manifest from one staged file and source-intake receipt.",
+    )
+    objet_capture_selection.add_argument("archive_root", help="Archive root containing the staged file.")
+    objet_capture_selection.add_argument("--staged-path", required=True, help="Archive-relative staged file path.")
+    objet_capture_selection.add_argument("--source-intake-receipt", required=True, help="Archive-relative source-intake plan record under receipts/sources/.")
+    objet_capture_selection.add_argument("--item-id", default="item", help="Safe item id for the selection manifest.")
+    objet_capture_selection.add_argument("--manifest-id", help="Optional safe manifest id; defaults from the object hash.")
+    objet_capture_selection.add_argument("--project-intake-receipt", help="Optional archive-relative project-intake decisions receipt.")
+    objet_capture_selection.add_argument("--dry-run", action="store_true", help="Preview the selection manifest without writing.")
+    objet_capture_selection.add_argument("--approve", action="store_true", help="Write the reviewed selection manifest only; does not run capture.")
+    objet_capture_selection.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
+    objet_capture_selection.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    objet_capture_selection.set_defaults(func=command_objet_capture_selection)
 
     objet_capture = subcommands.add_parser(
         "objet-capture",

@@ -15430,6 +15430,86 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(self._inventory(archive_root), before, "dry-run must not write anything")
             self.assertFalse(list(archive_root.rglob("*.part-*")))
 
+    def test_objet_capture_selection_approve_writes_selection_only_for_later_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            staged_path, digest = self._stage(archive_root, "note.txt", b"selection bridge bytes")
+            plan_path, plan_sha = self._plan(archive_root)
+            before_manifest_records = archive_services.load_manifest_records(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "objet-capture-selection",
+                    str(archive_root),
+                    "--staged-path",
+                    staged_path,
+                    "--source-intake-receipt",
+                    plan_path,
+                    "--item-id",
+                    "note-1",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "objet_capture_selection_record")
+            self.assertFalse(result["privacy_guards"]["objet_capture_run"])
+            self.assertFalse(result["privacy_guards"]["object_manifest_appended"])
+            self.assertFalse(result["privacy_guards"]["object_bytes_written"])
+            self.assertEqual(result["item"]["approved_object_id"], f"sha256:{digest}")
+            self.assertEqual(result["item"]["source_intake_plan_sha256"], plan_sha)
+
+            selection_path = archive_root / Path(result["selection_path"])
+            self.assertTrue(selection_path.is_file())
+            selection = json.loads(selection_path.read_text(encoding="utf-8"))
+            self.assertEqual(selection["action"], archive_services.OBJET_CAPTURE_SELECTION_ACTION)
+            self.assertEqual(selection["items"][0]["approved_object_id"], f"sha256:{digest}")
+            self.assertEqual(selection["items"][0]["expected_size_bytes"], len(b"selection bridge bytes"))
+            self.assertEqual(selection["items"][0]["source_intake_receipt_path"], plan_path)
+            self.assertEqual(archive_services.load_manifest_records(archive_root), before_manifest_records)
+            self.assertFalse((archive_root / "objects" / "sha256" / digest[:2] / digest).exists())
+
+            capture_preview = archive_services.objet_capture_dry_run(archive_root, selection_path)
+            self.assertTrue(capture_preview["ok"], capture_preview)
+            self.assertEqual(capture_preview["summary"]["would_capture"], 1)
+
+    def test_objet_capture_selection_dry_run_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            staged_path, digest = self._stage(archive_root, "note.txt", b"selection dry run")
+            plan_path, _ = self._plan(archive_root)
+            before = self._inventory(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "objet-capture-selection",
+                    str(archive_root),
+                    "--staged-path",
+                    staged_path,
+                    "--source-intake-receipt",
+                    plan_path,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "objet_capture_selection_plan")
+            self.assertEqual(result["item"]["approved_object_id"], f"sha256:{digest}")
+            self.assertTrue(result["privacy_guards"]["file_body_hashed"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            self.assertEqual(self._inventory(archive_root), before)
+            self.assertTrue(result["proposed_selection_path"].startswith("receipts/objet-capture-selections/"))
+
     def test_objet_capture_dry_run_accepts_project_intake_receipt_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root, selection, _ = self._simple_capture_setup(tmp)

@@ -22990,6 +22990,7 @@ def derived_text_capture_manifest_apply(
 
 
 OBJET_CAPTURE_RECEIPTS_DIR = "receipts/objet-capture"
+OBJET_CAPTURE_SELECTION_MANIFESTS_DIR = "receipts/objet-capture-selections"
 OBJET_CAPTURE_SELECTION_ACTION = "local_objet_capture_approved"
 OBJET_CAPTURE_RECEIPT_SCHEMA = "wom-kit/objet-capture-receipt/v0.2"
 OBJET_CAPTURE_REQUIRED_PRIVACY_GUARDS = (
@@ -23313,6 +23314,243 @@ def _objet_capture_manifest_needs_leading_newline(manifest_path: Path) -> bool:
     with manifest_path.open("rb") as handle:
         handle.seek(-1, os.SEEK_END)
         return handle.read(1) != b"\n"
+
+
+def objet_capture_selection_manifest(
+    archive_root: Path | str,
+    *,
+    staged_path: str,
+    source_intake_receipt: str,
+    item_id: str = "item",
+    manifest_id: str | None = None,
+    project_intake_receipt: str | None = None,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+    reviewer = safe_project_intake_actor_id(reviewed_by)
+    if approve and reviewer is None:
+        blockers.append("Objet capture selection approval requires --reviewed-by with a safe actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    normalized_item_id = str(item_id or "").strip()
+    if not safe_source_intake_ref(normalized_item_id):
+        blockers.append("item_id must be a safe label/ref, not a URL, path, token, or secret.")
+        normalized_item_id = "item"
+    normalized_manifest_id = str(manifest_id or "").strip()
+    if normalized_manifest_id and not safe_source_intake_ref(normalized_manifest_id):
+        blockers.append("manifest_id must be a safe label/ref, not a URL, path, token, or secret.")
+        normalized_manifest_id = ""
+
+    normalized_staged = ""
+    src: Path | None = None
+    try:
+        normalized_staged = normalize_archive_relative_path(staged_path)
+        src = resolve_archive_relative_path(root, normalized_staged)
+    except ArchivePathError:
+        blockers.append("unsafe_staged_path")
+    if normalized_staged:
+        first_segment = normalized_staged.split("/", 1)[0].lower()
+        if first_segment in OBJET_CAPTURE_INTERNAL_PREFIXES:
+            blockers.append("unsafe_staged_path")
+        for part in PurePosixPath(normalized_staged).parts:
+            if part.split(".", 1)[0].lower() in OBJET_CAPTURE_RESERVED_DEVICE_NAMES:
+                blockers.append("reserved_device_name")
+        chain_blockers = objet_capture_path_chain_blockers(root, normalized_staged)
+        blockers.extend(chain_blockers)
+    if src is not None:
+        if not is_path_within_root(src, root):
+            blockers.append("unsafe_staged_path")
+        if target_looks_external_live_never_touch(src):
+            blockers.append("resolved_path_never_touch")
+
+    normalized_receipt = ""
+    try:
+        normalized_receipt = normalize_archive_relative_path(source_intake_receipt)
+    except ArchivePathError:
+        blockers.append("source_intake_evidence_invalid")
+    if normalized_receipt and not normalized_receipt.startswith("receipts/sources/"):
+        blockers.append("source_intake_evidence_invalid")
+
+    project_intake_context = objet_capture_project_intake_context(
+        root,
+        {"project_intake_receipt_path": project_intake_receipt} if project_intake_receipt else {},
+        project_intake_receipt,
+        blockers,
+        warnings,
+    )
+
+    digest: str | None = None
+    head = b""
+    size_bytes: int | None = None
+    mime: str | None = None
+    if src is not None and not blockers:
+        unresolved = root.joinpath(*PurePosixPath(normalized_staged).parts)
+        try:
+            entry_stat = os.lstat(unresolved)
+        except FileNotFoundError:
+            blockers.append("source_missing")
+        except OSError:
+            blockers.append("source_unreadable")
+        else:
+            if stat.S_ISDIR(entry_stat.st_mode):
+                blockers.append("staged_path_is_directory")
+            elif not stat.S_ISREG(entry_stat.st_mode):
+                blockers.append("special_file_not_allowed")
+        if not blockers:
+            open_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                fd = os.open(str(unresolved), open_flags)
+            except OSError:
+                blockers.append("source_unreadable")
+            else:
+                try:
+                    fd_stat = os.fstat(fd)
+                    if not stat.S_ISREG(fd_stat.st_mode):
+                        blockers.append("special_file_not_allowed")
+                    else:
+                        size_bytes = fd_stat.st_size
+                        digest, head = _objet_capture_sha256_and_head_fd(fd)
+                        mime = objet_capture_deterministic_mime(unresolved.name, head)
+                        if size_bytes == 0:
+                            warnings.append("zero_byte_file")
+                except OSError:
+                    blockers.append("source_unreadable")
+                finally:
+                    os.close(fd)
+
+    plan_sha256 = ""
+    if normalized_receipt and not blockers:
+        try:
+            receipt_path = resolve_archive_relative_path(root, normalized_receipt)
+            plan = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (ArchivePathError, OSError, json.JSONDecodeError):
+            blockers.append("source_intake_evidence_invalid")
+            plan = None
+        if isinstance(plan, dict):
+            gate_blockers: list[str] = []
+            prepare_source_intake_plan_for_draft(plan, gate_blockers)
+            if gate_blockers:
+                blockers.append("source_intake_evidence_invalid")
+            else:
+                plan_sha256 = sha256_json_value(plan)
+        elif plan is not None:
+            blockers.append("source_intake_evidence_invalid")
+
+    if digest and not normalized_manifest_id:
+        normalized_manifest_id = f"selection:{digest[:16]}"
+    captured_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    item = {
+        "item_id": normalized_item_id,
+        "approved": True,
+        "input_kind": "local_path",
+        "staged_path": normalized_staged,
+        "approved_object_id": f"sha256:{digest}" if digest else "",
+        "expected_size_bytes": size_bytes,
+        "expected_mime": mime,
+        "source_intake_receipt_path": normalized_receipt,
+        "source_intake_plan_sha256": plan_sha256,
+    }
+    selection = {
+        "manifest_id": normalized_manifest_id or "selection:pending",
+        "schema": "wom-kit/b4-selection/v0.2",
+        "action": OBJET_CAPTURE_SELECTION_ACTION,
+        "archive_id": archive_id,
+        "created_at": captured_at,
+        "created_by": reviewer,
+        "project_intake_receipt_path": project_intake_receipt,
+        "items": [item],
+        "privacy_guards": {key: True for key in OBJET_CAPTURE_REQUIRED_PRIVACY_GUARDS},
+    }
+    envelope_blockers = objet_capture_envelope_blockers(selection, archive_id)
+    if digest and plan_sha256 and normalized_receipt:
+        evidence_blockers = objet_capture_intake_evidence_blockers(root, item)
+        blockers.extend(evidence_blockers)
+    blockers.extend(envelope_blockers)
+
+    selection_sha256 = sha256_json_value(selection)
+    receipt_digest = selection_sha256.removeprefix("sha256:")
+    selection_relative = f"{OBJET_CAPTURE_SELECTION_MANIFESTS_DIR}/{receipt_digest[:16]}.selection.json"
+    selection_path = archive_internal_path(root, selection_relative)
+    if approve and selection_path.exists():
+        blockers.append("objet capture selection manifest already exists for this selection hash.")
+
+    result: dict[str, Any] = {
+        "ok": not blockers,
+        "dry_run": dry_run,
+        "lifecycle_action": "objet_capture_selection_plan" if dry_run else "objet_capture_selection_record",
+        "archive_id": archive_id,
+        "selection_manifest_id": selection["manifest_id"],
+        "selection_manifest_sha256": selection_sha256,
+        "project_intake_context": project_intake_context,
+        "proposed_selection_path": selection_relative,
+        "selection_path": None,
+        "item": {
+            "item_id": normalized_item_id,
+            "staged_path": normalized_staged or None,
+            "approved_object_id": item["approved_object_id"] or None,
+            "expected_size_bytes": size_bytes,
+            "expected_mime": mime,
+            "source_intake_receipt_path": normalized_receipt or None,
+            "source_intake_plan_sha256": plan_sha256 or None,
+        },
+        "selection_manifest": selection if not blockers else None,
+        "privacy_guards": {
+            "absolute_local_paths_echoed": False,
+            "source_intake_receipt_read": bool(normalized_receipt),
+            "file_body_hashed": digest is not None,
+            "file_body_copied": False,
+            "objet_capture_run": False,
+            "object_manifest_appended": False,
+            "object_bytes_written": False,
+            "provider_calls": False,
+            "writes": approve and not blockers,
+        },
+        "next_safe_actions": [
+            "Review the selection manifest before running objet-capture.",
+            "Run objet-capture --selection <selection-path> --dry-run before any approved capture.",
+            "Keep cleanup manual and last; this command never deletes staged files.",
+        ],
+        "would_change": [selection_relative] if dry_run and not blockers else [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+    if blockers or dry_run:
+        return result
+
+    created_dirs = missing_parent_dirs_before_write(root, [selection_path])
+    created_paths: list[Path] = []
+    try:
+        selection_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_new_file(selection_path, selection)
+        created_paths.append(selection_path)
+    except Exception:
+        for path in created_paths:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        cleanup_created_empty_dirs(root, created_dirs)
+        raise
+
+    result.update(
+        {
+            "ok": True,
+            "dry_run": False,
+            "selection_path": selection_relative,
+            "files_written": [selection_relative],
+            "would_change": [],
+            "privacy_guards": {**result["privacy_guards"], "writes": True},
+        }
+    )
+    return result
 
 
 def _objet_capture_process_item(

@@ -26,6 +26,12 @@ This project uses semantic versioning for public compatibility checkpoints.
   to validate a reviewed `source-intake --dry-run` JSON file and preserve the
   redacted plan under `receipts/sources/` for later capture evidence without
   reading file bodies, calculating content hashes, or calling providers.
+- Added approval-gated CLI `archive objet-capture-selection
+  --dry-run|--approve` to build a reviewed `objet-capture --selection`
+  manifest from one staged file and one recorded source-intake plan. It hashes
+  the selected staged file to bind `approved_object_id`, writes only the
+  selection manifest on approve, and does not capture bytes, append object
+  manifest records, draft, mint, upload, or clean staged originals.
 - Added CLI `archive prehashed-objet-ledger --dry-run|--approve` for
   already-hashed external content-addressed ledgers, including Notion
   source-export ledgers. Dry-run previews registration without echoing row
