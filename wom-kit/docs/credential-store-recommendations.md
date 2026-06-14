@@ -129,6 +129,9 @@ v0.3.25 adds a read-only adapter readiness preview. See
 v0.3.26 adds a read-only adapter manifest preview. See
 [Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md).
 
+v0.3.27 adds a read-only adapter audit receipt preview. See
+[Credential Adapter Audit Plan](credential-adapter-audit-plan.md).
+
 ## WOM Compatibility Rules
 
 Use:

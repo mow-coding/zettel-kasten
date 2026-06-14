@@ -1064,6 +1064,8 @@ CREDENTIAL_ADAPTER_OPERATIONS = {
 CREDENTIAL_ADAPTER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 CREDENTIAL_ADAPTER_MANIFEST_SCHEMA = "wom-kit/credential-adapter-manifest/v0.1"
 CREDENTIAL_ADAPTER_MANIFESTS_DIR = "config/credential-adapters"
+CREDENTIAL_ADAPTER_AUDIT_RECEIPTS_DIR = "receipts/credentials/adapter-audits"
+CREDENTIAL_ADAPTER_AUDIT_RESULT_STATUSES = {"not_run", "succeeded", "failed", "denied"}
 ONBOARDING_PROVIDER_PROFILES = {
     "local_only": {
         "description": "Local archive plus physical/local backup and external secret vault guidance.",
@@ -12107,6 +12109,207 @@ def credential_adapter_manifest_plan(
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
+
+
+def credential_adapter_audit_plan(
+    archive_root: Path | str,
+    *,
+    adapter_id: str,
+    adapter_kind: str,
+    operation: str,
+    credential_id: str,
+    action_kind: str,
+    result_status: str = "not_run",
+    store_kind: str | None = None,
+    credential_kind: str | None = None,
+    provider: str | None = None,
+    consumer: str | None = None,
+    platform: str = "windows",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("credential-adapter-audit-plan is read-only and requires --dry-run.")
+
+    resolved_result_status = (result_status or "not_run").strip().lower().replace("-", "_")
+    if resolved_result_status not in CREDENTIAL_ADAPTER_AUDIT_RESULT_STATUSES:
+        blockers.append("result_status must be one of: " + ", ".join(sorted(CREDENTIAL_ADAPTER_AUDIT_RESULT_STATUSES)) + ".")
+        resolved_result_status = "not_run"
+
+    manifest_preview = credential_adapter_manifest_plan(
+        root,
+        adapter_id=adapter_id,
+        adapter_kind=adapter_kind,
+        operations=[operation],
+        store_kind=store_kind,
+        consumer=consumer,
+        platform=platform,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in manifest_preview.get("blockers") or [])
+    warnings.extend(str(item) for item in manifest_preview.get("warnings") or [])
+
+    manifest = manifest_preview.get("manifest_preview") if isinstance(manifest_preview.get("manifest_preview"), dict) else {}
+    readiness_preview = credential_adapter_readiness_plan(
+        root,
+        adapter_kind=str(manifest.get("adapter_kind") or adapter_kind),
+        operation=operation,
+        credential_id=credential_id,
+        credential_ref=None,
+        credential_kind=credential_kind,
+        provider=provider,
+        action_kind=action_kind,
+        store_kind=str(manifest.get("store_kind") or store_kind or "password_manager"),
+        consumer=str(manifest.get("consumer") or consumer or "wom:adapter"),
+        platform=str(manifest.get("platform") or platform),
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in readiness_preview.get("blockers") or [])
+    warnings.extend(str(item) for item in readiness_preview.get("warnings") or [])
+
+    adapter_id_for_receipt = str(manifest.get("adapter_id") or "adapter")
+    operation_summary = readiness_preview.get("operation") if isinstance(readiness_preview.get("operation"), dict) else {}
+    case_id = credential_adapter_audit_case_id(
+        archive_id=archive_id,
+        adapter_id=adapter_id_for_receipt,
+        operation=str(operation_summary.get("operation") or operation),
+        credential_id=str(operation_summary.get("credential_id") or credential_id),
+        action_kind=str(operation_summary.get("action_kind") or action_kind),
+        result_status=resolved_result_status,
+    )
+    proposed_receipt_path = f"{CREDENTIAL_ADAPTER_AUDIT_RECEIPTS_DIR}/{case_id}.credential-adapter-audit.json"
+    receipt_preview = {
+        "receipt_kind": "credential_adapter_audit",
+        "schema_version": "wom-credential-adapter-audit/v0.1",
+        "archive_id": archive_id,
+        "result_status": resolved_result_status,
+        "adapter": {
+            "adapter_id": adapter_id_for_receipt,
+            "adapter_kind": manifest.get("adapter_kind"),
+            "adapter_family": manifest.get("adapter_family"),
+            "store_kind": manifest.get("store_kind"),
+            "platform": manifest.get("platform"),
+            "consumer": manifest.get("consumer"),
+        },
+        "operation": operation_summary,
+        "approval": {
+            "approval_receipt_required_before_use": True,
+            "approval_receipt_ref_included": False,
+            "approval_receipt_writer_implemented": False,
+        },
+        "manifest": {
+            "manifest_required_before_live_use": True,
+            "manifest_ref_included": False,
+            "manifest_writer_implemented": False,
+        },
+        "non_secret_result_metadata_allowed": [
+            "result_status",
+            "adapter_id",
+            "adapter_kind",
+            "operation",
+            "action_kind",
+            "credential_id",
+            "provider",
+            "cost_class",
+            "source_object_ids",
+            "derived_text_receipt_refs",
+            "error_class",
+        ],
+        "secret_material": {
+            "secret_value_included": False,
+            "credential_ref_value_included": False,
+            "username_included": False,
+            "email_included": False,
+            "token_included": False,
+            "local_path_included": False,
+            "provider_url_included": False,
+        },
+    }
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "credential_adapter_audit_plan",
+        "archive_id": archive_id,
+        "proposed_receipt_path": proposed_receipt_path,
+        "receipt_preview": json_safe(receipt_preview),
+        "manifest_plan_summary": {
+            "proposed_manifest_path": manifest_preview.get("proposed_manifest_path"),
+            "schema_validation_ok": (manifest_preview.get("schema_validation") or {}).get("ok") if isinstance(manifest_preview.get("schema_validation"), dict) else None,
+            "adapter_id": manifest.get("adapter_id"),
+            "adapter_kind": manifest.get("adapter_kind"),
+            "store_kind": manifest.get("store_kind"),
+        },
+        "readiness_plan_summary": {
+            "operation": operation_summary.get("operation"),
+            "action_kind": operation_summary.get("action_kind"),
+            "credential_id": operation_summary.get("credential_id"),
+            "readiness_status": (readiness_preview.get("readiness") or {}).get("status") if isinstance(readiness_preview.get("readiness"), dict) else None,
+        },
+        "current_capability": {
+            "adapter_audit_receipt_preview_available": True,
+            "adapter_audit_receipt_write_implemented": False,
+            "live_adapter_implemented": False,
+            "secret_value_read_implemented": False,
+            "secret_value_write_implemented": False,
+            "approval_receipt_write_implemented": False,
+            "adapter_manifest_write_implemented": False,
+        },
+        "closed_actions": {
+            "audit_receipt_written": False,
+            "adapter_manifest_written": False,
+            "approval_receipt_written": False,
+            "live_adapter_executed": False,
+            "secret_prompted_in_chat": False,
+            "secret_value_read": False,
+            "secret_value_written": False,
+            "password_manager_opened": False,
+            "browser_password_store_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "plaintext_file_read": False,
+            "provider_api_called": False,
+            "oauth_started": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "credential_ref_values_echoed": False,
+            "email_addresses_echoed": False,
+            "tokens_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def credential_adapter_audit_case_id(
+    *,
+    archive_id: str,
+    adapter_id: str,
+    operation: str,
+    credential_id: str,
+    action_kind: str,
+    result_status: str,
+) -> str:
+    payload = {
+        "archive_id": archive_id,
+        "adapter_id": adapter_id,
+        "operation": operation,
+        "credential_id": credential_id,
+        "action_kind": action_kind,
+        "result_status": result_status,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
+    return f"credential-adapter-audit-{digest}"
 
 
 def credential_access_action_profile(action_kind: str) -> dict[str, Any]:

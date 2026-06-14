@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.27 - 2026-06-15
+
+- Added read-only CLI `archive credential-adapter-audit-plan --dry-run` and
+  MCP `credential_adapter_audit_plan` for previewing a non-secret future
+  credential adapter audit receipt.
+- Added CLI aliases `archive credential-adapter-audit --dry-run` and
+  `archive secret-adapter-audit-plan --dry-run`.
+- Defined the future audit boundary after credential refs, adapter manifests,
+  readiness checks, human approval receipts, and local adapter operations.
+- Kept the audit layer non-mutating and non-executing: it writes no receipts or
+  manifests, executes no live adapters, opens no vaults, keyrings, browser
+  stores, environment variables, plaintext secret files, provider APIs, or
+  approval writers, and includes no secret values, exact credential refs,
+  usernames, email addresses, tokens, local paths, provider URLs, passwords, or
+  API keys.
+- Added `wom-kit/docs/credential-adapter-audit-plan.md` plus CLI/MCP/docs
+  tests for dry-run-only behavior, allowed-root enforcement, no-write behavior,
+  non-execution, and privacy boundaries.
+
 ## v0.3.26 - 2026-06-15
 
 - Added read-only CLI `archive credential-adapter-manifest-plan --dry-run`
