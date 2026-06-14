@@ -48,6 +48,7 @@ project-intake-plan
 -> project-intake-next-question
 -> project-intake-decision-template
 -> project-intake-unpack-queue
+-> project-intake-unpack-choice
 -> project-intake-item-plan
 -> source-intake --project-intake-receipt
 -> source-intake-record
@@ -138,6 +139,7 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Session guide | `archive project-intake-session-guide --dry-run` / MCP `project_intake_session_guide` | Shows the next safe human-guided step from a project slug, staged folder, or existing decisions receipt. It writes nothing, echoes no decision values, reads no bodies, and authorizes no automatic execution. |
 | Session planning | `archive project-intake-plan --dry-run` / MCP `project_intake_plan` | Plans one staged project folder session with top-level counts, human review checklist, suggested classification labels, and no writes. |
 | Unpack queue | `archive project-intake-unpack-queue --dry-run` / MCP `project_intake_unpack_queue` | Queues top-level staged items as opaque `item-0001` refs with coarse kind/extension/size hints so the AI can ask which box to unpack next. It exposes no entry names or local paths, reads no bodies, hashes nothing, classifies nothing automatically, and writes nothing. |
+| Unpack choice | `archive project-intake-unpack-choice --dry-run|--approve` / MCP `project_intake_unpack_choice` | Records one human-confirmed opaque queue choice after the project checklist is complete. It writes only a local unpack-choice receipt on approval and does not expose staged entry names, local paths, file bodies, or choice notes in command output. |
 | Next question | `archive project-intake-next-question --dry-run` / MCP `project_intake_next_question` | Returns exactly one next human-review question for a new staged folder or continuing receipt. It includes placeholders only, does not echo decision values, and writes nothing. |
 | Decision template | `archive project-intake-decision-template --dry-run` / MCP `project_intake_decision_template` | Builds the JSON shape for the next human-reviewed answer. It leaves `answer` empty, does not echo previous answers, and writes nothing. |
 | Answer recording | `archive project-intake-record-answer --dry-run|--approve` | Appends one human-reviewed answer file to a new or existing session and writes a new decisions receipt on approval. It does not echo current or previous answer values, run capture, draft, mint, provider calls, or cleanup. |
@@ -160,7 +162,7 @@ a session planner with
 human review prompts, a one-question-at-a-time prompt surface, a next-answer
 answer JSON template, a one-answer receipt writer, a batch receipt writer for
 reviewed answers, a read-only
-receipt status check, a one-item source-intake route preview, source-intake
+receipt status check, an approval-gated unpack-choice receipt, a one-item source-intake route preview, source-intake
 plan recording for later capture evidence, an optional source-intake
 session-context link, missing-question prompts for the next human review turn,
 and draft/mint metadata preservation for that receipt evidence.
