@@ -8,6 +8,7 @@ KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 FREEZE_DOC_PATH = KIT_ROOT / "docs" / "v02x-freeze-v03-entry-boundary.md"
+PROJECT_INTAKE_COOKBOOK_PATH = KIT_ROOT / "docs" / "project-intake-cookbook.md"
 
 
 class CapabilityMatrixDocsTests(unittest.TestCase):
@@ -82,6 +83,24 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertEqual(positions, sorted(positions))
                 self.assertIn("wom-kit/docs/capability-matrix.md", text)
                 self.assertIn("wom-kit/docs/v02x-freeze-v03-entry-boundary.md", text)
+
+    def test_project_intake_cookbook_keeps_manual_receipt_spine(self) -> None:
+        text = PROJECT_INTAKE_COOKBOOK_PATH.read_text(encoding="utf-8")
+        for phrase in (
+            "fake-archive rehearsal",
+            "archive project-intake-session-guide",
+            "archive project-intake-record-answer",
+            "archive project-intake-status",
+            "archive source-intake-record",
+            "archive objet-capture-selection",
+            "archive objet-capture",
+            "archive staged-cleanup-check",
+            "does not echo the answer text",
+            "Treat receipts as context, not automatic permission.",
+            "WOM-kit still never deletes it for you.",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
 
     def test_v02x_freeze_boundary_doc_covers_public_proof_and_non_goals(self) -> None:
         text = FREEZE_DOC_PATH.read_text(encoding="utf-8")

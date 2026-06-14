@@ -6,6 +6,19 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.10 - 2026-06-14
+
+- Added `wom-kit/docs/project-intake-cookbook.md`, a fake-archive rehearsal
+  walkthrough for the manual project-intake spine from session planning through
+  answer receipt, source-intake, capture selection, capture, draft/mint gates,
+  and cleanup verification.
+- Strengthened the project-intake-to-objet-capture roundtrip regression so it
+  now creates the project-intake receipt through
+  `archive project-intake-record-answer` semantics before passing that receipt
+  into source-intake and capture context checks.
+- Updated README release-baseline bookkeeping to v0.3.10, including the Korean
+  README's release tag list.
+
 ## v0.3.9 - 2026-06-14
 
 - Added approval-gated CLI `archive project-intake-record-answer --dry-run|--approve`

@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.9 project-intake answer recording checkpoint
+Status: v0.3.10 project-intake cookbook checkpoint
 Date: 2026-06-14
-Version: v0.3.9, release candidate
+Version: v0.3.10, release candidate
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 

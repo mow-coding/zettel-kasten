@@ -98,6 +98,12 @@ deferred, or cleaned:
 wom-kit/docs/artifact-hygiene.md
 ```
 
+For a fake-archive rehearsal that can be run before touching real data, see:
+
+```text
+wom-kit/docs/project-intake-cookbook.md
+```
+
 ## 3. Archive Of Record
 
 The staged folder is not the archive of record.
@@ -156,8 +162,8 @@ receipt status check, a one-item source-intake route preview, source-intake
 plan recording for later capture evidence, an optional source-intake
 session-context link, missing-question prompts for the next human review turn,
 and draft/mint metadata preservation for that receipt evidence.
-They still do not form a full human-guided intake/capture/draft/mint/cleanup
-workflow.
+They form a manual command spine, not a joined executor. The user or AI runtime
+still carries reviewed receipt paths between steps.
 
 ## 5. Planned Surfaces
 

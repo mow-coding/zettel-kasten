@@ -1,0 +1,141 @@
+# Project Intake Cookbook
+
+Status: fake-archive rehearsal
+Date: 2026-06-14
+
+This cookbook shows the current manual project-intake spine with public-safe
+fake data. It is for rehearsal before using a real personal archive.
+
+The goal is not automatic import. The goal is:
+
+```text
+AI asks one question.
+The human reviews one answer.
+WOM-kit records one receipt.
+The next command uses that receipt only as context.
+```
+
+## 1. Copy The Fake Archive
+
+Use a temporary folder outside the repository:
+
+```powershell
+$tmp = Join-Path $env:TEMP "wom-project-intake-rehearsal"
+Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $tmp | Out-Null
+Copy-Item -Recurse ".\wom-kit\examples\fake-life-archive" "$tmp\archive"
+Set-Content -Path "$tmp\archive\.wom-sandbox" -Value "sandbox" -Encoding utf8
+New-Item -ItemType Directory -Path "$tmp\archive\staging\incoming" -Force | Out-Null
+Set-Content -Path "$tmp\archive\staging\incoming\project-note.txt" -Value "Fake source note for project intake rehearsal." -Encoding utf8
+```
+
+The `.wom-sandbox` marker keeps destructive real-data assumptions out of this
+rehearsal. Do not point these commands at a real private archive until the dry
+runs and receipts make sense.
+
+## 2. Ask For The Session Shape
+
+```powershell
+archive project-intake-session-guide "$tmp\archive" --staged-folder "$tmp\archive\staging\incoming" --dry-run --format json
+archive project-intake-plan "$tmp\archive" --staged-folder "$tmp\archive\staging\incoming" --dry-run --format json
+archive project-intake-next-question "$tmp\archive" --staged-folder "$tmp\archive\staging\incoming" --dry-run --format json
+archive project-intake-decision-template "$tmp\archive" --staged-folder "$tmp\archive\staging\incoming" --session-id rehearsal-project-20260614 --dry-run --format json
+```
+
+These commands write nothing. They do not read file bodies, classify the whole
+folder, capture objets, draft zets, mint zets, upload files, or clean the staged
+folder.
+
+## 3. Record One Human-Reviewed Answer
+
+Create one answer file:
+
+```powershell
+@'
+{
+  "schema": "wom-kit/project-intake-answer/v0.1",
+  "checklist_id": "scope.single_project",
+  "answer": "yes",
+  "notes": "This fake staged folder is one rehearsal project."
+}
+'@ | Set-Content -Path "$tmp\scope-answer.json" -Encoding utf8
+```
+
+Preview, then approve:
+
+```powershell
+archive project-intake-record-answer "$tmp\archive" --answer "$tmp\scope-answer.json" --session-id rehearsal-project-20260614 --dry-run --format json
+archive project-intake-record-answer "$tmp\archive" --answer "$tmp\scope-answer.json" --session-id rehearsal-project-20260614 --approve --reviewed-by person:test --format json
+```
+
+The approved command writes a project-intake decisions receipt under
+`receipts/project-intake/`. Console output does not echo the answer text.
+
+Save the returned `receipt_path` as `$projectReceipt` for the next commands:
+
+```powershell
+$projectReceipt = "<receipt_path from the approved command>"
+```
+
+## 4. Check What Is Still Missing
+
+```powershell
+archive project-intake-status "$tmp\archive" --receipt $projectReceipt --dry-run --format json
+archive project-intake-next-question "$tmp\archive" --receipt $projectReceipt --dry-run --format json
+```
+
+The receipt can show checklist coverage and the next missing question. It is not
+permission to run the rest of the workflow automatically.
+
+## 5. Plan One Selected File
+
+```powershell
+archive project-intake-item-plan "$tmp\archive" --receipt $projectReceipt --local-path "$tmp\archive\staging\incoming\project-note.txt" --dry-run --format json
+archive source-intake "$tmp\archive" --dry-run --local-path "$tmp\archive\staging\incoming\project-note.txt" --project-intake-receipt $projectReceipt --redact-local-paths --format json
+```
+
+Save and review the source-intake JSON outside the command, then record it:
+
+```powershell
+$sourcePlan = "$tmp\source-intake-plan.json"
+# Write the reviewed source-intake dry-run JSON to $sourcePlan.
+archive source-intake-record "$tmp\archive" --source-intake-plan $sourcePlan --dry-run --format json
+archive source-intake-record "$tmp\archive" --source-intake-plan $sourcePlan --approve --reviewed-by person:test --format json
+```
+
+## 6. Capture Only After A Separate Selection
+
+Use `objet-capture-selection` to prepare a reviewed selection manifest for one
+staged file, then pass that selection to `objet-capture`.
+
+```powershell
+archive objet-capture-selection "$tmp\archive" --staged-path staging/incoming/project-note.txt --source-intake-receipt <source-intake-record-path> --dry-run --format json
+archive objet-capture-selection "$tmp\archive" --staged-path staging/incoming/project-note.txt --source-intake-receipt <source-intake-record-path> --approve --reviewed-by person:test --format json
+archive objet-capture "$tmp\archive" --selection <selection-json> --project-intake-receipt $projectReceipt --dry-run --format json
+archive objet-capture "$tmp\archive" --selection <selection-json> --project-intake-receipt $projectReceipt --approve --reviewed-by person:test --format json
+```
+
+Capture still does not draft, mint, upload, or clean.
+
+## 7. Draft, Mint, Then Check Cleanup
+
+After capture and any derived text review, draft and mint remain separate
+approval gates:
+
+```powershell
+archive create-draft "$tmp\archive" --title "Rehearsal zet" --body "Rehearsal body from a reviewed captured source." --source-intake-plan $sourcePlan --format json
+archive mint-zet "$tmp\archive" --path <draft-path> --approve --reviewed-by person:test --allow-warnings --format json
+archive staged-cleanup-check "$tmp\archive" --staged staging/incoming --dry-run --format json
+```
+
+Only the cleanup report can say whether the staged folder is safe to remove.
+WOM-kit still never deletes it for you.
+
+## Safety Summary
+
+- Use one staged project folder at a time.
+- Record one answer at a time.
+- Preserve one selected item at a time.
+- Treat receipts as context, not automatic permission.
+- Keep provider sync, uploads, draft creation, minting, and cleanup as separate
+  approval gates.

@@ -109,6 +109,7 @@
 
 - [AI-Assisted Onboarding And Provider Setup](ai-assisted-onboarding-and-provider-setup.md)
 - [Project Intake Session](project-intake-session.md)
+- [Project Intake Cookbook](project-intake-cookbook.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
 - [WOM Profile Registry](wom-profile-registry.md)
 - [WOM Profile Wallet Model](wom-profile-wallet-model.md)
