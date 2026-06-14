@@ -104,6 +104,9 @@ object_storage_setup_plan
 zet_surface_prototype_plan
   Preview a user-selected ZET surface prototype for WordPress, Joplin, Notion, or Obsidian. This is read-only and never calls providers, requests tokens, writes notes, writes vault files, publishes posts, creates projection receipts, mints, syncs, or runs ZET transport.
 
+project_intake_session_guide
+  Show the next safe human-guided project intake step from a project slug, staged folder, or existing decisions receipt. This is read-only and never writes decisions, echoes decision values, reads file bodies, captures, drafts, mints, uploads, cleans, or runs automatically.
+
 source_intake_plan
   Classify one source/objet locator and return safe draft refs. This is read-only and never reads file bodies, calculates full hashes, copies, uploads, imports, OCRs, transcribes, extracts, calls provider APIs, creates drafts, or mints.
 
@@ -283,6 +286,7 @@ ownership_transfer_check
 - `foreign_block_attestation_statement_draft_decision_preview` is read-only and writes nothing. MCP rejects any `dry_run` value other than boolean `true`, treats review notes as preview context only, and exposes no decision write/apply, statement draft accept, import, trust, attest, sign, receipt write, WordPress publishing, provider sync, auto-accept, auto-import, transport, or full-auto tool.
 - `zet_projection_plan_check` is read-only and requires `dry_run: true`. MCP exposes no projection-plan apply/write, projection receipt write, WordPress publishing, provider publishing, ZET transport, or automatic posting tool.
 - `zet_surface_prototype_plan` is read-only and requires `dry_run: true`. MCP exposes no ZET surface apply/write, provider call, OAuth/token prompt, note creation, vault write, post publishing, projection receipt write, sync, minting, cleanup, or transport tool.
+- `project_intake_session_guide` is read-only and requires `dry_run: true`. MCP exposes no project-intake write/apply, decision write, source-intake apply, objet capture, draft creation, minting, provider upload, cleanup, or full-auto execution tool.
 - `zet_transport_would_plan` is read-only and requires `dry_run: true`. MCP exposes no ZET transport apply/write/send/deliver/publish, key creation, radio-frequency access creation, mirroring delivery, queue/worker, receipt write, provider, trust/import/attest/sign/anchor, or full-auto tool.
 - v0.2.48 radio-frequency recommendation is documentation-only. MCP exposes no recommendation fetch/rank/update, selector execution, provider, projection, receipt, or feed mutation tool.
 - v0.3.0 shared update attestation/review recording is CLI-only. MCP exposes no boundary apply/write/approve, receiver-side renewal write, public proof anchor, DID/wallet/key custody, transport, provider sync, trust mutation, token, governance, or full-auto tool.

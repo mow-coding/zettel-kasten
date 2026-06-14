@@ -10,6 +10,11 @@ This project uses semantic versioning for public compatibility checkpoints.
   `project_intake_staging_guide` to show the recommended local objet-store
   intake path for one project slug without creating folders, moving files,
   uploading, capturing, drafting, minting, or cleaning.
+- Added read-only CLI `archive project-intake-session-guide --dry-run` and MCP
+  `project_intake_session_guide` to show the next safe human-guided intake step
+  from a project slug, staged folder, or existing decisions receipt without
+  echoing decision values, reading file bodies, writing decisions, capturing,
+  drafting, minting, uploading, cleaning, or authorizing automatic execution.
 - Added read-only CLI `archive project-intake-next-question --dry-run` and MCP
   `project_intake_next_question` so AI-assisted intake can ask one
   human-review question at a time without echoing decision values, writing

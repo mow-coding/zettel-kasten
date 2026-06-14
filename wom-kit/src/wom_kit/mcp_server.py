@@ -278,6 +278,23 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "project_intake_session_guide",
+        "description": "Show the next safe human-guided project intake step. Read-only; never writes decisions, captures, drafts, mints, uploads, cleans, or runs automatically.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "project_slug": {"type": "string", "description": "Lowercase ASCII project slug for staging guidance."},
+                "staged_folder": {"type": "string", "description": "One staged project folder for a new intake session."},
+                "receipt": {"type": "string", "description": "Archive-relative project-intake decisions receipt for a continuing session."},
+                "session_id": {"type": "string", "description": "Optional safe session id for a new decision template."},
+                "staged_folder_ref": {"type": "string", "description": "Optional non-secret staged folder reference for a new decision template."},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "project_intake_status",
         "description": "Review one project-intake decisions receipt. Read-only; returns checklist coverage and next human-review prompts without echoing answer values.",
         "inputSchema": {
@@ -1298,6 +1315,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_project_intake_plan(arguments)
     if name == "project_intake_staging_guide":
         return tool_project_intake_staging_guide(arguments)
+    if name == "project_intake_session_guide":
+        return tool_project_intake_session_guide(arguments)
     if name == "project_intake_status":
         return tool_project_intake_status(arguments)
     if name == "project_intake_next_question":
@@ -1632,6 +1651,26 @@ def tool_project_intake_staging_guide(arguments: dict[str, Any]) -> dict[str, An
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"project_intake_staging_guide: {state}.", result)
+
+
+def tool_project_intake_session_guide(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("project_intake_session_guide is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    staged_folder_value = optional_string_arg(arguments, "staged_folder")
+    staged_folder = require_path_arg({"staged_folder": staged_folder_value}, "staged_folder") if staged_folder_value else None
+    result = call_service(
+        archive_services.project_intake_session_guide,
+        archive_root,
+        project_slug=optional_string_arg(arguments, "project_slug"),
+        staged_folder=staged_folder,
+        receipt=optional_string_arg(arguments, "receipt"),
+        session_id=optional_string_arg(arguments, "session_id"),
+        staged_folder_ref=optional_string_arg(arguments, "staged_folder_ref"),
+        dry_run=True,
+    )
+    state = str(result.get("state") or ("passed" if result["ok"] else "blocked"))
+    return tool_success_result(f"project_intake_session_guide: {state}.", result)
 
 
 def tool_project_intake_status(arguments: dict[str, Any]) -> dict[str, Any]:
