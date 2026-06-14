@@ -44,6 +44,7 @@ Supporting philosophy and model docs:
 - [Derived Text Capture](derived-text.md)
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)
 - [Objet Ref Resolution](objet-ref-resolution.md)
+- [Zettel Objet Links](zettel-objet-links.md)
 
 These documents cover:
 
@@ -116,6 +117,7 @@ Onboarding and setup plans:
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)
 - [Objet Ref Resolution](objet-ref-resolution.md)
+- [Zettel Objet Links](zettel-objet-links.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
 - [WOM Profile Registry](wom-profile-registry.md)
 - [WOM Profile Wallet Model](wom-profile-wallet-model.md)

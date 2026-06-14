@@ -13,6 +13,7 @@ HUMAN_ARTIFACT_STORE_CONTRACT_PATH = KIT_ROOT / "docs" / "human-artifact-store-c
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
 NOTION_PAGE_SNAPSHOT_MODEL_PATH = KIT_ROOT / "docs" / "notion-page-snapshot-model.md"
 OBJET_REF_RESOLUTION_PATH = KIT_ROOT / "docs" / "objet-ref-resolution.md"
+ZETTEL_OBJET_LINKS_PATH = KIT_ROOT / "docs" / "zettel-objet-links.md"
 SOURCE_OBJECT_STORAGE_POLICY_PATH = KIT_ROOT / "docs" / "source-object-storage-policy.md"
 TEXT_PROVENANCE_HIERARCHY_PATH = KIT_ROOT / "docs" / "text-provenance-hierarchy.md"
 NOTION_THREE_STORE_EXAMPLE_PATH = KIT_ROOT / "docs" / "notion-source-export-three-store-example.md"
@@ -266,7 +267,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, resolver_text)
         for phrase in (
-            "Status: v0.3.17 read-only objet ref resolution checkpoint",
+            "Status: v0.3.18 zettel objet link preview checkpoint",
             "Objet ref resolver",
             "archive resolve-objet-ref --object-id sha256:<hex> --dry-run",
             "MCP `resolve_objet_ref`",
@@ -275,13 +276,52 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.17 pre-release",
+            "v0.3.18 pre-release",
             "[Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)",
             "read-only objet reference resolution",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         self.assertIn("[Objet Ref Resolution](objet-ref-resolution.md)", public_map_text)
+
+    def test_zettel_objet_links_doc_and_matrix_keep_read_only_boundaries(self) -> None:
+        links_text = ZETTEL_OBJET_LINKS_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.18 read-only preview",
+            "archive zettel-objet-links <archive-root>",
+            "MCP:",
+            "zettel_objet_links",
+            "sha256:<64 hex characters>",
+            "objet:sha256:<64 hex characters>",
+            "body text",
+            "frontmatter values",
+            "absolute local paths",
+            "provider URLs",
+            "presigned URLs",
+            "Redacted zettels are blocked",
+            "Provider-backed presigned URLs are separate future work",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, links_text)
+        for phrase in (
+            "Zettel objet link preview",
+            "archive zettel-objet-links --path <zet.md>|--zettel-id <id> --dry-run",
+            "MCP `zettel_objet_links`",
+            "echo no zettel body text or frontmatter values",
+            "block redacted zettels",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "[Zettel Objet Links](wom-kit/docs/zettel-objet-links.md)",
+            "zettel objet link previews",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        self.assertIn("[Zettel Objet Links](zettel-objet-links.md)", public_map_text)
 
     def test_v02x_freeze_boundary_doc_covers_public_proof_and_non_goals(self) -> None:
         text = FREEZE_DOC_PATH.read_text(encoding="utf-8")

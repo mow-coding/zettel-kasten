@@ -644,6 +644,21 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "zettel_objet_links",
+        "description": "Preview safe local-client objet link candidates referenced by one zettel. Read-only; never echoes body text, frontmatter values, absolute paths, provider URLs, presigned URLs, object bytes, or writes files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "zettel_id": {"type": "string"},
+                "path": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+                "max_refs": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "block_header_check",
         "description": "Dry-run preview of the derived block header for one draft or canonical zet.",
         "inputSchema": {
@@ -1404,6 +1419,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_list_zettels(arguments)
     if name == "read_zettel":
         return tool_read_zettel(arguments)
+    if name == "zettel_objet_links":
+        return tool_zettel_objet_links(arguments)
     if name == "block_header_check":
         return tool_block_header_check(arguments)
     if name == "zet_projection_plan_check":
@@ -2110,6 +2127,24 @@ def tool_read_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
         f"Read zettel {frontmatter.get('id', result['path']) if isinstance(frontmatter, dict) else result['path']}.",
         result,
     )
+
+
+def tool_zettel_objet_links(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("zettel_objet_links is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    zettel_id = optional_string_arg(arguments, "zettel_id")
+    relative_path = optional_string_arg(arguments, "path")
+    result = call_service(
+        archive_services.zettel_objet_links,
+        archive_root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        dry_run=True,
+        max_refs=int(arguments.get("max_refs", 100)),
+    )
+    state = "passed" if result.get("ok") else "blocked"
+    return tool_success_result(f"zettel_objet_links: {state}, {result['count']} link(s).", result)
 
 
 def tool_block_header_check(arguments: dict[str, Any]) -> dict[str, Any]:

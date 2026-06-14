@@ -1920,6 +1920,119 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("requires --dry-run", no_dry_output)
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
+    def test_zettel_objet_links_preview_resolves_refs_without_echoing_body_or_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+            payload = b"local link target\n"
+            local_digest = hashlib.sha256(payload).hexdigest()
+            local_relative = f"objects/sha256/{local_digest[:2]}/{local_digest}"
+            local_path = archive_root / local_relative
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_bytes(payload)
+            external_digest = "d" * 64
+            unsafe_url = "https://" + "redacted.example/unsafe-presigned"
+            records = [
+                {
+                    "object_id": f"sha256:{local_digest}",
+                    "sha256": local_digest,
+                    "logical_key": local_relative,
+                    "mime": "text/plain",
+                    "size_bytes": len(payload),
+                    "locations": [{"provider": "local", "path": local_relative, "availability": "available"}],
+                    "provenance": {"source": "b4_local_objet_capture"},
+                },
+                {
+                    "object_id": f"sha256:{external_digest}",
+                    "sha256": external_digest,
+                    "logical_key": f"objects/external/prehashed/notion_source_export/{external_digest[:2]}/{external_digest}",
+                    "mime": "application/octet-stream",
+                    "size_bytes": 321,
+                    "locations": [
+                        {
+                            "provider": "external_prehashed",
+                            "store_kind": "notion_source_export",
+                            "store_ref": "notion-export-20260614",
+                            "availability": "declared_external",
+                            "content_addressed": True,
+                            "byte_verification_by_wom_kit": False,
+                            "provider_url": unsafe_url,
+                        }
+                    ],
+                    "provenance": {"source": "prehashed_external_objet_ledger"},
+                },
+            ]
+            with manifest_path.open("a", encoding="utf-8") as handle:
+                for record in records:
+                    handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+            zettel_path = archive_root / "inbox" / "zet_objet_link_preview.md"
+            zettel_path.write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_objet_link_preview",
+                        "status: draft",
+                        "title: Private body must stay private",
+                        "source_refs:",
+                        f"  - object_id: sha256:{local_digest}",
+                        "---",
+                        "",
+                        "A private sentence that must not be echoed by link preview.",
+                        f"See objet:sha256:{external_digest} and sha256:{local_digest}.",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "zettel-objet-links",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_objet_link_preview.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "zettel_objet_links")
+            self.assertEqual(result["count"], 2)
+            by_id = {item["object_id"]: item for item in result["links"]}
+            self.assertEqual(by_id[f"sha256:{local_digest}"]["resolution_state"], "local_available")
+            self.assertTrue(by_id[f"sha256:{local_digest}"]["local_openable"])
+            self.assertEqual(
+                by_id[f"sha256:{local_digest}"]["link_candidates"][0]["archive_relative_path"],
+                local_relative,
+            )
+            self.assertEqual(by_id[f"sha256:{external_digest}"]["resolution_state"], "external_declared")
+            self.assertTrue(by_id[f"sha256:{external_digest}"]["external_declared"])
+            self.assertFalse(by_id[f"sha256:{external_digest}"]["link_candidates"][0]["clickable_in_local_client"])
+            self.assertFalse(result["privacy_guards"]["body_text_echoed"])
+            self.assertFalse(result["privacy_guards"]["frontmatter_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["presigned_url_created"])
+            self.assertFalse(result["privacy_guards"]["object_file_bytes_read"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            self.assertNotIn("A private sentence", output)
+            self.assertNotIn("Private body must stay private", output)
+            self.assertNotIn(str(archive_root), output)
+            self.assertNotIn(unsafe_url, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            no_dry_code, no_dry_output = self.run_cli(
+                ["zettel-objet-links", str(archive_root), "--path", "inbox/zet_objet_link_preview.md"]
+            )
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+
     def test_prehashed_objet_ledger_approve_blocks_invalid_rows_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
