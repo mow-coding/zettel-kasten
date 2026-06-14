@@ -346,6 +346,43 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "credential_plaintext_migration_plan",
+        "description": "Plan safe migration from a human-selected plaintext secret note into a real vault/keyring without reading files, returning secrets, writing vaults, or deleting plaintext.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "source_label": {"type": "string", "description": "Safe non-secret source label; not a path."},
+                "credential_id": {"type": "string"},
+                "target_store_id": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_VAULT_ONBOARDING_STORE_IDS),
+                    "default": "recommended",
+                },
+                "scenario": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS),
+                    "default": "personal_local_first",
+                },
+                "credential_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+                },
+                "provider": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+                },
+                "platform": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+                    "default": "windows",
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "source_label", "credential_id"],
+        },
+    },
+    {
         "name": "credential_access_broker_plan",
         "description": "Plan a future approved credential broker request without retrieving secrets. Read-only; never opens password managers, browser stores, keyrings, files, or environment variables.",
         "inputSchema": {
@@ -1713,6 +1750,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_credential_store_recommendation(arguments)
     if name == "credential_vault_onboarding_plan":
         return tool_credential_vault_onboarding_plan(arguments)
+    if name == "credential_plaintext_migration_plan":
+        return tool_credential_plaintext_migration_plan(arguments)
     if name == "credential_access_broker_plan":
         return tool_credential_access_broker_plan(arguments)
     if name == "credential_access_approval_plan":
@@ -2112,6 +2151,30 @@ def tool_credential_vault_onboarding_plan(arguments: dict[str, Any]) -> dict[str
     store = result.get("selected_store") if isinstance(result.get("selected_store"), dict) else {}
     return tool_success_result(
         f"credential_vault_onboarding_plan: {state}, store={store.get('store_id') or '-'}.",
+        result,
+    )
+
+
+def tool_credential_plaintext_migration_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("credential_plaintext_migration_plan is read-only and requires dry-run.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.credential_plaintext_migration_plan,
+        archive_root,
+        source_label=require_string_arg(arguments, "source_label"),
+        credential_id=require_string_arg(arguments, "credential_id"),
+        target_store_id=optional_string_arg(arguments, "target_store_id") or "recommended",
+        scenario=optional_string_arg(arguments, "scenario") or "personal_local_first",
+        credential_kind=optional_string_arg(arguments, "credential_kind"),
+        provider=optional_string_arg(arguments, "provider"),
+        platform=optional_string_arg(arguments, "platform") or "windows",
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    target = result.get("target") if isinstance(result.get("target"), dict) else {}
+    return tool_success_result(
+        f"credential_plaintext_migration_plan: {state}, target={target.get('selected_store_id') or '-'}.",
         result,
     )
 

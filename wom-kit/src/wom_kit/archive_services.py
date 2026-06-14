@@ -11670,6 +11670,196 @@ def credential_vault_onboarding_plan(
     }
 
 
+def credential_plaintext_migration_plan(
+    archive_root: Path | str,
+    *,
+    source_label: str,
+    credential_id: str,
+    target_store_id: str = "recommended",
+    scenario: str = "personal_local_first",
+    credential_kind: str | None = None,
+    provider: str | None = None,
+    platform: str = "windows",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("credential-plaintext-migration-plan is read-only and requires --dry-run.")
+
+    resolved_source_label = (source_label or "").strip()
+    if not resolved_source_label:
+        blockers.append("source_label is required.")
+    elif not safe_source_intake_plan_scalar(resolved_source_label):
+        blockers.append("source_label must be a safe non-secret label, not a path, URL, email, token, or secret.")
+        resolved_source_label = ""
+
+    resolved_credential_id = (credential_id or "").strip()
+    if not resolved_credential_id:
+        blockers.append("credential_id is required.")
+    elif not safe_source_intake_plan_scalar(resolved_credential_id):
+        blockers.append("credential_id must be a safe non-secret label such as cred:openai-api.")
+        resolved_credential_id = ""
+
+    resolved_scenario = (scenario or "personal_local_first").strip().lower().replace("-", "_")
+    if resolved_scenario not in CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS:
+        blockers.append(
+            "scenario must be one of: "
+            + ", ".join(sorted(CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS))
+            + "."
+        )
+        resolved_scenario = "personal_local_first"
+
+    resolved_target_store = (target_store_id or "recommended").strip().lower().replace("-", "_")
+    if resolved_target_store not in CREDENTIAL_VAULT_ONBOARDING_STORE_IDS:
+        blockers.append(
+            "target_store_id must be one of: "
+            + ", ".join(sorted(CREDENTIAL_VAULT_ONBOARDING_STORE_IDS))
+            + "."
+        )
+        resolved_target_store = "recommended"
+
+    resolved_platform = (platform or "windows").strip().lower().replace("-", "_")
+    if resolved_platform not in CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS:
+        blockers.append(
+            "platform must be one of: "
+            + ", ".join(sorted(CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS))
+            + "."
+        )
+        resolved_platform = "cross_platform"
+
+    action_profile = credential_access_action_profile("plaintext_secret_migration")
+    resolved_kind = (credential_kind or action_profile["recommended_credential_kind"]).strip().lower().replace("-", "_")
+    if resolved_kind not in CREDENTIAL_REF_ALLOWED_KINDS:
+        blockers.append("credential_kind must be one of: " + ", ".join(sorted(CREDENTIAL_REF_ALLOWED_KINDS)) + ".")
+        resolved_kind = action_profile["recommended_credential_kind"]
+
+    resolved_provider = (provider or default_credential_ref_provider(resolved_kind)).strip().lower().replace("-", "_")
+    if resolved_provider not in CREDENTIAL_REF_ALLOWED_PROVIDERS:
+        blockers.append("provider must be one of: " + ", ".join(sorted(CREDENTIAL_REF_ALLOWED_PROVIDERS)) + ".")
+        resolved_provider = "generic_provider"
+
+    onboarding_preview = credential_vault_onboarding_plan(
+        root,
+        scenario=resolved_scenario,
+        store_id=resolved_target_store,
+        credential_id=resolved_credential_id or "cred:pending-secret",
+        credential_kind=resolved_kind,
+        provider=resolved_provider,
+        action_kind="plaintext_secret_migration",
+        platform=resolved_platform,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in onboarding_preview.get("blockers") or [])
+    warnings.extend(str(item) for item in onboarding_preview.get("warnings") or [])
+
+    selected_store = onboarding_preview.get("selected_store") if isinstance(onboarding_preview.get("selected_store"), dict) else {}
+    if selected_store.get("store_id") == "browser_or_platform_password_manager":
+        warnings.append("Browser/platform password managers are usually not the right target for importing API keys or CLI tokens.")
+    if selected_store.get("store_id") == "environment_variable":
+        warnings.append("Environment variables should be used only as runtime injection, not as the durable target for migrated secrets.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "credential_plaintext_migration_plan",
+        "archive_id": archive_id,
+        "source": {
+            "source_label": resolved_source_label or None,
+            "source_kind": "human_selected_plaintext_note",
+            "source_file_path_echoed": False,
+            "source_file_read": False,
+            "source_bytes_hashed": False,
+            "secret_detection_run": False,
+            "secret_values_returned_to_ai": False,
+        },
+        "target": {
+            "requested_store_id": resolved_target_store,
+            "selected_store_id": onboarding_preview.get("selected_store_id"),
+            "store_kind": selected_store.get("store_kind"),
+            "adapter_kind": selected_store.get("adapter_kind"),
+            "wom_ref_prefix": selected_store.get("wom_ref_prefix"),
+            "credential_id": resolved_credential_id or None,
+            "credential_kind": resolved_kind,
+            "provider": resolved_provider,
+        },
+        "migration_preview": {
+            "human_file_selection_required": True,
+            "visible_local_ui_required": True,
+            "local_candidate_detection_future_work": True,
+            "per_entry_human_confirmation_required": True,
+            "future_adapter_write_required": True,
+            "wom_records_refs_and_catalog_only": True,
+            "old_plaintext_cleanup_is_separate_human_review": True,
+            "secret_value_return_to_ai": False,
+            "exact_ref_value_echoed": False,
+        },
+        "human_review_steps": [
+            "Human chooses the plaintext note through a visible local UI; the path is not printed to chat.",
+            "A future local scanner may identify candidate secret fields in memory without returning values to AI.",
+            "Human confirms each candidate entry, target store, credential id, provider, and purpose.",
+            "A future approved adapter writes the secret to the chosen vault/keyring/store without echoing it.",
+            "WOM records only refs, credential metadata, approval receipts, and audit receipts.",
+            "Human separately decides whether to delete, quarantine, or keep the old plaintext note.",
+        ],
+        "planner_chain": {
+            "vault_onboarding": "credential-vault-onboarding-plan",
+            "broker_request": "credential-access-broker-plan",
+            "approval_preview": "credential-access-approval-plan",
+            "adapter_readiness": "credential-adapter-readiness-plan",
+            "adapter_manifest": "credential-adapter-manifest-plan",
+            "adapter_audit": "credential-adapter-audit-plan",
+        },
+        "onboarding_summary": {
+            "selected_store_id": onboarding_preview.get("selected_store_id"),
+            "safe_ref_prefix_to_record": (onboarding_preview.get("credential_plan") or {}).get("safe_ref_prefix_to_record")
+            if isinstance(onboarding_preview.get("credential_plan"), dict)
+            else None,
+            "broker_plan_available": onboarding_preview.get("broker_plan_summary") is not None,
+            "adapter_readiness_available": onboarding_preview.get("adapter_readiness_summary") is not None,
+        },
+        "current_capability": {
+            "plaintext_migration_plan_available": True,
+            "vault_onboarding_plan_available": True,
+            "local_file_picker_implemented": False,
+            "secret_candidate_scanner_implemented": False,
+            "vault_write_adapter_implemented": False,
+            "secret_value_storage_implemented": False,
+            "secret_value_retrieval_implemented": False,
+            "plaintext_cleanup_implemented": False,
+        },
+        "closed_actions": {
+            "secret_prompted_in_chat": False,
+            "secret_value_read": False,
+            "secret_value_written": False,
+            "password_manager_opened": False,
+            "browser_password_store_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "plaintext_file_read": False,
+            "plaintext_file_deleted": False,
+            "provider_api_called": False,
+            "oauth_started": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "credential_ref_values_echoed": False,
+            "email_addresses_echoed": False,
+            "tokens_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
 def credential_vault_onboarding_profiles(platform_keyring: str, platform: str) -> dict[str, dict[str, Any]]:
     recommendation_profiles = credential_store_scenario_profiles(platform_keyring)
 

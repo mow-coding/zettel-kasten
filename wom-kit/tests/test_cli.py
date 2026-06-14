@@ -1904,6 +1904,92 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_credential_plaintext_migration_plan_is_read_only_and_pathless(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "credential-plaintext-migration-plan",
+                    str(archive_root),
+                    "--source-label",
+                    "plaintext-note-001",
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--credential-kind",
+                    "openai_api_key",
+                    "--provider",
+                    "openai",
+                    "--target-store-id",
+                    "keepassxc",
+                    "--scenario",
+                    "personal_local_first",
+                    "--platform",
+                    "windows",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "credential_plaintext_migration_plan")
+            self.assertEqual(result["source"]["source_label"], "plaintext-note-001")
+            self.assertEqual(result["target"]["selected_store_id"], "keepassxc")
+            self.assertEqual(result["target"]["wom_ref_prefix"], "secret:")
+            self.assertTrue(result["migration_preview"]["human_file_selection_required"])
+            self.assertTrue(result["migration_preview"]["per_entry_human_confirmation_required"])
+            self.assertFalse(result["source"]["source_file_path_echoed"])
+            self.assertFalse(result["source"]["source_file_read"])
+            self.assertFalse(result["source"]["secret_detection_run"])
+            self.assertFalse(result["migration_preview"]["secret_value_return_to_ai"])
+            self.assertFalse(result["closed_actions"]["plaintext_file_read"])
+            self.assertFalse(result["closed_actions"]["secret_value_written"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("C:\\", output)
+            self.assertNotIn("sk-proj-", output)
+            self.assertNotIn("keyring:openai-api-key", output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            path_code, path_output = self.run_cli(
+                [
+                    "credential-plaintext-migration-plan",
+                    str(archive_root),
+                    "--source-label",
+                    "C:\\Users\\example\\Desktop\\secret.txt",
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--target-store-id",
+                    "keepassxc",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            path_result = json.loads(path_output)
+            self.assertEqual(path_code, 1)
+            self.assertFalse(path_result["ok"])
+            self.assertTrue(any("source_label must be a safe non-secret label" in blocker for blocker in path_result["blockers"]))
+            self.assertNotIn("secret.txt", path_output)
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "credential-plaintext-migration-plan",
+                    str(archive_root),
+                    "--source-label",
+                    "plaintext-note-001",
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_credential_access_broker_plan_is_read_only_and_never_echoes_refs_or_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

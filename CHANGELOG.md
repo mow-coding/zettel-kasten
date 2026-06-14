@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.29 - 2026-06-15
+
+- Added read-only CLI `archive credential-plaintext-migration-plan --dry-run`
+  and MCP `credential_plaintext_migration_plan` for planning how a
+  human-selected plaintext note could later be migrated into a real
+  vault/keyring/store without returning secrets to AI.
+- Added CLI aliases `archive secret-migration-plan --dry-run` and
+  `archive credential-import-plan --dry-run`.
+- Required a safe `--source-label` instead of accepting or echoing local file
+  paths, and linked target store routing to the v0.3.28 vault onboarding layer.
+- Kept the release strictly non-mutating and non-secret: it reads no plaintext
+  files, prints no plaintext file paths, hashes no plaintext bytes, detects no
+  secret values, returns no candidate secret values to AI, opens no vaults,
+  keyrings, browser stores, environment variables, provider APIs, OAuth flows,
+  or adapter runners, deletes no plaintext notes, and writes no files.
+- Added `wom-kit/docs/credential-plaintext-migration-plan.md` plus CLI/MCP/docs
+  tests for dry-run-only behavior, allowed-root enforcement, pathless source
+  labeling, no-write behavior, and privacy boundaries.
+
 ## v0.3.28 - 2026-06-15
 
 - Added read-only CLI `archive credential-vault-onboarding-plan --dry-run`

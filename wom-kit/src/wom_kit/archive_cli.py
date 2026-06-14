@@ -31,6 +31,8 @@ Commands:
           Recommend a secret store class for a human scenario without reading secrets.
   credential-vault-onboarding-plan
           Plan safe human vault onboarding without opening or reading a vault.
+  credential-plaintext-migration-plan
+          Plan safe plaintext-secret migration without reading or importing secrets.
   credential-access-broker-plan
           Plan a future approved credential broker request without retrieving secrets.
   credential-access-approval-plan
@@ -2118,6 +2120,48 @@ def command_credential_vault_onboarding_plan(args: argparse.Namespace) -> int:
         print(f"Scenario: {result.get('scenario') or '-'}")
         print(f"Store: {store.get('store_id') or '-'} ({store.get('store_class') or '-'})")
         print(f"WOM ref prefix: {credential.get('safe_ref_prefix_to_record') or '-'}")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_credential_plaintext_migration_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("credential-plaintext-migration-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.credential_plaintext_migration_plan(
+            Path(args.archive_root),
+            source_label=args.source_label,
+            credential_id=args.credential_id,
+            target_store_id=args.target_store_id,
+            scenario=args.scenario,
+            credential_kind=args.credential_kind,
+            provider=args.provider,
+            platform=args.platform,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        target = result.get("target") if isinstance(result.get("target"), dict) else {}
+        print(f"Credential plaintext migration plan {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source label: {(result.get('source') or {}).get('source_label') if isinstance(result.get('source'), dict) else '-'}")
+        print(f"Target store: {target.get('selected_store_id') or '-'} ({target.get('store_kind') or '-'})")
+        print(f"WOM ref prefix: {target.get('wom_ref_prefix') or '-'}")
         print("Writes: none")
         if result.get("blockers"):
             print("Blockers:")
@@ -6575,6 +6619,50 @@ def build_parser() -> argparse.ArgumentParser:
     credential_vault_onboarding_plan.add_argument("--dry-run", action="store_true", help="Required; read-only onboarding plan.")
     credential_vault_onboarding_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_vault_onboarding_plan.set_defaults(func=command_credential_vault_onboarding_plan)
+
+    credential_plaintext_migration_plan = subcommands.add_parser(
+        "credential-plaintext-migration-plan",
+        aliases=["secret-migration-plan", "credential-import-plan"],
+        help="Plan safe plaintext-secret migration without reading or importing secrets.",
+    )
+    credential_plaintext_migration_plan.add_argument("archive_root", help="Archive root to inspect.")
+    credential_plaintext_migration_plan.add_argument(
+        "--source-label",
+        required=True,
+        help="Safe label for the human-selected plaintext source. Do not pass a path, email, URL, token, or secret.",
+    )
+    credential_plaintext_migration_plan.add_argument("--credential-id", required=True, help="Safe credential label, e.g. cred:openai-api.")
+    credential_plaintext_migration_plan.add_argument(
+        "--target-store-id",
+        choices=sorted(archive_services.CREDENTIAL_VAULT_ONBOARDING_STORE_IDS),
+        default="recommended",
+        help="Selected target vault/store family. Defaults to the scenario recommendation.",
+    )
+    credential_plaintext_migration_plan.add_argument(
+        "--scenario",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS),
+        default="personal_local_first",
+        help="Human secret-vault usage scenario.",
+    )
+    credential_plaintext_migration_plan.add_argument(
+        "--credential-kind",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+        help="Optional credential kind; defaults from plaintext migration.",
+    )
+    credential_plaintext_migration_plan.add_argument(
+        "--provider",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+        help="Optional provider context.",
+    )
+    credential_plaintext_migration_plan.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Host platform for OS keyring wording.",
+    )
+    credential_plaintext_migration_plan.add_argument("--dry-run", action="store_true", help="Required; read-only migration plan.")
+    credential_plaintext_migration_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    credential_plaintext_migration_plan.set_defaults(func=command_credential_plaintext_migration_plan)
 
     credential_access_broker_plan = subcommands.add_parser(
         "credential-access-broker-plan",
