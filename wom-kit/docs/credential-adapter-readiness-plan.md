@@ -158,3 +158,7 @@ WOM records non-secret metadata
 ```
 
 This planner prepares that contract before any real secret access exists.
+
+Next layer:
+
+- [Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md)

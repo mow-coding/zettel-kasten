@@ -1061,6 +1061,9 @@ CREDENTIAL_ADAPTER_OPERATIONS = {
     "browser_login_fill",
     "list_metadata_only",
 }
+CREDENTIAL_ADAPTER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+CREDENTIAL_ADAPTER_MANIFEST_SCHEMA = "wom-kit/credential-adapter-manifest/v0.1"
+CREDENTIAL_ADAPTER_MANIFESTS_DIR = "config/credential-adapters"
 ONBOARDING_PROVIDER_PROFILES = {
     "local_only": {
         "description": "Local archive plus physical/local backup and external secret vault guidance.",
@@ -11955,6 +11958,157 @@ def credential_adapter_readiness_plan(
     }
 
 
+def credential_adapter_manifest_plan(
+    archive_root: Path | str,
+    *,
+    adapter_id: str,
+    adapter_kind: str,
+    operations: list[str] | None = None,
+    store_kind: str | None = None,
+    consumer: str | None = None,
+    platform: str = "windows",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("credential-adapter-manifest-plan is read-only and requires --dry-run.")
+
+    resolved_adapter_id = (adapter_id or "").strip()
+    if not safe_credential_adapter_id(resolved_adapter_id):
+        blockers.append("adapter_id must be a safe path-segment label such as win-keyring or keepassxc-local.")
+        resolved_adapter_id = "adapter"
+
+    resolved_adapter = (adapter_kind or "").strip().lower().replace("-", "_")
+    if resolved_adapter not in CREDENTIAL_ADAPTER_KINDS:
+        blockers.append("adapter_kind must be one of: " + ", ".join(sorted(CREDENTIAL_ADAPTER_KINDS)) + ".")
+        resolved_adapter = "keepassxc_cli"
+
+    resolved_platform = (platform or "windows").strip().lower().replace("-", "_")
+    if resolved_platform not in CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS:
+        blockers.append("platform must be one of: " + ", ".join(sorted(CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS)) + ".")
+        resolved_platform = "cross_platform"
+
+    adapter_profile = credential_adapter_profile(resolved_adapter, resolved_platform)
+    inferred_store = str(adapter_profile["store_kind"])
+    resolved_store = (store_kind or inferred_store).strip().lower().replace("-", "_")
+    if resolved_store not in CREDENTIAL_ACCESS_BROKER_STORE_KINDS:
+        blockers.append("store_kind must be one of: " + ", ".join(sorted(CREDENTIAL_ACCESS_BROKER_STORE_KINDS)) + ".")
+        resolved_store = inferred_store
+    if resolved_store != inferred_store:
+        warnings.append(f"adapter_kind={resolved_adapter} normally maps to store_kind={inferred_store}.")
+
+    resolved_consumer = (consumer or adapter_profile["default_consumer"]).strip()
+    if not safe_source_intake_plan_scalar(resolved_consumer):
+        blockers.append("consumer must be a safe non-secret adapter label.")
+        resolved_consumer = adapter_profile["default_consumer"]
+
+    supported_operations = credential_adapter_supported_operations(resolved_adapter)
+    requested_operations: list[str] = []
+    for item in operations or supported_operations:
+        normalized = str(item or "").strip().lower().replace("-", "_")
+        if normalized not in CREDENTIAL_ADAPTER_OPERATIONS:
+            blockers.append("operations must contain only: " + ", ".join(sorted(CREDENTIAL_ADAPTER_OPERATIONS)) + ".")
+            continue
+        requested_operations.append(normalized)
+    requested_operations = unique_preserve_order(requested_operations)
+    if not requested_operations:
+        requested_operations = list(supported_operations)
+    unsupported = [item for item in requested_operations if item not in supported_operations]
+    for item in unsupported:
+        warnings.append(f"adapter_kind={resolved_adapter} does not normally support operation={item}.")
+
+    manifest_preview = {
+        "schema": CREDENTIAL_ADAPTER_MANIFEST_SCHEMA,
+        "manifest_kind": "credential_adapter_manifest",
+        "manifest_version": "v0.1",
+        "archive_id": archive_id,
+        "adapter_id": resolved_adapter_id,
+        "adapter_kind": resolved_adapter,
+        "adapter_family": adapter_profile["adapter_family"],
+        "store_kind": resolved_store,
+        "platform": resolved_platform,
+        "consumer": resolved_consumer,
+        "expected_ref_prefixes": list(adapter_profile["expected_ref_prefixes"]),
+        "supported_operations": requested_operations,
+        "requires": {
+            "policy_gate_before_use": True,
+            "approval_receipt_before_use": True,
+            "local_human_ui_for_secret_writes": True,
+            "non_echo_contract": True,
+            "audit_receipt_after_use": True,
+        },
+        "privacy_contract": {
+            "secret_values_in_manifest": False,
+            "exact_credential_refs_in_manifest": False,
+            "local_absolute_paths_in_manifest": False,
+            "provider_account_values_in_manifest": False,
+            "provider_urls_in_manifest": False,
+            "ai_visible_secret_output_allowed": False,
+        },
+        "closed_actions": {
+            "adapter_manifest_written": False,
+            "secret_value_read": False,
+            "secret_value_written": False,
+            "password_manager_opened": False,
+            "browser_password_store_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "plaintext_file_read": False,
+            "provider_api_called": False,
+        },
+    }
+
+    schema_issues = validate_schema(manifest_preview, "credential-adapter-manifest.schema.json")
+    if schema_issues:
+        blockers.extend(f"{issue.data_path}: {issue.message}" for issue in schema_issues)
+
+    proposed_manifest_path = f"{CREDENTIAL_ADAPTER_MANIFESTS_DIR}/{resolved_adapter_id}.credential-adapter.json"
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "credential_adapter_manifest_plan",
+        "archive_id": archive_id,
+        "proposed_manifest_path": proposed_manifest_path,
+        "manifest_preview": json_safe(manifest_preview),
+        "schema_validation": {
+            "schema_name": "credential-adapter-manifest.schema.json",
+            "ok": not schema_issues,
+            "issue_count": len(schema_issues),
+        },
+        "next_safe_actions": [
+            "Review the manifest preview locally.",
+            "Only a future approval-gated writer may persist this manifest.",
+            "Use credential-adapter-readiness-plan to evaluate a concrete operation before any live adapter exists.",
+            "Keep real vault paths, account values, tokens, passwords, and exact credential refs out of adapter manifests.",
+        ],
+        "current_capability": {
+            "adapter_manifest_preview_available": True,
+            "adapter_manifest_schema_available": True,
+            "adapter_manifest_write_implemented": False,
+            "live_adapter_implemented": False,
+            "secret_value_read_implemented": False,
+            "secret_value_write_implemented": False,
+        },
+        "closed_actions": dict(manifest_preview["closed_actions"]),
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "credential_ref_values_echoed": False,
+            "email_addresses_echoed": False,
+            "tokens_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
 def credential_access_action_profile(action_kind: str) -> dict[str, Any]:
     profiles: dict[str, dict[str, Any]] = {
         "mail_source_read": {
@@ -12355,6 +12509,17 @@ def safe_credential_ref(value: str) -> bool:
     if contains_forbidden_location_reference(text):
         return False
     return bool(OBJECT_STORAGE_REF_RE.match(text))
+
+
+def safe_credential_adapter_id(value: str) -> bool:
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    if any(item in text for item in [":", "/", "\\", "@", "#", "?", "&", "="]):
+        return False
+    if contains_forbidden_location_reference(text) or source_intake_secret_like(text):
+        return False
+    return bool(CREDENTIAL_ADAPTER_ID_RE.match(text))
 
 
 def normalize_imap_mailbox_provider(value: str | None) -> str:

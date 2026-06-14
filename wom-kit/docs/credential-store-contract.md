@@ -130,6 +130,9 @@ v0.3.25 adds [Credential Adapter Readiness Plan](credential-adapter-readiness-pl
 so WOM can preview the future local adapter contract without opening a keyring
 or vault.
 
+v0.3.26 adds [Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md)
+so WOM can preview a non-secret future adapter manifest without writing it.
+
 ## Mail Sources
 
 Mail source access should use refs such as:

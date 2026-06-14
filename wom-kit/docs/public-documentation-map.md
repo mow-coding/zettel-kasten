@@ -120,6 +120,7 @@ Onboarding and setup plans:
 - [Credential Access Broker Plan](credential-access-broker-plan.md)
 - [Credential Access Approval Plan](credential-access-approval-plan.md)
 - [Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md)
+- [Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md)
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
 - [IMAP Mailbox Source](imap-mailbox-source.md)
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)

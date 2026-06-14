@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.26 - 2026-06-15
+
+- Added read-only CLI `archive credential-adapter-manifest-plan --dry-run`
+  and MCP `credential_adapter_manifest_plan` for previewing a non-secret
+  future credential adapter manifest.
+- Added CLI aliases `archive credential-adapter-manifest --dry-run` and
+  `archive secret-adapter-manifest-plan --dry-run`.
+- Added JSON schema `wom-kit/schemas/credential-adapter-manifest.schema.json`
+  and schema validation in the manifest preview output.
+- Kept the manifest layer non-mutating and non-secret: it writes no manifests,
+  opens no vaults, keyrings, browser stores, environment variables, plaintext
+  secret files, provider APIs, approval receipt writers, or audit receipt
+  writers, and it includes no secret values, exact credential refs, local
+  absolute paths, provider account values, provider URLs, passwords, tokens, or
+  API keys.
+- Added `wom-kit/docs/credential-adapter-manifest-plan.md` plus CLI/MCP/docs
+  tests for dry-run-only behavior, allowed-root enforcement, schema validity,
+  no-write behavior, and privacy boundaries.
+
 ## v0.3.25 - 2026-06-15
 
 - Added read-only CLI `archive credential-adapter-readiness-plan --dry-run`

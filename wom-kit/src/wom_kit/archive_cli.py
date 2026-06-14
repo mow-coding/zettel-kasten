@@ -35,6 +35,8 @@ Commands:
           Preview a future credential access approval receipt without writing or reading secrets.
   credential-adapter-readiness-plan
           Preview whether a future credential adapter contract is safe to implement.
+  credential-adapter-manifest-plan
+          Preview a non-secret future credential adapter manifest without writing it.
   source-intake
           Plan safe source/objet refs before draft creation.
   source-intake-record
@@ -2205,6 +2207,48 @@ def command_credential_adapter_readiness_plan(args: argparse.Namespace) -> int:
         print(f"Archive: {result.get('archive_id') or '-'}")
         print(f"Adapter: {adapter.get('adapter_kind') or '-'} ({adapter.get('store_kind') or '-'})")
         print(f"Operation: {operation.get('operation') or '-'} / {operation.get('action_kind') or '-'}")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_credential_adapter_manifest_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("credential-adapter-manifest-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.credential_adapter_manifest_plan(
+            Path(args.archive_root),
+            adapter_id=args.adapter_id,
+            adapter_kind=args.adapter_kind,
+            operations=args.operation,
+            store_kind=args.store_kind,
+            consumer=args.consumer,
+            platform=args.platform,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        manifest = result.get("manifest_preview") if isinstance(result.get("manifest_preview"), dict) else {}
+        schema = result.get("schema_validation") if isinstance(result.get("schema_validation"), dict) else {}
+        print(f"Credential adapter manifest plan {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Adapter: {manifest.get('adapter_id') or '-'} ({manifest.get('adapter_kind') or '-'})")
+        print(f"Manifest: {result.get('proposed_manifest_path') or '-'}")
+        print(f"Schema valid: {schema.get('ok')}")
         print("Writes: none")
         if result.get("blockers"):
             print("Blockers:")
@@ -6534,6 +6578,41 @@ def build_parser() -> argparse.ArgumentParser:
     credential_adapter_readiness_plan.add_argument("--dry-run", action="store_true", help="Required; read-only adapter readiness preview.")
     credential_adapter_readiness_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_adapter_readiness_plan.set_defaults(func=command_credential_adapter_readiness_plan)
+
+    credential_adapter_manifest_plan = subcommands.add_parser(
+        "credential-adapter-manifest-plan",
+        aliases=["credential-adapter-manifest", "secret-adapter-manifest-plan"],
+        help="Preview a non-secret future credential adapter manifest without writing it.",
+    )
+    credential_adapter_manifest_plan.add_argument("archive_root", help="Archive root to inspect.")
+    credential_adapter_manifest_plan.add_argument("--adapter-id", required=True, help="Safe adapter id path segment, e.g. win-keyring.")
+    credential_adapter_manifest_plan.add_argument(
+        "--adapter-kind",
+        choices=sorted(archive_services.CREDENTIAL_ADAPTER_KINDS),
+        required=True,
+        help="Future local adapter class to describe.",
+    )
+    credential_adapter_manifest_plan.add_argument(
+        "--operation",
+        action="append",
+        choices=sorted(archive_services.CREDENTIAL_ADAPTER_OPERATIONS),
+        help="Supported future adapter operation; may be repeated. Defaults from adapter kind.",
+    )
+    credential_adapter_manifest_plan.add_argument(
+        "--store-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+        help="External store class; defaults from adapter kind.",
+    )
+    credential_adapter_manifest_plan.add_argument("--consumer", help="Safe label for the future local adapter.")
+    credential_adapter_manifest_plan.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Host platform for OS keyring wording.",
+    )
+    credential_adapter_manifest_plan.add_argument("--dry-run", action="store_true", help="Required; read-only manifest preview.")
+    credential_adapter_manifest_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    credential_adapter_manifest_plan.set_defaults(func=command_credential_adapter_manifest_plan)
 
     source_intake = subcommands.add_parser(
         "source-intake",
