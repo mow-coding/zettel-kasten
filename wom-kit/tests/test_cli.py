@@ -19812,6 +19812,65 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertFalse(contract["closed_actions"]["derived_text_written"])
             self.assertEqual(self._inventory(archive_root), before)
 
+    def test_derive_text_doctor_reports_tool_readiness_without_paths_or_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-doctor")
+            before = self._inventory(archive_root)
+
+            def fake_module_available(module_name: str) -> bool:
+                return module_name in {"docx", "openpyxl", "fitz"}
+
+            def fake_executable_available(executable_name: str) -> bool:
+                return executable_name == "tesseract"
+
+            with patch.object(
+                archive_services,
+                "derived_text_python_module_available",
+                side_effect=fake_module_available,
+            ), patch.object(
+                archive_services,
+                "derived_text_executable_available",
+                side_effect=fake_executable_available,
+            ):
+                code, output = self.run_cli(
+                    ["derive-text-doctor", str(archive_root), "--dry-run", "--format", "json"]
+                )
+                nested_code, nested_output = self.run_cli(
+                    ["derive-text", "doctor", str(archive_root), "--dry-run", "--format", "json"]
+                )
+
+            result = json.loads(output)
+            nested = json.loads(nested_output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(nested_code, 0, nested_output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "derived_text_toolchain_doctor")
+            self.assertEqual(nested["lifecycle_action"], "derived_text_toolchain_doctor")
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["would_change"], [])
+            self.assertFalse(result["closed_actions"]["source_file_body_read"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["privacy_guards"]["tool_paths_echoed"])
+            self.assertFalse(result["privacy_guards"]["import_paths_echoed"])
+            self.assertIn("office_open_xml_word", [item["format_family"] for item in result["family_readiness"]])
+            by_family = {item["format_family"]: item for item in result["family_readiness"]}
+            self.assertTrue(by_family["office_open_xml_word"]["ready"])
+            self.assertTrue(by_family["office_open_xml_spreadsheet"]["ready"])
+            self.assertTrue(by_family["pdf"]["ready"])
+            self.assertTrue(by_family["image_scan"]["ready"])
+            self.assertFalse(by_family["office_open_xml_presentation"]["ready"])
+            self.assertFalse(by_family["legacy_office_binary"]["ready"])
+            self.assertFalse(by_family["audio"]["ready"])
+            self.assertNotIn("python-docx", result["readiness_summary"]["missing_tools"])
+            self.assertNotIn("python-docx", by_family["office_open_xml_word"]["missing_tools"])
+            self.assertIn("python-pptx", by_family["office_open_xml_presentation"]["missing_tools"])
+            self.assertIn("LibreOffice", by_family["legacy_office_binary"]["missing_tools"])
+            self.assertIn("local ASR", by_family["audio"]["missing_tools"])
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn(r"C:\Users", serialized)
+            self.assertEqual(self._inventory(archive_root), before)
+
     def test_doctor_flags_malformed_derived_text_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self._sandbox(tmp, "archive:personal:derived-doctor")

@@ -53,6 +53,8 @@ Commands:
           Check textual objet derived-text coverage without reading source bodies.
   derive-text-toolchain
           Recommend an extraction route for one derived-text format.
+  derive-text-doctor
+          Check local derived-text toolchain readiness without echoing tool paths.
   derive-text-agent-contract
           Print the derived-text agent operating contract.
   source-intake
@@ -4494,6 +4496,37 @@ def command_derive_text_agent_contract(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_derive_text_doctor(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("Derived text doctor is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.derived_text_toolchain_doctor(
+            Path(args.archive_root),
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError) as exc:
+        print(f"Derived text doctor failed: {exc}", file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("readiness_summary") if isinstance(result.get("readiness_summary"), dict) else {}
+        print("Derived text toolchain doctor.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Tools available: {summary.get('available_tool_count', 0)} / {summary.get('checked_tool_count', 0)}")
+        print(f"Families ready: {summary.get('ready_family_count', 0)} / {summary.get('total_family_count', 0)}")
+        for family in result.get("family_readiness", []):
+            state = "ready" if family.get("ready") else "needs-tool"
+            print(f"- {family.get('format_family')}: {state}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+        for warning in result.get("warnings", []):
+            print(f"WARNING: {warning}")
+    return 0 if result.get("ok") else 1
+
+
 def command_import_external(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -8153,6 +8186,15 @@ def build_parser() -> argparse.ArgumentParser:
     derive_text_toolchain.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     derive_text_toolchain.set_defaults(func=command_derive_text_toolchain)
 
+    derive_text_doctor = derive_text_subcommands.add_parser(
+        "doctor",
+        help="Check local derived-text toolchain readiness without echoing tool paths.",
+    )
+    derive_text_doctor.add_argument("archive_root", help="Archive root to inspect.")
+    derive_text_doctor.add_argument("--dry-run", action="store_true", help="Required; read-only toolchain readiness check.")
+    derive_text_doctor.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    derive_text_doctor.set_defaults(func=command_derive_text_doctor)
+
     derive_text_agent_contract = derive_text_subcommands.add_parser(
         "agent-contract",
         help="Print the derived-text agent operating contract.",
@@ -8182,6 +8224,15 @@ def build_parser() -> argparse.ArgumentParser:
     derive_text_toolchain_alias.add_argument("--dry-run", action="store_true", help="Required; read-only toolchain recommendation.")
     derive_text_toolchain_alias.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     derive_text_toolchain_alias.set_defaults(func=command_derive_text_toolchain)
+
+    derive_text_doctor_alias = subcommands.add_parser(
+        "derive-text-doctor",
+        help="Alias for derive-text doctor.",
+    )
+    derive_text_doctor_alias.add_argument("archive_root", help="Archive root to inspect.")
+    derive_text_doctor_alias.add_argument("--dry-run", action="store_true", help="Required; read-only toolchain readiness check.")
+    derive_text_doctor_alias.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    derive_text_doctor_alias.set_defaults(func=command_derive_text_doctor)
 
     derive_text_agent_contract_alias = subcommands.add_parser(
         "derive-text-agent-contract",

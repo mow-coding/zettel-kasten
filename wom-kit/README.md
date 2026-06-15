@@ -165,6 +165,9 @@ derive-text-coverage
 derive-text-toolchain
   Recommend a derived-text extraction route for one extension or MIME hint. Dry-run only; suggests parser/OCR/ASR/vision routing for PDF, Office, HWP/HWPX, images, audio, and text formats without running tools or calling providers.
 
+derive-text-doctor
+  Check local derived-text extraction tool readiness without echoing executable paths or import paths. Dry-run only; reports boolean readiness for parser/OCR/conversion/ASR route families and writes nothing.
+
 derive-text-agent-contract
   Print the derived-text agent operating contract. Dry-run only; encodes the maximum textual coverage default and required preflight order without reading source bytes or writing files.
 

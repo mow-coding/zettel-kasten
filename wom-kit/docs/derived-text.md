@@ -38,6 +38,14 @@ python wom-kit\cli\archive.py derive-text coverage <archive-root> `
 
 See [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md).
 
+Before choosing extraction tools, run the read-only local readiness doctor:
+
+```powershell
+python wom-kit\cli\archive.py derive-text doctor <archive-root> `
+  --dry-run `
+  --format json
+```
+
 ## Batch Manifest Command
 
 For hundreds or thousands of already extracted text files, use a JSONL manifest:
@@ -150,9 +158,9 @@ receipt records remain durable archive records.
 
 ## Coverage And Toolchain
 
-v0.3.34 adds read-only derived-text coverage, toolchain recommendation, and
-agent operating contract commands. They help agents enforce the rule that
-textual objets should be covered by derived text by default, but they do not
-run OCR/parsers/ASR/vision and do not write files.
+v0.3.35 includes read-only derived-text coverage, toolchain recommendation,
+toolchain doctor, and agent operating contract commands. They help agents
+enforce the rule that textual objets should be covered by derived text by
+default, but they do not run OCR/parsers/ASR/vision and do not write files.
 
 See [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md).
