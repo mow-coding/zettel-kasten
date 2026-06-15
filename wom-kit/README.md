@@ -89,6 +89,7 @@ docs/project-intake-session.md
 docs/project-intake-cookbook.md
 docs/derived-text-coverage-and-toolchain.md
 docs/human-artifact-store-contract.md
+docs/object-storage-recommendations.md
 docs/connected-accounts.md
 docs/credential-keepassxc-command-plan.md
 docs/credential-keepassxc-write.md
@@ -141,6 +142,9 @@ github-repo
 
 object-storage
   Plan object storage setup for WOM objets. Dry-run writes nothing. Approved mode writes only local provider metadata and a setup receipt; it does not create buckets, upload, sync, copy, hash, or import source files.
+
+object-storage-recommendation
+  Recommend an object storage provider path before setup planning. Dry-run only; writes nothing, calls no providers, performs no live price lookup, checks no bucket availability, uploads nothing, creates no presigned URLs, and returns the next object-storage dry-run command shape.
 
 human-artifact-store
   Plan a user-facing note/workspace/publication surface such as WordPress, Joplin, Notion, Obsidian, Evernote, or generic Markdown. Dry-run only; writes nothing, calls no providers, creates no notes, publishes no posts, and keeps system/AI artifacts separate from human-readable artifacts.

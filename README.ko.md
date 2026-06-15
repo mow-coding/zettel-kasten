@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.3.38 pre-release
+v0.3.39 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -108,6 +108,7 @@ v0.3.38 pre-release
 - [Credential Adapter Manifest Plan](wom-kit/docs/credential-adapter-manifest-plan.md)
 - [Credential Adapter Audit Plan](wom-kit/docs/credential-adapter-audit-plan.md)
 - [Human Artifact Store Contract](wom-kit/docs/human-artifact-store-contract.md)
+- [Object Storage Recommendations](wom-kit/docs/object-storage-recommendations.md)
 - [IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)
 - [Zettel Objet Links](wom-kit/docs/zettel-objet-links.md)
 - [Derived Text Coverage And Toolchain](wom-kit/docs/derived-text-coverage-and-toolchain.md)
@@ -215,6 +216,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.3.39
 v0.3.38
 v0.3.37
 v0.3.31

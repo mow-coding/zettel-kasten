@@ -1440,6 +1440,83 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(result["provider_setup_receipt_preview"]["external_actions"]["files_uploaded"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
+    def test_object_storage_recommendation_matches_scenarios_without_provider_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "object-storage-recommendation",
+                    str(archive_root),
+                    "--scenario",
+                    "personal_low_ops",
+                    "--profile-id",
+                    "profile:personal:username",
+                    "--profile-slug",
+                    "username",
+                    "--storage-account-ref",
+                    "storage:account:username",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "object_storage_recommendation")
+            self.assertEqual(result["primary_recommendation"]["provider"], "cloudflare-r2")
+            self.assertTrue(result["primary_recommendation"]["s3_compatible_path"])
+            self.assertIn("object-storage", result["setup_bridge"]["planner_command"])
+            self.assertIn("--provider cloudflare-r2", result["setup_bridge"]["planner_command"])
+            self.assertFalse(result["setup_bridge"]["bucket_availability_checked"])
+            self.assertFalse(result["current_capability"]["live_price_lookup_implemented"])
+            self.assertFalse(result["current_capability"]["provider_api_call_implemented"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["presigned_url_created"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("https://", output)
+            self.assertNotIn("R2_TOKEN", output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            backup_code, backup_output = self.run_cli(
+                [
+                    "object-storage-recommendation",
+                    str(archive_root),
+                    "--scenario",
+                    "backup_cost_sensitive",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            backup = json.loads(backup_output)
+            self.assertEqual(backup_code, 0, backup_output)
+            self.assertEqual(backup["primary_recommendation"]["provider"], "backblaze-b2")
+
+            aws_code, aws_output = self.run_cli(
+                [
+                    "object-storage-recommendation",
+                    str(archive_root),
+                    "--scenario",
+                    "aws_native",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            aws = json.loads(aws_output)
+            self.assertEqual(aws_code, 0, aws_output)
+            self.assertEqual(aws["primary_recommendation"]["provider"], "aws-s3")
+
+            no_dry_code, no_dry_output = self.run_cli(["object-storage-recommendation", str(archive_root)])
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+
     def test_human_artifact_store_joplin_plan_is_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

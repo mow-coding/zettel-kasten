@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.38 connected accounts bridge checkpoint
+Status: v0.3.39 object storage recommendation checkpoint
 Date: 2026-06-15
-Version: v0.3.38, release candidate
+Version: v0.3.39, release candidate
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -43,6 +43,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Profile wallet preview | `read-only preview` | none | Wallet-ready identity model only. No keys, signing, or blockchain calls. |
 | GitHub repository setup plan | `approval-gated write` | CLI approve writes local provider metadata/receipt only | Does not create a repository, configure remotes, push, call GitHub APIs, or run OAuth. |
 | Objet storage setup plan | `approval-gated write` | CLI approve writes local provider metadata/receipt only | Does not create buckets, upload, sync, copy files, hash source files, or call provider APIs. |
+| Object storage recommendation | `read-only preview` | none | CLI `archive object-storage-recommendation --scenario <scenario> --dry-run`, alias `archive object-storage-match --dry-run`, and alias `archive objet-storage-recommendation --dry-run` map human storage scenarios to existing WOM-kit object-storage setup provider ids. They return a next `archive object-storage --dry-run` command shape, but write nothing, call no provider APIs, perform no live price lookup, check no bucket availability, create no buckets, upload or download no files, read no object bytes, create no presigned URLs, start no OAuth, read no secret values, and echo no provider URLs, local paths, object filenames, tokens, or secret values. |
 | Provider setup status | `read-only preview` | none | CLI `archive provider-status --dry-run` and MCP `provider_setup_status` check setup-managed GitHub/object-storage bindings against local provider setup receipts. They do not call providers, verify live accounts, upload, sync, push, or write files. |
 | Credential ref plan | `read-only preview` | none | CLI `archive credential-ref-plan --dry-run` and MCP `credential_ref_plan` validate safe refs for mail usernames/app passwords/OAuth tokens, OpenAI API keys, OCR API keys, provider API keys, object storage tokens, and backup passwords. They write nothing, read no environment variables, open no OS keyring, store no secrets, call no providers, call no OpenAI or paid OCR APIs, and never echo raw keys, tokens, passwords, email addresses, local paths, or provider URLs. |
 | Credential ref inventory | `read-only preview` | none | CLI `archive credential-ref-inventory --dry-run` and MCP `credential_ref_inventory` list known credential refs from provider bindings, source bindings, and ignored `profiles/local/credential-refs.local.yml` without echoing exact ref values or secrets. Aliases `credentials` and `credential-status` are supported. The inventory reports only credential id, kind, provider, purpose, and ref prefix/store type; it writes nothing, reads no environment variables, opens no OS keyring, calls no providers, and never prints passwords, API keys, OAuth tokens, email addresses, local paths, provider URLs, or full credential refs. |

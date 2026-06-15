@@ -1106,6 +1106,14 @@ OBJECT_STORAGE_ALLOWED_PROVIDERS = {
     "google-cloud-storage",
     "generic-s3",
 }
+OBJECT_STORAGE_RECOMMENDATION_SCENARIOS = {
+    "personal_low_ops",
+    "s3_compatible",
+    "backup_cost_sensitive",
+    "aws_native",
+    "google_cloud_native",
+    "generic_provider",
+}
 OBJECT_STORAGE_DEFAULT_VISIBILITY = "private"
 OBJECT_STORAGE_ALLOWED_VISIBILITIES = {"private"}
 OBJECT_STORAGE_BUCKET_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$")
@@ -20557,6 +20565,193 @@ def object_storage_setup_plan(
         "warnings": unique_preserve_order(warnings),
         "would_change": [provider_action, f"write {receipt_path}"],
     }
+
+
+def object_storage_recommendation(
+    archive_root: Path | str,
+    *,
+    scenario: str = "personal_low_ops",
+    profile_id: str | None = None,
+    profile_slug: str | None = None,
+    storage_account_ref: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("object-storage-recommendation is read-only and requires --dry-run.")
+
+    resolved_scenario = (scenario or "personal_low_ops").strip().lower().replace("-", "_")
+    if resolved_scenario not in OBJECT_STORAGE_RECOMMENDATION_SCENARIOS:
+        blockers.append("scenario must be one of: " + ", ".join(sorted(OBJECT_STORAGE_RECOMMENDATION_SCENARIOS)) + ".")
+        resolved_scenario = "personal_low_ops"
+
+    resolved_profile_id = (profile_id or "<profile-id>").strip()
+    resolved_profile_slug = (profile_slug or "<profile-slug>").strip()
+    resolved_account_ref = (storage_account_ref or "storage:account:<label>").strip()
+    if profile_id and not safe_source_intake_plan_scalar(resolved_profile_id):
+        blockers.append("profile_id must be a safe non-secret label.")
+        resolved_profile_id = "<profile-id>"
+    if profile_slug and not safe_github_profile_slug_input(resolved_profile_slug):
+        blockers.append("profile_slug must be a safe ASCII slug.")
+        resolved_profile_slug = "<profile-slug>"
+    if storage_account_ref and not safe_object_storage_account_ref(resolved_account_ref):
+        blockers.append("storage_account_ref must be a safe account reference, not an email, URL, token, secret, or path.")
+        resolved_account_ref = "storage:account:<label>"
+
+    profiles = object_storage_recommendation_profiles()
+    ordered_provider_ids = profiles[resolved_scenario]
+    candidates = [object_storage_recommendation_candidate(provider, rank=index + 1) for index, provider in enumerate(ordered_provider_ids)]
+    primary = candidates[0] if candidates else object_storage_recommendation_candidate("generic-s3", rank=1)
+
+    warnings.append("Object-storage pricing, free-tier terms, retention policy, and regional availability are not checked by this command.")
+    warnings.append("Run the provider's official calculator/docs and review data residency before spending money or uploading source objets.")
+
+    setup_command = (
+        "archive object-storage <archive-root> --dry-run --provider "
+        + primary["provider"]
+        + " --profile-id "
+        + resolved_profile_id
+        + " --profile-slug "
+        + resolved_profile_slug
+        + " --storage-account-ref "
+        + resolved_account_ref
+        + " --format json"
+    )
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "object_storage_recommendation",
+        "archive_id": archive_id,
+        "scenario": resolved_scenario,
+        "primary_recommendation": primary,
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+        "selection_logic": object_storage_recommendation_selection_logic(),
+        "setup_bridge": {
+            "planner_command": setup_command,
+            "next_command": "object-storage",
+            "requires_human_provider_signup": True,
+            "requires_manual_price_policy_review": True,
+            "bucket_availability_checked": False,
+        },
+        "current_capability": {
+            "recommendation_matching_available": True,
+            "object_storage_setup_plan_available": True,
+            "live_price_lookup_implemented": False,
+            "provider_account_lookup_implemented": False,
+            "bucket_availability_check_implemented": False,
+            "provider_api_call_implemented": False,
+            "presigned_url_implemented": False,
+            "upload_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "pricing_api_called": False,
+            "bucket_created": False,
+            "bucket_availability_checked": False,
+            "files_uploaded": False,
+            "files_downloaded": False,
+            "object_bytes_read": False,
+            "presigned_url_created": False,
+            "oauth_started": False,
+            "secret_value_read": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "tokens_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "object_filenames_echoed": False,
+            "object_bytes_read": False,
+            "writes": False,
+        },
+        "next_safe_actions": [
+            "Review the recommendation and tradeoffs with the human before provider signup.",
+            "Verify current provider pricing, retention, region, and data-residency policy outside WOM.",
+            "Run the returned object-storage dry-run command before any approved local metadata write.",
+            "Keep provider credentials in a vault/keyring/secret manager and store only refs in WOM.",
+        ],
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def object_storage_recommendation_profiles() -> dict[str, list[str]]:
+    return {
+        "personal_low_ops": ["cloudflare-r2", "backblaze-b2", "generic-s3", "aws-s3", "google-cloud-storage"],
+        "s3_compatible": ["cloudflare-r2", "backblaze-b2", "aws-s3", "generic-s3", "google-cloud-storage"],
+        "backup_cost_sensitive": ["backblaze-b2", "cloudflare-r2", "generic-s3", "aws-s3", "google-cloud-storage"],
+        "aws_native": ["aws-s3", "cloudflare-r2", "backblaze-b2", "generic-s3", "google-cloud-storage"],
+        "google_cloud_native": ["google-cloud-storage", "aws-s3", "cloudflare-r2", "backblaze-b2", "generic-s3"],
+        "generic_provider": ["generic-s3", "cloudflare-r2", "backblaze-b2", "aws-s3", "google-cloud-storage"],
+    }
+
+
+def object_storage_recommendation_candidate(provider: str, *, rank: int) -> dict[str, Any]:
+    labels = {
+        "cloudflare-r2": "Cloudflare R2",
+        "backblaze-b2": "Backblaze B2",
+        "aws-s3": "Amazon S3",
+        "google-cloud-storage": "Google Cloud Storage",
+        "generic-s3": "Generic S3-compatible provider",
+    }
+    notes = {
+        "cloudflare-r2": {
+            "best_for": "Personal or app-adjacent S3-compatible object storage when low operational friction matters.",
+            "tradeoff": "Review account, region, durability, retention, and current billing policy before upload.",
+            "provider_family": "s3_compatible",
+        },
+        "backblaze-b2": {
+            "best_for": "Backup-oriented object storage and S3-compatible tooling paths.",
+            "tradeoff": "Review retrieval, lifecycle, region, and current billing policy before upload.",
+            "provider_family": "s3_compatible",
+        },
+        "aws-s3": {
+            "best_for": "AWS-native workflows, mature IAM controls, and broad S3 ecosystem compatibility.",
+            "tradeoff": "More configuration surface; review IAM, region, lifecycle, and current billing policy carefully.",
+            "provider_family": "aws_native",
+        },
+        "google-cloud-storage": {
+            "best_for": "Google Cloud-native workflows and projects already governed in GCP.",
+            "tradeoff": "Not the default S3-compatible path in WOM-kit; review IAM, region, lifecycle, and billing policy.",
+            "provider_family": "google_native",
+        },
+        "generic-s3": {
+            "best_for": "A provider the human has already chosen that exposes an S3-compatible endpoint.",
+            "tradeoff": "Compatibility, lifecycle, region, support, and billing must be checked manually.",
+            "provider_family": "s3_compatible",
+        },
+    }
+    provider_notes = notes.get(provider, notes["generic-s3"])
+    return {
+        "rank": rank,
+        "provider": provider,
+        "label": labels.get(provider, provider),
+        "provider_family": provider_notes["provider_family"],
+        "best_for": provider_notes["best_for"],
+        "tradeoff": provider_notes["tradeoff"],
+        "compatible_setup_provider": provider if provider in OBJECT_STORAGE_ALLOWED_PROVIDERS else "generic-s3",
+        "s3_compatible_path": provider in {"cloudflare-r2", "backblaze-b2", "aws-s3", "generic-s3"},
+        "live_policy_checked": False,
+        "live_pricing_checked": False,
+    }
+
+
+def object_storage_recommendation_selection_logic() -> list[str]:
+    return [
+        "If the human wants low-friction personal remote objet storage, start with S3-compatible providers already supported by object-storage dry-run.",
+        "If backup/storage-cost sensitivity is the main concern, compare backup-oriented S3-compatible options first.",
+        "If the archive already lives in an AWS or Google Cloud organization, prefer the native provider for account governance.",
+        "If the human already selected a different S3-compatible provider, use generic-s3 and keep endpoint refs non-secret.",
+        "Never treat this recommendation as live pricing, bucket availability, provider signup, upload approval, or presigned URL authorization.",
+    ]
 
 
 def approve_object_storage_setup_plan(
