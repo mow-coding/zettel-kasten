@@ -1934,6 +1934,42 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
 
+            local_inventory.write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "version": "wom-local-credential-ref-inventory/v0.1",
+                        "credentials": [
+                            {
+                                "credential_id": "cred:needs-review",
+                                "credential_kind": "openai_api_key",
+                                "provider": "openai",
+                                "credential_ref": None,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            catalog_issue_code, catalog_issue_output = self.run_cli(
+                [
+                    "connected-accounts",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            catalog_issue_result = json.loads(catalog_issue_output)
+            self.assertEqual(catalog_issue_code, 0, catalog_issue_output)
+            self.assertTrue(catalog_issue_result["ok"])
+            self.assertEqual(catalog_issue_result["blockers"], [])
+            self.assertFalse(catalog_issue_result["credential_catalog"]["ok"])
+            self.assertEqual(catalog_issue_result["credential_catalog"]["status"], "needs_review")
+            self.assertTrue(catalog_issue_result["credential_catalog"]["blockers"])
+            self.assertTrue(
+                any("credential catalog issue" in warning for warning in catalog_issue_result["warnings"])
+            )
+
             source_data["sources"][-1]["connection"]["account_ref"] = "person@example.com"
             source_path.write_text(archive_cli.dump_yaml(source_data), encoding="utf-8")
             bad_code, bad_output = self.run_cli(
