@@ -35,6 +35,8 @@ Commands:
           Plan safe plaintext-secret migration without reading or importing secrets.
   credential-policy-check
           Check a credential request against the approval policy gate.
+  credential-keepassxc-command-plan
+          Plan a KeePassXC CLI command after approval receipt verification, without executing it.
   credential-access-broker-plan
           Plan a future approved credential broker request without retrieving secrets.
   credential-access-approval-plan
@@ -2222,6 +2224,56 @@ def command_credential_policy_check(args: argparse.Namespace) -> int:
             print("Denied rules:")
             for rule in evaluation["denied_rules"]:
                 print(f"- {rule}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_credential_keepassxc_command_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("credential-keepassxc-command-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.credential_keepassxc_command_plan(
+            Path(args.archive_root),
+            credential_id=args.credential_id,
+            credential_ref=args.credential_ref,
+            credential_kind=args.credential_kind,
+            provider=args.provider,
+            action_kind=args.action_kind,
+            operation=args.operation,
+            approval_receipt=args.approval_receipt,
+            entry_label=args.entry_label,
+            group_label=args.group_label,
+            database_ref=args.database_ref,
+            consumer=args.consumer,
+            reviewed_by=args.reviewed_by,
+            platform=args.platform,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        adapter = result.get("adapter") if isinstance(result.get("adapter"), dict) else {}
+        command_plan = result.get("command_plan") if isinstance(result.get("command_plan"), dict) else {}
+        print(f"Credential KeePassXC command plan {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Adapter: {adapter.get('adapter_kind') or '-'} / {adapter.get('operation') or '-'}")
+        print(f"Approval receipt verified: {adapter.get('approval_receipt_verified')}")
+        print("Command preview:")
+        print("  " + " ".join(str(item) for item in command_plan.get("argv_preview") or []))
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
         if result.get("warnings"):
             print("Warnings:")
             for warning in result["warnings"]:
@@ -6781,6 +6833,67 @@ def build_parser() -> argparse.ArgumentParser:
     credential_policy_check.add_argument("--dry-run", action="store_true", help="Required; read-only policy check.")
     credential_policy_check.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_policy_check.set_defaults(func=command_credential_policy_check)
+
+    credential_keepassxc_command_plan = subcommands.add_parser(
+        "credential-keepassxc-command-plan",
+        aliases=["keepassxc-command-plan", "credential-keepassxc-write-plan"],
+        help="Plan a KeePassXC CLI add command after verifying an approval receipt, without executing it.",
+    )
+    credential_keepassxc_command_plan.add_argument("archive_root", help="Archive root to inspect.")
+    credential_keepassxc_command_plan.add_argument("--credential-id", required=True, help="Safe credential label, e.g. cred:openai-api.")
+    credential_keepassxc_command_plan.add_argument("--credential-ref", help="Optional secret: ref; exact value is not echoed.")
+    credential_keepassxc_command_plan.add_argument(
+        "--credential-kind",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+        help="Credential kind; defaults from action kind.",
+    )
+    credential_keepassxc_command_plan.add_argument(
+        "--provider",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+        help="Optional provider context.",
+    )
+    credential_keepassxc_command_plan.add_argument(
+        "--action-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_ACTIONS),
+        default="plaintext_secret_migration",
+        help="Credential action to policy-check before planning the command.",
+    )
+    credential_keepassxc_command_plan.add_argument(
+        "--operation",
+        choices=["plaintext_secret_migration", "write_new_secret"],
+        default="plaintext_secret_migration",
+        help="KeePassXC write-like operation to preflight.",
+    )
+    credential_keepassxc_command_plan.add_argument(
+        "--approval-receipt",
+        required=True,
+        help="Archive-relative credential access approval receipt to verify before planning.",
+    )
+    credential_keepassxc_command_plan.add_argument(
+        "--entry-label",
+        required=True,
+        help="Safe non-secret KeePassXC entry label. Do not pass an email, URL, token, password, or path.",
+    )
+    credential_keepassxc_command_plan.add_argument(
+        "--group-label",
+        help="Optional safe non-secret KeePassXC group label. Do not pass a path.",
+    )
+    credential_keepassxc_command_plan.add_argument(
+        "--database-ref",
+        default="keepassxc:human-selected-database",
+        help="Safe label for the human-selected database; never pass a .kdbx path.",
+    )
+    credential_keepassxc_command_plan.add_argument("--consumer", default="wom:adapter:keepassxc", help="Safe label for the future local adapter.")
+    credential_keepassxc_command_plan.add_argument("--reviewed-by", default="human:pending-review", help="Safe non-secret reviewer label.")
+    credential_keepassxc_command_plan.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Host platform context.",
+    )
+    credential_keepassxc_command_plan.add_argument("--dry-run", action="store_true", help="Required; read-only command preflight.")
+    credential_keepassxc_command_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    credential_keepassxc_command_plan.set_defaults(func=command_credential_keepassxc_command_plan)
 
     credential_access_broker_plan = subcommands.add_parser(
         "credential-access-broker-plan",

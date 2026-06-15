@@ -438,6 +438,56 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "credential_keepassxc_command_plan",
+        "description": "Plan a KeePassXC CLI add command after verifying an approval receipt. Read-only; never executes keepassxc-cli, opens vaults, reads paths, prompts for, writes, or echoes secrets.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "credential_id": {"type": "string"},
+                "credential_ref": {"type": "string"},
+                "credential_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+                },
+                "provider": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+                },
+                "action_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ACCESS_BROKER_ACTIONS),
+                    "default": "plaintext_secret_migration",
+                },
+                "operation": {
+                    "type": "string",
+                    "enum": ["plaintext_secret_migration", "write_new_secret"],
+                    "default": "plaintext_secret_migration",
+                },
+                "approval_receipt": {
+                    "type": "string",
+                    "description": "Archive-relative credential access approval receipt to verify.",
+                },
+                "entry_label": {"type": "string", "description": "Safe non-secret KeePassXC entry label."},
+                "group_label": {"type": "string", "description": "Optional safe non-secret KeePassXC group label."},
+                "database_ref": {
+                    "type": "string",
+                    "description": "Safe label for the human-selected database; not a local path.",
+                    "default": "keepassxc:human-selected-database",
+                },
+                "consumer": {"type": "string", "default": "wom:adapter:keepassxc"},
+                "reviewed_by": {"type": "string", "default": "human:pending-review"},
+                "platform": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+                    "default": "windows",
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "credential_id", "approval_receipt", "entry_label"],
+        },
+    },
+    {
         "name": "credential_access_broker_plan",
         "description": "Plan a future approved credential broker request without retrieving secrets. Read-only; never opens password managers, browser stores, keyrings, files, or environment variables.",
         "inputSchema": {
@@ -1809,6 +1859,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_credential_plaintext_migration_plan(arguments)
     if name == "credential_policy_check":
         return tool_credential_policy_check(arguments)
+    if name == "credential_keepassxc_command_plan":
+        return tool_credential_keepassxc_command_plan(arguments)
     if name == "credential_access_broker_plan":
         return tool_credential_access_broker_plan(arguments)
     if name == "credential_access_approval_plan":
@@ -2260,6 +2312,36 @@ def tool_credential_policy_check(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     return tool_success_result(
         f"credential_policy_check: {result.get('policy_result') or '-'}.",
+        result,
+    )
+
+
+def tool_credential_keepassxc_command_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("credential_keepassxc_command_plan is read-only and requires dry-run.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.credential_keepassxc_command_plan,
+        archive_root,
+        credential_id=require_string_arg(arguments, "credential_id"),
+        credential_ref=optional_string_arg(arguments, "credential_ref"),
+        credential_kind=optional_string_arg(arguments, "credential_kind"),
+        provider=optional_string_arg(arguments, "provider"),
+        action_kind=optional_string_arg(arguments, "action_kind") or "plaintext_secret_migration",
+        operation=optional_string_arg(arguments, "operation") or "plaintext_secret_migration",
+        approval_receipt=require_string_arg(arguments, "approval_receipt"),
+        entry_label=require_string_arg(arguments, "entry_label"),
+        group_label=optional_string_arg(arguments, "group_label"),
+        database_ref=optional_string_arg(arguments, "database_ref") or "keepassxc:human-selected-database",
+        consumer=optional_string_arg(arguments, "consumer") or "wom:adapter:keepassxc",
+        reviewed_by=optional_string_arg(arguments, "reviewed_by"),
+        platform=optional_string_arg(arguments, "platform") or "windows",
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    summary = result.get("policy_check_summary") if isinstance(result.get("policy_check_summary"), dict) else {}
+    return tool_success_result(
+        f"credential_keepassxc_command_plan: {state}, policy={summary.get('policy_result') or '-'}.",
         result,
     )
 

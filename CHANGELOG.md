@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.32 - 2026-06-15
+
+- Added read-only CLI `archive credential-keepassxc-command-plan --dry-run`
+  and MCP `credential_keepassxc_command_plan` for previewing a safe
+  KeePassXC CLI add-command shape after approval receipt verification.
+- Added CLI aliases `archive keepassxc-command-plan --dry-run` and
+  `archive credential-keepassxc-write-plan --dry-run`.
+- Required `--approval-receipt <path>` and re-used `credential_policy_check`
+  so the plan is blocked unless the written approval receipt verifies for the
+  same archive, credential, action, store, consumer, and `approve_once`
+  decision.
+- Kept the release non-executing and non-secret: it runs no `keepassxc-cli`,
+  opens no KeePassXC vaults, stores no `.kdbx` paths, reads no database
+  passwords, reads no plaintext files, pipes no secrets to stdin, places no
+  secret values in argv, writes no vault entries, and keeps
+  `live_execution_allowed_now` false.
+- Added `wom-kit/docs/credential-keepassxc-command-plan.md` plus CLI/MCP/docs
+  coverage for receipt verification, dry-run-only behavior, allowed-root
+  enforcement, no-write behavior, and privacy boundaries.
+
 ## v0.3.31 - 2026-06-15
 
 - Added local CLI approval receipt writing through

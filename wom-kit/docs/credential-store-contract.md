@@ -148,6 +148,11 @@ v0.3.31 updates [Credential Policy Check](credential-policy-check.md) so future
 adapter execution has a concrete read-only policy gate that can also verify a
 written approval receipt before any secret use.
 
+v0.3.32 adds [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md)
+so WOM can preview a safe `keepassxc-cli add` command shape after approval
+receipt verification, without running KeePassXC, storing a vault path, or
+writing a secret.
+
 ## Mail Sources
 
 Mail source access should use refs such as:

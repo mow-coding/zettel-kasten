@@ -1,10 +1,11 @@
 # Credential Policy Check
 
-Status: v0.3.31 credential policy gate plus receipt verification checkpoint
+Status: v0.3.32 credential policy gate plus KeePassXC preflight checkpoint
 Date: 2026-06-15
 
 v0.3.30 added the first concrete credential policy gate. v0.3.31 lets the gate
 verify a written credential access approval receipt.
+v0.3.32 adds a KeePassXC command preflight that must pass this gate first.
 
 This is still read-only, but it is not only a planner. It evaluates a proposed
 credential use request and returns a policy result:
@@ -78,7 +79,7 @@ A request can return `ready_after_approval_receipt` only when:
   consumer, decision, and archive,
 - no secret value or exact credential ref is echoed.
 
-Even then, `live_execution_allowed_now` is still `false` in v0.3.31.
+Even then, `live_execution_allowed_now` is still `false` in v0.3.32.
 
 The result means:
 
@@ -148,9 +149,14 @@ credential-store-recommendation
 -> credential-access-broker-plan
 -> credential-access-approval-plan / credential-access-approval --approve
 -> credential-policy-check --approval-receipt <path>
+-> credential-keepassxc-command-plan --approval-receipt <path>
 -> future adapter execution
 -> credential-adapter-audit-plan
 ```
 
 v0.3.31 connects the written approval receipt to the gate that future adapter
 execution must satisfy. It still does not perform the execution.
+
+v0.3.32 adds [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md),
+which reuses this policy gate before previewing a safe `keepassxc-cli add`
+command shape. It still does not run KeePassXC.

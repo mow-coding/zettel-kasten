@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.31 pre-release
+v0.3.32 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -39,7 +39,7 @@ What exists today:
 - approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
 - approval-gated `.gitignore` repair for missing WOM-kit safe defaults,
 - human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
-- read-only credential reference planning, inventory, external store recommendation, vault onboarding planning, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, adapter readiness planning, adapter manifest preview, and adapter audit receipt preview for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
+- read-only credential reference planning, inventory, external store recommendation, vault onboarding planning, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, adapter readiness planning, adapter manifest preview, and adapter audit receipt preview for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
 - read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces,
 - read-only IMAP mailbox source planning for Gmail, Naver, and generic IMAP account refs,
 - documented Notion page snapshot and `store-ref` boundaries for page/block JSON exports,
@@ -53,7 +53,7 @@ For a status-by-capability view, see the [WOM-kit Capability Matrix](wom-kit/doc
 What does not exist yet:
 
 - production-grade installation and platform support,
-- real OS keyring read/write adapters, secret retrieval, OAuth flows, OpenAI API calls, or paid OCR API calls,
+- real OS keyring read/write adapters, KeePassXC command execution, secret retrieval, OAuth flows, OpenAI API calls, or paid OCR API calls,
 - live provider integrations or provider API sync,
 - live IMAP login, mailbox header scans, message capture, attachment capture, or email-derived text extraction,
 - production `ZET` transport, sharing service, feed update, or mirroring delivery,
@@ -112,6 +112,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Credential Access Broker Plan](wom-kit/docs/credential-access-broker-plan.md)
 - [Credential Access Approval Plan](wom-kit/docs/credential-access-approval-plan.md)
 - [Credential Policy Check](wom-kit/docs/credential-policy-check.md)
+- [Credential KeePassXC Command Plan](wom-kit/docs/credential-keepassxc-command-plan.md)
 - [Credential Adapter Readiness Plan](wom-kit/docs/credential-adapter-readiness-plan.md)
 - [Credential Adapter Manifest Plan](wom-kit/docs/credential-adapter-manifest-plan.md)
 - [Credential Adapter Audit Plan](wom-kit/docs/credential-adapter-audit-plan.md)
@@ -238,6 +239,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.32
 v0.3.31
 v0.3.30
 v0.3.29

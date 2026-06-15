@@ -645,6 +645,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("credential_vault_onboarding_plan", tool_names)
             self.assertIn("credential_plaintext_migration_plan", tool_names)
             self.assertIn("credential_policy_check", tool_names)
+            self.assertIn("credential_keepassxc_command_plan", tool_names)
             self.assertIn("credential_access_broker_plan", tool_names)
             self.assertIn("credential_access_approval_plan", tool_names)
             self.assertIn("credential_adapter_readiness_plan", tool_names)
@@ -2260,6 +2261,131 @@ class McpServerTests(unittest.TestCase):
                                 "archive_root": str(allowed_archive),
                                 "credential_id": "cred:openai-api",
                                 "action_kind": "model_api_call",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_credential_keepassxc_command_plan_tool_requires_receipt_and_never_executes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            approved = archive_services.credential_access_approval_plan(
+                allowed_archive,
+                credential_id="cred:openai-api",
+                credential_ref="secret:keepassxc-openai-api",
+                credential_kind="openai_api_key",
+                provider="openai",
+                action_kind="plaintext_secret_migration",
+                decision="approve_once",
+                store_kind="password_manager",
+                consumer="wom:adapter:keepassxc",
+                reviewed_by="human:tester",
+                dry_run=False,
+                approve=True,
+            )
+            self.assertTrue(approved["ok"], approved)
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_keepassxc_command_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "credential_id": "cred:openai-api",
+                                "credential_ref": "secret:keepassxc-openai-api",
+                                "credential_kind": "openai_api_key",
+                                "provider": "openai",
+                                "action_kind": "plaintext_secret_migration",
+                                "operation": "plaintext_secret_migration",
+                                "approval_receipt": approved["receipt_path"],
+                                "entry_label": "openai-api",
+                                "group_label": "wom-secrets",
+                                "database_ref": "keepassxc:personal-vault",
+                                "consumer": "wom:adapter:keepassxc",
+                                "reviewed_by": "human:tester",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                serialized = json.dumps(structured)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "credential_keepassxc_command_plan")
+                self.assertTrue(structured["adapter"]["approval_receipt_verified"])
+                self.assertEqual(structured["policy_check_summary"]["policy_result"], "ready_after_approval_receipt")
+                self.assertEqual(structured["command_plan"]["argv_preview"][0:3], ["keepassxc-cli", "add", "--password-prompt"])
+                self.assertEqual(structured["command_plan"]["argv_preview"][3], "<database.kdbx selected by human outside WOM>")
+                self.assertFalse(structured["command_plan"]["database_path_included"])
+                self.assertFalse(structured["command_plan"]["secret_value_in_argv"])
+                self.assertFalse(structured["closed_actions"]["keepassxc_opened"])
+                self.assertFalse(structured["closed_actions"]["live_adapter_executed"])
+                self.assertFalse(structured["closed_actions"]["secret_value_written"])
+                self.assertNotIn("secret:keepassxc-openai-api", serialized)
+                self.assertNotIn("sk-proj-", serialized)
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_keepassxc_command_plan",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "credential_id": "cred:openai-api",
+                                "approval_receipt": approved["receipt_path"],
+                                "entry_label": "openai-api",
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_keepassxc_command_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "credential_id": "cred:openai-api",
+                                "approval_receipt": approved["receipt_path"],
+                                "entry_label": "openai-api",
                                 "dry_run": False,
                             },
                         },

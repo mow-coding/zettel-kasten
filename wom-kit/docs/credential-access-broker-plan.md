@@ -27,6 +27,10 @@ v0.3.31 adds a non-secret approval receipt preview and local writer. See
 v0.3.25 adds a read-only adapter readiness preview. See
 [Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md).
 
+v0.3.32 adds a read-only KeePassXC command preflight after approval receipt
+verification. See
+[Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md).
+
 ## Read-Only Planner
 
 ```powershell
