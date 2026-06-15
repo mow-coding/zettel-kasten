@@ -57,6 +57,13 @@ archive imap-mailbox-adapter-preflight-plan <archive-root> --dry-run
 MCP: imap_mailbox_adapter_preflight_plan
 ```
 
+Related approval-gated local audit receipt write added by v0.3.56:
+
+```text
+archive imap-mailbox-adapter-audit-write <archive-root> --approve
+MCP: no live write tool
+```
+
 ## What It Previews
 
 The planner composes:
@@ -123,7 +130,12 @@ Safe public labels such as `gmail`, `naver`, `generic_imap`, `local-imap`,
 
 ## Current Boundary
 
-v0.3.50 does not write audit receipts.
+This planner does not write audit receipts. v0.3.56 adds a separate
+approval-gated local receipt writer:
+
+```text
+imap-mailbox-adapter-audit-write
+```
 
 It does not:
 
@@ -159,9 +171,10 @@ imap-mailbox-plan
 -> imap-mailbox-adapter-readiness-plan
 -> imap-mailbox-selection-plan
 -> imap-mailbox-adapter-audit-plan
+-> imap-mailbox-adapter-preflight-plan
 -> future read-only mailbox selection adapter, not implemented in v0.3.50
 -> future header-only metadata scan, not implemented in v0.3.50
--> future non-secret adapter audit receipt writer, not implemented in v0.3.50
+-> imap-mailbox-adapter-audit-write
 -> future message capture with separate approval
 ```
 

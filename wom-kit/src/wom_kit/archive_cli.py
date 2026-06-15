@@ -31,6 +31,8 @@ Commands:
           Preview or approve writing a non-secret IMAP adapter manifest locally.
   imap-mailbox-adapter-audit-plan
           Preview a non-secret future IMAP adapter audit receipt without reading mail.
+  imap-mailbox-adapter-audit-write
+          Preview or approve writing a non-secret IMAP adapter audit receipt locally.
   prehashed-objet-ledger
           Preview or approve-register an already-hashed external objet ledger without reading blob bytes.
   resolve-objet-ref
@@ -5475,6 +5477,78 @@ def command_imap_mailbox_adapter_audit_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_imap_mailbox_adapter_audit_write(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.imap_mailbox_adapter_audit_write(
+            Path(args.archive_root),
+            adapter_id=args.adapter_id,
+            source_id=args.source_id,
+            provider=args.provider,
+            imap_host=args.imap_host,
+            imap_port=args.imap_port,
+            account_ref=args.account_ref,
+            username_ref=args.username_ref,
+            auth_mode=args.auth_mode,
+            app_password_ref=args.app_password_ref,
+            oauth_token_ref=args.oauth_token_ref,
+            mailbox_ref=args.mailbox_ref,
+            operation=args.operation,
+            selection_rule=args.selection_rule,
+            selector_id=args.selector_id,
+            max_messages=args.max_messages,
+            since_days=args.since_days,
+            credential_id=args.credential_id,
+            credential_ref=args.credential_ref,
+            credential_kind=args.credential_kind,
+            credential_provider=args.credential_provider,
+            store_kind=args.store_kind,
+            adapter_kind=args.adapter_kind,
+            approval_decision=args.approval_decision,
+            approval_receipt=args.approval_receipt,
+            result_status=args.result_status,
+            consumer=args.consumer,
+            reviewed_by=args.reviewed_by,
+            platform=args.platform,
+            dry_run=args.dry_run,
+            approve=args.approve,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "written" if result.get("approved") else ("passed" if result.get("ok") else "blocked")
+        receipt = result.get("receipt_preview") if isinstance(result.get("receipt_preview"), dict) else {}
+        print(f"IMAP mailbox adapter audit write {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Adapter: {(receipt.get('adapter') or {}).get('adapter_id') or '-'}")
+        print(f"Result: {receipt.get('result_status') or '-'}")
+        print(f"Receipt: {result.get('receipt_path') or result.get('proposed_receipt_path') or '-'}")
+        print("IMAP connection opened: no")
+        print("Mail read: no")
+        writes = result.get("files_written") or []
+        if writes:
+            print("Files written:")
+            for path in writes:
+                print(f"- {path}")
+        else:
+            print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_imap_mailbox_adapter_preflight_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("imap-mailbox-adapter-preflight-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -9842,6 +9916,139 @@ def build_parser() -> argparse.ArgumentParser:
     imap_mailbox_adapter_audit.add_argument("--dry-run", action="store_true", help="Required. Preview only; never connects, selects, searches, lists, or reads mail.")
     imap_mailbox_adapter_audit.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     imap_mailbox_adapter_audit.set_defaults(func=command_imap_mailbox_adapter_audit_plan)
+
+    imap_mailbox_adapter_audit_write = subcommands.add_parser(
+        "imap-mailbox-adapter-audit-write",
+        aliases=["mailbox-adapter-audit-write"],
+        help="Preview or approve writing a non-secret IMAP adapter audit receipt without connecting or reading mail.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument("archive_root", help="Archive root to inspect.")
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--adapter-id",
+        required=True,
+        help="Safe local adapter id, e.g. local-imap. Do not pass paths, URLs, emails, or secrets.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument("--source-id", required=True, help="Stable source id, e.g. imap:gmail-personal.")
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--provider",
+        choices=sorted(archive_services.IMAP_MAILBOX_ALLOWED_PROVIDERS),
+        default="generic_imap",
+        help="Provider preset. generic_imap requires --imap-host.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument("--imap-host", help="Safe IMAP host label. Required for generic_imap.")
+    imap_mailbox_adapter_audit_write.add_argument("--imap-port", type=int, default=993, help="IMAP SSL port. Defaults to 993.")
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--account-ref",
+        required=True,
+        help="Safe account reference, e.g. imap:account:personal-mail. Do not pass an email address.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--username-ref",
+        required=True,
+        help="env/keyring/secret/wallet reference for the username. Do not pass the username value.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--auth-mode",
+        choices=sorted(archive_services.IMAP_MAILBOX_ALLOWED_AUTH_MODES),
+        default="app_password_ref",
+        help="Credential reference kind.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--app-password-ref",
+        help="env/keyring/secret/wallet reference for an app password. Do not pass the password value.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--oauth-token-ref",
+        help="env/keyring/secret/wallet reference for an OAuth token. Do not pass the token value.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--mailbox-ref",
+        default="imap:mailbox:inbox",
+        help="Safe mailbox reference. Do not pass private mailbox names.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--operation",
+        choices=sorted(archive_services.IMAP_MAILBOX_OPERATION_REQUEST_OPERATIONS),
+        default="header_metadata_scan",
+        help="Future IMAP mailbox operation to audit.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--selection-rule",
+        choices=sorted(archive_services.IMAP_MAILBOX_SELECTION_RULES),
+        default="newest_first",
+        help="Future non-secret mailbox selection rule.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--selector-id",
+        default="mail-selection:recent-inbox",
+        help="Safe non-secret selector label. Do not pass subjects, senders, emails, mailbox names, URLs, or paths.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--max-messages",
+        type=int,
+        default=archive_services.IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT,
+        help="Future message candidate limit to request. Must be between 1 and 2000.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--since-days",
+        type=int,
+        help="Optional future recency window. Must be between 1 and 3650 days.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--credential-id",
+        default="cred:mail-source-access",
+        help="Safe credential label for the future mail credential.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument("--credential-ref", help="Optional env/keyring/secret/wallet ref; exact value is not echoed.")
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--credential-kind",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+        help="Credential kind. Defaults from IMAP auth mode.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--credential-provider",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+        help="Credential provider label. Defaults from IMAP provider.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--store-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+        default="password_manager",
+        help="Credential store class for the future mail credential retrieval.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--adapter-kind",
+        choices=sorted(archive_services.CREDENTIAL_ADAPTER_KINDS),
+        help="Future credential adapter kind. Defaults from store kind and platform.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--approval-decision",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_APPROVAL_DECISIONS),
+        default="needs_review",
+        help="Human decision state to evaluate.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--approval-receipt",
+        help="Archive-relative approval receipt path to verify. The path is not echoed in output.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--result-status",
+        choices=sorted(archive_services.IMAP_MAILBOX_ADAPTER_AUDIT_RESULT_STATUSES),
+        default="not_run",
+        help="Non-secret future adapter outcome status to record.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument("--consumer", default="wom:adapter:imap-mailbox", help="Safe label for the future adapter.")
+    imap_mailbox_adapter_audit_write.add_argument("--reviewed-by", help="Safe non-secret reviewer label. Required with --approve.")
+    imap_mailbox_adapter_audit_write.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Local platform for default credential adapter selection.",
+    )
+    imap_mailbox_adapter_audit_write.add_argument("--dry-run", action="store_true", help="Preview the audit receipt without writing files.")
+    imap_mailbox_adapter_audit_write.add_argument("--approve", action="store_true", help="Write the non-secret audit receipt after local human review.")
+    imap_mailbox_adapter_audit_write.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    imap_mailbox_adapter_audit_write.set_defaults(func=command_imap_mailbox_adapter_audit_write)
 
     imap_mailbox_adapter_preflight = subcommands.add_parser(
         "imap-mailbox-adapter-preflight-plan",

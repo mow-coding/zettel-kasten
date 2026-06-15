@@ -6,6 +6,27 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.56 - 2026-06-16
+
+- Added approval-gated local IMAP adapter audit receipt writing:
+  `archive imap-mailbox-adapter-audit-write --dry-run|--approve` and alias
+  `archive mailbox-adapter-audit-write`.
+- The command wraps the existing IMAP adapter audit preview and writes exactly
+  one non-secret JSON receipt under `receipts/imap/adapter-audits/` only after
+  explicit `--approve --reviewed-by <actor>`.
+- Added replay protection when the same audit receipt already exists.
+- Added `wom-kit/docs/imap-mailbox-adapter-audit-write.md`, public
+  documentation links, capability matrix coverage, and CLI tests.
+- Kept the command local and non-secret: it exposes no MCP write tool, opens no
+  IMAP connection, attempts no login, selects no mailbox, searches no mailbox,
+  lists no candidate messages, reads no IMAP UIDs, Message-ID values, headers,
+  bodies, or attachments, creates no derived text, retrieves no secrets, starts
+  no OAuth, calls no providers, and echoes no email addresses, username values,
+  exact account refs, exact credential refs, exact mailbox refs, IMAP host
+  values, provider URLs, message ids, subjects, sender or recipient values,
+  attachment names, approval receipt paths, selection receipt paths, local
+  absolute paths, tokens, or secret values.
+
 ## v0.3.55 - 2026-06-16
 
 - Added read-only IMAP adapter preflight planning:

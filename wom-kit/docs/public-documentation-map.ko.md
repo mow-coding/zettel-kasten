@@ -135,6 +135,7 @@
 - [IMAP Mailbox Adapter Readiness Plan](imap-mailbox-adapter-readiness-plan.md)
 - [IMAP Mailbox Selection Plan](imap-mailbox-selection-plan.md)
 - [IMAP Mailbox Adapter Audit Plan](imap-mailbox-adapter-audit-plan.md)
+- [IMAP Mailbox Adapter Audit Write](imap-mailbox-adapter-audit-write.md)
 - [IMAP Mailbox Adapter Preflight Plan](imap-mailbox-adapter-preflight-plan.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
 - [WOM Profile Registry](wom-profile-registry.md)

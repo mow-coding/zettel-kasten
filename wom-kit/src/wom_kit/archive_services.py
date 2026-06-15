@@ -12946,6 +12946,244 @@ def imap_mailbox_adapter_audit_case_id(
     return f"imap-mailbox-adapter-audit-{digest}"
 
 
+def imap_mailbox_adapter_audit_write(
+    archive_root: Path | str,
+    *,
+    adapter_id: str,
+    source_id: str,
+    provider: str | None = None,
+    imap_host: str | None = None,
+    imap_port: int | None = None,
+    account_ref: str | None = None,
+    username_ref: str | None = None,
+    auth_mode: str | None = None,
+    app_password_ref: str | None = None,
+    oauth_token_ref: str | None = None,
+    mailbox_ref: str | None = None,
+    operation: str = "header_metadata_scan",
+    selection_rule: str = "newest_first",
+    selector_id: str = "mail-selection:recent-inbox",
+    max_messages: int = IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT,
+    since_days: int | None = None,
+    credential_id: str = "cred:mail-source-access",
+    credential_ref: str | None = None,
+    credential_kind: str | None = None,
+    credential_provider: str | None = None,
+    store_kind: str = "password_manager",
+    adapter_kind: str | None = None,
+    approval_decision: str = "needs_review",
+    approval_receipt: str | None = None,
+    consumer: str = "wom:adapter:imap-mailbox",
+    reviewed_by: str | None = None,
+    platform: str = "windows",
+    result_status: str = "not_run",
+    dry_run: bool = True,
+    approve: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+
+    audit_plan = imap_mailbox_adapter_audit_plan(
+        root,
+        adapter_id=adapter_id,
+        source_id=source_id,
+        provider=provider,
+        imap_host=imap_host,
+        imap_port=imap_port,
+        account_ref=account_ref,
+        username_ref=username_ref,
+        auth_mode=auth_mode,
+        app_password_ref=app_password_ref,
+        oauth_token_ref=oauth_token_ref,
+        mailbox_ref=mailbox_ref,
+        operation=operation,
+        selection_rule=selection_rule,
+        selector_id=selector_id,
+        max_messages=max_messages,
+        since_days=since_days,
+        credential_id=credential_id,
+        credential_ref=credential_ref,
+        credential_kind=credential_kind,
+        credential_provider=credential_provider,
+        store_kind=store_kind,
+        adapter_kind=adapter_kind,
+        approval_decision=approval_decision,
+        approval_receipt=approval_receipt,
+        consumer=consumer,
+        reviewed_by=reviewed_by,
+        platform=platform,
+        result_status=result_status,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in audit_plan.get("blockers") or [])
+    warnings.extend(str(item) for item in audit_plan.get("warnings") or [])
+
+    proposed_receipt_path = str(audit_plan.get("proposed_receipt_path") or "")
+    receipt_path = archive_internal_path(root, proposed_receipt_path)
+    receipt_exists = receipt_path.is_file()
+    if receipt_exists:
+        blockers.append(f"IMAP adapter audit receipt already exists: {proposed_receipt_path}.")
+
+    resolved_reviewer = (reviewed_by or ("human:pending-review" if dry_run else "")).strip()
+    if approve and not resolved_reviewer:
+        blockers.append("reviewed_by is required when --approve writes an IMAP adapter audit receipt.")
+        resolved_reviewer = "human:required"
+    if not safe_source_intake_plan_scalar(resolved_reviewer):
+        blockers.append("reviewed_by must be a safe non-secret reviewer label.")
+        resolved_reviewer = "human:pending-review"
+
+    written_at = (
+        datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        if approve and not blockers
+        else None
+    )
+    receipt_id = Path(proposed_receipt_path).name.removesuffix(".imap-mailbox-adapter-audit.json")
+    base_receipt = audit_plan.get("receipt_preview") if isinstance(audit_plan.get("receipt_preview"), dict) else {}
+    receipt_preview = json_safe(
+        {
+            **base_receipt,
+            "receipt_id": receipt_id,
+            "receipt_path": proposed_receipt_path,
+            "lifecycle_action": "imap_mailbox_adapter_audit_write",
+            "archive_id": archive_id,
+            "review": {
+                "reviewed_by": resolved_reviewer,
+                "reviewed_at": written_at,
+            },
+            "closed_actions": {
+                "audit_receipt_written": approve and not blockers,
+                "selection_receipt_written": False,
+                "approval_receipt_written": False,
+                "live_adapter_executed": False,
+                "imap_connection_opened": False,
+                "imap_login_attempted": False,
+                "mailbox_selected": False,
+                "mailbox_searched": False,
+                "candidate_messages_listed": False,
+                "message_uids_read": False,
+                "message_ids_read": False,
+                "message_headers_read": False,
+                "message_bodies_read": False,
+                "attachments_read": False,
+                "derived_text_created": False,
+                "credential_value_read": False,
+                "secret_value_read": False,
+                "provider_api_called": False,
+                "oauth_started": False,
+                "files_written": approve and not blockers,
+            },
+        }
+    )
+
+    files_written: list[str] = []
+    if approve and not blockers:
+        created_paths: list[Path] = []
+        created_dirs = missing_parent_dirs_before_write(root, [receipt_path])
+        try:
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_new_file(receipt_path, receipt_preview)
+            created_paths.append(receipt_path)
+            files_written = [proposed_receipt_path]
+        except OSError as exc:
+            for path in reversed(created_paths):
+                path.unlink(missing_ok=True)
+            cleanup_empty_archive_dirs(root, created_dirs)
+            raise ArchiveServiceError(f"Could not write IMAP adapter audit receipt: {exc}") from exc
+
+    receipt_written = approve and not blockers and bool(files_written)
+    would_change = [proposed_receipt_path] if dry_run and not blockers else []
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "approved": receipt_written,
+        "lifecycle_action": "imap_mailbox_adapter_audit_write_plan" if dry_run else "imap_mailbox_adapter_audit_write",
+        "archive_id": archive_id,
+        "audit_state": "written" if receipt_written else ("preview_ready" if not blockers else "blocked"),
+        "receipt_path": proposed_receipt_path if receipt_written else None,
+        "proposed_receipt_path": proposed_receipt_path,
+        "receipt_exists": receipt_exists or receipt_written,
+        "receipt_preview": receipt_preview,
+        "selection_plan_summary": audit_plan.get("selection_plan_summary"),
+        "current_capability": {
+            "adapter_audit_receipt_preview_available": True,
+            "adapter_audit_receipt_write_implemented": True,
+            "mcp_live_write_tool_exposed": False,
+            "live_imap_adapter_implemented": False,
+            "mailbox_selection_adapter_implemented": False,
+            "imap_connection_implemented": False,
+            "imap_login_implemented": False,
+            "mailbox_select_implemented": False,
+            "imap_search_implemented": False,
+            "header_scan_implemented": False,
+            "rfc822_capture_implemented": False,
+            "attachment_capture_implemented": False,
+            "derived_text_capture_implemented": False,
+            "credential_secret_retrieval_implemented": False,
+        },
+        "closed_actions": {
+            "audit_receipt_written": receipt_written,
+            "selection_receipt_written": False,
+            "approval_receipt_written": False,
+            "live_adapter_executed": False,
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "mailbox_selected": False,
+            "mailbox_searched": False,
+            "candidate_messages_listed": False,
+            "message_uids_read": False,
+            "message_ids_read": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "derived_text_created": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "oauth_started": False,
+            "provider_api_called": False,
+            "files_written": bool(files_written),
+        },
+        "privacy_guards": {
+            "email_addresses_echoed": False,
+            "username_values_echoed": False,
+            "exact_account_refs_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "exact_mailbox_refs_echoed": False,
+            "imap_host_values_echoed": False,
+            "provider_urls_echoed": False,
+            "message_uid_values_echoed": False,
+            "message_id_values_echoed": False,
+            "message_headers_echoed": False,
+            "message_bodies_echoed": False,
+            "subject_values_echoed": False,
+            "sender_values_echoed": False,
+            "recipient_values_echoed": False,
+            "attachment_names_echoed": False,
+            "secret_values_echoed": False,
+            "approval_receipt_path_echoed": False,
+            "selection_receipt_path_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "writes": bool(files_written),
+        },
+        "next_safe_actions": [
+            "Use this receipt only as a non-secret audit record; it is not permission to read mail.",
+            "A future live IMAP adapter must still verify manifest, approval, selection, credential policy, and preflight gates before mailbox access.",
+            "Keep message ids, subjects, sender values, body text, attachments, private mailbox names, and credential refs out of audit receipts.",
+        ],
+        "would_change": would_change,
+        "files_written": files_written,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
 def imap_mailbox_adapter_preflight_plan(
     archive_root: Path | str,
     *,

@@ -99,6 +99,7 @@ docs/imap-mailbox-adapter-manifest-write.md
 docs/imap-mailbox-adapter-readiness-plan.md
 docs/imap-mailbox-selection-plan.md
 docs/imap-mailbox-adapter-audit-plan.md
+docs/imap-mailbox-adapter-audit-write.md
 docs/imap-mailbox-adapter-preflight-plan.md
 docs/connected-accounts.md
 docs/credential-keepassxc-command-plan.md
@@ -180,6 +181,9 @@ imap-mailbox-adapter-manifest-write
 
 imap-mailbox-adapter-audit-plan
   Preview a non-secret future IMAP adapter audit receipt. Dry-run only; combines the mailbox selection plan with safe receipt metadata without connecting, logging in, selecting/searching a mailbox, listing message ids, reading headers/bodies/attachments, retrieving secrets, starting OAuth, or writing files.
+
+imap-mailbox-adapter-audit-write
+  Preview or approve writing one non-secret IMAP adapter audit receipt under receipts/imap/adapter-audits/. CLI-only; MCP exposes no live write tool. Does not connect, log in, select/search a mailbox, list message ids, read headers/bodies/attachments, retrieve secrets, start OAuth, or call providers.
 
 imap-mailbox-adapter-preflight-plan
   Compose readiness, manifest status, approval receipt verification, mailbox selection, and audit receipt preview into one final read-only gate before any future IMAP adapter execution. Dry-run only; writes nothing, connects to no mailbox, reads no mail, retrieves no secrets, starts no OAuth, and calls no providers.
