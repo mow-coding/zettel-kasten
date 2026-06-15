@@ -1,6 +1,6 @@
 # Derived Text Coverage And Toolchain
 
-Status: v0.3.34 read-only coverage gate and agent contract
+Status: v0.3.35 read-only coverage, toolchain doctor, and agent contract
 Date: 2026-06-15
 
 This document defines the read-only layer that helps an AI agent act on the
@@ -29,6 +29,13 @@ archive derive-text toolchain <archive-root> --extension .pdf --dry-run --format
 archive derive-text-toolchain <archive-root> --extension .hwp --dry-run --format json
 ```
 
+Toolchain readiness doctor:
+
+```bash
+archive derive-text doctor <archive-root> --dry-run --format json
+archive derive-text-doctor <archive-root> --dry-run --format json
+```
+
 Agent operating contract:
 
 ```bash
@@ -36,7 +43,7 @@ archive derive-text agent-contract <archive-root> --dry-run --format json
 archive derive-text-agent-contract <archive-root> --dry-run --format json
 ```
 
-All three commands are read-only.
+All four command families are read-only.
 
 ## What Coverage Checks
 
@@ -105,6 +112,27 @@ Reference docs used for the recommendation baseline:
 - [Tesseract OCR documentation](https://tesseract-ocr.github.io/)
 - [PyMuPDF documentation](https://pymupdf.readthedocs.io/)
 - [pyhwp converters](https://pyhwp.readthedocs.io/en/latest/converters.html)
+
+## Toolchain Doctor
+
+`derive-text doctor` checks local readiness for the routes recommended by
+`derive-text toolchain`.
+
+It checks boolean availability for:
+
+- Python module probes: `docx`, `openpyxl`, `pptx`, and `fitz`.
+- Executable probes: `soffice`, `libreoffice`, `tesseract`, and `hwp5txt`.
+- Policy-dependent routes such as local ASR, which are reported as not
+  configured unless a future adapter defines them.
+
+The doctor output does not echo executable paths, import paths, usernames,
+local absolute paths, source filenames, source bodies, provider URLs, or secret
+values. It reports only tool names, probe labels, booleans, route families, and
+missing readiness categories.
+
+The doctor does not install tools, import source files, run parsers, run OCR,
+run ASR, call vision models, call providers, write derived text, or write
+receipts.
 
 ## Agent Operating Contract
 

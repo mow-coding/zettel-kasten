@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.35 - 2026-06-15
+
+- Added read-only derived-text toolchain doctor commands:
+  `archive derive-text doctor --dry-run` and
+  `archive derive-text-doctor --dry-run`.
+- The doctor checks boolean readiness for Python module probes (`docx`,
+  `openpyxl`, `pptx`, `fitz`) and executable probes (`soffice`,
+  `libreoffice`, `tesseract`, `hwp5txt`) without echoing executable paths,
+  import paths, local absolute paths, source filenames, provider URLs, source
+  bodies, usernames, or secret values.
+- Added family readiness output for plain text/markup, OOXML Word,
+  spreadsheets, presentations, legacy Office, HWP/HWPX, PDF, image scan, and
+  audio routes.
+- Kept the doctor read-only: it installs nothing, reads no source bytes, runs
+  no OCR/parsers/ASR/vision calls, calls no providers, writes no derived text,
+  writes no receipts, drafts no zets, and mints nothing.
+
 ## v0.3.34 - 2026-06-15
 
 - Added read-only derived-text coverage gate commands:

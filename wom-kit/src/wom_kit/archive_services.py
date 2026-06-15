@@ -6,6 +6,7 @@ import json
 import copy
 import hashlib
 import fnmatch
+import importlib.util
 import mimetypes
 import os
 import re
@@ -82,6 +83,150 @@ DERIVED_TEXT_HWP_EXTENSIONS = {".hwp", ".hwpx"}
 DERIVED_TEXT_PDF_EXTENSIONS = {".pdf"}
 DERIVED_TEXT_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp"}
 DERIVED_TEXT_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus", ".aac"}
+DERIVED_TEXT_TOOLCHAIN_DOCTOR_CHECKS = (
+    {
+        "tool": "python-docx",
+        "kind": "python_module",
+        "probe": "docx",
+        "purpose": "OOXML Word parser",
+        "format_families": ["office_open_xml_word"],
+    },
+    {
+        "tool": "openpyxl",
+        "kind": "python_module",
+        "probe": "openpyxl",
+        "purpose": "OOXML spreadsheet parser",
+        "format_families": ["office_open_xml_spreadsheet"],
+    },
+    {
+        "tool": "python-pptx",
+        "kind": "python_module",
+        "probe": "pptx",
+        "purpose": "OOXML presentation parser",
+        "format_families": ["office_open_xml_presentation"],
+    },
+    {
+        "tool": "PyMuPDF",
+        "kind": "python_module",
+        "probe": "fitz",
+        "purpose": "PDF text extraction and render metadata",
+        "format_families": ["pdf"],
+    },
+    {
+        "tool": "LibreOffice",
+        "kind": "executable",
+        "probe": "soffice",
+        "purpose": "headless conversion fallback for Office, OpenDocument, RTF, and HWP where supported",
+        "format_families": [
+            "office_open_xml_word",
+            "office_open_xml_spreadsheet",
+            "office_open_xml_presentation",
+            "legacy_office_binary",
+            "open_document_or_rtf",
+            "hwp_or_hwpx",
+        ],
+    },
+    {
+        "tool": "LibreOffice",
+        "kind": "executable",
+        "probe": "libreoffice",
+        "purpose": "headless conversion fallback for Office, OpenDocument, RTF, and HWP where supported",
+        "format_families": [
+            "office_open_xml_word",
+            "office_open_xml_spreadsheet",
+            "office_open_xml_presentation",
+            "legacy_office_binary",
+            "open_document_or_rtf",
+            "hwp_or_hwpx",
+        ],
+    },
+    {
+        "tool": "Tesseract OCR",
+        "kind": "executable",
+        "probe": "tesseract",
+        "purpose": "local OCR for scanned PDFs and images",
+        "format_families": ["pdf", "image_scan"],
+    },
+    {
+        "tool": "pyhwp/hwp5txt",
+        "kind": "executable",
+        "probe": "hwp5txt",
+        "purpose": "HWP text extraction",
+        "format_families": ["hwp_or_hwpx"],
+    },
+    {
+        "tool": "HWPX zip/XML fallback",
+        "kind": "not_configured",
+        "probe": "zipfile+xml",
+        "purpose": "future HWPX package inspection with Python standard library",
+        "format_families": ["hwp_or_hwpx"],
+    },
+    {
+        "tool": "local ASR",
+        "kind": "not_configured",
+        "probe": "asr",
+        "purpose": "audio transcription route selected by local policy",
+        "format_families": ["audio"],
+    },
+)
+DERIVED_TEXT_TOOLCHAIN_DOCTOR_FAMILIES = (
+    {
+        "format_family": "plain_text_or_markup",
+        "candidate_extensions": sorted(DERIVED_TEXT_PLAIN_TEXT_EXTENSIONS),
+        "ready_when_any": ["built-in utf-8 text parser"],
+        "notes": ["Built-in text handling still needs encoding review before capture."],
+    },
+    {
+        "format_family": "office_open_xml_word",
+        "candidate_extensions": [".docx"],
+        "ready_when_any": ["python-docx", "LibreOffice"],
+        "notes": ["python-docx is preferred; LibreOffice is a conversion fallback."],
+    },
+    {
+        "format_family": "office_open_xml_spreadsheet",
+        "candidate_extensions": [".xlsx"],
+        "ready_when_any": ["openpyxl", "LibreOffice"],
+        "notes": ["openpyxl is preferred; preserve sheet/cell metadata when extracting."],
+    },
+    {
+        "format_family": "office_open_xml_presentation",
+        "candidate_extensions": [".pptx"],
+        "ready_when_any": ["python-pptx", "LibreOffice"],
+        "notes": ["Slides may need notes, tables, shapes, and embedded image OCR later."],
+    },
+    {
+        "format_family": "legacy_office_binary",
+        "candidate_extensions": sorted(DERIVED_TEXT_LEGACY_OFFICE_EXTENSIONS),
+        "ready_when_any": ["LibreOffice"],
+        "notes": ["Legacy Office support depends on conversion before parser/OCR."],
+    },
+    {
+        "format_family": "hwp_or_hwpx",
+        "candidate_extensions": sorted(DERIVED_TEXT_HWP_EXTENSIONS),
+        "ready_when_any": ["pyhwp/hwp5txt", "LibreOffice"],
+        "optional_tools": ["HWPX zip/XML fallback"],
+        "notes": ["HWP and HWPX need separate real-file validation before broad claims."],
+    },
+    {
+        "format_family": "pdf",
+        "candidate_extensions": sorted(DERIVED_TEXT_PDF_EXTENSIONS),
+        "ready_when_any": ["PyMuPDF"],
+        "optional_tools": ["Tesseract OCR"],
+        "notes": ["Scanned PDFs need OCR even when PyMuPDF is available."],
+    },
+    {
+        "format_family": "image_scan",
+        "candidate_extensions": sorted(DERIVED_TEXT_IMAGE_EXTENSIONS),
+        "ready_when_any": ["Tesseract OCR"],
+        "notes": ["Vision fallback remains policy/provider dependent and is not auto-called."],
+    },
+    {
+        "format_family": "audio",
+        "candidate_extensions": sorted(DERIVED_TEXT_AUDIO_EXTENSIONS),
+        "ready_when_any": ["local ASR"],
+        "notes": ["No default ASR is configured by this package."],
+    },
+)
 KIT_ROOT = Path(__file__).resolve().parents[2]
 WORKPACK_MODES = {"reference", "copy", "mount", "derive", "handover", "return"}
 ARCHIVE_SCOPES = {"personal", "relationship", "family", "child", "project", "company", "business_unit"}
@@ -28399,6 +28544,125 @@ def derived_text_toolchain_source_urls(tool_names: list[str]) -> list[dict[str, 
             seen.add(key)
             deduped.append(item)
     return deduped
+
+
+def derived_text_python_module_available(module_name: str) -> bool:
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (ImportError, AttributeError, ValueError):
+        return False
+
+
+def derived_text_executable_available(executable_name: str) -> bool:
+    return shutil.which(executable_name) is not None
+
+
+def derived_text_toolchain_doctor(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    if not dry_run:
+        blockers.append("derive-text doctor is read-only; pass --dry-run.")
+
+    checks: list[dict[str, Any]] = [
+        {
+            "tool": "built-in utf-8 text parser",
+            "kind": "built_in",
+            "probe": "python_text_io",
+            "available": True,
+            "purpose": "plain text and markup extraction route",
+            "format_families": ["plain_text_or_markup"],
+            "path_echoed": False,
+            "secret_echoed": False,
+        }
+    ]
+    tool_available: dict[str, bool] = {"built-in utf-8 text parser": True}
+
+    for check in DERIVED_TEXT_TOOLCHAIN_DOCTOR_CHECKS:
+        kind = str(check["kind"])
+        probe = str(check["probe"])
+        available = False
+        if kind == "python_module":
+            available = derived_text_python_module_available(probe)
+        elif kind == "executable":
+            available = derived_text_executable_available(probe)
+        elif kind == "built_in":
+            available = True
+        elif kind == "not_configured":
+            available = False
+        tool = str(check["tool"])
+        tool_available[tool] = tool_available.get(tool, False) or available
+        checks.append(
+            {
+                "tool": tool,
+                "kind": kind,
+                "probe": probe,
+                "available": available,
+                "purpose": check["purpose"],
+                "format_families": check["format_families"],
+                "path_echoed": False,
+                "secret_echoed": False,
+            }
+        )
+
+    family_readiness: list[dict[str, Any]] = []
+    for family in DERIVED_TEXT_TOOLCHAIN_DOCTOR_FAMILIES:
+        ready_when_any = [str(tool) for tool in family.get("ready_when_any", [])]
+        optional_tools = [str(tool) for tool in family.get("optional_tools", [])]
+        available_required = [tool for tool in ready_when_any if tool_available.get(tool, False)]
+        missing_required = [tool for tool in ready_when_any if not tool_available.get(tool, False)]
+        missing_optional = [tool for tool in optional_tools if not tool_available.get(tool, False)]
+        family_readiness.append(
+            {
+                "format_family": family["format_family"],
+                "candidate_extensions": family["candidate_extensions"],
+                "ready": bool(available_required),
+                "available_tools": available_required,
+                "missing_tools": missing_required,
+                "missing_optional_tools": missing_optional,
+                "notes": family.get("notes", []),
+            }
+        )
+
+    ready_family_count = sum(1 for item in family_readiness if item["ready"])
+    available_tool_count = sum(1 for item in checks if item["available"])
+    missing_tools = unique_preserve_order(
+        str(item["tool"]) for item in checks if not item["available"] and item["kind"] != "not_configured"
+    )
+    not_ready_families = [str(item["format_family"]) for item in family_readiness if not item["ready"]]
+    warnings: list[str] = []
+    if not_ready_families:
+        warnings.append("some_derived_text_format_families_need_tool_install_or_policy_configuration")
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "derived_text_toolchain_doctor",
+        "archive_id": archive_id,
+        "readiness_summary": {
+            "checked_tool_count": len(checks),
+            "available_tool_count": available_tool_count,
+            "ready_family_count": ready_family_count,
+            "total_family_count": len(family_readiness),
+            "not_ready_families": not_ready_families,
+            "missing_tools": missing_tools,
+        },
+        "tool_checks": checks,
+        "family_readiness": family_readiness,
+        "agent_operating_contract": derived_text_agent_operating_contract(),
+        "closed_actions": derived_text_read_only_closed_actions(),
+        "privacy_guards": {
+            **derived_text_read_only_privacy_guards(),
+            "tool_paths_echoed": False,
+            "import_paths_echoed": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
 
 
 def derived_text_toolchain(
