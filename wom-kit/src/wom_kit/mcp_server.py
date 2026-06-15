@@ -510,6 +510,87 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "imap_mailbox_adapter_audit_plan",
+        "description": "Preview a non-secret future IMAP adapter audit receipt. Dry-run only; never connects, logs in, selects/searches a mailbox, lists messages, reads headers/bodies/attachments, opens keyrings, starts OAuth, or writes files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "adapter_id": {"type": "string"},
+                "source_id": {"type": "string"},
+                "provider": {
+                    "type": "string",
+                    "enum": sorted(archive_services.IMAP_MAILBOX_ALLOWED_PROVIDERS),
+                    "default": "generic_imap",
+                },
+                "imap_host": {"type": "string"},
+                "imap_port": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 993},
+                "account_ref": {"type": "string"},
+                "username_ref": {"type": "string"},
+                "auth_mode": {
+                    "type": "string",
+                    "enum": sorted(archive_services.IMAP_MAILBOX_ALLOWED_AUTH_MODES),
+                    "default": "app_password_ref",
+                },
+                "app_password_ref": {"type": "string"},
+                "oauth_token_ref": {"type": "string"},
+                "mailbox_ref": {"type": "string", "default": "imap:mailbox:inbox"},
+                "operation": {
+                    "type": "string",
+                    "enum": sorted(archive_services.IMAP_MAILBOX_OPERATION_REQUEST_OPERATIONS),
+                    "default": "header_metadata_scan",
+                },
+                "selection_rule": {
+                    "type": "string",
+                    "enum": sorted(archive_services.IMAP_MAILBOX_SELECTION_RULES),
+                    "default": "newest_first",
+                },
+                "selector_id": {"type": "string", "default": "mail-selection:recent-inbox"},
+                "max_messages": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": archive_services.IMAP_MAILBOX_OPERATION_MAX_MESSAGES_LIMIT,
+                    "default": archive_services.IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT,
+                },
+                "since_days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": archive_services.IMAP_MAILBOX_OPERATION_SINCE_DAYS_LIMIT,
+                },
+                "credential_id": {"type": "string", "default": "cred:mail-source-access"},
+                "credential_ref": {"type": "string"},
+                "credential_kind": {"type": "string", "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS)},
+                "credential_provider": {"type": "string", "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS)},
+                "store_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+                    "default": "password_manager",
+                },
+                "adapter_kind": {"type": "string", "enum": sorted(archive_services.CREDENTIAL_ADAPTER_KINDS)},
+                "approval_decision": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ACCESS_APPROVAL_DECISIONS),
+                    "default": "needs_review",
+                },
+                "approval_receipt": {"type": "string"},
+                "result_status": {
+                    "type": "string",
+                    "enum": sorted(archive_services.IMAP_MAILBOX_ADAPTER_AUDIT_RESULT_STATUSES),
+                    "default": "not_run",
+                },
+                "consumer": {"type": "string", "default": "wom:adapter:imap-mailbox"},
+                "reviewed_by": {"type": "string", "default": "human:pending-review"},
+                "platform": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+                    "default": "windows",
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "adapter_id", "source_id", "account_ref", "username_ref"],
+        },
+    },
+    {
         "name": "credential_ref_plan",
         "description": "Plan a local credential reference for mail, model APIs, OCR APIs, storage, or backups. Dry-run only; never reads, writes, prompts for, or echoes secret values.",
         "inputSchema": {
@@ -2143,6 +2224,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_imap_mailbox_adapter_readiness_plan(arguments)
     if name == "imap_mailbox_selection_plan":
         return tool_imap_mailbox_selection_plan(arguments)
+    if name == "imap_mailbox_adapter_audit_plan":
+        return tool_imap_mailbox_adapter_audit_plan(arguments)
     if name == "credential_ref_plan":
         return tool_credential_ref_plan(arguments)
     if name == "credential_ref_inventory":
@@ -2692,6 +2775,66 @@ def tool_imap_mailbox_selection_plan(arguments: dict[str, Any]) -> dict[str, Any
     )
     state = str(result.get("selection_state") or ("passed" if result["ok"] else "blocked"))
     return tool_success_result(f"imap_mailbox_selection_plan: {state}.", result)
+
+
+def tool_imap_mailbox_adapter_audit_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("imap_mailbox_adapter_audit_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    try:
+        imap_port = int(arguments.get("imap_port", 993))
+    except (TypeError, ValueError):
+        raise ToolError("imap_port must be an integer.")
+    try:
+        max_messages = int(arguments.get("max_messages", archive_services.IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT))
+    except (TypeError, ValueError):
+        raise ToolError("max_messages must be an integer.")
+    since_days_arg = arguments.get("since_days")
+    since_days: int | None = None
+    if since_days_arg is not None:
+        try:
+            since_days = int(since_days_arg)
+        except (TypeError, ValueError):
+            raise ToolError("since_days must be an integer.")
+    result = call_service(
+        archive_services.imap_mailbox_adapter_audit_plan,
+        archive_root,
+        adapter_id=require_string_arg(arguments, "adapter_id"),
+        source_id=require_string_arg(arguments, "source_id"),
+        provider=optional_string_arg(arguments, "provider") or "generic_imap",
+        imap_host=optional_string_arg(arguments, "imap_host"),
+        imap_port=imap_port,
+        account_ref=require_string_arg(arguments, "account_ref"),
+        username_ref=require_string_arg(arguments, "username_ref"),
+        auth_mode=optional_string_arg(arguments, "auth_mode") or "app_password_ref",
+        app_password_ref=optional_string_arg(arguments, "app_password_ref"),
+        oauth_token_ref=optional_string_arg(arguments, "oauth_token_ref"),
+        mailbox_ref=optional_string_arg(arguments, "mailbox_ref") or "imap:mailbox:inbox",
+        operation=optional_string_arg(arguments, "operation") or "header_metadata_scan",
+        selection_rule=optional_string_arg(arguments, "selection_rule") or "newest_first",
+        selector_id=optional_string_arg(arguments, "selector_id") or "mail-selection:recent-inbox",
+        max_messages=max_messages,
+        since_days=since_days,
+        credential_id=optional_string_arg(arguments, "credential_id") or "cred:mail-source-access",
+        credential_ref=optional_string_arg(arguments, "credential_ref"),
+        credential_kind=optional_string_arg(arguments, "credential_kind"),
+        credential_provider=optional_string_arg(arguments, "credential_provider"),
+        store_kind=optional_string_arg(arguments, "store_kind") or "password_manager",
+        adapter_kind=optional_string_arg(arguments, "adapter_kind"),
+        approval_decision=optional_string_arg(arguments, "approval_decision") or "needs_review",
+        approval_receipt=optional_string_arg(arguments, "approval_receipt"),
+        consumer=optional_string_arg(arguments, "consumer") or "wom:adapter:imap-mailbox",
+        reviewed_by=optional_string_arg(arguments, "reviewed_by") or "human:pending-review",
+        platform=optional_string_arg(arguments, "platform") or "windows",
+        result_status=optional_string_arg(arguments, "result_status") or "not_run",
+        dry_run=True,
+    )
+    state = str(result.get("audit_state") or ("passed" if result["ok"] else "blocked"))
+    receipt = result.get("receipt_preview") if isinstance(result.get("receipt_preview"), dict) else {}
+    return tool_success_result(
+        f"imap_mailbox_adapter_audit_plan: {state}, result={receipt.get('result_status') or '-'}.",
+        result,
+    )
 
 
 def tool_credential_ref_plan(arguments: dict[str, Any]) -> dict[str, Any]:

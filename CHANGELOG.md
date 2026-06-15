@@ -6,6 +6,30 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.50 - 2026-06-16
+
+- Added read-only IMAP adapter audit receipt previews:
+  `archive imap-mailbox-adapter-audit-plan --dry-run`, alias
+  `archive imap-mailbox-adapter-audit --dry-run`, and alias
+  `archive mailbox-adapter-audit-plan --dry-run`.
+- Added MCP tool `imap_mailbox_adapter_audit_plan` for the same read-only
+  preview surface.
+- The planner composes `imap-mailbox-selection-plan` with safe future adapter
+  result metadata, then previews a non-secret receipt shape under
+  `receipts/imap/adapter-audits/`.
+- Added `wom-kit/docs/imap-mailbox-adapter-audit-plan.md` and public
+  documentation links.
+- Kept the preview read-only: it writes no audit receipts, selection receipts,
+  approval receipts, or adapter manifests, executes no live adapters, opens no
+  IMAP connection, attempts no login, selects no mailbox, searches no mailbox,
+  lists no candidate messages, reads no IMAP UIDs, Message-ID values, headers,
+  bodies, or attachments, creates no derived text, retrieves no secrets, starts
+  no OAuth, calls no providers, and echoes no email addresses, username values,
+  exact account refs, exact credential refs, exact mailbox refs, IMAP host
+  values, provider URLs, message ids, subjects, sender or recipient values,
+  attachment names, approval receipt paths, selection receipt paths, local
+  absolute paths, tokens, or secret values.
+
 ## v0.3.49 - 2026-06-16
 
 - Added read-only IMAP mailbox selection planning:

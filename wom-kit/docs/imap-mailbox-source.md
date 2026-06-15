@@ -127,6 +127,38 @@ imap_mailbox_selection_plan
 This plans how a future adapter may choose candidate messages without listing
 message ids, subjects, senders, headers, bodies, or attachments now.
 
+v0.3.50 adds a read-only adapter audit receipt preview:
+
+```powershell
+python cli\archive.py imap-mailbox-adapter-audit-plan .\my-archive `
+  --adapter-id local-imap `
+  --source-id imap:gmail-personal `
+  --provider gmail `
+  --account-ref imap:account:gmail-personal `
+  --username-ref env:WOM_GMAIL_USERNAME `
+  --auth-mode oauth_token_ref `
+  --oauth-token-ref keyring:gmail-oauth `
+  --mailbox-ref imap:mailbox:inbox `
+  --credential-id cred:gmail-mail-access `
+  --operation header_metadata_scan `
+  --selection-rule newest_first `
+  --selector-id mail-selection:recent-inbox `
+  --result-status not_run `
+  --dry-run `
+  --format json
+```
+
+and the matching MCP tool:
+
+```text
+imap_mailbox_adapter_audit_plan
+```
+
+This previews the non-secret receipt shape a future adapter should write after
+execution. It still does not execute the adapter, write the receipt, list
+messages, read UIDs, read Message-ID values, read headers, read bodies, or read
+attachments.
+
 ## Provider Presets
 
 The planning command is provider-neutral. It currently recognizes:
@@ -223,18 +255,21 @@ The intended sequence is:
    `imap-mailbox-operation-request-plan`.
 4. Check adapter readiness with `imap-mailbox-adapter-readiness-plan`.
 5. Plan a future mailbox selection rule with `imap-mailbox-selection-plan`.
-6. Add a future header-only dry-run scan that selects the mailbox read-only and
+6. Preview the future non-secret audit receipt with
+   `imap-mailbox-adapter-audit-plan`.
+7. Add a future header-only dry-run scan that selects the mailbox read-only and
    fetches safe message metadata only.
-7. Add a future approved fetch that preserves each selected RFC822 message as a
+8. Add a future approved fetch that preserves each selected RFC822 message as a
    `.eml` source objet.
-8. Add future MIME attachment capture as separate objets.
-9. Add future derived-text extraction from `text/plain` and reviewed `text/html`
+9. Add future MIME attachment capture as separate objets.
+10. Add future derived-text extraction from `text/plain` and reviewed `text/html`
    parts.
 
-Each later phase needs its own approval and privacy boundary. v0.3.49 can now
-package the approval request, summarize adapter readiness, and plan a mailbox
-selection rule, but it still does not implement reads, searches, message lists,
-or captures.
+Each later phase needs its own approval and privacy boundary. v0.3.50 can now
+package the approval request, summarize adapter readiness, plan a mailbox
+selection rule, and preview a non-secret future adapter audit receipt, but it
+still does not implement reads, searches, message lists, receipt writes, or
+captures.
 
 ## Closed Actions
 

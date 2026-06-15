@@ -1227,6 +1227,8 @@ IMAP_MAILBOX_SELECTION_RULES = {
     "since_days_window",
     "human_review_queue",
 }
+IMAP_MAILBOX_ADAPTER_AUDIT_RECEIPTS_DIR = "receipts/imap/adapter-audits"
+IMAP_MAILBOX_ADAPTER_AUDIT_RESULT_STATUSES = {"not_run", "succeeded", "failed", "denied"}
 IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT = 100
 IMAP_MAILBOX_OPERATION_MAX_MESSAGES_LIMIT = 2000
 IMAP_MAILBOX_OPERATION_SINCE_DAYS_LIMIT = 3650
@@ -11960,6 +11962,313 @@ def imap_mailbox_selection_plan(
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
+
+
+def imap_mailbox_adapter_audit_plan(
+    archive_root: Path | str,
+    *,
+    adapter_id: str,
+    source_id: str,
+    provider: str | None = None,
+    imap_host: str | None = None,
+    imap_port: int | None = None,
+    account_ref: str | None = None,
+    username_ref: str | None = None,
+    auth_mode: str | None = None,
+    app_password_ref: str | None = None,
+    oauth_token_ref: str | None = None,
+    mailbox_ref: str | None = None,
+    operation: str = "header_metadata_scan",
+    selection_rule: str = "newest_first",
+    selector_id: str = "mail-selection:recent-inbox",
+    max_messages: int = IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT,
+    since_days: int | None = None,
+    credential_id: str = "cred:mail-source-access",
+    credential_ref: str | None = None,
+    credential_kind: str | None = None,
+    credential_provider: str | None = None,
+    store_kind: str = "password_manager",
+    adapter_kind: str | None = None,
+    approval_decision: str = "needs_review",
+    approval_receipt: str | None = None,
+    consumer: str = "wom:adapter:imap-mailbox",
+    reviewed_by: str | None = None,
+    platform: str = "windows",
+    result_status: str = "not_run",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("imap-mailbox-adapter-audit-plan is read-only and requires --dry-run.")
+
+    resolved_adapter_id = str(adapter_id or "").strip()
+    if not resolved_adapter_id:
+        blockers.append("adapter_id is required.")
+        resolved_adapter_id = "imap-adapter"
+    elif not safe_source_intake_plan_scalar(resolved_adapter_id):
+        blockers.append("adapter_id must be a safe non-secret label, not a path, URL, email, token, or private mailbox name.")
+        resolved_adapter_id = "imap-adapter-redacted"
+
+    resolved_result_status = str(result_status or "not_run").strip().lower().replace("-", "_")
+    if resolved_result_status not in IMAP_MAILBOX_ADAPTER_AUDIT_RESULT_STATUSES:
+        blockers.append("result_status must be one of: " + ", ".join(sorted(IMAP_MAILBOX_ADAPTER_AUDIT_RESULT_STATUSES)) + ".")
+        resolved_result_status = "not_run"
+
+    selection_preview = imap_mailbox_selection_plan(
+        root,
+        source_id=source_id,
+        provider=provider,
+        imap_host=imap_host,
+        imap_port=imap_port,
+        account_ref=account_ref,
+        username_ref=username_ref,
+        auth_mode=auth_mode,
+        app_password_ref=app_password_ref,
+        oauth_token_ref=oauth_token_ref,
+        mailbox_ref=mailbox_ref,
+        operation=operation,
+        selection_rule=selection_rule,
+        selector_id=selector_id,
+        max_messages=max_messages,
+        since_days=since_days,
+        credential_id=credential_id,
+        credential_ref=credential_ref,
+        credential_kind=credential_kind,
+        credential_provider=credential_provider,
+        store_kind=store_kind,
+        adapter_kind=adapter_kind,
+        approval_decision=approval_decision,
+        approval_receipt=approval_receipt,
+        consumer=consumer,
+        reviewed_by=reviewed_by,
+        platform=platform,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in selection_preview.get("blockers") or [])
+    warnings.extend(str(item) for item in selection_preview.get("warnings") or [])
+
+    selector_plan = selection_preview.get("selector_plan") if isinstance(selection_preview.get("selector_plan"), dict) else {}
+    operation_scope = selection_preview.get("operation_scope") if isinstance(selection_preview.get("operation_scope"), dict) else {}
+    request_summary = (
+        selection_preview.get("request_package_summary")
+        if isinstance(selection_preview.get("request_package_summary"), dict)
+        else {}
+    )
+    selected_operation = str(selection_preview.get("operation") or operation)
+    selected_rule = str(selector_plan.get("selection_rule") or selection_rule)
+    safe_selector_id = str(selector_plan.get("selector_id") or "mail-selection:pending")
+    case_id = imap_mailbox_adapter_audit_case_id(
+        archive_id=archive_id,
+        adapter_id=resolved_adapter_id,
+        source_id=str(selection_preview.get("source_id") or source_id),
+        operation=selected_operation,
+        selection_rule=selected_rule,
+        selector_id=safe_selector_id,
+        result_status=resolved_result_status,
+    )
+    proposed_receipt_path = f"{IMAP_MAILBOX_ADAPTER_AUDIT_RECEIPTS_DIR}/{case_id}.imap-mailbox-adapter-audit.json"
+    receipt_preview = {
+        "receipt_kind": "imap_mailbox_adapter_audit",
+        "schema_version": "wom-imap-mailbox-adapter-audit/v0.1",
+        "archive_id": archive_id,
+        "result_status": resolved_result_status,
+        "adapter": {
+            "adapter_id": resolved_adapter_id,
+            "adapter_kind": "imap_mailbox",
+            "provider": selection_preview.get("provider"),
+            "consumer": consumer,
+            "platform": platform,
+        },
+        "operation": {
+            "operation": selected_operation,
+            "source_id": selection_preview.get("source_id"),
+            "selection_rule": selected_rule,
+            "selector_id": safe_selector_id,
+            "max_candidates": selector_plan.get("max_candidates"),
+            "recency_window_days": selector_plan.get("recency_window_days"),
+            "future_headers_requested": operation_scope.get("future_headers_requested"),
+            "future_bodies_requested": operation_scope.get("future_bodies_requested"),
+            "future_attachments_requested": operation_scope.get("future_attachments_requested"),
+            "future_derived_text_requested": operation_scope.get("future_derived_text_requested"),
+        },
+        "approval": {
+            "approval_receipt_required_before_use": True,
+            "approval_receipt_ref_included": False,
+            "approval_receipt_path_included": False,
+            "approval_receipt_verified_in_plan": request_summary.get("approval_receipt_verified"),
+        },
+        "selection": {
+            "selection_plan_required_before_use": True,
+            "selection_plan_state": selection_preview.get("selection_state"),
+            "selection_receipt_ref_included": False,
+            "selection_receipt_path_included": False,
+            "candidate_count_exact_included": False,
+            "candidate_count_bucket_allowed": True,
+            "candidate_list_included": False,
+            "imap_uid_values_included": False,
+            "message_id_values_included": False,
+            "subject_values_included": False,
+            "sender_values_included": False,
+            "recipient_values_included": False,
+            "attachment_names_included": False,
+        },
+        "non_secret_result_metadata_allowed": [
+            "result_status",
+            "adapter_id",
+            "adapter_kind",
+            "provider label",
+            "operation label",
+            "selection rule",
+            "safe selector id",
+            "candidate count bucket",
+            "duration bucket",
+            "error class",
+            "selection receipt id",
+            "adapter audit receipt id",
+        ],
+        "mail_material": {
+            "mailbox_ref_included": False,
+            "mailbox_name_included": False,
+            "email_address_included": False,
+            "username_included": False,
+            "imap_host_included": False,
+            "imap_uid_values_included": False,
+            "message_id_values_included": False,
+            "message_headers_included": False,
+            "message_bodies_included": False,
+            "subject_values_included": False,
+            "sender_values_included": False,
+            "recipient_values_included": False,
+            "attachment_names_included": False,
+        },
+        "secret_material": {
+            "secret_value_included": False,
+            "credential_ref_value_included": False,
+            "token_included": False,
+            "password_included": False,
+            "local_path_included": False,
+            "provider_url_included": False,
+        },
+    }
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "imap_mailbox_adapter_audit_plan",
+        "archive_id": archive_id,
+        "audit_state": "preview_ready" if not blockers else "blocked",
+        "proposed_receipt_path": proposed_receipt_path,
+        "receipt_preview": json_safe(receipt_preview),
+        "selection_plan_summary": {
+            "selection_state": selection_preview.get("selection_state"),
+            "request_state": request_summary.get("request_state"),
+            "policy_result": request_summary.get("policy_result"),
+            "approval_decision": request_summary.get("approval_decision"),
+            "approval_receipt_verified": request_summary.get("approval_receipt_verified"),
+            "source_id": selection_preview.get("source_id"),
+            "provider": selection_preview.get("provider"),
+            "operation": selected_operation,
+            "selection_rule": selected_rule,
+            "selector_id": safe_selector_id,
+        },
+        "current_capability": {
+            "adapter_audit_receipt_preview_available": True,
+            "adapter_audit_receipt_write_implemented": False,
+            "live_imap_adapter_implemented": False,
+            "mailbox_selection_adapter_implemented": False,
+            "imap_connection_implemented": False,
+            "imap_login_implemented": False,
+            "mailbox_select_implemented": False,
+            "imap_search_implemented": False,
+            "header_scan_implemented": False,
+            "rfc822_capture_implemented": False,
+            "attachment_capture_implemented": False,
+            "derived_text_capture_implemented": False,
+            "credential_secret_retrieval_implemented": False,
+        },
+        "closed_actions": {
+            "audit_receipt_written": False,
+            "selection_receipt_written": False,
+            "approval_receipt_written": False,
+            "live_adapter_executed": False,
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "mailbox_selected": False,
+            "mailbox_searched": False,
+            "candidate_messages_listed": False,
+            "message_uids_read": False,
+            "message_ids_read": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "derived_text_created": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "oauth_started": False,
+            "provider_api_called": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "email_addresses_echoed": False,
+            "username_values_echoed": False,
+            "exact_account_refs_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "exact_mailbox_refs_echoed": False,
+            "imap_host_values_echoed": False,
+            "provider_urls_echoed": False,
+            "message_uid_values_echoed": False,
+            "message_id_values_echoed": False,
+            "message_headers_echoed": False,
+            "message_bodies_echoed": False,
+            "subject_values_echoed": False,
+            "sender_values_echoed": False,
+            "recipient_values_echoed": False,
+            "attachment_names_echoed": False,
+            "secret_values_echoed": False,
+            "approval_receipt_path_echoed": False,
+            "selection_receipt_path_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": [
+            "Review this non-secret audit receipt preview before any future IMAP adapter writes receipts.",
+            "A future adapter must verify approval, selection, and credential policy again before live mailbox access.",
+            "Keep message ids, subjects, sender values, body text, attachments, private mailbox names, and credential refs out of audit receipts.",
+        ],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def imap_mailbox_adapter_audit_case_id(
+    *,
+    archive_id: str,
+    adapter_id: str,
+    source_id: str,
+    operation: str,
+    selection_rule: str,
+    selector_id: str,
+    result_status: str,
+) -> str:
+    payload = {
+        "archive_id": archive_id,
+        "adapter_id": adapter_id,
+        "source_id": source_id,
+        "operation": operation,
+        "selection_rule": selection_rule,
+        "selector_id": selector_id,
+        "result_status": result_status,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
+    return f"imap-mailbox-adapter-audit-{digest}"
 
 
 def credential_ref_plan(
