@@ -159,6 +159,9 @@ credential-keepassxc-command-plan
 credential-keepassxc-write
   Execute a minimal KeePassXC CLI add after verifying a credential access approval receipt. Dry-run previews first; approved mode is CLI-only, requires a local .kdbx path, invokes keepassxc-cli add --password-prompt, writes a non-secret execution receipt, blocks replay with the same approval receipt, and echoes no secret value, exact credential ref, database path, username, email, token, provider URL, or raw adapter output.
 
+beginner-setup-manual
+  Print beginner-friendly secret vault and derived-text tool setup steps. Dry-run only; explains what to do in external UIs, shows safe non-secret labels and dry-run commands, writes nothing, opens no vault, installs no tools, runs no extraction, and echoes no secret values or local paths.
+
 derive-text-coverage
   Check derived-text coverage for textual or plausibly textual objets without reading source bodies. Dry-run only; compares files.jsonl to derived-text.jsonl, classifies missing/encrypted items, echoes no source filenames or local paths, and writes nothing.
 

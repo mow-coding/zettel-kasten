@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.37 - 2026-06-15
+
+- Added read-only beginner setup manual commands:
+  `archive beginner-setup-manual --dry-run`, alias
+  `archive first-use-setup-manual --dry-run`, and alias
+  `archive setup-manual --dry-run`.
+- The manual bridges existing credential and derived-text setup surfaces by
+  explaining first vault setup, safe non-secret labels, KeePassXC-style naming,
+  derived-text tool readiness, private `--tool-hints` files, and the next
+  dry-run commands to execute.
+- Added `wom-kit/docs/beginner-setup-manual.md` and public documentation links.
+- Kept the manual read-only: it opens no vault, reads no keyring or environment,
+  installs no tools, executes no tools, reads no source bytes, writes no files,
+  runs no OCR/parsers/ASR/provider calls, and echoes no local paths, tool hint
+  paths, usernames, emails, tokens, provider URLs, or secret values.
+
 ## v0.3.36 - 2026-06-15
 
 - Added `--tool-hints <json>` to read-only derived-text doctor commands:

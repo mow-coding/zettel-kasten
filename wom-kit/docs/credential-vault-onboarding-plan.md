@@ -18,6 +18,11 @@ human chooses a real vault/keyring outside WOM
 It is not a password manager, keyring reader, browser password-store scraper,
 secret importer, or adapter runner.
 
+For beginner-facing first-use steps, see
+[Beginner Setup Manual](beginner-setup-manual.md). That guide explains what a
+vault is, how to choose safe non-secret labels, and which dry-run commands to
+run next without asking for secret values.
+
 ## Command
 
 ```bash
