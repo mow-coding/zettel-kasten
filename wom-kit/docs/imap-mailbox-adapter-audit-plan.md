@@ -43,6 +43,13 @@ MCP:
 imap_mailbox_adapter_audit_plan
 ```
 
+Related adapter manifest preview added in v0.3.51:
+
+```text
+archive imap-mailbox-adapter-manifest-plan <archive-root> --dry-run
+MCP: imap_mailbox_adapter_manifest_plan
+```
+
 ## What It Previews
 
 The planner composes:
@@ -139,6 +146,7 @@ It is an audit receipt preview, not an adapter runner.
 
 ```text
 imap-mailbox-plan
+-> imap-mailbox-adapter-manifest-plan
 -> credential-access-approval
 -> imap-mailbox-operation-request-plan
 -> imap-mailbox-adapter-readiness-plan

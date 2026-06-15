@@ -2183,6 +2183,78 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
 
+    def test_imap_mailbox_adapter_manifest_plan_previews_manifest_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "imap-mailbox-adapter-manifest-plan",
+                    str(archive_root),
+                    "--adapter-id",
+                    "local-imap",
+                    "--provider",
+                    "gmail",
+                    "--provider",
+                    "naver",
+                    "--operation",
+                    "header_metadata_scan",
+                    "--selection-rule",
+                    "newest_first",
+                    "--selection-rule",
+                    "unread_first",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "imap_mailbox_adapter_manifest_plan")
+            self.assertEqual(result["proposed_manifest_path"], "config/imap-adapters/local-imap.imap-mailbox-adapter.json")
+            manifest = result["manifest_preview"]
+            self.assertEqual(manifest["manifest_kind"], "imap_mailbox_adapter_manifest")
+            self.assertEqual(manifest["adapter_id"], "local-imap")
+            self.assertEqual(manifest["adapter_kind"], "imap_mailbox")
+            self.assertEqual(manifest["supported_providers"], ["gmail", "naver"])
+            self.assertEqual(manifest["supported_operations"], ["header_metadata_scan"])
+            self.assertEqual(manifest["supported_selection_rules"], ["newest_first", "unread_first"])
+            self.assertTrue(manifest["requires"]["human_approval_receipt_before_use"])
+            self.assertTrue(manifest["requires"]["non_secret_adapter_audit_receipt_after_use"])
+            self.assertFalse(manifest["privacy_contract"]["email_addresses_in_manifest"])
+            self.assertFalse(manifest["privacy_contract"]["exact_credential_refs_in_manifest"])
+            self.assertFalse(manifest["privacy_contract"]["message_headers_in_manifest"])
+            self.assertFalse(manifest["privacy_contract"]["secret_values_in_manifest"])
+            self.assertFalse(manifest["closed_actions"]["adapter_manifest_written"])
+            self.assertFalse(manifest["closed_actions"]["imap_connection_opened"])
+            self.assertFalse(manifest["closed_actions"]["candidate_messages_listed"])
+            self.assertFalse(result["current_capability"]["imap_adapter_manifest_write_implemented"])
+            self.assertFalse(result["current_capability"]["live_imap_adapter_implemented"])
+            self.assertFalse(result["closed_actions"]["adapter_manifest_written"])
+            self.assertFalse(result["closed_actions"]["message_headers_read"])
+            self.assertFalse(result["privacy_guards"]["email_addresses_echoed"])
+            self.assertFalse(result["privacy_guards"]["exact_credential_refs_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertFalse((archive_root / result["proposed_manifest_path"]).exists())
+            self.assertNotIn("imap:account:naver-personal", output)
+            self.assertNotIn("keyring:naver-app-password", output)
+            self.assertNotIn("Subject:", output)
+            self.assertNotIn("Message-ID", output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            no_dry_code, no_dry_output = self.run_cli(
+                [
+                    "imap-mailbox-adapter-manifest-plan",
+                    str(archive_root),
+                    "--adapter-id",
+                    "local-imap",
+                ]
+            )
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+
     def test_credential_ref_plan_is_read_only_and_redacts_raw_secret_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

@@ -56,6 +56,13 @@ MCP: imap_mailbox_adapter_readiness_plan
 
 That v0.3.47 checkpoint still ended at a future IMAP adapter, not implemented in v0.3.47.
 
+Related adapter manifest preview added in v0.3.51:
+
+```text
+archive imap-mailbox-adapter-manifest-plan <archive-root> --dry-run
+MCP: imap_mailbox_adapter_manifest_plan
+```
+
 Related selection planning check added in v0.3.49:
 
 ```text
@@ -170,6 +177,7 @@ It is an approval request package for a future adapter, not the adapter itself.
 
 ```text
 imap-mailbox-plan
+-> imap-mailbox-adapter-manifest-plan
 -> credential-access-approval
 -> imap-mailbox-operation-request-plan
 -> imap-mailbox-adapter-readiness-plan

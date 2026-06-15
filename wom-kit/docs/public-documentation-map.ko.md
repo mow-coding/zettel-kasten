@@ -130,6 +130,7 @@
 - [Object Storage Recommendations](object-storage-recommendations.md)
 - [IMAP Mailbox Source](imap-mailbox-source.md)
 - [IMAP Mailbox Operation Request Plan](imap-mailbox-operation-request-plan.md)
+- [IMAP Mailbox Adapter Manifest Plan](imap-mailbox-adapter-manifest-plan.md)
 - [IMAP Mailbox Adapter Readiness Plan](imap-mailbox-adapter-readiness-plan.md)
 - [IMAP Mailbox Selection Plan](imap-mailbox-selection-plan.md)
 - [IMAP Mailbox Adapter Audit Plan](imap-mailbox-adapter-audit-plan.md)
