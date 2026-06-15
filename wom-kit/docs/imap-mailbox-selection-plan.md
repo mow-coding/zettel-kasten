@@ -49,7 +49,7 @@ archive imap-mailbox-adapter-audit-plan <archive-root> --dry-run
 MCP: imap_mailbox_adapter_audit_plan
 ```
 
-Related adapter manifest preview added in v0.3.51:
+Related adapter manifest preview and schema baseline added by v0.3.52:
 
 ```text
 archive imap-mailbox-adapter-manifest-plan <archive-root> --dry-run

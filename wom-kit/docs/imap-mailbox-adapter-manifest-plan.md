@@ -1,10 +1,10 @@
 # IMAP Mailbox Adapter Manifest Plan
 
-Status: v0.3.51 read-only IMAP adapter manifest preview baseline
+Status: v0.3.52 read-only IMAP adapter manifest preview plus schema baseline
 Date: 2026-06-16
 
 `imap-mailbox-adapter-manifest-plan` previews the non-secret manifest shape for
-a future IMAP mailbox adapter.
+a future IMAP mailbox adapter and validates that preview against a JSON Schema.
 
 It is not an IMAP client. It does not write a manifest, open a mailbox, search
 a mailbox, list messages, read headers, or write receipts.
@@ -47,12 +47,19 @@ The planner emits:
 - supported selection rules,
 - required approval and audit boundaries,
 - privacy contract,
-- closed actions.
+- closed actions,
+- schema validation status.
 
 The proposed path has this shape:
 
 ```text
 config/imap-adapters/<adapter-id>.imap-mailbox-adapter.json
+```
+
+The preview validates against this schema:
+
+```text
+imap-mailbox-adapter-manifest.schema.json
 ```
 
 ## Manifest Shape
@@ -102,7 +109,7 @@ Safe public labels such as `gmail`, `naver`, `generic_imap`, `local-imap`,
 
 ## Current Boundary
 
-v0.3.51 does not write IMAP adapter manifests.
+v0.3.52 does not write IMAP adapter manifests.
 
 It does not:
 
@@ -139,9 +146,9 @@ imap-mailbox-plan
 -> imap-mailbox-adapter-readiness-plan
 -> imap-mailbox-selection-plan
 -> imap-mailbox-adapter-audit-plan
--> future read-only mailbox selection adapter, not implemented in v0.3.51
--> future header-only metadata scan, not implemented in v0.3.51
--> future non-secret adapter audit receipt writer, not implemented in v0.3.51
+-> future read-only mailbox selection adapter, not implemented in v0.3.52
+-> future header-only metadata scan, not implemented in v0.3.52
+-> future non-secret adapter audit receipt writer, not implemented in v0.3.52
 -> future message capture with separate approval
 ```
 

@@ -171,7 +171,7 @@ imap-mailbox-selection-plan
   Plan a future read-only IMAP mailbox message selection rule. Dry-run only; combines the IMAP operation request package with safe selector labels without connecting, logging in, selecting/searching a mailbox, listing message ids, reading headers/bodies/attachments, retrieving secrets, starting OAuth, or writing files.
 
 imap-mailbox-adapter-manifest-plan
-  Preview a non-secret future IMAP adapter manifest. Dry-run only; writes no manifests and does not connect, log in, select/search a mailbox, list message ids, read headers/bodies/attachments, retrieve secrets, start OAuth, or call providers.
+  Preview and schema-check a non-secret future IMAP adapter manifest. Dry-run only; writes no manifests and does not connect, log in, select/search a mailbox, list message ids, read headers/bodies/attachments, retrieve secrets, start OAuth, or call providers.
 
 imap-mailbox-adapter-audit-plan
   Preview a non-secret future IMAP adapter audit receipt. Dry-run only; combines the mailbox selection plan with safe receipt metadata without connecting, logging in, selecting/searching a mailbox, listing message ids, reading headers/bodies/attachments, retrieving secrets, starting OAuth, or writing files.

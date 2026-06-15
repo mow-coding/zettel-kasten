@@ -159,7 +159,7 @@ execution. It still does not execute the adapter, write the receipt, list
 messages, read UIDs, read Message-ID values, read headers, read bodies, or read
 attachments.
 
-v0.3.51 adds a read-only adapter manifest preview:
+v0.3.52 keeps the read-only adapter manifest preview and adds schema validation:
 
 ```powershell
 python cli\archive.py imap-mailbox-adapter-manifest-plan .\my-archive `
@@ -291,11 +291,10 @@ The intended sequence is:
 11. Add future derived-text extraction from `text/plain` and reviewed `text/html`
    parts.
 
-Each later phase needs its own approval and privacy boundary. v0.3.51 can now
-package the approval request, preview the future adapter manifest, summarize adapter readiness,
-plan a mailbox selection rule, and preview a non-secret future adapter audit
-receipt, but it still does not implement reads, searches, message lists,
-manifest writes, receipt writes, or captures.
+Each later phase needs its own approval and privacy boundary. v0.3.52 can now
+package the approval request, preview and schema-check the future adapter
+manifest, summarize adapter readiness, plan a mailbox selection rule, and
+preview a non-secret future adapter audit receipt, but it still does not implement reads, searches, message lists, manifest writes, receipt writes, or captures.
 
 ## Closed Actions
 

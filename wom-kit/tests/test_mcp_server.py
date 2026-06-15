@@ -2427,6 +2427,7 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(structured["lifecycle_action"], "imap_mailbox_adapter_manifest_plan")
                 self.assertEqual(structured["proposed_manifest_path"], "config/imap-adapters/local-imap.imap-mailbox-adapter.json")
                 manifest = structured["manifest_preview"]
+                self.assertEqual(manifest["schema"], "wom-kit/imap-mailbox-adapter-manifest/v0.1")
                 self.assertEqual(manifest["manifest_kind"], "imap_mailbox_adapter_manifest")
                 self.assertEqual(manifest["adapter_id"], "local-imap")
                 self.assertEqual(manifest["supported_providers"], ["gmail", "naver"])
@@ -2442,6 +2443,8 @@ class McpServerTests(unittest.TestCase):
                 self.assertFalse(structured["closed_actions"]["imap_connection_opened"])
                 self.assertFalse(structured["closed_actions"]["candidate_messages_listed"])
                 self.assertFalse(structured["privacy_guards"]["exact_credential_refs_echoed"])
+                self.assertTrue(structured["schema_validation"]["ok"])
+                self.assertEqual(structured["schema_validation"]["schema_name"], "imap-mailbox-adapter-manifest.schema.json")
                 structured_dump = json.dumps(structured)
                 self.assertNotIn(str(allowed_archive), structured_dump)
                 self.assertNotIn("imap:account:naver-personal", structured_dump)
