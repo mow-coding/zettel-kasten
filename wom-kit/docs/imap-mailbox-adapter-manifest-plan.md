@@ -151,10 +151,11 @@ imap-mailbox-plan
 -> imap-mailbox-adapter-readiness-plan
 -> imap-mailbox-selection-plan
 -> imap-mailbox-adapter-audit-plan
+-> imap-mailbox-adapter-preflight-plan
 -> imap-mailbox-adapter-manifest-write
 -> future read-only mailbox selection adapter, not implemented in v0.3.55
 -> future header-only metadata scan, not implemented in v0.3.55
--> future non-secret adapter audit receipt writer, not implemented in v0.3.55
+-> imap-mailbox-adapter-audit-write
 -> future message capture with separate approval
 ```
 

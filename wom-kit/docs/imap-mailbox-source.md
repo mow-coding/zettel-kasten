@@ -193,6 +193,18 @@ imap-mailbox-adapter-manifest-write
 It writes only `config/imap-adapters/` and
 `receipts/imap/adapter-manifests/` files after `--approve`.
 
+v0.3.56 adds an approval-gated local audit receipt write:
+
+```text
+imap-mailbox-adapter-audit-write
+```
+
+It writes one non-secret receipt under `receipts/imap/adapter-audits/` after
+`--approve --reviewed-by <actor>`. It still does not execute the adapter, open
+an IMAP connection, select or search a mailbox, list messages, read headers,
+read bodies, read attachments, retrieve secrets, start OAuth, or call providers.
+These are audit receipt writes only, not live mail access.
+
 ## Provider Presets
 
 The planning command is provider-neutral. It currently recognizes:
@@ -296,20 +308,23 @@ The intended sequence is:
    `imap-mailbox-adapter-audit-plan`.
 8. Run the final read-only preflight with
    `imap-mailbox-adapter-preflight-plan`.
-9. Add a future header-only dry-run scan that selects the mailbox read-only and
+9. Record a reviewed non-secret audit receipt with
+   `imap-mailbox-adapter-audit-write` when there is a denied, not-run, failed,
+   or future adapter outcome to document.
+10. Add a future header-only dry-run scan that selects the mailbox read-only and
    fetches safe message metadata only.
-10. Add a future approved fetch that preserves each selected RFC822 message as a
+11. Add a future approved fetch that preserves each selected RFC822 message as a
    `.eml` source objet.
-11. Add future MIME attachment capture as separate objets.
-12. Add future derived-text extraction from `text/plain` and reviewed `text/html`
+12. Add future MIME attachment capture as separate objets.
+13. Add future derived-text extraction from `text/plain` and reviewed `text/html`
    parts.
 
-Each later phase needs its own approval and privacy boundary. v0.3.55 can now
+Each later phase needs its own approval and privacy boundary. v0.3.56 can now
 package the approval request, preview and schema-check the future adapter
 manifest, write the reviewed non-secret manifest, summarize adapter readiness,
 plan a mailbox selection rule, preview a non-secret future adapter audit
-receipt, and run a final read-only adapter preflight, but it still does not implement reads, searches, message lists,
-live adapter audit receipt writes, or captures.
+receipt, run a final read-only adapter preflight, and write a reviewed non-secret audit receipt,
+but it still does not implement reads, searches, message lists, live adapter execution, or captures.
 
 ## Closed Actions
 
