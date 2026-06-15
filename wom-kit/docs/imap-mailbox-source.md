@@ -159,6 +159,30 @@ execution. It still does not execute the adapter, write the receipt, list
 messages, read UIDs, read Message-ID values, read headers, read bodies, or read
 attachments.
 
+v0.3.51 adds a read-only adapter manifest preview:
+
+```powershell
+python cli\archive.py imap-mailbox-adapter-manifest-plan .\my-archive `
+  --adapter-id local-imap `
+  --provider gmail `
+  --provider naver `
+  --operation header_metadata_scan `
+  --selection-rule newest_first `
+  --dry-run `
+  --format json
+```
+
+and the matching MCP tool:
+
+```text
+imap_mailbox_adapter_manifest_plan
+```
+
+This previews a non-secret declaration of supported providers, operation
+labels, selection rules, and privacy gates. It still does not write a manifest,
+connect, login, select, search, list messages, read headers, read bodies, read
+attachments, or call providers.
+
 ## Provider Presets
 
 The planning command is provider-neutral. It currently recognizes:
@@ -251,25 +275,27 @@ The intended sequence is:
 
 1. Plan the mailbox source with refs only.
 2. Register the `imap_mailbox` source after human review.
-3. Prepare an operation request package with
+3. Preview the future adapter declaration with
+   `imap-mailbox-adapter-manifest-plan`.
+4. Prepare an operation request package with
    `imap-mailbox-operation-request-plan`.
-4. Check adapter readiness with `imap-mailbox-adapter-readiness-plan`.
-5. Plan a future mailbox selection rule with `imap-mailbox-selection-plan`.
-6. Preview the future non-secret audit receipt with
+5. Check adapter readiness with `imap-mailbox-adapter-readiness-plan`.
+6. Plan a future mailbox selection rule with `imap-mailbox-selection-plan`.
+7. Preview the future non-secret audit receipt with
    `imap-mailbox-adapter-audit-plan`.
-7. Add a future header-only dry-run scan that selects the mailbox read-only and
+8. Add a future header-only dry-run scan that selects the mailbox read-only and
    fetches safe message metadata only.
-8. Add a future approved fetch that preserves each selected RFC822 message as a
+9. Add a future approved fetch that preserves each selected RFC822 message as a
    `.eml` source objet.
-9. Add future MIME attachment capture as separate objets.
-10. Add future derived-text extraction from `text/plain` and reviewed `text/html`
+10. Add future MIME attachment capture as separate objets.
+11. Add future derived-text extraction from `text/plain` and reviewed `text/html`
    parts.
 
-Each later phase needs its own approval and privacy boundary. v0.3.50 can now
-package the approval request, summarize adapter readiness, plan a mailbox
-selection rule, and preview a non-secret future adapter audit receipt, but it
-still does not implement reads, searches, message lists, receipt writes, or
-captures.
+Each later phase needs its own approval and privacy boundary. v0.3.51 can now
+package the approval request, preview the future adapter manifest, summarize adapter readiness,
+plan a mailbox selection rule, and preview a non-secret future adapter audit
+receipt, but it still does not implement reads, searches, message lists,
+manifest writes, receipt writes, or captures.
 
 ## Closed Actions
 

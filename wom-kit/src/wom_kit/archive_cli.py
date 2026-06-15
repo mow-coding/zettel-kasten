@@ -25,6 +25,8 @@ Commands:
           Check readiness for a future IMAP mailbox adapter without connecting or reading mail.
   imap-mailbox-selection-plan
           Plan a future read-only mailbox message selection without listing messages.
+  imap-mailbox-adapter-manifest-plan
+          Preview a non-secret future IMAP adapter manifest without writing it.
   imap-mailbox-adapter-audit-plan
           Preview a non-secret future IMAP adapter audit receipt without reading mail.
   prehashed-objet-ledger
@@ -5468,6 +5470,46 @@ def command_imap_mailbox_adapter_audit_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_imap_mailbox_adapter_manifest_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("imap-mailbox-adapter-manifest-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.imap_mailbox_adapter_manifest_plan(
+            Path(args.archive_root),
+            adapter_id=args.adapter_id,
+            providers=args.provider,
+            operations=args.operation,
+            selection_rules=args.selection_rule,
+            consumer=args.consumer,
+            platform=args.platform,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        manifest = result.get("manifest_preview") if isinstance(result.get("manifest_preview"), dict) else {}
+        print(f"IMAP mailbox adapter manifest plan {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Adapter: {manifest.get('adapter_id') or '-'} ({manifest.get('adapter_kind') or '-'})")
+        print(f"Manifest: {result.get('proposed_manifest_path') or '-'}")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_sources(args: argparse.Namespace) -> int:
     try:
         result = archive_services.list_sources(Path(args.archive_root))
@@ -9458,6 +9500,46 @@ def build_parser() -> argparse.ArgumentParser:
     imap_mailbox_selection.add_argument("--dry-run", action="store_true", help="Required. Plan only; never connects, selects, searches, lists, or reads mail.")
     imap_mailbox_selection.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     imap_mailbox_selection.set_defaults(func=command_imap_mailbox_selection_plan)
+
+    imap_mailbox_adapter_manifest = subcommands.add_parser(
+        "imap-mailbox-adapter-manifest-plan",
+        aliases=["imap-mailbox-adapter-manifest", "mailbox-adapter-manifest-plan"],
+        help="Preview a non-secret future IMAP adapter manifest without connecting or reading mail.",
+    )
+    imap_mailbox_adapter_manifest.add_argument("archive_root", help="Archive root to inspect.")
+    imap_mailbox_adapter_manifest.add_argument(
+        "--adapter-id",
+        required=True,
+        help="Safe local adapter id, e.g. local-imap. Do not pass paths, URLs, emails, or secrets.",
+    )
+    imap_mailbox_adapter_manifest.add_argument(
+        "--provider",
+        action="append",
+        choices=sorted(archive_services.IMAP_MAILBOX_ALLOWED_PROVIDERS),
+        help="Supported provider label. May be repeated; defaults to all current IMAP providers.",
+    )
+    imap_mailbox_adapter_manifest.add_argument(
+        "--operation",
+        action="append",
+        choices=sorted(archive_services.IMAP_MAILBOX_OPERATION_REQUEST_OPERATIONS),
+        help="Supported future operation. May be repeated; defaults to all current IMAP operation labels.",
+    )
+    imap_mailbox_adapter_manifest.add_argument(
+        "--selection-rule",
+        action="append",
+        choices=sorted(archive_services.IMAP_MAILBOX_SELECTION_RULES),
+        help="Supported future selection rule. May be repeated; defaults to all current selection rules.",
+    )
+    imap_mailbox_adapter_manifest.add_argument("--consumer", default="wom:adapter:imap-mailbox", help="Safe label for the future adapter.")
+    imap_mailbox_adapter_manifest.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Local platform context.",
+    )
+    imap_mailbox_adapter_manifest.add_argument("--dry-run", action="store_true", help="Required. Preview only; never writes manifests, connects, lists, or reads mail.")
+    imap_mailbox_adapter_manifest.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    imap_mailbox_adapter_manifest.set_defaults(func=command_imap_mailbox_adapter_manifest_plan)
 
     imap_mailbox_adapter_audit = subcommands.add_parser(
         "imap-mailbox-adapter-audit-plan",

@@ -46,6 +46,13 @@ archive imap-mailbox-operation-request-plan <archive-root> --dry-run
 MCP: imap_mailbox_operation_request_plan
 ```
 
+Related adapter manifest preview:
+
+```text
+archive imap-mailbox-adapter-manifest-plan <archive-root> --dry-run
+MCP: imap_mailbox_adapter_manifest_plan
+```
+
 Related mailbox selection plan:
 
 ```text
@@ -131,6 +138,7 @@ Before any future live adapter can run, WOM still needs:
 - a human approval receipt,
 - a credential adapter manifest,
 - an IMAP adapter manifest,
+- `imap-mailbox-adapter-manifest-plan`,
 - a read-only mailbox selection rule,
 - `imap-mailbox-selection-plan`,
 - `imap-mailbox-adapter-audit-plan`,

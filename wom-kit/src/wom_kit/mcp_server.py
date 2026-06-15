@@ -591,6 +591,37 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "imap_mailbox_adapter_manifest_plan",
+        "description": "Preview a non-secret future IMAP adapter manifest. Dry-run only; never writes manifests, connects, logs in, selects/searches a mailbox, lists messages, reads headers/bodies/attachments, opens keyrings, starts OAuth, or calls providers.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "adapter_id": {"type": "string"},
+                "providers": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": sorted(archive_services.IMAP_MAILBOX_ALLOWED_PROVIDERS)},
+                },
+                "operations": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": sorted(archive_services.IMAP_MAILBOX_OPERATION_REQUEST_OPERATIONS)},
+                },
+                "selection_rules": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": sorted(archive_services.IMAP_MAILBOX_SELECTION_RULES)},
+                },
+                "consumer": {"type": "string", "default": "wom:adapter:imap-mailbox"},
+                "platform": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+                    "default": "windows",
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "adapter_id"],
+        },
+    },
+    {
         "name": "credential_ref_plan",
         "description": "Plan a local credential reference for mail, model APIs, OCR APIs, storage, or backups. Dry-run only; never reads, writes, prompts for, or echoes secret values.",
         "inputSchema": {
@@ -2226,6 +2257,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_imap_mailbox_selection_plan(arguments)
     if name == "imap_mailbox_adapter_audit_plan":
         return tool_imap_mailbox_adapter_audit_plan(arguments)
+    if name == "imap_mailbox_adapter_manifest_plan":
+        return tool_imap_mailbox_adapter_manifest_plan(arguments)
     if name == "credential_ref_plan":
         return tool_credential_ref_plan(arguments)
     if name == "credential_ref_inventory":
@@ -2833,6 +2866,32 @@ def tool_imap_mailbox_adapter_audit_plan(arguments: dict[str, Any]) -> dict[str,
     receipt = result.get("receipt_preview") if isinstance(result.get("receipt_preview"), dict) else {}
     return tool_success_result(
         f"imap_mailbox_adapter_audit_plan: {state}, result={receipt.get('result_status') or '-'}.",
+        result,
+    )
+
+
+def tool_imap_mailbox_adapter_manifest_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("imap_mailbox_adapter_manifest_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    providers_arg = arguments.get("providers")
+    operations_arg = arguments.get("operations")
+    selection_rules_arg = arguments.get("selection_rules")
+    result = call_service(
+        archive_services.imap_mailbox_adapter_manifest_plan,
+        archive_root,
+        adapter_id=require_string_arg(arguments, "adapter_id"),
+        providers=[str(item) for item in providers_arg] if isinstance(providers_arg, list) else None,
+        operations=[str(item) for item in operations_arg] if isinstance(operations_arg, list) else None,
+        selection_rules=[str(item) for item in selection_rules_arg] if isinstance(selection_rules_arg, list) else None,
+        consumer=optional_string_arg(arguments, "consumer") or "wom:adapter:imap-mailbox",
+        platform=optional_string_arg(arguments, "platform") or "windows",
+        dry_run=True,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    manifest = result.get("manifest_preview") if isinstance(result.get("manifest_preview"), dict) else {}
+    return tool_success_result(
+        f"imap_mailbox_adapter_manifest_plan: {state}, adapter={manifest.get('adapter_id') or '-'}.",
         result,
     )
 

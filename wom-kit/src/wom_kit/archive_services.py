@@ -1227,6 +1227,7 @@ IMAP_MAILBOX_SELECTION_RULES = {
     "since_days_window",
     "human_review_queue",
 }
+IMAP_MAILBOX_ADAPTER_MANIFESTS_DIR = "config/imap-adapters"
 IMAP_MAILBOX_ADAPTER_AUDIT_RECEIPTS_DIR = "receipts/imap/adapter-audits"
 IMAP_MAILBOX_ADAPTER_AUDIT_RESULT_STATUSES = {"not_run", "succeeded", "failed", "denied"}
 IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT = 100
@@ -11959,6 +11960,184 @@ def imap_mailbox_selection_plan(
         },
         "would_change": [],
         "next_safe_actions": unique_preserve_order(next_safe_actions),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def imap_mailbox_adapter_manifest_plan(
+    archive_root: Path | str,
+    *,
+    adapter_id: str,
+    providers: list[str] | None = None,
+    operations: list[str] | None = None,
+    selection_rules: list[str] | None = None,
+    consumer: str = "wom:adapter:imap-mailbox",
+    platform: str = "windows",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("imap-mailbox-adapter-manifest-plan is read-only and requires --dry-run.")
+
+    resolved_adapter_id = str(adapter_id or "").strip()
+    if not resolved_adapter_id:
+        blockers.append("adapter_id is required.")
+        resolved_adapter_id = "imap-adapter"
+    elif not safe_credential_adapter_id(resolved_adapter_id):
+        blockers.append("adapter_id must be a safe path-segment label such as local-imap or desktop-imap.")
+        resolved_adapter_id = "imap-adapter"
+
+    requested_providers: list[str] = []
+    for item in providers or sorted(IMAP_MAILBOX_ALLOWED_PROVIDERS):
+        normalized = str(item or "").strip().lower().replace("-", "_")
+        if normalized not in IMAP_MAILBOX_ALLOWED_PROVIDERS:
+            blockers.append("providers must contain only: " + ", ".join(sorted(IMAP_MAILBOX_ALLOWED_PROVIDERS)) + ".")
+            continue
+        requested_providers.append(normalized)
+    requested_providers = unique_preserve_order(requested_providers)
+    if not requested_providers:
+        requested_providers = sorted(IMAP_MAILBOX_ALLOWED_PROVIDERS)
+
+    requested_operations: list[str] = []
+    for item in operations or sorted(IMAP_MAILBOX_OPERATION_REQUEST_OPERATIONS):
+        normalized = str(item or "").strip().lower().replace("-", "_")
+        if normalized not in IMAP_MAILBOX_OPERATION_REQUEST_OPERATIONS:
+            blockers.append("operations must contain only: " + ", ".join(sorted(IMAP_MAILBOX_OPERATION_REQUEST_OPERATIONS)) + ".")
+            continue
+        requested_operations.append(normalized)
+    requested_operations = unique_preserve_order(requested_operations)
+    if not requested_operations:
+        requested_operations = sorted(IMAP_MAILBOX_OPERATION_REQUEST_OPERATIONS)
+
+    requested_selection_rules: list[str] = []
+    for item in selection_rules or sorted(IMAP_MAILBOX_SELECTION_RULES):
+        normalized = str(item or "").strip().lower().replace("-", "_")
+        if normalized not in IMAP_MAILBOX_SELECTION_RULES:
+            blockers.append("selection_rules must contain only: " + ", ".join(sorted(IMAP_MAILBOX_SELECTION_RULES)) + ".")
+            continue
+        requested_selection_rules.append(normalized)
+    requested_selection_rules = unique_preserve_order(requested_selection_rules)
+    if not requested_selection_rules:
+        requested_selection_rules = sorted(IMAP_MAILBOX_SELECTION_RULES)
+
+    resolved_consumer = str(consumer or "wom:adapter:imap-mailbox").strip()
+    if not safe_source_intake_plan_scalar(resolved_consumer):
+        blockers.append("consumer must be a safe non-secret adapter label.")
+        resolved_consumer = "wom:adapter:imap-mailbox"
+
+    resolved_platform = str(platform or "windows").strip().lower().replace("-", "_")
+    if resolved_platform not in CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS:
+        blockers.append("platform must be one of: " + ", ".join(sorted(CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS)) + ".")
+        resolved_platform = "cross_platform"
+
+    proposed_manifest_path = f"{IMAP_MAILBOX_ADAPTER_MANIFESTS_DIR}/{resolved_adapter_id}.imap-mailbox-adapter.json"
+    manifest_preview = {
+        "manifest_kind": "imap_mailbox_adapter_manifest",
+        "manifest_version": "v0.1",
+        "archive_id": archive_id,
+        "adapter_id": resolved_adapter_id,
+        "adapter_kind": "imap_mailbox",
+        "adapter_family": "mail_source",
+        "platform": resolved_platform,
+        "consumer": resolved_consumer,
+        "supported_providers": requested_providers,
+        "supported_operations": requested_operations,
+        "supported_selection_rules": requested_selection_rules,
+        "requires": {
+            "imap_mailbox_source_plan_before_use": True,
+            "operation_request_package_before_use": True,
+            "credential_policy_gate_before_use": True,
+            "human_approval_receipt_before_use": True,
+            "mailbox_selection_plan_before_use": True,
+            "non_secret_adapter_audit_receipt_after_use": True,
+            "message_capture_separate_approval": True,
+        },
+        "privacy_contract": {
+            "email_addresses_in_manifest": False,
+            "username_values_in_manifest": False,
+            "exact_account_refs_in_manifest": False,
+            "exact_credential_refs_in_manifest": False,
+            "exact_mailbox_refs_in_manifest": False,
+            "imap_host_values_in_manifest": False,
+            "provider_urls_in_manifest": False,
+            "message_ids_in_manifest": False,
+            "subjects_in_manifest": False,
+            "sender_or_recipient_values_in_manifest": False,
+            "message_headers_in_manifest": False,
+            "message_bodies_in_manifest": False,
+            "attachment_names_in_manifest": False,
+            "local_absolute_paths_in_manifest": False,
+            "secret_values_in_manifest": False,
+            "ai_visible_secret_output_allowed": False,
+        },
+        "closed_actions": {
+            "adapter_manifest_written": False,
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "mailbox_selected": False,
+            "mailbox_searched": False,
+            "candidate_messages_listed": False,
+            "message_uids_read": False,
+            "message_ids_read": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "derived_text_created": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "provider_api_called": False,
+            "oauth_started": False,
+        },
+    }
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "imap_mailbox_adapter_manifest_plan",
+        "archive_id": archive_id,
+        "proposed_manifest_path": proposed_manifest_path,
+        "manifest_preview": json_safe(manifest_preview),
+        "next_safe_actions": [
+            "Review the IMAP adapter manifest preview locally.",
+            "Only a future approval-gated writer may persist this manifest.",
+            "Use imap-mailbox-adapter-readiness-plan, imap-mailbox-selection-plan, and imap-mailbox-adapter-audit-plan before any live adapter exists.",
+            "Keep real email addresses, mailbox names, message ids, subjects, sender values, credential refs, provider URLs, and local paths out of adapter manifests.",
+        ],
+        "current_capability": {
+            "imap_adapter_manifest_preview_available": True,
+            "imap_adapter_manifest_write_implemented": False,
+            "live_imap_adapter_implemented": False,
+            "mailbox_selection_adapter_implemented": False,
+            "header_scan_implemented": False,
+            "credential_secret_retrieval_implemented": False,
+        },
+        "closed_actions": dict(manifest_preview["closed_actions"]),
+        "privacy_guards": {
+            "email_addresses_echoed": False,
+            "username_values_echoed": False,
+            "exact_account_refs_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "exact_mailbox_refs_echoed": False,
+            "imap_host_values_echoed": False,
+            "provider_urls_echoed": False,
+            "message_uid_values_echoed": False,
+            "message_id_values_echoed": False,
+            "message_headers_echoed": False,
+            "message_bodies_echoed": False,
+            "subject_values_echoed": False,
+            "sender_values_echoed": False,
+            "recipient_values_echoed": False,
+            "attachment_names_echoed": False,
+            "secret_values_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }

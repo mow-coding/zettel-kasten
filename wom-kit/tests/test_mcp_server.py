@@ -645,6 +645,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("imap_mailbox_adapter_readiness_plan", tool_names)
             self.assertIn("imap_mailbox_selection_plan", tool_names)
             self.assertIn("imap_mailbox_adapter_audit_plan", tool_names)
+            self.assertIn("imap_mailbox_adapter_manifest_plan", tool_names)
             self.assertIn("credential_ref_plan", tool_names)
             self.assertIn("credential_ref_inventory", tool_names)
             self.assertIn("credential_store_recommendation", tool_names)
@@ -2374,6 +2375,114 @@ class McpServerTests(unittest.TestCase):
                                 "account_ref": "imap:account:naver-personal",
                                 "username_ref": "env:NAVER_IMAP_USERNAME",
                                 "app_password_ref": "keyring:naver-app-password",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_imap_mailbox_adapter_manifest_tool_previews_manifest_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "imap_mailbox_adapter_manifest_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "adapter_id": "local-imap",
+                                "providers": ["gmail", "naver"],
+                                "operations": ["header_metadata_scan"],
+                                "selection_rules": ["newest_first", "unread_first"],
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"], structured)
+                self.assertTrue(structured["dry_run"])
+                self.assertEqual(structured["lifecycle_action"], "imap_mailbox_adapter_manifest_plan")
+                self.assertEqual(structured["proposed_manifest_path"], "config/imap-adapters/local-imap.imap-mailbox-adapter.json")
+                manifest = structured["manifest_preview"]
+                self.assertEqual(manifest["manifest_kind"], "imap_mailbox_adapter_manifest")
+                self.assertEqual(manifest["adapter_id"], "local-imap")
+                self.assertEqual(manifest["supported_providers"], ["gmail", "naver"])
+                self.assertEqual(manifest["supported_operations"], ["header_metadata_scan"])
+                self.assertEqual(manifest["supported_selection_rules"], ["newest_first", "unread_first"])
+                self.assertTrue(manifest["requires"]["mailbox_selection_plan_before_use"])
+                self.assertTrue(manifest["requires"]["non_secret_adapter_audit_receipt_after_use"])
+                self.assertFalse(manifest["privacy_contract"]["email_addresses_in_manifest"])
+                self.assertFalse(manifest["privacy_contract"]["message_headers_in_manifest"])
+                self.assertFalse(manifest["privacy_contract"]["secret_values_in_manifest"])
+                self.assertFalse(structured["current_capability"]["imap_adapter_manifest_write_implemented"])
+                self.assertFalse(structured["closed_actions"]["adapter_manifest_written"])
+                self.assertFalse(structured["closed_actions"]["imap_connection_opened"])
+                self.assertFalse(structured["closed_actions"]["candidate_messages_listed"])
+                self.assertFalse(structured["privacy_guards"]["exact_credential_refs_echoed"])
+                structured_dump = json.dumps(structured)
+                self.assertNotIn(str(allowed_archive), structured_dump)
+                self.assertNotIn("imap:account:naver-personal", structured_dump)
+                self.assertNotIn("keyring:naver-app-password", structured_dump)
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "imap_mailbox_adapter_manifest_plan",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "adapter_id": "local-imap",
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "imap_mailbox_adapter_manifest_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "adapter_id": "local-imap",
                                 "dry_run": False,
                             },
                         },
