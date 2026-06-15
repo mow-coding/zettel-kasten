@@ -12291,19 +12291,22 @@ def credential_access_approval_plan(
     reviewed_by: str | None = None,
     platform: str = "windows",
     dry_run: bool = True,
+    approve: bool = False,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
     warnings: list[str] = []
 
-    if not dry_run:
-        blockers.append("credential-access-approval-plan is read-only and requires --dry-run.")
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
 
     resolved_decision = (decision or "needs_review").strip().lower().replace("-", "_")
     if resolved_decision not in CREDENTIAL_ACCESS_APPROVAL_DECISIONS:
         blockers.append("decision must be one of: " + ", ".join(sorted(CREDENTIAL_ACCESS_APPROVAL_DECISIONS)) + ".")
         resolved_decision = "needs_review"
+    if approve and resolved_decision == "needs_review":
+        blockers.append("--approve requires decision approve_once or deny; needs_review is preview-only.")
 
     broker_preview = credential_access_broker_plan(
         root,
@@ -12320,7 +12323,10 @@ def credential_access_approval_plan(
     blockers.extend(str(item) for item in broker_preview.get("blockers") or [])
     warnings.extend(str(item) for item in broker_preview.get("warnings") or [])
 
-    resolved_reviewed_by = (reviewed_by or "human:pending-review").strip()
+    resolved_reviewed_by = (reviewed_by or ("human:pending-review" if dry_run else "")).strip()
+    if approve and not resolved_reviewed_by:
+        blockers.append("reviewed_by is required when --approve writes a credential access approval receipt.")
+        resolved_reviewed_by = "human:required"
     if not safe_source_intake_plan_scalar(resolved_reviewed_by):
         blockers.append("reviewed_by must be a safe non-secret reviewer label.")
         resolved_reviewed_by = "human:pending-review"
@@ -12337,19 +12343,29 @@ def credential_access_approval_plan(
         decision=resolved_decision,
     )
     proposed_receipt_path = f"{CREDENTIAL_ACCESS_APPROVAL_RECEIPTS_DIR}/{case_id}.credential-access-approval.json"
+    receipt_path = archive_internal_path(root, proposed_receipt_path)
+    receipt_exists = receipt_path.is_file()
+    if approve and receipt_exists:
+        blockers.append(f"Credential access approval receipt already exists: {proposed_receipt_path}.")
     decision_effect = {
         "approve_once": "would_allow_one_approved_action_after_receipt_write",
         "deny": "would_deny_the_requested_action_after_receipt_write",
         "needs_review": "would_keep_the_request_pending_for_human_review",
     }[resolved_decision]
+    reviewed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z") if approve else None
 
     receipt_preview = {
+        "receipt_id": case_id,
         "receipt_kind": "credential_access_approval",
         "schema_version": "wom-credential-access-approval/v0.1",
+        "lifecycle_action": "credential_access_approval_record",
         "archive_id": archive_id,
+        "receipt_path": proposed_receipt_path,
         "decision": resolved_decision,
         "decision_effect": decision_effect,
         "reviewed_by": resolved_reviewed_by,
+        "reviewed_at": reviewed_at,
+        "approval_status": "recorded" if approve and not blockers else "preview",
         "credential": credential,
         "broker_request": broker_request,
         "action_description": action_profile.get("description"),
@@ -12370,16 +12386,37 @@ def credential_access_approval_plan(
         },
         "non_secret_result_metadata_allowed": list(action_profile.get("expected_result_metadata") or []),
         "never_return": list(action_profile.get("never_return") or []),
+        "files_written": [proposed_receipt_path] if approve and not blockers else [],
     }
+
+    if approve and not blockers:
+        created_paths: list[Path] = []
+        created_dirs = missing_parent_dirs_before_write(root, [receipt_path])
+        try:
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_new_file(receipt_path, receipt_preview)
+            created_paths.append(receipt_path)
+        except OSError as exc:
+            for path in reversed(created_paths):
+                path.unlink(missing_ok=True)
+            cleanup_empty_archive_dirs(root, created_dirs)
+            raise ArchiveServiceError(f"Could not write credential access approval receipt: {exc}") from exc
+
+    approval_receipt_written = approve and not blockers
+    files_written = [proposed_receipt_path] if approval_receipt_written else []
+    would_change = [proposed_receipt_path] if dry_run else []
 
     return {
         "ok": not blockers,
-        "dry_run": True,
-        "lifecycle_action": "credential_access_approval_plan",
+        "dry_run": bool(dry_run),
+        "approved": approval_receipt_written,
+        "lifecycle_action": "credential_access_approval_plan" if dry_run else "credential_access_approval_record",
         "archive_id": archive_id,
         "decision": resolved_decision,
         "decision_effect": decision_effect,
         "proposed_receipt_path": proposed_receipt_path,
+        "receipt_path": proposed_receipt_path if approval_receipt_written else None,
+        "receipt_exists": receipt_exists or approval_receipt_written,
         "receipt_preview": json_safe(receipt_preview),
         "broker_plan_summary": {
             "action_kind": broker_request.get("action_kind"),
@@ -12393,18 +12430,18 @@ def credential_access_approval_plan(
         },
         "next_safe_actions": [
             "Human reviews the receipt preview locally.",
-            "A future approval writer may record this receipt only after explicit approve/deny input.",
+            "Use --approve with decision approve_once or deny only after explicit local human review.",
             "A future broker may use approve_once only for one scoped action, then require a new receipt for replay.",
             "Secret values and exact credential refs must stay outside chat, zets, receipts, logs, prompts, and public docs.",
         ],
         "current_capability": {
             "approval_receipt_preview_available": True,
-            "approval_receipt_write_implemented": False,
+            "approval_receipt_write_implemented": True,
             "broker_adapter_implemented": False,
             "secret_value_retrieval_implemented": False,
         },
         "closed_actions": {
-            "approval_receipt_written": False,
+            "approval_receipt_written": approval_receipt_written,
             "secret_prompted_in_chat": False,
             "secret_value_read": False,
             "secret_value_written": False,
@@ -12415,7 +12452,7 @@ def credential_access_approval_plan(
             "plaintext_file_read": False,
             "provider_api_called": False,
             "oauth_started": False,
-            "files_written": False,
+            "files_written": bool(files_written),
         },
         "privacy_guards": {
             "secret_values_echoed": False,
@@ -12424,9 +12461,10 @@ def credential_access_approval_plan(
             "tokens_echoed": False,
             "local_absolute_paths_echoed": False,
             "provider_urls_echoed": False,
-            "writes": False,
+            "writes": bool(files_written),
         },
-        "would_change": [],
+        "would_change": would_change,
+        "files_written": files_written,
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
@@ -12453,6 +12491,89 @@ def credential_access_approval_case_id(
     return f"credential-access-{digest}"
 
 
+def credential_access_approval_receipt_review(
+    archive_root: Path,
+    receipt_relative: str,
+    *,
+    expected_archive_id: str,
+    expected_credential_id: str | None,
+    expected_action_kind: str,
+    expected_store_kind: str,
+    expected_consumer: str,
+    expected_decision: str,
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    normalized_receipt = ""
+    try:
+        normalized_receipt = normalize_archive_relative_path(receipt_relative)
+    except ArchivePathError:
+        blockers.append("approval_receipt must be an archive-relative credential access approval receipt path.")
+    if normalized_receipt and (
+        not normalized_receipt.startswith(f"{CREDENTIAL_ACCESS_APPROVAL_RECEIPTS_DIR}/")
+        or not normalized_receipt.endswith(".credential-access-approval.json")
+    ):
+        blockers.append(f"approval_receipt must point under {CREDENTIAL_ACCESS_APPROVAL_RECEIPTS_DIR}/.")
+
+    receipt_doc: dict[str, Any] = {}
+    if normalized_receipt and not blockers:
+        receipt_path = archive_internal_path(archive_root, normalized_receipt)
+        if not receipt_path.is_file():
+            blockers.append(f"approval_receipt was not found: {normalized_receipt}.")
+        else:
+            loaded = load_json_object_for_review(receipt_path, "credential access approval receipt", blockers)
+            if isinstance(loaded, dict):
+                receipt_doc = loaded
+
+    serialized = json.dumps(json_safe(receipt_doc), ensure_ascii=False, sort_keys=True, default=str)
+    if contains_forbidden_location_reference(serialized) or DRAFT_SECRET_VALUE_RE.search(serialized):
+        blockers.append("approval_receipt contains private locator or secret-like material and cannot be used.")
+
+    credential = receipt_doc.get("credential") if isinstance(receipt_doc.get("credential"), dict) else {}
+    broker_request = receipt_doc.get("broker_request") if isinstance(receipt_doc.get("broker_request"), dict) else {}
+    receipt_decision = str(receipt_doc.get("decision") or "")
+    if receipt_doc:
+        if receipt_doc.get("receipt_kind") != "credential_access_approval":
+            blockers.append("approval_receipt receipt_kind must be credential_access_approval.")
+        if receipt_doc.get("schema_version") != "wom-credential-access-approval/v0.1":
+            blockers.append("approval_receipt schema_version must be wom-credential-access-approval/v0.1.")
+        if receipt_doc.get("archive_id") != expected_archive_id:
+            blockers.append("approval_receipt archive_id does not match this archive.")
+        if receipt_decision != expected_decision:
+            blockers.append("approval_receipt decision does not match the requested approval_decision.")
+        if receipt_decision == "needs_review":
+            blockers.append("approval_receipt must record approve_once or deny, not needs_review.")
+        if expected_credential_id and credential.get("credential_id") != expected_credential_id:
+            blockers.append("approval_receipt credential_id does not match the requested credential.")
+        if broker_request.get("action_kind") != expected_action_kind:
+            blockers.append("approval_receipt action_kind does not match the requested action.")
+        if broker_request.get("store_kind") != expected_store_kind:
+            blockers.append("approval_receipt store_kind does not match the requested store.")
+        if broker_request.get("consumer") != expected_consumer:
+            blockers.append("approval_receipt consumer does not match the requested consumer.")
+        if not is_utc_z_timestamp(receipt_doc.get("reviewed_at")):
+            warnings.append("approval_receipt reviewed_at is missing or not a UTC Z timestamp.")
+        if not isinstance(receipt_doc.get("files_written"), list) or normalized_receipt not in receipt_doc.get("files_written", []):
+            warnings.append("approval_receipt files_written does not include its archive-relative receipt path.")
+
+    return {
+        "ok": not blockers,
+        "receipt_path": normalized_receipt or receipt_relative,
+        "receipt_present": bool(receipt_doc),
+        "receipt_id": receipt_doc.get("receipt_id"),
+        "decision": receipt_decision or None,
+        "reviewed_by": receipt_doc.get("reviewed_by") if isinstance(receipt_doc.get("reviewed_by"), str) else None,
+        "reviewed_at": receipt_doc.get("reviewed_at") if isinstance(receipt_doc.get("reviewed_at"), str) else None,
+        "credential_id": credential.get("credential_id"),
+        "action_kind": broker_request.get("action_kind"),
+        "store_kind": broker_request.get("store_kind"),
+        "consumer": broker_request.get("consumer"),
+        "secret_material": safe_summary_mapping(receipt_doc.get("secret_material")),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
 def credential_policy_check(
     archive_root: Path | str,
     *,
@@ -12468,6 +12589,7 @@ def credential_policy_check(
     consumer: str | None = None,
     reviewed_by: str | None = None,
     platform: str = "windows",
+    approval_receipt: str | None = None,
     dry_run: bool = True,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
@@ -12556,6 +12678,27 @@ def credential_policy_check(
     if resolved_action == "plaintext_secret_migration" and resolved_operation == "plaintext_secret_migration":
         satisfied_rules.append("plaintext migration is scoped to human-selected local UI and per-entry confirmation.")
 
+    receipt_preview = approval_preview.get("receipt_preview") if isinstance(approval_preview.get("receipt_preview"), dict) else {}
+    broker_request = receipt_preview.get("broker_request") if isinstance(receipt_preview.get("broker_request"), dict) else {}
+    credential = receipt_preview.get("credential") if isinstance(receipt_preview.get("credential"), dict) else {}
+    expected_consumer = str(broker_request.get("consumer") or consumer or adapter_profile["default_consumer"])
+    approval_receipt_summary = None
+    approval_receipt_verified = False
+    if approval_receipt:
+        approval_receipt_summary = credential_access_approval_receipt_review(
+            root,
+            approval_receipt,
+            expected_archive_id=archive_id,
+            expected_credential_id=str(credential.get("credential_id") or ""),
+            expected_action_kind=str(broker_request.get("action_kind") or resolved_action),
+            expected_store_kind=str(broker_request.get("store_kind") or resolved_store),
+            expected_consumer=expected_consumer,
+            expected_decision=resolved_decision,
+        )
+        blockers.extend(str(item) for item in approval_receipt_summary.get("blockers") or [])
+        warnings.extend(str(item) for item in approval_receipt_summary.get("warnings") or [])
+        approval_receipt_verified = bool(approval_receipt_summary.get("ok"))
+
     if resolved_decision == "deny":
         policy_result = "denied_by_human_decision"
     elif blockers:
@@ -12567,9 +12710,6 @@ def credential_policy_check(
     else:
         policy_result = "ready_after_approval_receipt"
 
-    receipt_preview = approval_preview.get("receipt_preview") if isinstance(approval_preview.get("receipt_preview"), dict) else {}
-    broker_request = receipt_preview.get("broker_request") if isinstance(receipt_preview.get("broker_request"), dict) else {}
-    credential = receipt_preview.get("credential") if isinstance(receipt_preview.get("credential"), dict) else {}
     live_execution_allowed_now = False
     would_allow_future_adapter_after_receipt = policy_result == "ready_after_approval_receipt"
 
@@ -12612,16 +12752,19 @@ def credential_policy_check(
             "satisfied_rules": unique_preserve_order(satisfied_rules),
             "denied_rules": unique_preserve_order(denied_rules),
             "approval_receipt_required_before_use": True,
-            "approval_receipt_written": False,
+            "approval_receipt_written": approval_receipt_verified,
+            "approval_receipt_verified": approval_receipt_verified,
             "approval_receipt_preview_path": approval_preview.get("proposed_receipt_path"),
+            "approval_receipt_path": approval_receipt_summary.get("receipt_path") if isinstance(approval_receipt_summary, dict) else None,
             "live_execution_allowed_now": live_execution_allowed_now,
             "would_allow_future_adapter_after_receipt": would_allow_future_adapter_after_receipt,
+            "future_adapter_has_verified_receipt": approval_receipt_verified and would_allow_future_adapter_after_receipt,
             "secret_value_return_to_ai": False,
             "secret_value_echoed": False,
             "exact_ref_value_echoed": False,
         },
         "next_gate": {
-            "if_ready": "future approval writer must persist the scoped approval receipt before an adapter can run",
+            "if_ready": "verified approval receipt can be required by a future adapter; live adapter execution is still a separate command",
             "if_needs_review": "human must approve_once or deny through a local approval UI",
             "if_denied": "do not call a live adapter",
         },
@@ -12629,11 +12772,12 @@ def credential_policy_check(
             "policy_check_available": True,
             "policy_object_preview_available": True,
             "approval_receipt_preview_available": True,
-            "approval_receipt_write_implemented": False,
+            "approval_receipt_write_implemented": True,
             "live_adapter_implemented": False,
             "secret_value_read_implemented": False,
             "secret_value_write_implemented": False,
         },
+        "approval_receipt_summary": json_safe(approval_receipt_summary) if isinstance(approval_receipt_summary, dict) else None,
         "closed_actions": {
             "approval_receipt_written": False,
             "live_adapter_executed": False,
@@ -12859,7 +13003,7 @@ def credential_adapter_readiness_plan(
             "live_adapter_implemented": False,
             "secret_value_read_implemented": False,
             "secret_value_write_implemented": False,
-            "approval_receipt_write_implemented": False,
+            "approval_receipt_write_implemented": True,
         },
         "closed_actions": {
             "secret_prompted_in_chat": False,
@@ -13185,7 +13329,7 @@ def credential_adapter_audit_plan(
             "live_adapter_implemented": False,
             "secret_value_read_implemented": False,
             "secret_value_write_implemented": False,
-            "approval_receipt_write_implemented": False,
+            "approval_receipt_write_implemented": True,
             "adapter_manifest_write_implemented": False,
         },
         "closed_actions": {

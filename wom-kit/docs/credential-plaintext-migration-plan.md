@@ -147,3 +147,7 @@ future local UI and adapter work.
 
 v0.3.30 adds a read-only execution gate. See
 [Credential Policy Check](credential-policy-check.md).
+
+v0.3.31 adds a non-secret approval receipt writer that policy-check can verify
+before any future migration adapter runs. See
+[Credential Access Approval Plan](credential-access-approval-plan.md).

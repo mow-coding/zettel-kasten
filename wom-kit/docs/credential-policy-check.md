@@ -1,9 +1,10 @@
 # Credential Policy Check
 
-Status: v0.3.30 read-only credential policy gate baseline
+Status: v0.3.31 credential policy gate plus receipt verification checkpoint
 Date: 2026-06-15
 
-v0.3.30 adds the first concrete credential policy gate.
+v0.3.30 added the first concrete credential policy gate. v0.3.31 lets the gate
+verify a written credential access approval receipt.
 
 This is still read-only, but it is not only a planner. It evaluates a proposed
 credential use request and returns a policy result:
@@ -31,6 +32,7 @@ archive credential-policy-check <archive-root> \
   --operation plaintext_secret_migration \
   --consumer wom:adapter:keepassxc \
   --reviewed-by human:tester \
+  --approval-receipt receipts/credentials/access-approvals/<id>.credential-access-approval.json \
   --platform windows \
   --dry-run \
   --format json
@@ -72,14 +74,16 @@ A request can return `ready_after_approval_receipt` only when:
 - the store kind is compatible with the adapter kind,
 - the adapter supports the requested operation,
 - the operation is valid for the requested action kind,
+- any supplied approval receipt matches the same credential id, action, store,
+  consumer, decision, and archive,
 - no secret value or exact credential ref is echoed.
 
-Even then, `live_execution_allowed_now` is still `false` in v0.3.30.
+Even then, `live_execution_allowed_now` is still `false` in v0.3.31.
 
 The result means:
 
 ```text
-policy is ready for a future approval receipt writer
+policy is ready after a written approval receipt
 ```
 
 It does not mean:
@@ -127,6 +131,10 @@ Examples that return `denied_by_policy`:
 
 It is a policy gate, not a secret executor.
 
+When `--approval-receipt` is supplied, the command reads only that
+archive-relative, non-secret receipt and reports whether it was verified. It
+does not read or infer the underlying secret.
+
 ## Relationship To The Credential Layers
 
 The safe chain becomes:
@@ -138,11 +146,11 @@ credential-store-recommendation
 -> credential-ref-plan
 -> credential-ref-inventory
 -> credential-access-broker-plan
--> credential-access-approval-plan
--> credential-policy-check
+-> credential-access-approval-plan / credential-access-approval --approve
+-> credential-policy-check --approval-receipt <path>
 -> future adapter execution
 -> credential-adapter-audit-plan
 ```
 
-v0.3.30 adds the gate that future adapter execution must satisfy. It still does
-not perform the execution.
+v0.3.31 connects the written approval receipt to the gate that future adapter
+execution must satisfy. It still does not perform the execution.

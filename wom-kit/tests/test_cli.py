@@ -2038,6 +2038,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["policy_evaluation"]["would_allow_future_adapter_after_receipt"])
             self.assertFalse(result["policy_evaluation"]["live_execution_allowed_now"])
             self.assertFalse(result["closed_actions"]["approval_receipt_written"])
+            self.assertTrue(result["current_capability"]["approval_receipt_write_implemented"])
             self.assertFalse(result["closed_actions"]["live_adapter_executed"])
             self.assertFalse(result["closed_actions"]["secret_value_written"])
             self.assertFalse(result["privacy_guards"]["secret_values_echoed"])
@@ -2240,13 +2241,92 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(result["receipt_preview"]["approval_constraints"]["secret_value_return_to_ai"])
             self.assertTrue(result["receipt_preview"]["approval_constraints"]["single_action_only"])
             self.assertFalse(result["closed_actions"]["approval_receipt_written"])
+            self.assertTrue(result["current_capability"]["approval_receipt_write_implemented"])
             self.assertFalse(result["closed_actions"]["secret_value_read"])
             self.assertFalse(result["closed_actions"]["files_written"])
-            self.assertEqual(result["would_change"], [])
+            self.assertEqual(result["would_change"], [result["proposed_receipt_path"]])
             self.assertNotIn("secret:keepassxc-openai-api", output)
             self.assertNotIn("sk-proj-", output)
             self.assertFalse((archive_root / result["proposed_receipt_path"]).exists())
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "credential-access-approval",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--credential-ref",
+                    "secret:keepassxc-openai-api",
+                    "--action-kind",
+                    "plaintext_secret_migration",
+                    "--decision",
+                    "approve_once",
+                    "--store-kind",
+                    "password_manager",
+                    "--consumer",
+                    "wom:adapter:keepassxc",
+                    "--reviewed-by",
+                    "human:tester",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            approved = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approved["approved"])
+            self.assertFalse(approved["dry_run"])
+            self.assertEqual(approved["lifecycle_action"], "credential_access_approval_record")
+            self.assertEqual(approved["files_written"], [approved["receipt_path"]])
+            self.assertTrue((archive_root / approved["receipt_path"]).is_file())
+            stored_receipt = json.loads((archive_root / approved["receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(stored_receipt["decision"], "approve_once")
+            self.assertEqual(stored_receipt["broker_request"]["action_kind"], "plaintext_secret_migration")
+            self.assertFalse(stored_receipt["secret_material"]["secret_value_included"])
+            self.assertFalse(stored_receipt["secret_material"]["credential_ref_value_included"])
+            self.assertNotIn("secret:keepassxc-openai-api", approve_output)
+
+            policy_code, policy_output = self.run_cli(
+                [
+                    "credential-policy-check",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--credential-ref",
+                    "secret:keepassxc-openai-api",
+                    "--credential-kind",
+                    "openai_api_key",
+                    "--provider",
+                    "openai",
+                    "--action-kind",
+                    "plaintext_secret_migration",
+                    "--approval-decision",
+                    "approve_once",
+                    "--store-kind",
+                    "password_manager",
+                    "--adapter-kind",
+                    "keepassxc_cli",
+                    "--operation",
+                    "plaintext_secret_migration",
+                    "--consumer",
+                    "wom:adapter:keepassxc",
+                    "--reviewed-by",
+                    "human:tester",
+                    "--approval-receipt",
+                    approved["receipt_path"],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            policy = json.loads(policy_output)
+            self.assertEqual(policy_code, 0, policy_output)
+            self.assertEqual(policy["policy_result"], "ready_after_approval_receipt")
+            self.assertTrue(policy["policy_evaluation"]["approval_receipt_verified"])
+            self.assertTrue(policy["policy_evaluation"]["future_adapter_has_verified_receipt"])
+            self.assertFalse(policy["policy_evaluation"]["live_execution_allowed_now"])
+            self.assertNotIn("secret:keepassxc-openai-api", policy_output)
 
             raw_secret = "sk" + "-proj-" + "abcdefghijklmnopqrstuvwxyz1234567890"
             bad_code, bad_output = self.run_cli(
@@ -2271,6 +2351,21 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(bad_result["ok"])
             self.assertTrue(any("credential_ref must be" in blocker for blocker in bad_result["blockers"]))
             self.assertNotIn(raw_secret, bad_output)
+
+            no_mode_code, no_mode_output = self.run_cli(
+                [
+                    "credential-access-approval",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:no-mode",
+                    "--action-kind",
+                    "model_api_call",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_mode_code, 1)
+            self.assertIn("Choose exactly one mode", no_mode_output)
 
     def test_credential_adapter_readiness_plan_is_read_only_and_non_echoing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

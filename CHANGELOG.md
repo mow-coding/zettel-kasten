@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.31 - 2026-06-15
+
+- Added local CLI approval receipt writing through
+  `archive credential-access-approval --approve --reviewed-by <actor>` for
+  recording one non-secret credential access approval receipt under
+  `receipts/credentials/access-approvals/`.
+- Kept `archive credential-access-approval-plan --dry-run` and MCP
+  `credential_access_approval_plan` as preview-only surfaces; MCP still cannot
+  write approval receipts.
+- Updated `archive credential-policy-check --dry-run` and MCP
+  `credential_policy_check` so they can verify an archive-relative approval
+  receipt with `--approval-receipt <path>` before any future adapter execution.
+- Preserved secret boundaries: the writer records no secret values, no exact
+  credential refs, no usernames, no email addresses, no local paths, no provider
+  URLs, and it opens no vault, keyring, browser store, environment variable,
+  plaintext file, provider API, OAuth flow, or live adapter.
+- Added CLI/docs coverage for receipt preview, receipt write, duplicate/no-mode
+  blockers, policy receipt verification, no-write MCP behavior, and privacy
+  boundaries.
+
 ## v0.3.30 - 2026-06-15
 
 - Added read-only CLI `archive credential-policy-check --dry-run` and MCP
