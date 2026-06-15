@@ -2233,6 +2233,24 @@ class ArchiveCliTests(unittest.TestCase):
             section_ids = [section["section_id"] for section in result["sections"]]
             self.assertIn("credential_vault", section_ids)
             self.assertIn("derived_text_tools", section_ids)
+            credential_section = next(section for section in result["sections"] if section["section_id"] == "credential_vault")
+            walkthrough = credential_section["product_walkthrough"]
+            self.assertEqual(walkthrough["store_id"], "keepassxc")
+            self.assertEqual(walkthrough["product_version_family"], "KeePassXC 2.7.x")
+            self.assertEqual(walkthrough["field_decisions"]["database_format"], "KDBX 4.0")
+            self.assertEqual(walkthrough["field_decisions"]["encryption_algorithm"], "AES-256")
+            self.assertEqual(walkthrough["field_decisions"]["key_derivation_function"], "Argon2d")
+            self.assertTrue(any(step["step_id"] == "encryption" for step in walkthrough["wizard_steps"]))
+            self.assertTrue(
+                any(
+                    field.get("recommended_value") == "Argon2d"
+                    for step in walkthrough["wizard_steps"]
+                    for field in step.get("fields", [])
+                )
+            )
+            self.assertTrue(any("Argon2id" in item for item in walkthrough["conflict_resolution"]))
+            self.assertFalse(walkthrough["closed_actions"]["keepassxc_opened"])
+            self.assertFalse(walkthrough["closed_actions"]["database_created"])
             self.assertIn("credential-vault-onboarding-plan", result["cross_links"])
             self.assertIn("derive-text-doctor", result["cross_links"])
             self.assertTrue(any("credential-ref-plan" in command for command in result["command_checklist"]))

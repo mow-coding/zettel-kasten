@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.44 - 2026-06-15
+
+- Added a KeePassXC 2.7.x first-vault walkthrough to
+  `archive beginner-setup-manual --store-id keepassxc --platform windows
+  --dry-run`.
+- The walkthrough now gives screen-by-screen and field-by-field guidance for
+  the new database wizard: general screen, encryption settings, credentials,
+  save dialog, and first entry.
+- Added WOM-context field decisions for first local KeePassXC vaults:
+  KDBX 4.0, AES-256, Argon2d, and leaving KeePassXC automatic/recommended KDF
+  tuning values alone.
+- Added explicit conflict guidance for Argon2d vs Argon2id: WOM's beginner
+  recommendation is scoped to a local offline KDBX vault threat model; stricter
+  workplace/school/regulatory policy still wins when present.
+- Kept the manual read-only: it does not open KeePassXC, create a database,
+  store database paths, read or write secrets, read environment variables, call
+  providers, install tools, or write files.
+
 ## v0.3.43 - 2026-06-15
 
 - Added manifest-aware object storage recommendations.
