@@ -13,6 +13,7 @@ import secrets
 import shutil
 import sqlite3
 import stat
+import subprocess
 import unicodedata
 from datetime import date, datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -1051,6 +1052,7 @@ CREDENTIAL_ACCESS_BROKER_STORE_KINDS = {
 }
 CREDENTIAL_ACCESS_APPROVAL_DECISIONS = {"needs_review", "approve_once", "deny"}
 CREDENTIAL_ACCESS_APPROVAL_RECEIPTS_DIR = "receipts/credentials/access-approvals"
+CREDENTIAL_KEEPASSXC_WRITE_RECEIPTS_DIR = "receipts/credentials/keepassxc-writes"
 CREDENTIAL_POLICY_RESULTS = {
     "ready_after_approval_receipt",
     "needs_human_review",
@@ -12996,6 +12998,524 @@ def credential_keepassxc_command_plan(
             "writes": False,
         },
         "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def credential_keepassxc_write(
+    archive_root: Path | str,
+    *,
+    credential_id: str,
+    approval_receipt: str | None,
+    entry_label: str,
+    database_path: str | Path | None = None,
+    group_label: str | None = None,
+    database_ref: str | None = None,
+    action_kind: str = "plaintext_secret_migration",
+    operation: str = "plaintext_secret_migration",
+    credential_ref: str | None = None,
+    credential_kind: str | None = None,
+    provider: str | None = None,
+    consumer: str | None = None,
+    reviewed_by: str | None = None,
+    platform: str = "windows",
+    dry_run: bool = True,
+    approve: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+
+    command_plan = credential_keepassxc_command_plan(
+        root,
+        credential_id=credential_id,
+        credential_ref=credential_ref,
+        credential_kind=credential_kind,
+        provider=provider,
+        action_kind=action_kind,
+        operation=operation,
+        approval_receipt=approval_receipt,
+        entry_label=entry_label,
+        group_label=group_label,
+        database_ref=database_ref,
+        consumer=consumer,
+        reviewed_by=reviewed_by,
+        platform=platform,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in command_plan.get("blockers") or [])
+    warnings.extend(str(item) for item in command_plan.get("warnings") or [])
+
+    adapter = command_plan.get("adapter") if isinstance(command_plan.get("adapter"), dict) else {}
+    command_plan_payload = command_plan.get("command_plan") if isinstance(command_plan.get("command_plan"), dict) else {}
+    policy_summary = command_plan.get("policy_check_summary") if isinstance(command_plan.get("policy_check_summary"), dict) else {}
+    resolved_operation = str(adapter.get("operation") or operation or "plaintext_secret_migration")
+    resolved_action = str(adapter.get("action_kind") or action_kind or "plaintext_secret_migration")
+    resolved_consumer = str(adapter.get("consumer") or consumer or "wom:adapter:keepassxc")
+    resolved_platform = str(adapter.get("platform") or platform or "windows")
+    resolved_entry_label = command_plan_payload.get("entry_label") if isinstance(command_plan_payload.get("entry_label"), str) else ""
+    resolved_group_label = command_plan_payload.get("group_label") if isinstance(command_plan_payload.get("group_label"), str) else None
+    resolved_database_ref = command_plan_payload.get("database_ref") if isinstance(command_plan_payload.get("database_ref"), str) else None
+    entry_target = keepassxc_entry_target_label(resolved_entry_label, resolved_group_label)
+
+    normalized_approval_receipt = None
+    if approval_receipt:
+        try:
+            normalized_approval_receipt = normalize_archive_relative_path(approval_receipt)
+        except ArchivePathError:
+            normalized_approval_receipt = None
+
+    execution_case_id = credential_keepassxc_write_case_id(
+        archive_id=archive_id,
+        credential_id=credential_id,
+        action_kind=resolved_action,
+        operation=resolved_operation,
+        consumer=resolved_consumer,
+        approval_receipt=normalized_approval_receipt or "invalid-or-missing-approval-receipt",
+        entry_label=resolved_entry_label,
+        group_label=resolved_group_label,
+    )
+    proposed_receipt_path = f"{CREDENTIAL_KEEPASSXC_WRITE_RECEIPTS_DIR}/{execution_case_id}.credential-keepassxc-write.json"
+    receipt_path = archive_internal_path(root, proposed_receipt_path)
+    receipt_exists = receipt_path.is_file()
+    if receipt_exists:
+        blockers.append("approval_receipt already has a KeePassXC write execution receipt; create a new approval receipt before replay.")
+
+    selected_database_path: Path | None = None
+    if approve:
+        selected_database_path = safe_keepassxc_database_path_for_write(database_path, root, blockers)
+        if shutil.which("keepassxc-cli") is None:
+            blockers.append("keepassxc-cli was not found on PATH.")
+    elif database_path is not None:
+        safe_keepassxc_database_path_for_write(database_path, root, blockers, required=False)
+
+    reviewed_by_value = (reviewed_by or ("human:pending-review" if dry_run else "")).strip()
+    if approve and not reviewed_by_value:
+        blockers.append("reviewed_by is required when --approve executes a KeePassXC write.")
+        reviewed_by_value = "human:required"
+    if reviewed_by_value and not safe_source_intake_plan_scalar(reviewed_by_value):
+        blockers.append("reviewed_by must be a safe non-secret reviewer label.")
+        reviewed_by_value = "human:pending-review"
+
+    receipt_preview = credential_keepassxc_write_receipt_payload(
+        archive_id=archive_id,
+        receipt_id=execution_case_id,
+        receipt_path=proposed_receipt_path,
+        approval_receipt=normalized_approval_receipt,
+        credential_id=credential_id,
+        credential_kind=credential_kind,
+        provider=provider,
+        action_kind=resolved_action,
+        operation=resolved_operation,
+        consumer=resolved_consumer,
+        platform=resolved_platform,
+        entry_label=resolved_entry_label,
+        group_label=resolved_group_label,
+        database_ref=resolved_database_ref,
+        reviewed_by=reviewed_by_value or "human:pending-review",
+        status="planned" if dry_run else "blocked",
+        started_at=None,
+        finished_at=None,
+        return_code=None,
+    )
+
+    if blockers:
+        return credential_keepassxc_write_result(
+            ok=False,
+            dry_run=dry_run,
+            archive_id=archive_id,
+            receipt_path=None,
+            proposed_receipt_path=proposed_receipt_path,
+            receipt_exists=receipt_exists,
+            command_plan=command_plan,
+            receipt_preview=receipt_preview,
+            execution_status="blocked",
+            return_code=None,
+            files_written=[],
+            would_change=[proposed_receipt_path, "KeePassXC database entry selected locally"] if dry_run else [],
+            blockers=blockers,
+            warnings=warnings,
+        )
+
+    if dry_run:
+        return credential_keepassxc_write_result(
+            ok=True,
+            dry_run=True,
+            archive_id=archive_id,
+            receipt_path=None,
+            proposed_receipt_path=proposed_receipt_path,
+            receipt_exists=receipt_exists,
+            command_plan=command_plan,
+            receipt_preview=receipt_preview,
+            execution_status="planned",
+            return_code=None,
+            files_written=[],
+            would_change=[proposed_receipt_path, "KeePassXC database entry selected locally"],
+            blockers=[],
+            warnings=warnings,
+        )
+
+    assert selected_database_path is not None
+    started_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    started_receipt = credential_keepassxc_write_receipt_payload(
+        archive_id=archive_id,
+        receipt_id=execution_case_id,
+        receipt_path=proposed_receipt_path,
+        approval_receipt=normalized_approval_receipt,
+        credential_id=credential_id,
+        credential_kind=credential_kind,
+        provider=provider,
+        action_kind=resolved_action,
+        operation=resolved_operation,
+        consumer=resolved_consumer,
+        platform=resolved_platform,
+        entry_label=resolved_entry_label,
+        group_label=resolved_group_label,
+        database_ref=resolved_database_ref,
+        reviewed_by=reviewed_by_value,
+        status="started",
+        started_at=started_at,
+        finished_at=None,
+        return_code=None,
+    )
+
+    created_dirs = missing_parent_dirs_before_write(root, [receipt_path])
+    try:
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_new_file(receipt_path, started_receipt)
+    except OSError as exc:
+        cleanup_empty_archive_dirs(root, [receipt_path])
+        cleanup_created_empty_dirs(root, created_dirs)
+        raise ArchiveServiceError(f"Could not write KeePassXC execution receipt before adapter run: {exc}") from exc
+
+    return_code: int | None = None
+    execution_status = "failed"
+    try:
+        return_code = run_keepassxc_cli_add(
+            [
+                shutil.which("keepassxc-cli") or "keepassxc-cli",
+                "add",
+                "--password-prompt",
+                str(selected_database_path),
+                entry_target,
+            ]
+        )
+        execution_status = "succeeded" if return_code == 0 else "failed"
+        if return_code != 0:
+            warnings.append("keepassxc-cli returned a non-zero exit code; raw output is not captured or echoed.")
+    except OSError:
+        warnings.append("keepassxc-cli could not be executed; raw exception details are not echoed.")
+        execution_status = "failed"
+
+    finished_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    final_receipt = credential_keepassxc_write_receipt_payload(
+        archive_id=archive_id,
+        receipt_id=execution_case_id,
+        receipt_path=proposed_receipt_path,
+        approval_receipt=normalized_approval_receipt,
+        credential_id=credential_id,
+        credential_kind=credential_kind,
+        provider=provider,
+        action_kind=resolved_action,
+        operation=resolved_operation,
+        consumer=resolved_consumer,
+        platform=resolved_platform,
+        entry_label=resolved_entry_label,
+        group_label=resolved_group_label,
+        database_ref=resolved_database_ref,
+        reviewed_by=reviewed_by_value,
+        status=execution_status,
+        started_at=started_at,
+        finished_at=finished_at,
+        return_code=return_code,
+    )
+    try:
+        receipt_path.write_text(json.dumps(json_safe(final_receipt), indent=2, ensure_ascii=False, default=str) + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise ArchiveServiceError("KeePassXC adapter ran, but its non-secret execution receipt could not be finalized.") from exc
+
+    files_written = [proposed_receipt_path]
+    return credential_keepassxc_write_result(
+        ok=execution_status == "succeeded",
+        dry_run=False,
+        archive_id=archive_id,
+        receipt_path=proposed_receipt_path,
+        proposed_receipt_path=proposed_receipt_path,
+        receipt_exists=True,
+        command_plan=command_plan,
+        receipt_preview=final_receipt,
+        execution_status=execution_status,
+        return_code=return_code,
+        files_written=files_written,
+        would_change=[],
+        blockers=[],
+        warnings=warnings,
+    )
+
+
+def credential_keepassxc_write_case_id(
+    *,
+    archive_id: str,
+    credential_id: str,
+    action_kind: str,
+    operation: str,
+    consumer: str,
+    approval_receipt: str,
+    entry_label: str,
+    group_label: str | None,
+) -> str:
+    payload = {
+        "archive_id": archive_id,
+        "credential_id": credential_id,
+        "action_kind": action_kind,
+        "operation": operation,
+        "consumer": consumer,
+        "approval_receipt": approval_receipt,
+        "entry_label": entry_label,
+        "group_label": group_label,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
+    return f"keepassxc-write-{digest}"
+
+
+def keepassxc_entry_target_label(entry_label: str, group_label: str | None) -> str:
+    if group_label:
+        return f"{group_label}/{entry_label}"
+    return entry_label
+
+
+def safe_keepassxc_database_path_for_write(
+    value: str | Path | None,
+    archive_root: Path,
+    blockers: list[str],
+    *,
+    required: bool = True,
+) -> Path | None:
+    if value is None or not str(value).strip():
+        if required:
+            blockers.append("database_path is required for --approve and must point to an existing local .kdbx file.")
+        return None
+    try:
+        candidate = Path(value).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        blockers.append("database_path could not be resolved safely.")
+        return None
+    if candidate.suffix.lower() != ".kdbx" or not candidate.is_file():
+        blockers.append("database_path must point to an existing local .kdbx file selected by the human operator.")
+        return None
+    try:
+        if is_path_within_root(candidate, archive_root.resolve()):
+            blockers.append("database_path must be outside the WOM archive root so a vault file is not accidentally published.")
+            return None
+    except OSError:
+        blockers.append("database_path could not be checked against the archive root safely.")
+        return None
+    return candidate
+
+
+def run_keepassxc_cli_add(argv: list[str]) -> int:
+    completed = subprocess.run(argv, check=False)
+    return int(completed.returncode)
+
+
+def credential_keepassxc_write_receipt_payload(
+    *,
+    archive_id: str,
+    receipt_id: str,
+    receipt_path: str,
+    approval_receipt: str | None,
+    credential_id: str,
+    credential_kind: str | None,
+    provider: str | None,
+    action_kind: str,
+    operation: str,
+    consumer: str,
+    platform: str,
+    entry_label: str,
+    group_label: str | None,
+    database_ref: str | None,
+    reviewed_by: str,
+    status: str,
+    started_at: str | None,
+    finished_at: str | None,
+    return_code: int | None,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "wom-credential-keepassxc-write/v0.1",
+        "receipt_kind": "credential_keepassxc_write",
+        "lifecycle_action": "credential_keepassxc_write",
+        "archive_id": archive_id,
+        "receipt_id": receipt_id,
+        "receipt_path": receipt_path,
+        "approval": {
+            "approval_receipt_path": approval_receipt,
+            "approval_receipt_required": True,
+            "approval_receipt_consumed_by_this_receipt": status in {"started", "succeeded", "failed"},
+            "single_action_only": True,
+        },
+        "credential": {
+            "credential_id": credential_id,
+            "credential_kind": credential_kind,
+            "provider": provider,
+            "exact_credential_ref_echoed": False,
+        },
+        "adapter": {
+            "adapter_kind": "keepassxc_cli",
+            "store_kind": "password_manager",
+            "operation": operation,
+            "action_kind": action_kind,
+            "consumer": consumer,
+            "platform": platform,
+        },
+        "target": {
+            "database_ref": database_ref or "keepassxc:human-selected-database",
+            "database_path_included": False,
+            "entry_label": entry_label,
+            "group_label": group_label,
+            "entry_target": keepassxc_entry_target_label(entry_label, group_label),
+        },
+        "execution": {
+            "status": status,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "return_code": return_code,
+            "command_shape": [
+                "keepassxc-cli",
+                "add",
+                "--password-prompt",
+                "<database.kdbx selected locally>",
+                "<entry>",
+            ],
+            "raw_stdout_included": False,
+            "raw_stderr_included": False,
+        },
+        "review": {
+            "reviewed_by": reviewed_by,
+        },
+        "secret_material": {
+            "secret_value_included": False,
+            "secret_value_in_argv": False,
+            "secret_value_in_stdin": False,
+            "secret_value_returned_to_ai": False,
+            "database_password_included": False,
+            "credential_ref_value_included": False,
+            "username_included": False,
+            "email_included": False,
+            "token_included": False,
+            "local_path_included": False,
+        },
+        "files_written": [receipt_path] if status in {"started", "succeeded", "failed"} else [],
+    }
+
+
+def credential_keepassxc_write_result(
+    *,
+    ok: bool,
+    dry_run: bool,
+    archive_id: str,
+    receipt_path: str | None,
+    proposed_receipt_path: str,
+    receipt_exists: bool,
+    command_plan: dict[str, Any],
+    receipt_preview: dict[str, Any],
+    execution_status: str,
+    return_code: int | None,
+    files_written: list[str],
+    would_change: list[str],
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    command_plan_payload = command_plan.get("command_plan") if isinstance(command_plan.get("command_plan"), dict) else {}
+    policy_summary = command_plan.get("policy_check_summary") if isinstance(command_plan.get("policy_check_summary"), dict) else {}
+    executed = not dry_run and execution_status in {"succeeded", "failed"}
+    return {
+        "ok": ok,
+        "dry_run": dry_run,
+        "approved": executed,
+        "lifecycle_action": "credential_keepassxc_write_plan" if dry_run else "credential_keepassxc_write",
+        "archive_id": archive_id,
+        "receipt_path": receipt_path,
+        "proposed_receipt_path": proposed_receipt_path,
+        "receipt_exists": receipt_exists or bool(files_written),
+        "execution_status": execution_status,
+        "return_code": return_code,
+        "policy_check_summary": {
+            "policy_result": policy_summary.get("policy_result"),
+            "approval_receipt_verified": bool(policy_summary.get("approval_receipt_verified")),
+            "future_adapter_has_verified_receipt": bool(policy_summary.get("future_adapter_has_verified_receipt")),
+        },
+        "adapter": {
+            "adapter_kind": "keepassxc_cli",
+            "store_kind": "password_manager",
+            "operation": receipt_preview.get("adapter", {}).get("operation") if isinstance(receipt_preview.get("adapter"), dict) else None,
+            "action_kind": receipt_preview.get("adapter", {}).get("action_kind") if isinstance(receipt_preview.get("adapter"), dict) else None,
+            "approval_receipt_required": True,
+            "approval_receipt_consumed": executed,
+            "live_execution_allowed_now": executed,
+        },
+        "target": {
+            "database_ref": receipt_preview.get("target", {}).get("database_ref") if isinstance(receipt_preview.get("target"), dict) else None,
+            "database_path_supplied": executed,
+            "database_path_included": False,
+            "entry_label": command_plan_payload.get("entry_label"),
+            "group_label": command_plan_payload.get("group_label"),
+            "entry_target": receipt_preview.get("target", {}).get("entry_target") if isinstance(receipt_preview.get("target"), dict) else None,
+        },
+        "execution_boundary": {
+            "cli_only": True,
+            "mcp_live_tool_exposed": False,
+            "uses_keepassxc_password_prompt": True,
+            "database_selected_locally": True,
+            "database_path_recorded_in_wom": False,
+            "secret_value_return_to_ai": False,
+            "raw_stdout_or_stderr_returned": False,
+        },
+        "receipt_preview": json_safe(receipt_preview),
+        "current_capability": {
+            "keepassxc_command_plan_available": True,
+            "keepassxc_write_cli_available": True,
+            "approval_receipt_verification_required": True,
+            "approval_receipt_consumption_receipt_implemented": True,
+            "command_execution_implemented": True,
+            "secret_value_write_implemented": True,
+            "mcp_live_execution_implemented": False,
+        },
+        "closed_actions": {
+            "live_adapter_executed": executed,
+            "keepassxc_cli_invoked": executed,
+            "keepassxc_ui_opened": False,
+            "password_manager_opened_by_cli": executed,
+            "database_path_echoed": False,
+            "database_password_read_by_wom": False,
+            "secret_prompted_in_chat": False,
+            "secret_value_read_by_wom": False,
+            "secret_value_written": execution_status == "succeeded",
+            "secret_value_piped_to_stdin": False,
+            "plaintext_file_read": False,
+            "provider_api_called": False,
+            "oauth_started": False,
+            "execution_receipt_written": bool(files_written),
+            "files_written": bool(files_written),
+        },
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "credential_ref_values_echoed": False,
+            "database_paths_echoed": False,
+            "email_addresses_echoed": False,
+            "tokens_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "raw_adapter_output_echoed": False,
+            "writes": bool(files_written) or executed,
+        },
+        "external_writes": ["keepassxc_database_entry"] if execution_status == "succeeded" else [],
+        "would_change": would_change,
+        "files_written": files_written,
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }

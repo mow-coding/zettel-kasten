@@ -31,6 +31,9 @@ v0.3.32 adds a read-only KeePassXC command preflight after approval receipt
 verification. See
 [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md).
 
+v0.3.33 adds a minimal CLI-only KeePassXC write adapter after the same approval
+and policy gates. See [Credential KeePassXC Write](credential-keepassxc-write.md).
+
 ## Read-Only Planner
 
 ```powershell

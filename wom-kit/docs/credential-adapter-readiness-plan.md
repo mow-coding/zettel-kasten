@@ -157,9 +157,10 @@ local adapter uses the secret without echoing it
 WOM records non-secret metadata
 ```
 
-This planner prepares that contract before any real secret access exists.
+This planner prepares that contract without executing an adapter itself.
 
 Next layer:
 
 - [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md)
+- [Credential KeePassXC Write](credential-keepassxc-write.md)
 - [Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md)

@@ -15,8 +15,8 @@ It describes the safe future workflow:
 human chooses a plaintext note in a visible local UI
 -> local scanner proposes candidate entries without returning values to AI
 -> human confirms each entry and target
--> future approved adapter writes the secret to the selected vault/keyring
--> WOM records only refs, metadata, approval receipts, and audit receipts
+-> approved adapter writes the secret to the selected vault/keyring
+-> WOM records only refs, metadata, approval receipts, and execution receipts
 ```
 
 It is not a secret scanner, importer, vault writer, keyring writer, or cleanup
@@ -137,14 +137,15 @@ credential-store-recommendation
 -> credential-access-approval-plan
 -> credential-policy-check
 -> credential-keepassxc-command-plan
+-> credential-keepassxc-write
 -> credential-adapter-readiness-plan
 -> credential-adapter-manifest-plan
 -> credential-adapter-audit-plan
 ```
 
-v0.3.29 adds only the pathless, non-secret migration planning step. Actual
-secret detection, vault writes, keyring writes, cleanup, and deletion remain
-future local UI and adapter work.
+v0.3.29 adds only the pathless, non-secret migration planning step. Broad
+secret detection, keyring writes, cleanup, and deletion remain future local UI
+and adapter work.
 
 v0.3.30 adds a read-only execution gate. See
 [Credential Policy Check](credential-policy-check.md).
@@ -155,3 +156,6 @@ before any future migration adapter runs. See
 
 v0.3.32 adds a KeePassXC command preflight after receipt verification. See
 [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md).
+
+v0.3.33 adds a minimal CLI-only KeePassXC write adapter after the same approval
+and policy gates. See [Credential KeePassXC Write](credential-keepassxc-write.md).

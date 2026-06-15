@@ -18,6 +18,7 @@ CREDENTIAL_ACCESS_BROKER_PATH = KIT_ROOT / "docs" / "credential-access-broker-pl
 CREDENTIAL_ACCESS_APPROVAL_PATH = KIT_ROOT / "docs" / "credential-access-approval-plan.md"
 CREDENTIAL_POLICY_CHECK_PATH = KIT_ROOT / "docs" / "credential-policy-check.md"
 CREDENTIAL_KEEPASSXC_COMMAND_PATH = KIT_ROOT / "docs" / "credential-keepassxc-command-plan.md"
+CREDENTIAL_KEEPASSXC_WRITE_PATH = KIT_ROOT / "docs" / "credential-keepassxc-write.md"
 CREDENTIAL_ADAPTER_READINESS_PATH = KIT_ROOT / "docs" / "credential-adapter-readiness-plan.md"
 CREDENTIAL_ADAPTER_MANIFEST_PATH = KIT_ROOT / "docs" / "credential-adapter-manifest-plan.md"
 CREDENTIAL_ADAPTER_MANIFEST_SCHEMA_PATH = KIT_ROOT / "schemas" / "credential-adapter-manifest.schema.json"
@@ -293,7 +294,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, resolver_text)
         for phrase in (
-            "Status: v0.3.32 KeePassXC command preflight checkpoint",
+            "Status: v0.3.33 KeePassXC write adapter checkpoint",
             "Objet ref resolver",
             "archive resolve-objet-ref --object-id sha256:<hex> --dry-run",
             "MCP `resolve_objet_ref`",
@@ -302,7 +303,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.32 pre-release",
+            "v0.3.33 pre-release",
             "[Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)",
             "read-only objet reference resolution",
         ):
@@ -397,7 +398,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.32 pre-release",
+            "v0.3.33 pre-release",
             "[IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)",
             "read-only IMAP mailbox source planning",
         ):
@@ -446,7 +447,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.32 pre-release",
+            "v0.3.33 pre-release",
             "[Credential Store Contract](wom-kit/docs/credential-store-contract.md)",
             "read-only credential reference planning",
         ):
@@ -503,7 +504,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.32 pre-release",
+            "v0.3.33 pre-release",
             "[Credential Ref Inventory And Onboarding](wom-kit/docs/credential-ref-inventory-and-onboarding.md)",
             "read-only credential reference planning, inventory",
         ):
@@ -558,7 +559,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.32 pre-release",
+            "v0.3.33 pre-release",
             "[Credential Store Recommendations](wom-kit/docs/credential-store-recommendations.md)",
             "external store recommendation",
         ):
@@ -606,7 +607,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.32 pre-release",
+            "v0.3.33 pre-release",
             "[Credential Vault Onboarding Plan](wom-kit/docs/credential-vault-onboarding-plan.md)",
             "vault onboarding planning",
         ):
@@ -633,7 +634,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "source-label",
             "v0.3.29 does not accept or print the real local path",
             "It is a plaintext migration planner, not a migration executor.",
-            "secret detection, vault writes, keyring writes, cleanup, and deletion remain",
+            "Broad\nsecret detection, keyring writes, cleanup, and deletion remain",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, migration_text)
@@ -652,7 +653,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.32 pre-release",
+            "v0.3.33 pre-release",
             "[Credential Plaintext Migration Plan](wom-kit/docs/credential-plaintext-migration-plan.md)",
             "plaintext migration planning",
         ):
@@ -709,7 +710,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.32 pre-release",
+            "v0.3.33 pre-release",
             "[Credential Access Broker Plan](wom-kit/docs/credential-access-broker-plan.md)",
             "future access broker planning",
         ):
@@ -764,7 +765,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.32 pre-release",
+            "v0.3.33 pre-release",
             "[Credential Access Approval Plan](wom-kit/docs/credential-access-approval-plan.md)",
             "local approval receipt preview/write",
         ):
@@ -809,7 +810,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.32 pre-release",
+            "v0.3.33 pre-release",
             "[Credential Policy Check](wom-kit/docs/credential-policy-check.md)",
             "credential policy checking",
         ):
@@ -865,7 +866,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.32 pre-release",
+            "v0.3.33 pre-release",
             "[Credential KeePassXC Command Plan](wom-kit/docs/credential-keepassxc-command-plan.md)",
             "KeePassXC command preflight",
         ):
@@ -873,6 +874,57 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, readme_text)
         self.assertIn("[Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md)", public_map_text)
         self.assertIn("[Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md)", public_map_ko_text)
+
+    def test_credential_keepassxc_write_doc_and_matrix_are_cli_only_and_non_secret(self) -> None:
+        write_text = CREDENTIAL_KEEPASSXC_WRITE_PATH.read_text(encoding="utf-8")
+        command_text = CREDENTIAL_KEEPASSXC_COMMAND_PATH.read_text(encoding="utf-8")
+        approval_text = CREDENTIAL_ACCESS_APPROVAL_PATH.read_text(encoding="utf-8")
+        policy_text = CREDENTIAL_POLICY_CHECK_PATH.read_text(encoding="utf-8")
+        plaintext_text = CREDENTIAL_PLAINTEXT_MIGRATION_PATH.read_text(encoding="utf-8")
+        contract_text = CREDENTIAL_STORE_CONTRACT_PATH.read_text(encoding="utf-8")
+        recommendation_text = CREDENTIAL_STORE_RECOMMENDATIONS_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.33 CLI-only KeePassXC write adapter",
+            "credential-keepassxc-write",
+            "keepassxc-write",
+            "--approve",
+            "--database-path",
+            "keepassxc-cli add --password-prompt",
+            "receipts/credentials/keepassxc-writes/",
+            "There is no MCP live execution tool.",
+            "mcp_live_tool_exposed: false",
+            "database_path_included: false",
+            "raw_adapter_output_echoed: false",
+            "replay is blocked",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, write_text)
+        for doc_text in (command_text, approval_text, policy_text, plaintext_text, contract_text, recommendation_text):
+            self.assertIn("[Credential KeePassXC Write](credential-keepassxc-write.md)", doc_text)
+        for phrase in (
+            "Credential KeePassXC write",
+            "local CLI adapter write",
+            "archive credential-keepassxc-write --approval-receipt <path> --entry-label <safe-label> --database-path <local.kdbx> --approve",
+            "MCP has no live write tool",
+            "blocks replay",
+            "echoes no secret values",
+            "raw adapter output",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.33 pre-release",
+            "[Credential KeePassXC Write](wom-kit/docs/credential-keepassxc-write.md)",
+            "CLI-only KeePassXC write execution",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        self.assertIn("[Credential KeePassXC Write](credential-keepassxc-write.md)", public_map_text)
+        self.assertIn("[Credential KeePassXC Write](credential-keepassxc-write.md)", public_map_ko_text)
 
     def test_credential_adapter_readiness_doc_and_matrix_keep_live_adapters_closed(self) -> None:
         adapter_text = CREDENTIAL_ADAPTER_READINESS_PATH.read_text(encoding="utf-8")
@@ -919,7 +971,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.32 pre-release",
+            "v0.3.33 pre-release",
             "[Credential Adapter Readiness Plan](wom-kit/docs/credential-adapter-readiness-plan.md)",
             "adapter readiness planning",
         ):
@@ -973,7 +1025,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.32 pre-release",
+            "v0.3.33 pre-release",
             "[Credential Adapter Manifest Plan](wom-kit/docs/credential-adapter-manifest-plan.md)",
             "adapter manifest preview",
         ):
@@ -1016,7 +1068,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.32 pre-release",
+            "v0.3.33 pre-release",
             "[Credential Adapter Audit Plan](wom-kit/docs/credential-adapter-audit-plan.md)",
             "adapter audit receipt preview",
         ):

@@ -89,6 +89,7 @@ docs/project-intake-session.md
 docs/project-intake-cookbook.md
 docs/human-artifact-store-contract.md
 docs/credential-keepassxc-command-plan.md
+docs/credential-keepassxc-write.md
 docs/zet-surface-prototypes.md
 docs/notion-source-export-three-store-example.md
 docs/notion-page-snapshot-model.md
@@ -153,6 +154,9 @@ resolve-objet-ref
 
 credential-keepassxc-command-plan
   Verify a credential access approval receipt through the policy gate, then preview a safe KeePassXC CLI add command shape. Dry-run only; runs no keepassxc-cli, opens no vault, stores no .kdbx path, passes no secret through argv or stdin, writes no vault entry, and echoes no exact credential ref.
+
+credential-keepassxc-write
+  Execute a minimal KeePassXC CLI add after verifying a credential access approval receipt. Dry-run previews first; approved mode is CLI-only, requires a local .kdbx path, invokes keepassxc-cli add --password-prompt, writes a non-secret execution receipt, blocks replay with the same approval receipt, and echoes no secret value, exact credential ref, database path, username, email, token, provider URL, or raw adapter output.
 
 source-intake
   Classify one source/objet locator before draft creation. Dry-run only; returns safe source refs without reading bodies, hashing, copying, uploading, importing, OCR, transcription, extraction, or provider API calls. It can optionally validate a project-intake decisions receipt as session context only.

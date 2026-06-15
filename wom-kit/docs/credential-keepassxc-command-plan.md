@@ -25,8 +25,8 @@ human chooses external vault
 -> human writes one scoped approval receipt
 -> policy check verifies the receipt
 -> KeePassXC command plan previews the local command shape
--> future local adapter may execute separately
--> future audit receipt records non-secret result metadata
+-> CLI-only KeePassXC write adapter may execute separately
+-> execution receipt records non-secret result metadata
 ```
 
 ## Command
@@ -152,6 +152,10 @@ Do not pass:
 
 It is a command preflight, not a vault adapter.
 
+v0.3.33 adds a separate CLI-only live write adapter. See
+[Credential KeePassXC Write](credential-keepassxc-write.md). MCP still exposes
+only the read-only preflight.
+
 ## Output Guarantees
 
 The output keeps:
@@ -178,9 +182,13 @@ credential-store-recommendation
 -> credential-access-approval-plan / credential-access-approval --approve
 -> credential-policy-check --approval-receipt <path>
 -> credential-keepassxc-command-plan --approval-receipt <path>
--> future live KeePassXC adapter execution
--> credential-adapter-audit-plan
+-> credential-keepassxc-write --approval-receipt <path> --approve
+-> non-secret KeePassXC write execution receipt
 ```
 
 v0.3.32 adds the KeePassXC-specific command preflight. It still does not
 perform the execution.
+
+v0.3.33 adds [Credential KeePassXC Write](credential-keepassxc-write.md), a
+separate CLI-only adapter that can execute `keepassxc-cli add` after the same
+receipt and policy gates pass.

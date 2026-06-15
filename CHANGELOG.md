@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.33 - 2026-06-15
+
+- Added CLI-only `archive credential-keepassxc-write --approve` for the first
+  minimal live KeePassXC credential write adapter.
+- Reused approval receipt verification and `credential_policy_check` before
+  execution, and required one scoped `approve_once` receipt for each write.
+- Invoked only `keepassxc-cli add --password-prompt` in approved local CLI
+  mode, so the database unlock secret and new entry password stay in the local
+  terminal/KeePassXC CLI prompt instead of argv, stdin, chat, JSON output, or
+  receipts.
+- Added non-secret execution receipts under
+  `receipts/credentials/keepassxc-writes/` and blocked replay with the same
+  approval receipt once a write execution receipt exists.
+- Kept MCP preview-only: no live KeePassXC write tool is exposed through MCP.
+- Added `wom-kit/docs/credential-keepassxc-write.md` plus CLI/docs coverage
+  for verified receipts, database-path non-echo, secret non-echo, replay
+  blocking, and the CLI-only execution boundary.
+
 ## v0.3.32 - 2026-06-15
 
 - Added read-only CLI `archive credential-keepassxc-command-plan --dry-run`
