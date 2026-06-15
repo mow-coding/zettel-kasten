@@ -1111,12 +1111,58 @@ OBJECT_STORAGE_ALLOWED_PROVIDERS = {
     "generic-s3",
 }
 OBJECT_STORAGE_RECOMMENDATION_SCENARIOS = {
+    "auto_from_manifest",
     "personal_low_ops",
     "s3_compatible",
     "backup_cost_sensitive",
     "aws_native",
     "google_cloud_native",
     "generic_provider",
+}
+OBJECT_STORAGE_RECOMMENDATION_PRICE_SNAPSHOT_DATE = "2026-06-15"
+OBJECT_STORAGE_RECOMMENDATION_PRICE_SOURCES = {
+    "cloudflare-r2": "https://developers.cloudflare.com/r2/pricing/",
+    "backblaze-b2": "https://www.backblaze.com/cloud-storage/pricing",
+    "aws-s3": "https://aws.amazon.com/s3/pricing/",
+    "google-cloud-storage": "https://cloud.google.com/storage/pricing-examples",
+}
+OBJECT_STORAGE_RECOMMENDATION_ROUGH_PRICING = {
+    "cloudflare-r2": {
+        "storage_usd_per_gb_month": 0.015,
+        "free_storage_gb": 10.0,
+        "egress_model": "internet_egress_free",
+        "egress_usd_per_gb_after_allowance": 0.0,
+        "source": OBJECT_STORAGE_RECOMMENDATION_PRICE_SOURCES["cloudflare-r2"],
+    },
+    "backblaze-b2": {
+        "storage_usd_per_gb_month": 6.95 / 1000,
+        "free_storage_gb": 10.0,
+        "egress_model": "free_up_to_3x_average_monthly_storage_then_overage",
+        "egress_free_multiple_of_storage": 3.0,
+        "egress_usd_per_gb_after_allowance": 0.01,
+        "source": OBJECT_STORAGE_RECOMMENDATION_PRICE_SOURCES["backblaze-b2"],
+    },
+    "aws-s3": {
+        "storage_usd_per_gb_month": None,
+        "free_storage_gb": 0.0,
+        "egress_model": "regional_and_tiered_manual_review_required",
+        "egress_usd_per_gb_after_allowance": None,
+        "source": OBJECT_STORAGE_RECOMMENDATION_PRICE_SOURCES["aws-s3"],
+    },
+    "google-cloud-storage": {
+        "storage_usd_per_gb_month": 0.020,
+        "free_storage_gb": 0.0,
+        "egress_model": "example_us_east1_to_americas_emea",
+        "egress_usd_per_gb_after_allowance": 0.12,
+        "source": OBJECT_STORAGE_RECOMMENDATION_PRICE_SOURCES["google-cloud-storage"],
+    },
+    "generic-s3": {
+        "storage_usd_per_gb_month": None,
+        "free_storage_gb": 0.0,
+        "egress_model": "provider_specific_manual_review_required",
+        "egress_usd_per_gb_after_allowance": None,
+        "source": None,
+    },
 }
 OBJECT_STORAGE_DEFAULT_VISIBILITY = "private"
 OBJECT_STORAGE_ALLOWED_VISIBILITIES = {"private"}
@@ -20753,10 +20799,10 @@ def object_storage_recommendation(
     if not dry_run:
         blockers.append("object-storage-recommendation is read-only and requires --dry-run.")
 
-    resolved_scenario = (scenario or "personal_low_ops").strip().lower().replace("-", "_")
-    if resolved_scenario not in OBJECT_STORAGE_RECOMMENDATION_SCENARIOS:
+    requested_scenario = (scenario or "personal_low_ops").strip().lower().replace("-", "_")
+    if requested_scenario not in OBJECT_STORAGE_RECOMMENDATION_SCENARIOS:
         blockers.append("scenario must be one of: " + ", ".join(sorted(OBJECT_STORAGE_RECOMMENDATION_SCENARIOS)) + ".")
-        resolved_scenario = "personal_low_ops"
+        requested_scenario = "personal_low_ops"
 
     resolved_profile_id = (profile_id or "<profile-id>").strip()
     resolved_profile_slug = (profile_slug or "<profile-slug>").strip()
@@ -20771,13 +20817,36 @@ def object_storage_recommendation(
         blockers.append("storage_account_ref must be a safe account reference, not an email, URL, token, secret, or path.")
         resolved_account_ref = "storage:account:<label>"
 
+    manifest_analysis = object_storage_manifest_storage_analysis(root)
+    resolved_scenario = requested_scenario
+    scenario_source = "human_selected"
+    if requested_scenario == "auto_from_manifest":
+        resolved_scenario = str(manifest_analysis.get("inferred_scenario") or "personal_low_ops")
+        scenario_source = "manifest_analysis"
+
     profiles = object_storage_recommendation_profiles()
     ordered_provider_ids = profiles[resolved_scenario]
     candidates = [object_storage_recommendation_candidate(provider, rank=index + 1) for index, provider in enumerate(ordered_provider_ids)]
     primary = candidates[0] if candidates else object_storage_recommendation_candidate("generic-s3", rank=1)
+    rough_cost = object_storage_rough_cost_estimates(
+        candidates,
+        total_size_gb=float(manifest_analysis.get("total_size_gb_decimal") or 0.0),
+    )
+    estimate_by_provider = {
+        item["provider"]: item
+        for item in rough_cost.get("provider_estimates", [])
+        if isinstance(item, dict) and isinstance(item.get("provider"), str)
+    }
+    for candidate in candidates:
+        candidate["rough_cost_estimate"] = estimate_by_provider.get(candidate.get("provider"))
+    primary = candidates[0] if candidates else primary
 
     warnings.append("Object-storage pricing, free-tier terms, retention policy, and regional availability are not checked by this command.")
     warnings.append("Run the provider's official calculator/docs and review data residency before spending money or uploading source objets.")
+    if manifest_analysis.get("record_count"):
+        warnings.append("Manifest analysis uses metadata only; object filenames, local paths, and object bytes are not echoed or read.")
+    if requested_scenario == "auto_from_manifest":
+        warnings.append("Auto scenario is a heuristic; ask the human whether the archive is backup-only, frequently read, shared, or compliance-bound before signup.")
 
     setup_command = (
         "archive object-storage <archive-root> --dry-run --provider "
@@ -20797,9 +20866,13 @@ def object_storage_recommendation(
         "lifecycle_action": "object_storage_recommendation",
         "archive_id": archive_id,
         "scenario": resolved_scenario,
+        "requested_scenario": requested_scenario,
+        "scenario_source": scenario_source,
+        "manifest_analysis": manifest_analysis,
         "primary_recommendation": primary,
         "candidate_count": len(candidates),
         "candidates": candidates,
+        "rough_cost_estimates": rough_cost,
         "selection_logic": object_storage_recommendation_selection_logic(),
         "setup_bridge": {
             "planner_command": setup_command,
@@ -20810,6 +20883,9 @@ def object_storage_recommendation(
         },
         "current_capability": {
             "recommendation_matching_available": True,
+            "manifest_metadata_analysis_available": True,
+            "manifest_based_auto_scenario_available": True,
+            "rough_cost_estimate_available": True,
             "object_storage_setup_plan_available": True,
             "live_price_lookup_implemented": False,
             "provider_account_lookup_implemented": False,
@@ -20852,8 +20928,168 @@ def object_storage_recommendation(
     }
 
 
+def object_storage_manifest_storage_analysis(root: Path) -> dict[str, Any]:
+    manifest_path = archive_internal_path(root, "objects/manifests/files.jsonl")
+    records = load_manifest_records(root)
+    class_totals: dict[str, dict[str, Any]] = {}
+    total_size_bytes = 0
+    sized_record_count = 0
+    invalid_size_record_count = 0
+
+    for record in records:
+        raw_size = record.get("size_bytes")
+        if isinstance(raw_size, bool) or not isinstance(raw_size, int) or raw_size < 0:
+            invalid_size_record_count += 1
+            continue
+        mime = safe_mime(str(record.get("mime") or ""))
+        kind = classify_source_kind(mime, str(record.get("logical_key") or ""))
+        bucket = class_totals.setdefault(kind, {"content_class": kind, "object_count": 0, "total_size_bytes": 0})
+        bucket["object_count"] += 1
+        bucket["total_size_bytes"] += raw_size
+        sized_record_count += 1
+        total_size_bytes += raw_size
+
+    content_classes = []
+    for item in class_totals.values():
+        size_bytes = int(item["total_size_bytes"])
+        content_classes.append(
+            {
+                "content_class": item["content_class"],
+                "object_count": item["object_count"],
+                "total_size_bytes": size_bytes,
+                "total_size_gb_decimal": object_storage_round_gb(size_bytes),
+                "share_percent": object_storage_percent(size_bytes, total_size_bytes),
+            }
+        )
+    content_classes.sort(key=lambda item: (-int(item["total_size_bytes"]), str(item["content_class"])))
+    dominant = content_classes[0] if content_classes else None
+    inference = object_storage_infer_scenario_from_manifest(total_size_bytes, content_classes, manifest_path.is_file())
+    return {
+        "manifest_path": "objects/manifests/files.jsonl",
+        "manifest_present": manifest_path.is_file(),
+        "record_count": len(records),
+        "sized_record_count": sized_record_count,
+        "invalid_size_record_count": invalid_size_record_count,
+        "total_size_bytes": total_size_bytes,
+        "total_size_gb_decimal": object_storage_round_gb(total_size_bytes),
+        "dominant_content_class": dominant,
+        "content_classes": content_classes,
+        "inferred_scenario": inference["scenario"],
+        "inference_confidence": inference["confidence"],
+        "inference_signals": inference["signals"],
+        "privacy_guards": {
+            "object_filenames_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "object_bytes_read": False,
+        },
+    }
+
+
+def object_storage_infer_scenario_from_manifest(
+    total_size_bytes: int,
+    content_classes: list[dict[str, Any]],
+    manifest_present: bool,
+) -> dict[str, Any]:
+    total_gb = total_size_bytes / 1_000_000_000 if total_size_bytes else 0.0
+    share_by_class = {
+        str(item.get("content_class")): float(item.get("share_percent") or 0.0)
+        for item in content_classes
+    }
+    media_share = share_by_class.get("video", 0.0) + share_by_class.get("audio", 0.0) + share_by_class.get("image", 0.0)
+    signals: list[str] = []
+    if not manifest_present:
+        signals.append("object_manifest_missing")
+        return {"scenario": "personal_low_ops", "confidence": "low", "signals": signals}
+    if total_size_bytes <= 0:
+        signals.append("manifest_has_no_sized_objects")
+        return {"scenario": "personal_low_ops", "confidence": "low", "signals": signals}
+    if media_share >= 50.0 and total_gb >= 50.0:
+        signals.extend(["media_heavy_archive", "egress_policy_matters", "manual_access_pattern_review_needed"])
+        return {"scenario": "personal_low_ops", "confidence": "medium", "signals": signals}
+    if total_gb >= 500.0:
+        signals.extend(["large_archive", "monthly_storage_cost_matters"])
+        return {"scenario": "backup_cost_sensitive", "confidence": "medium", "signals": signals}
+    if total_gb >= 100.0:
+        signals.extend(["medium_large_archive", "storage_and_restore_cost_review_needed"])
+        return {"scenario": "backup_cost_sensitive", "confidence": "low", "signals": signals}
+    signals.append("small_or_mixed_archive")
+    return {"scenario": "personal_low_ops", "confidence": "low", "signals": signals}
+
+
+def object_storage_rough_cost_estimates(candidates: list[dict[str, Any]], *, total_size_gb: float) -> dict[str, Any]:
+    estimates = [
+        object_storage_rough_cost_estimate_for_provider(str(candidate.get("provider") or ""), total_size_gb=total_size_gb)
+        for candidate in candidates
+    ]
+    return {
+        "pricing_snapshot_date": OBJECT_STORAGE_RECOMMENDATION_PRICE_SNAPSHOT_DATE,
+        "currency": "USD",
+        "live_pricing_checked": False,
+        "pricing_api_called": False,
+        "basis": {
+            "manifest_total_size_gb_decimal": round(total_size_gb, 3),
+            "monthly_storage_assumption": "store_manifest_total_for_one_full_month",
+            "egress_assumption": "one_full_manifest_size_restore_or_download",
+            "operation_charges_included": False,
+        },
+        "provider_estimates": estimates,
+        "limitations": [
+            "Rough estimate only; official calculators and account-specific terms must be checked before spending money.",
+            "Operation, retrieval, lifecycle, minimum-duration, tax, currency, region, and support charges are not fully modeled.",
+            "AWS and generic S3 costs are region/provider-specific and require manual calculator review.",
+        ],
+    }
+
+
+def object_storage_rough_cost_estimate_for_provider(provider: str, *, total_size_gb: float) -> dict[str, Any]:
+    pricing = OBJECT_STORAGE_RECOMMENDATION_ROUGH_PRICING.get(provider) or OBJECT_STORAGE_RECOMMENDATION_ROUGH_PRICING["generic-s3"]
+    storage_rate = pricing.get("storage_usd_per_gb_month")
+    free_storage_gb = float(pricing.get("free_storage_gb") or 0.0)
+    billable_storage_gb = max(total_size_gb - free_storage_gb, 0.0)
+    storage_estimate = None
+    if isinstance(storage_rate, (float, int)):
+        storage_estimate = round(billable_storage_gb * float(storage_rate), 2)
+
+    egress_estimate = None
+    egress_note = str(pricing.get("egress_model") or "manual_review_required")
+    if provider == "cloudflare-r2":
+        egress_estimate = 0.0
+    elif provider == "backblaze-b2":
+        free_multiple = float(pricing.get("egress_free_multiple_of_storage") or 0.0)
+        free_egress_gb = total_size_gb * free_multiple
+        overage_gb = max(total_size_gb - free_egress_gb, 0.0)
+        egress_estimate = round(overage_gb * float(pricing.get("egress_usd_per_gb_after_allowance") or 0.0), 2)
+    elif isinstance(pricing.get("egress_usd_per_gb_after_allowance"), (float, int)):
+        egress_estimate = round(total_size_gb * float(pricing["egress_usd_per_gb_after_allowance"]), 2)
+
+    return {
+        "provider": provider,
+        "pricing_source_id": f"{provider}:official-pricing-docs" if pricing.get("source") else "manual-provider-review",
+        "pricing_source_url_echoed": False,
+        "storage_usd_per_gb_month": storage_rate,
+        "free_storage_gb": free_storage_gb,
+        "billable_storage_gb_estimate": round(billable_storage_gb, 3),
+        "monthly_storage_usd_estimate": storage_estimate,
+        "one_full_restore_egress_usd_estimate": egress_estimate,
+        "egress_model": egress_note,
+        "live_pricing_checked": False,
+        "manual_price_review_required": True,
+    }
+
+
+def object_storage_round_gb(size_bytes: int) -> float:
+    return round(size_bytes / 1_000_000_000, 3)
+
+
+def object_storage_percent(part: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return round((part / total) * 100, 1)
+
+
 def object_storage_recommendation_profiles() -> dict[str, list[str]]:
     return {
+        "auto_from_manifest": ["cloudflare-r2", "backblaze-b2", "generic-s3", "aws-s3", "google-cloud-storage"],
         "personal_low_ops": ["cloudflare-r2", "backblaze-b2", "generic-s3", "aws-s3", "google-cloud-storage"],
         "s3_compatible": ["cloudflare-r2", "backblaze-b2", "aws-s3", "generic-s3", "google-cloud-storage"],
         "backup_cost_sensitive": ["backblaze-b2", "cloudflare-r2", "generic-s3", "aws-s3", "google-cloud-storage"],

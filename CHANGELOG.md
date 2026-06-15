@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.43 - 2026-06-15
+
+- Added manifest-aware object storage recommendations.
+- `archive object-storage-recommendation --scenario auto_from_manifest
+  --dry-run` now reads aggregate metadata from `objects/manifests/files.jsonl`
+  to infer a scenario before provider setup planning.
+- Recommendation output now includes `manifest_analysis`, `scenario_source`,
+  and `rough_cost_estimates` with total manifest size, dominant content class,
+  content-class percentages, and non-live storage/egress estimate fields.
+- Rough estimates use a static 2026-06-15 public-pricing snapshot for
+  comparison only; live pricing APIs are not called and humans must still check
+  official calculators/docs before spending money.
+- Kept the command read-only: it writes no files, reads no object bytes, calls
+  no providers, checks no bucket availability, creates no buckets, uploads or
+  downloads nothing, creates no presigned URLs, and echoes no object filenames,
+  local paths, provider account URLs, tokens, or secret values.
+
 ## v0.3.42 - 2026-06-15
 
 - Updated `archive connected-accounts --dry-run` so account-map success is

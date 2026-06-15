@@ -1892,6 +1892,16 @@ def command_object_storage_recommendation(args: argparse.Namespace) -> int:
         print(f"Object storage recommendation dry-run {state}.")
         print(f"Archive: {result.get('archive_id') or '-'}")
         print(f"Scenario: {result.get('scenario') or '-'}")
+        print(f"Scenario source: {result.get('scenario_source') or '-'}")
+        manifest = result.get("manifest_analysis") if isinstance(result.get("manifest_analysis"), dict) else {}
+        dominant = manifest.get("dominant_content_class") if isinstance(manifest.get("dominant_content_class"), dict) else {}
+        print(f"Manifest size: {manifest.get('total_size_gb_decimal', 0)} GB")
+        if dominant:
+            print(
+                "Dominant class: "
+                f"{dominant.get('content_class') or '-'} "
+                f"{dominant.get('share_percent', 0)}%"
+            )
         print(f"Primary: {primary.get('provider') or '-'} ({primary.get('label') or '-'})")
         print("Writes: none")
         if result.get("blockers"):
