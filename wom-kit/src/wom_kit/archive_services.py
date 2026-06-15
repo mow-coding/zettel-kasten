@@ -626,6 +626,10 @@ SOURCE_INTAKE_OBJECT_STORAGE_PROVIDERS = {
     "generic_s3",
     "generic-s3",
 }
+PRESIGNED_URL_OPERATIONS = {"download", "head"}
+PRESIGNED_URL_DEFAULT_TTL_SECONDS = 900
+PRESIGNED_URL_MIN_TTL_SECONDS = 60
+PRESIGNED_URL_MAX_TTL_SECONDS = 86400
 BLOCK_HEADER_VERSION = "wom-block-header/v0.1-draft"
 FOREIGN_BLOCK_QUARANTINE_POLICIES = {"hold_for_human_review", "operator_review", "reject_by_default"}
 FOREIGN_BLOCK_QUARANTINE_DEFAULT_POLICY = "hold_for_human_review"
@@ -27005,6 +27009,165 @@ def resolve_objet_ref(
             "file_bytes_read": False,
             "file_hash_verified_now": False,
             "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": next_safe_actions,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def presigned_url_plan(
+    archive_root: Path | str,
+    *,
+    object_id: str,
+    store_ref: str | None = None,
+    operation: str = "download",
+    ttl_seconds: int = PRESIGNED_URL_DEFAULT_TTL_SECONDS,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("presigned-url-plan is read-only; pass --dry-run.")
+
+    normalized_object_id = normalize_object_id(str(object_id or ""), blockers)
+    normalized_operation = str(operation or "").strip().lower().replace("-", "_")
+    if normalized_operation in {"get", "read"}:
+        normalized_operation = "download"
+    if normalized_operation not in PRESIGNED_URL_OPERATIONS:
+        blockers.append("operation must be one of: " + ", ".join(sorted(PRESIGNED_URL_OPERATIONS)) + ".")
+        normalized_operation = "download"
+
+    try:
+        normalized_ttl_seconds = int(ttl_seconds)
+    except (TypeError, ValueError):
+        blockers.append("ttl_seconds must be an integer.")
+        normalized_ttl_seconds = PRESIGNED_URL_DEFAULT_TTL_SECONDS
+    if normalized_ttl_seconds < PRESIGNED_URL_MIN_TTL_SECONDS or normalized_ttl_seconds > PRESIGNED_URL_MAX_TTL_SECONDS:
+        blockers.append(
+            "ttl_seconds must be between "
+            f"{PRESIGNED_URL_MIN_TTL_SECONDS} and {PRESIGNED_URL_MAX_TTL_SECONDS}."
+        )
+        normalized_ttl_seconds = max(
+            PRESIGNED_URL_MIN_TTL_SECONDS,
+            min(normalized_ttl_seconds, PRESIGNED_URL_MAX_TTL_SECONDS),
+        )
+
+    normalized_store_ref = str(store_ref or "").strip()
+    if normalized_store_ref and not safe_source_intake_ref(normalized_store_ref):
+        blockers.append("store_ref must be a safe label/ref, not a URL, email, token, secret, or path.")
+        normalized_store_ref = ""
+
+    resolution: dict[str, Any] | None = None
+    if normalized_object_id:
+        resolution = resolve_objet_ref(root, object_id=normalized_object_id, dry_run=True)
+        for blocker in resolution.get("blockers", []):
+            blockers.append(str(blocker))
+        for warning in resolution.get("warnings", []):
+            warnings.append(str(warning))
+
+    external_candidates = []
+    if isinstance(resolution, dict) and isinstance(resolution.get("external_candidates"), list):
+        external_candidates = [candidate for candidate in resolution["external_candidates"] if isinstance(candidate, dict)]
+
+    selected_external_candidates: list[dict[str, Any]] = []
+    if normalized_store_ref:
+        selected_external_candidates = [
+            candidate
+            for candidate in external_candidates
+            if str(candidate.get("store_ref") or "") == normalized_store_ref
+        ]
+        if external_candidates and not selected_external_candidates:
+            blockers.append("store_ref_not_found_for_object_id")
+    elif len(external_candidates) == 1:
+        selected_external_candidates = external_candidates
+        candidate_ref = selected_external_candidates[0].get("store_ref")
+        if isinstance(candidate_ref, str) and candidate_ref:
+            normalized_store_ref = candidate_ref
+    elif len(external_candidates) > 1:
+        blockers.append("store_ref_required_when_multiple_external_candidates")
+
+    if normalized_object_id and not external_candidates and resolution and not resolution.get("blockers"):
+        blockers.append("no_external_store_candidate_for_object_id")
+
+    object_storage_status = object_storage_context(root)
+    object_storage_configured = bool(object_storage_status.get("object_storage_configured"))
+    if not object_storage_configured:
+        warnings.append("No local object-storage provider binding is configured; future presigned URL adapters will need one.")
+
+    selected_external_candidate = selected_external_candidates[0] if selected_external_candidates else None
+    plan_state = "blocked" if blockers else "ready_for_future_adapter"
+    next_safe_actions = [
+        f"archive resolve-objet-ref <archive-root> --object-id {normalized_object_id or 'sha256:<hex>'} --dry-run",
+        "Verify provider setup with archive provider-status --dry-run before any future adapter work.",
+        "Require a credential policy check and human approval receipt before any future live provider call.",
+    ]
+    if blockers:
+        next_safe_actions.insert(0, "Fix blockers before treating this as a presigned URL request.")
+    else:
+        next_safe_actions.append("A future adapter may create a URL only if it keeps URL output private and receipt-scoped.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "presigned_url_plan",
+        "archive_id": archive_id,
+        "object_id": normalized_object_id or str(object_id or ""),
+        "plan_state": plan_state,
+        "presigned_url_request": {
+            "operation": normalized_operation,
+            "ttl_seconds": normalized_ttl_seconds,
+            "store_ref": normalized_store_ref or None,
+            "object_storage_provider_binding_present": object_storage_configured,
+        },
+        "resolution_summary": {
+            "resolution_state": resolution.get("resolution_state") if isinstance(resolution, dict) else "not_checked",
+            "manifest_record_count": resolution.get("manifest_record_count") if isinstance(resolution, dict) else 0,
+            "local_openable": bool(resolution.get("local_openable")) if isinstance(resolution, dict) else False,
+            "external_candidate_count": len(external_candidates),
+            "selected_external_candidate": selected_external_candidate,
+        },
+        "current_capability": {
+            "presigned_url_creation_implemented": False,
+            "provider_api_call_implemented": False,
+            "credential_broker_live_adapter_implemented": False,
+            "download_implemented": False,
+            "upload_implemented": False,
+        },
+        "future_adapter_requirements": [
+            "explicit provider adapter implementation",
+            "safe object store binding that does not echo bucket URLs or secrets",
+            "credential access policy check",
+            "human approval receipt for the live provider call",
+            "private URL handling policy that keeps generated URLs out of public records",
+            "short TTL and operation-specific scope",
+            "non-secret audit receipt after adapter execution",
+        ],
+        "privacy_guards": {
+            "absolute_local_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "secret_values_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "object_file_bytes_read": False,
+            "file_hash_verified_now": False,
+            "provider_api_called": False,
+            "presigned_url_created": False,
+            "download_performed": False,
+            "upload_performed": False,
+            "writes": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "presigned_url_created": False,
+            "credential_value_read": False,
+            "provider_url_echoed": False,
+            "object_file_bytes_read": False,
+            "download_performed": False,
+            "upload_performed": False,
+            "receipt_written": False,
         },
         "would_change": [],
         "next_safe_actions": next_safe_actions,

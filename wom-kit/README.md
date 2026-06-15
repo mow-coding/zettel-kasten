@@ -97,6 +97,7 @@ docs/zet-surface-prototypes.md
 docs/notion-source-export-three-store-example.md
 docs/notion-page-snapshot-model.md
 docs/objet-ref-resolution.md
+docs/presigned-url-plan.md
 docs/source-maps.md
 docs/platform-support.md
 docs/server-blueprint.md

@@ -3684,6 +3684,109 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("requires --dry-run", no_dry_output)
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
+    def test_presigned_url_plan_uses_manifest_labels_without_creating_urls_or_reading_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+            digest = "c" * 64
+            unsafe_url = "https://" + "redacted.example/private-presigned"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "object_id": f"sha256:{digest}",
+                        "sha256": digest,
+                        "logical_key": f"objects/external/prehashed/r2_private/{digest[:2]}/{digest}",
+                        "mime": "application/octet-stream",
+                        "size_bytes": 456,
+                        "locations": [
+                            {
+                                "provider": "cloudflare_r2",
+                                "store_kind": "object_storage",
+                                "store_ref": "object-store-20260615",
+                                "availability": "declared_external",
+                                "content_addressed": True,
+                                "byte_verification_by_wom_kit": False,
+                                "provider_url": unsafe_url,
+                            }
+                        ],
+                        "provenance": {"source": "prehashed_external_objet_ledger"},
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "presigned-url-plan",
+                    str(archive_root),
+                    "--object-id",
+                    f"sha256:{digest}",
+                    "--store-ref",
+                    "object-store-20260615",
+                    "--ttl-seconds",
+                    "600",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "presigned_url_plan")
+            self.assertEqual(result["plan_state"], "ready_for_future_adapter")
+            self.assertEqual(result["presigned_url_request"]["operation"], "download")
+            self.assertEqual(result["presigned_url_request"]["ttl_seconds"], 600)
+            self.assertEqual(result["presigned_url_request"]["store_ref"], "object-store-20260615")
+            self.assertTrue(result["presigned_url_request"]["object_storage_provider_binding_present"])
+            self.assertEqual(result["resolution_summary"]["external_candidate_count"], 1)
+            selected = result["resolution_summary"]["selected_external_candidate"]
+            self.assertEqual(selected["provider"], "cloudflare_r2")
+            self.assertEqual(selected["store_ref"], "object-store-20260615")
+            self.assertFalse(result["current_capability"]["presigned_url_creation_implemented"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["presigned_url_created"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["object_file_bytes_read"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn(unsafe_url, output)
+            self.assertNotIn(str(archive_root), output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            unsafe_code, unsafe_output = self.run_cli(
+                [
+                    "presigned-url-plan",
+                    str(archive_root),
+                    "--object-id",
+                    f"sha256:{digest}",
+                    "--store-ref",
+                    unsafe_url,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            unsafe_result = json.loads(unsafe_output)
+            self.assertEqual(unsafe_code, 1, unsafe_output)
+            self.assertFalse(unsafe_result["ok"])
+            self.assertIn("store_ref must be a safe label/ref", " ".join(unsafe_result["blockers"]))
+            self.assertNotIn(unsafe_url, unsafe_output)
+
+            no_dry_code, no_dry_output = self.run_cli(
+                ["presigned-url-plan", str(archive_root), "--object-id", f"sha256:{digest}"]
+            )
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
     def test_zettel_objet_links_preview_resolves_refs_without_echoing_body_or_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
