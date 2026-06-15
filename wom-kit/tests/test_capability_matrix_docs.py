@@ -292,7 +292,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, resolver_text)
         for phrase in (
-            "Status: v0.3.30 credential policy gate checkpoint",
+            "Status: v0.3.31 credential approval receipt writer checkpoint",
             "Objet ref resolver",
             "archive resolve-objet-ref --object-id sha256:<hex> --dry-run",
             "MCP `resolve_objet_ref`",
@@ -301,7 +301,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.30 pre-release",
+            "v0.3.31 pre-release",
             "[Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)",
             "read-only objet reference resolution",
         ):
@@ -396,7 +396,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.30 pre-release",
+            "v0.3.31 pre-release",
             "[IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)",
             "read-only IMAP mailbox source planning",
         ):
@@ -445,7 +445,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.30 pre-release",
+            "v0.3.31 pre-release",
             "[Credential Store Contract](wom-kit/docs/credential-store-contract.md)",
             "read-only credential reference planning",
         ):
@@ -502,7 +502,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.30 pre-release",
+            "v0.3.31 pre-release",
             "[Credential Ref Inventory And Onboarding](wom-kit/docs/credential-ref-inventory-and-onboarding.md)",
             "read-only credential reference planning, inventory",
         ):
@@ -557,7 +557,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.30 pre-release",
+            "v0.3.31 pre-release",
             "[Credential Store Recommendations](wom-kit/docs/credential-store-recommendations.md)",
             "external store recommendation",
         ):
@@ -605,7 +605,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.30 pre-release",
+            "v0.3.31 pre-release",
             "[Credential Vault Onboarding Plan](wom-kit/docs/credential-vault-onboarding-plan.md)",
             "vault onboarding planning",
         ):
@@ -651,7 +651,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.30 pre-release",
+            "v0.3.31 pre-release",
             "[Credential Plaintext Migration Plan](wom-kit/docs/credential-plaintext-migration-plan.md)",
             "plaintext migration planning",
         ):
@@ -708,7 +708,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.30 pre-release",
+            "v0.3.31 pre-release",
             "[Credential Access Broker Plan](wom-kit/docs/credential-access-broker-plan.md)",
             "future access broker planning",
         ):
@@ -726,7 +726,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.24 read-only approval receipt preview baseline",
+            "Status: v0.3.31 credential approval receipt writer checkpoint",
             "credential-access-approval-plan",
             "credential-access-approval",
             "secret-access-approval-plan",
@@ -735,35 +735,37 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "approve_once",
             "deny",
             "The exact `credential_ref` value is not echoed back.",
-            "Even `approve_once` is only a preview",
-            "write an approval receipt",
+            "Use the local CLI for `--approve`.",
+            "needs_review` remains",
+            "writes one archive-internal JSON receipt",
             "grant live approval",
-            "It is an approval receipt preview, not an approval writer.",
+            "grant live adapter execution",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, approval_text)
         self.assertIn("[Credential Access Approval Plan](credential-access-approval-plan.md)", broker_text)
         for phrase in (
             "Credential Access Approval Plan",
-            "human-reviewed approval receipt",
-            "granting live access",
+            "human-reviewed, non-secret approval",
+            "without granting live adapter access",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, contract_text)
         for phrase in (
             "Credential access approval plan",
             "archive credential-access-approval-plan --decision approve_once|deny|needs_review --dry-run",
+            "archive credential-access-approval --decision approve_once|deny --approve --reviewed-by <actor>",
             "MCP `credential_access_approval_plan`",
-            "write no approval receipts",
-            "grant no live approval",
-            "include no secret values in the receipt preview",
+            "records one non-secret archive-internal receipt",
+            "grants no live adapter access",
+            "includes no secret values in the receipt",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.30 pre-release",
+            "v0.3.31 pre-release",
             "[Credential Access Approval Plan](wom-kit/docs/credential-access-approval-plan.md)",
-            "approval receipt preview",
+            "local approval receipt preview/write",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
@@ -779,7 +781,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.30 read-only credential policy gate baseline",
+            "Status: v0.3.31 credential policy gate plus receipt verification checkpoint",
             "credential-policy-check",
             "credential-access-policy-check",
             "secret-policy-check",
@@ -787,6 +789,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "ready_after_approval_receipt",
             "denied_by_policy",
             "live_execution_allowed_now",
+            "--approval-receipt",
+            "verify a written credential access approval receipt",
             "It is a policy gate, not a secret executor.",
         ):
             with self.subTest(phrase=phrase):
@@ -795,7 +799,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("[Credential Policy Check](credential-policy-check.md)", contract_text)
         for phrase in (
             "Credential policy check",
-            "archive credential-policy-check --action-kind <action> --approval-decision approve_once|deny|needs_review --adapter-kind <adapter> --operation <operation> --dry-run",
+            "archive credential-policy-check --action-kind <action> --approval-decision approve_once|deny|needs_review --adapter-kind <adapter> --operation <operation> --approval-receipt <path> --dry-run",
             "MCP `credential_policy_check`",
             "denied_by_policy",
             "run no live adapters",
@@ -804,7 +808,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.30 pre-release",
+            "v0.3.31 pre-release",
             "[Credential Policy Check](wom-kit/docs/credential-policy-check.md)",
             "credential policy checking",
         ):
@@ -858,7 +862,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.30 pre-release",
+            "v0.3.31 pre-release",
             "[Credential Adapter Readiness Plan](wom-kit/docs/credential-adapter-readiness-plan.md)",
             "adapter readiness planning",
         ):
@@ -912,7 +916,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.30 pre-release",
+            "v0.3.31 pre-release",
             "[Credential Adapter Manifest Plan](wom-kit/docs/credential-adapter-manifest-plan.md)",
             "adapter manifest preview",
         ):
@@ -955,7 +959,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.30 pre-release",
+            "v0.3.31 pre-release",
             "[Credential Adapter Audit Plan](wom-kit/docs/credential-adapter-audit-plan.md)",
             "adapter audit receipt preview",
         ):

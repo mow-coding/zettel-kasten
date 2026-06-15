@@ -428,6 +428,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "enum": sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
                     "default": "windows",
                 },
+                "approval_receipt": {
+                    "type": "string",
+                    "description": "Optional archive-relative credential access approval receipt to verify.",
+                },
                 "dry_run": {"type": "boolean", "default": True},
             },
             "required": ["archive_root", "credential_id", "action_kind"],
@@ -2251,6 +2255,7 @@ def tool_credential_policy_check(arguments: dict[str, Any]) -> dict[str, Any]:
         consumer=optional_string_arg(arguments, "consumer"),
         reviewed_by=optional_string_arg(arguments, "reviewed_by"),
         platform=optional_string_arg(arguments, "platform") or "windows",
+        approval_receipt=optional_string_arg(arguments, "approval_receipt"),
         dry_run=True,
     )
     return tool_success_result(

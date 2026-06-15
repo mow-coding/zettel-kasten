@@ -38,7 +38,7 @@ Commands:
   credential-access-broker-plan
           Plan a future approved credential broker request without retrieving secrets.
   credential-access-approval-plan
-          Preview a future credential access approval receipt without writing or reading secrets.
+          Preview or record a credential access approval receipt without reading secrets.
   credential-adapter-readiness-plan
           Preview whether a future credential adapter contract is safe to implement.
   credential-adapter-manifest-plan
@@ -2195,6 +2195,7 @@ def command_credential_policy_check(args: argparse.Namespace) -> int:
             consumer=args.consumer,
             reviewed_by=args.reviewed_by,
             platform=args.platform,
+            approval_receipt=args.approval_receipt,
             dry_run=True,
         )
     except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
@@ -2274,8 +2275,8 @@ def command_credential_access_broker_plan(args: argparse.Namespace) -> int:
 
 
 def command_credential_access_approval_plan(args: argparse.Namespace) -> int:
-    if not args.dry_run:
-        print("credential-access-approval-plan is read-only and requires --dry-run.", file=sys.stderr)
+    if args.dry_run == args.approve:
+        print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
         return 1
     try:
         result = archive_services.credential_access_approval_plan(
@@ -2290,7 +2291,8 @@ def command_credential_access_approval_plan(args: argparse.Namespace) -> int:
             consumer=args.consumer,
             reviewed_by=args.reviewed_by,
             platform=args.platform,
-            dry_run=True,
+            dry_run=args.dry_run,
+            approve=args.approve,
         )
     except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
@@ -2306,8 +2308,8 @@ def command_credential_access_approval_plan(args: argparse.Namespace) -> int:
         print(f"Decision: {result.get('decision') or '-'}")
         print(f"Action: {summary.get('action_kind') or '-'}")
         print(f"Credential: {summary.get('credential_id') or '-'}")
-        print(f"Receipt: {result.get('proposed_receipt_path') or '-'}")
-        print("Writes: none")
+        print(f"Receipt: {result.get('receipt_path') or result.get('proposed_receipt_path') or '-'}")
+        print(f"Writes: {'receipt' if result.get('files_written') else 'none'}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -6772,6 +6774,10 @@ def build_parser() -> argparse.ArgumentParser:
         default="windows",
         help="Host platform for OS keyring wording.",
     )
+    credential_policy_check.add_argument(
+        "--approval-receipt",
+        help="Optional archive-relative credential access approval receipt to verify.",
+    )
     credential_policy_check.add_argument("--dry-run", action="store_true", help="Required; read-only policy check.")
     credential_policy_check.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_policy_check.set_defaults(func=command_credential_policy_check)
@@ -6820,7 +6826,7 @@ def build_parser() -> argparse.ArgumentParser:
     credential_access_approval_plan = subcommands.add_parser(
         "credential-access-approval-plan",
         aliases=["credential-access-approval", "secret-access-approval-plan"],
-        help="Preview a future credential access approval receipt without writing or reading secrets.",
+        help="Preview or record a credential access approval receipt without reading secrets.",
     )
     credential_access_approval_plan.add_argument("archive_root", help="Archive root to inspect.")
     credential_access_approval_plan.add_argument("--credential-id", required=True, help="Safe credential label, e.g. cred:openai-api.")
@@ -6854,14 +6860,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="External store class that would hold the real secret.",
     )
     credential_access_approval_plan.add_argument("--consumer", default="wom_local_adapter", help="Safe label for the tool/adapter asking to use the credential.")
-    credential_access_approval_plan.add_argument("--reviewed-by", default="human:pending-review", help="Safe non-secret reviewer label.")
+    credential_access_approval_plan.add_argument("--reviewed-by", help="Safe non-secret reviewer label. Required with --approve.")
     credential_access_approval_plan.add_argument(
         "--platform",
         choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
         default="windows",
         help="Host platform for OS keyring wording.",
     )
-    credential_access_approval_plan.add_argument("--dry-run", action="store_true", help="Required; read-only approval receipt preview.")
+    credential_access_approval_plan.add_argument("--dry-run", action="store_true", help="Preview approval receipt without writing files.")
+    credential_access_approval_plan.add_argument("--approve", action="store_true", help="Write the reviewed approval receipt without reading secrets.")
     credential_access_approval_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_access_approval_plan.set_defaults(func=command_credential_access_approval_plan)
 

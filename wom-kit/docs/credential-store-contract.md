@@ -122,9 +122,9 @@ opening a vault or reading any secret value.
 v0.3.23 adds [Credential Access Broker Plan](credential-access-broker-plan.md)
 so WOM can describe future approved secret use without implementing secret retrieval.
 
-v0.3.24 adds [Credential Access Approval Plan](credential-access-approval-plan.md)
-so WOM can preview the human-reviewed approval receipt without writing it or
-granting live access.
+v0.3.31 updates [Credential Access Approval Plan](credential-access-approval-plan.md)
+so WOM can preview or locally record a human-reviewed, non-secret approval
+receipt without granting live adapter access.
 
 v0.3.25 adds [Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md)
 so WOM can preview the future local adapter contract without opening a keyring
@@ -144,8 +144,9 @@ v0.3.29 adds [Credential Plaintext Migration Plan](credential-plaintext-migratio
 so WOM can plan pathless migration from a human-selected plaintext note without
 reading the note or writing a vault entry.
 
-v0.3.30 adds [Credential Policy Check](credential-policy-check.md) so future
-adapter execution has a concrete read-only policy gate before any secret use.
+v0.3.31 updates [Credential Policy Check](credential-policy-check.md) so future
+adapter execution has a concrete read-only policy gate that can also verify a
+written approval receipt before any secret use.
 
 ## Mail Sources
 
