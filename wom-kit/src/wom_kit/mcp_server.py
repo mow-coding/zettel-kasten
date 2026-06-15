@@ -304,6 +304,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "properties": {
                 "archive_root": {"type": "string", "description": "Path to the archive root."},
                 "source_id": {"type": "string"},
+                "adapter_id": {
+                    "type": "string",
+                    "description": "Optional safe adapter manifest id to check under config/imap-adapters/.",
+                },
                 "provider": {
                     "type": "string",
                     "enum": sorted(archive_services.IMAP_MAILBOX_ALLOWED_PROVIDERS),
@@ -2727,6 +2731,7 @@ def tool_imap_mailbox_adapter_readiness_plan(arguments: dict[str, Any]) -> dict[
         archive_services.imap_mailbox_adapter_readiness_plan,
         archive_root,
         source_id=require_string_arg(arguments, "source_id"),
+        adapter_id=optional_string_arg(arguments, "adapter_id"),
         provider=optional_string_arg(arguments, "provider") or "generic_imap",
         imap_host=optional_string_arg(arguments, "imap_host"),
         imap_port=imap_port,

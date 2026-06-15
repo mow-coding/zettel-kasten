@@ -6,6 +6,32 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.54 - 2026-06-16
+
+- Extended `archive imap-mailbox-adapter-readiness-plan --dry-run` and MCP
+  `imap_mailbox_adapter_readiness_plan` with optional `--adapter-id` /
+  `adapter_id` manifest status checks.
+- The readiness output now includes `adapter_manifest_summary.status` with
+  `not_checked`, `missing`, `present_and_schema_valid`, `invalid`, or
+  `blocked`.
+- When a safe adapter id is supplied, readiness reads only the archive-relative
+  non-secret manifest under `config/imap-adapters/`, validates it against
+  `imap-mailbox-adapter-manifest.schema.json`, and checks the archive id,
+  adapter id, privacy contract, and closed actions without echoing user-edited
+  schema issue values.
+- Updated `wom-kit/docs/imap-mailbox-adapter-readiness-plan.md`, the capability
+  matrix, README version baseline, release notes, CLI tests, and MCP tests.
+- Kept the check read-only: it writes nothing, exposes no live write MCP tool,
+  opens no IMAP connection, attempts no login, selects no mailbox, searches no
+  mailbox, lists no candidate messages, reads no IMAP UIDs, Message-ID values,
+  headers, bodies, or attachments, creates no derived text, retrieves no
+  secrets, starts no OAuth, calls no providers, and echoes no email addresses,
+  username values, exact account refs, exact credential refs, exact mailbox
+  refs, IMAP host values, provider URLs, message ids, subjects, sender or
+  recipient values, attachment names, approval receipt paths, selection receipt
+  paths, schema validation issue values, local absolute paths, tokens, or secret
+  values.
+
 ## v0.3.53 - 2026-06-16
 
 - Added CLI `archive imap-mailbox-adapter-manifest-write --dry-run|--approve`

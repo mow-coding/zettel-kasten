@@ -11438,6 +11438,7 @@ def imap_mailbox_adapter_readiness_plan(
     archive_root: Path | str,
     *,
     source_id: str,
+    adapter_id: str | None = None,
     provider: str | None = None,
     imap_host: str | None = None,
     imap_port: int | None = None,
@@ -11512,6 +11513,14 @@ def imap_mailbox_adapter_readiness_plan(
     missing_modules = [name for name, summary in module_checks.items() if not summary["available"]]
     for name in missing_modules:
         blockers.append(f"python_module_missing_for_future_imap_adapter:{name}")
+
+    adapter_manifest_summary = imap_mailbox_adapter_manifest_status_summary(
+        root,
+        archive_id=archive_id,
+        adapter_id=adapter_id,
+        blockers=blockers,
+        warnings=warnings,
+    )
 
     request_state = str(request_preview.get("request_state") or "blocked")
     if blockers:
@@ -11613,6 +11622,7 @@ def imap_mailbox_adapter_readiness_plan(
             "tls_context_created": False,
             "imap_connection_opened": False,
         },
+        "adapter_manifest_summary": json_safe(adapter_manifest_summary),
         "operation_scope": json_safe(operation_scope),
         "required_gates": {
             "imap_mailbox_plan": True,
@@ -11631,6 +11641,9 @@ def imap_mailbox_adapter_readiness_plan(
             "readiness_planning_available": True,
             "operation_request_package_available": True,
             "runtime_module_check_available": True,
+            "imap_adapter_manifest_status_check_available": True,
+            "imap_adapter_manifest_schema_validation_available": True,
+            "imap_adapter_manifest_write_implemented": True,
             "live_imap_adapter_implemented": False,
             "imap_connection_implemented": False,
             "imap_login_implemented": False,
@@ -11682,12 +11695,236 @@ def imap_mailbox_adapter_readiness_plan(
             "Run archive imap-mailbox-plan --dry-run and resolve mailbox-source blockers.",
             "Run archive imap-mailbox-operation-request-plan --dry-run to prepare the future adapter request package.",
             "Run archive credential-policy-check with a human approval receipt before any future live IMAP adapter.",
-            "Prepare an adapter manifest before implementing any command that opens a mailbox.",
+            "Prepare and verify an IMAP adapter manifest before implementing any command that opens a mailbox.",
             "Keep email addresses, mailbox names, message content, attachment names, credential refs, and host values out of public records.",
         ],
         "would_change": [],
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
+    }
+
+
+def imap_mailbox_adapter_manifest_status_summary(
+    archive_root: Path,
+    *,
+    archive_id: str,
+    adapter_id: str | None,
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    raw_adapter_id = str(adapter_id or "").strip()
+    schema_name = "imap-mailbox-adapter-manifest.schema.json"
+    if not raw_adapter_id:
+        return {
+            "checked": False,
+            "status": "not_checked",
+            "adapter_id": None,
+            "manifest_path": None,
+            "manifest_path_kind": "archive_relative",
+            "manifest_exists": False,
+            "schema_validation": {
+                "schema_name": schema_name,
+                "ok": None,
+                "issue_count": None,
+                "issues_echoed": False,
+            },
+            "manifest_contract": {},
+            "local_absolute_path_echoed": False,
+            "secret_values_echoed": False,
+        }
+
+    if not safe_credential_adapter_id(raw_adapter_id):
+        blockers.append("adapter_id must be a safe path-segment label such as local-imap or desktop-imap.")
+        return {
+            "checked": True,
+            "status": "blocked",
+            "adapter_id": "invalid",
+            "manifest_path": None,
+            "manifest_path_kind": "archive_relative",
+            "manifest_exists": False,
+            "schema_validation": {
+                "schema_name": schema_name,
+                "ok": False,
+                "issue_count": None,
+                "issues_echoed": False,
+            },
+            "manifest_contract": {},
+            "local_absolute_path_echoed": False,
+            "secret_values_echoed": False,
+        }
+
+    manifest_relative = f"{IMAP_MAILBOX_ADAPTER_MANIFESTS_DIR}/{raw_adapter_id}.imap-mailbox-adapter.json"
+    manifest_path = archive_internal_path(archive_root, manifest_relative)
+    if not manifest_path.is_file():
+        warnings.append(f"imap_adapter_manifest_missing:{raw_adapter_id}")
+        return {
+            "checked": True,
+            "status": "missing",
+            "adapter_id": raw_adapter_id,
+            "manifest_path": manifest_relative,
+            "manifest_path_kind": "archive_relative",
+            "manifest_exists": False,
+            "schema_validation": {
+                "schema_name": schema_name,
+                "ok": None,
+                "issue_count": None,
+                "issues_echoed": False,
+            },
+            "manifest_contract": {},
+            "local_absolute_path_echoed": False,
+            "secret_values_echoed": False,
+        }
+
+    read_blockers: list[str] = []
+    manifest_doc = load_json_object_for_review(manifest_path, f"IMAP adapter manifest {raw_adapter_id}", read_blockers)
+    if manifest_doc is None:
+        blockers.append(f"imap_adapter_manifest_unreadable_or_invalid_json:{raw_adapter_id}")
+        return {
+            "checked": True,
+            "status": "invalid",
+            "adapter_id": raw_adapter_id,
+            "manifest_path": manifest_relative,
+            "manifest_path_kind": "archive_relative",
+            "manifest_exists": True,
+            "schema_validation": {
+                "schema_name": schema_name,
+                "ok": False,
+                "issue_count": None,
+                "issues_echoed": False,
+            },
+            "manifest_contract": {},
+            "local_absolute_path_echoed": False,
+            "secret_values_echoed": False,
+        }
+
+    schema_issues = validate_schema(manifest_doc, schema_name)
+    if schema_issues:
+        blockers.append(f"imap_adapter_manifest_schema_invalid:{raw_adapter_id}")
+
+    archive_id_matches = manifest_doc.get("archive_id") == archive_id
+    adapter_id_matches = manifest_doc.get("adapter_id") == raw_adapter_id
+    if not archive_id_matches:
+        blockers.append(f"imap_adapter_manifest_archive_id_mismatch:{raw_adapter_id}")
+    if not adapter_id_matches:
+        blockers.append(f"imap_adapter_manifest_adapter_id_mismatch:{raw_adapter_id}")
+
+    privacy_contract = manifest_doc.get("privacy_contract") if isinstance(manifest_doc.get("privacy_contract"), dict) else {}
+    privacy_contract_non_secret = all(
+        privacy_contract.get(key) is False
+        for key in [
+            "email_addresses_in_manifest",
+            "username_values_in_manifest",
+            "exact_account_refs_in_manifest",
+            "exact_credential_refs_in_manifest",
+            "exact_mailbox_refs_in_manifest",
+            "imap_host_values_in_manifest",
+            "provider_urls_in_manifest",
+            "message_ids_in_manifest",
+            "subjects_in_manifest",
+            "sender_or_recipient_values_in_manifest",
+            "message_headers_in_manifest",
+            "message_bodies_in_manifest",
+            "attachment_names_in_manifest",
+            "local_absolute_paths_in_manifest",
+            "secret_values_in_manifest",
+            "ai_visible_secret_output_allowed",
+        ]
+    )
+    if not privacy_contract_non_secret:
+        blockers.append(f"imap_adapter_manifest_privacy_contract_not_non_secret:{raw_adapter_id}")
+
+    closed_actions = manifest_doc.get("closed_actions") if isinstance(manifest_doc.get("closed_actions"), dict) else {}
+    closed_actions_remain_closed = all(
+        closed_actions.get(key) is False
+        for key in [
+            "imap_connection_opened",
+            "imap_login_attempted",
+            "mailbox_selected",
+            "mailbox_searched",
+            "candidate_messages_listed",
+            "message_uids_read",
+            "message_ids_read",
+            "message_headers_read",
+            "message_bodies_read",
+            "attachments_read",
+            "derived_text_created",
+            "credential_value_read",
+            "secret_value_read",
+            "provider_api_called",
+            "oauth_started",
+        ]
+    )
+    if not closed_actions_remain_closed:
+        blockers.append(f"imap_adapter_manifest_closed_actions_not_closed:{raw_adapter_id}")
+
+    raw_supported_providers = (
+        manifest_doc.get("supported_providers") if isinstance(manifest_doc.get("supported_providers"), list) else []
+    )
+    raw_supported_operations = (
+        manifest_doc.get("supported_operations") if isinstance(manifest_doc.get("supported_operations"), list) else []
+    )
+    raw_supported_selection_rules = (
+        manifest_doc.get("supported_selection_rules")
+        if isinstance(manifest_doc.get("supported_selection_rules"), list)
+        else []
+    )
+    safe_providers = [
+        item
+        for item in raw_supported_providers
+        if isinstance(item, str) and item in IMAP_MAILBOX_ALLOWED_PROVIDERS
+    ]
+    safe_operations = [
+        item
+        for item in raw_supported_operations
+        if isinstance(item, str) and item in IMAP_MAILBOX_OPERATION_REQUEST_OPERATIONS
+    ]
+    safe_selection_rules = [
+        item
+        for item in raw_supported_selection_rules
+        if isinstance(item, str) and item in IMAP_MAILBOX_SELECTION_RULES
+    ]
+    manifest_contract = {
+        "schema": manifest_doc.get("schema")
+        if manifest_doc.get("schema") == IMAP_MAILBOX_ADAPTER_MANIFEST_SCHEMA
+        else None,
+        "manifest_kind": manifest_doc.get("manifest_kind")
+        if manifest_doc.get("manifest_kind") == "imap_mailbox_adapter_manifest"
+        else None,
+        "manifest_version": manifest_doc.get("manifest_version") if manifest_doc.get("manifest_version") == "v0.1" else None,
+        "adapter_id_matches_request": adapter_id_matches,
+        "archive_id_matches_archive": archive_id_matches,
+        "privacy_contract_non_secret": privacy_contract_non_secret,
+        "closed_actions_remain_closed": closed_actions_remain_closed,
+        "supported_providers": safe_providers,
+        "supported_operations": safe_operations,
+        "supported_selection_rules": safe_selection_rules,
+        "supported_provider_count": len(raw_supported_providers),
+        "supported_operation_count": len(raw_supported_operations),
+        "supported_selection_rule_count": len(raw_supported_selection_rules),
+    }
+    contract_ok = (
+        not schema_issues
+        and archive_id_matches
+        and adapter_id_matches
+        and privacy_contract_non_secret
+        and closed_actions_remain_closed
+    )
+    return {
+        "checked": True,
+        "status": "present_and_schema_valid" if contract_ok else "invalid",
+        "adapter_id": raw_adapter_id,
+        "manifest_path": manifest_relative,
+        "manifest_path_kind": "archive_relative",
+        "manifest_exists": True,
+        "schema_validation": {
+            "schema_name": schema_name,
+            "ok": not schema_issues,
+            "issue_count": len(schema_issues),
+            "issues_echoed": False,
+        },
+        "manifest_contract": manifest_contract,
+        "local_absolute_path_echoed": False,
+        "secret_values_echoed": False,
     }
 
 

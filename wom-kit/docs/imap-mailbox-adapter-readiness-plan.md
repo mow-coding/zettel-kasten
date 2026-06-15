@@ -1,7 +1,7 @@
 # IMAP Mailbox Adapter Readiness Plan
 
-Status: v0.3.47 read-only adapter readiness baseline
-Date: 2026-06-15
+Status: v0.3.54 read-only adapter readiness plus manifest status baseline
+Date: 2026-06-16
 
 `imap-mailbox-adapter-readiness-plan` checks whether WOM-kit has the local
 planning pieces needed before a future IMAP mailbox adapter can be implemented
@@ -14,6 +14,7 @@ It is not an IMAP client. It does not open a mailbox.
 ```bash
 archive imap-mailbox-adapter-readiness-plan <archive-root> \
   --source-id imap:gmail-personal \
+  --adapter-id local-imap \
   --provider gmail \
   --account-ref imap:account:gmail-personal \
   --username-ref env:WOM_GMAIL_USERNAME \
@@ -53,6 +54,12 @@ archive imap-mailbox-adapter-manifest-plan <archive-root> --dry-run
 MCP: imap_mailbox_adapter_manifest_plan
 ```
 
+Related local adapter manifest write:
+
+```text
+archive imap-mailbox-adapter-manifest-write <archive-root> --dry-run|--approve
+```
+
 Related mailbox selection plan:
 
 ```text
@@ -69,8 +76,8 @@ MCP: imap_mailbox_adapter_audit_plan
 
 ## What It Checks
 
-The planner composes the existing read-only request package and adds a local
-runtime readiness summary.
+The planner composes the existing read-only request package and adds local
+runtime and adapter-manifest readiness summaries.
 
 It checks:
 
@@ -79,6 +86,12 @@ It checks:
 - whether the requested operation label is supported,
 - whether the Python runtime has the standard modules expected by a future
   adapter, currently `imaplib` and `email`,
+- when `--adapter-id <id>` is supplied, whether the non-secret adapter
+  manifest exists under `config/imap-adapters/`,
+- whether that manifest validates against
+  `imap-mailbox-adapter-manifest.schema.json`,
+- whether the manifest's archive id, adapter id, privacy contract, and closed
+  actions still match the safe non-secret adapter boundary,
 - which approval and adapter-manifest gates are still required.
 
 Supported future operation labels:
@@ -88,7 +101,7 @@ Supported future operation labels:
 - `attachment_capture`
 - `derived_text_capture`
 
-These are readiness labels only. v0.3.47 still does not implement the live
+These are readiness labels only. v0.3.54 still does not implement the live
 adapter that would perform them.
 
 ## Readiness States
@@ -107,6 +120,29 @@ mailbox.
 
 `live_execution_allowed_now` remains `false`.
 
+## Adapter Manifest Summary
+
+When `--adapter-id <id>` is provided, the JSON output includes
+`adapter_manifest_summary`.
+
+Possible `adapter_manifest_summary.status` values:
+
+- `not_checked`
+- `missing`
+- `present_and_schema_valid`
+- `invalid`
+- `blocked`
+
+The summary may echo only the safe adapter id and archive-relative manifest
+path, such as:
+
+```text
+config/imap-adapters/local-imap.imap-mailbox-adapter.json
+```
+
+It must not echo local absolute paths, exact credential refs, account refs,
+mailbox refs, usernames, email addresses, tokens, or secret values.
+
 ## What It Does Not Echo
 
 The planner does not echo:
@@ -123,6 +159,7 @@ The planner does not echo:
 - attachment names,
 - approval receipt paths,
 - local absolute paths,
+- schema validation issue values from a user-edited manifest,
 - secret values.
 
 Safe public labels such as `gmail`, `naver`, `generic_imap`, `imaplib`,
