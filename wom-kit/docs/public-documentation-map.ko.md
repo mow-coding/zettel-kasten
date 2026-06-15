@@ -269,6 +269,7 @@ Specs:
 Schemas:
 
 - [Schemas Directory](../schemas/)
+- [IMAP Mailbox Adapter Manifest Schema](../schemas/imap-mailbox-adapter-manifest.schema.json)
 
 이 문서들은 구현 계약에 가깝습니다. 제품 철학 문서보다 더 정확하고 엄격해야 합니다.
 

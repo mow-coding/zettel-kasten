@@ -2215,6 +2215,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["lifecycle_action"], "imap_mailbox_adapter_manifest_plan")
             self.assertEqual(result["proposed_manifest_path"], "config/imap-adapters/local-imap.imap-mailbox-adapter.json")
             manifest = result["manifest_preview"]
+            self.assertEqual(manifest["schema"], archive_services.IMAP_MAILBOX_ADAPTER_MANIFEST_SCHEMA)
             self.assertEqual(manifest["manifest_kind"], "imap_mailbox_adapter_manifest")
             self.assertEqual(manifest["adapter_id"], "local-imap")
             self.assertEqual(manifest["adapter_kind"], "imap_mailbox")
@@ -2236,6 +2237,9 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(result["closed_actions"]["message_headers_read"])
             self.assertFalse(result["privacy_guards"]["email_addresses_echoed"])
             self.assertFalse(result["privacy_guards"]["exact_credential_refs_echoed"])
+            self.assertTrue(result["schema_validation"]["ok"])
+            self.assertEqual(result["schema_validation"]["schema_name"], "imap-mailbox-adapter-manifest.schema.json")
+            self.assertEqual(archive_cli.validate_schema(manifest, "imap-mailbox-adapter-manifest.schema.json"), [])
             self.assertEqual(result["would_change"], [])
             self.assertFalse((archive_root / result["proposed_manifest_path"]).exists())
             self.assertNotIn("imap:account:naver-personal", output)

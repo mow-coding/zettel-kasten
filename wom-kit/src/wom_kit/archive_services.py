@@ -1227,6 +1227,7 @@ IMAP_MAILBOX_SELECTION_RULES = {
     "since_days_window",
     "human_review_queue",
 }
+IMAP_MAILBOX_ADAPTER_MANIFEST_SCHEMA = "wom-kit/imap-mailbox-adapter-manifest/v0.1"
 IMAP_MAILBOX_ADAPTER_MANIFESTS_DIR = "config/imap-adapters"
 IMAP_MAILBOX_ADAPTER_AUDIT_RECEIPTS_DIR = "receipts/imap/adapter-audits"
 IMAP_MAILBOX_ADAPTER_AUDIT_RESULT_STATUSES = {"not_run", "succeeded", "failed", "denied"}
@@ -12037,6 +12038,7 @@ def imap_mailbox_adapter_manifest_plan(
 
     proposed_manifest_path = f"{IMAP_MAILBOX_ADAPTER_MANIFESTS_DIR}/{resolved_adapter_id}.imap-mailbox-adapter.json"
     manifest_preview = {
+        "schema": IMAP_MAILBOX_ADAPTER_MANIFEST_SCHEMA,
         "manifest_kind": "imap_mailbox_adapter_manifest",
         "manifest_version": "v0.1",
         "archive_id": archive_id,
@@ -12094,6 +12096,9 @@ def imap_mailbox_adapter_manifest_plan(
             "oauth_started": False,
         },
     }
+    schema_issues = validate_schema(manifest_preview, "imap-mailbox-adapter-manifest.schema.json")
+    if schema_issues:
+        blockers.extend(f"{issue.data_path}: {issue.message}" for issue in schema_issues)
 
     return {
         "ok": not blockers,
@@ -12102,6 +12107,11 @@ def imap_mailbox_adapter_manifest_plan(
         "archive_id": archive_id,
         "proposed_manifest_path": proposed_manifest_path,
         "manifest_preview": json_safe(manifest_preview),
+        "schema_validation": {
+            "schema_name": "imap-mailbox-adapter-manifest.schema.json",
+            "ok": not schema_issues,
+            "issue_count": len(schema_issues),
+        },
         "next_safe_actions": [
             "Review the IMAP adapter manifest preview locally.",
             "Only a future approval-gated writer may persist this manifest.",

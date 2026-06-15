@@ -1,0 +1,270 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/wom-kit/imap-mailbox-adapter-manifest.schema.json",
+  "title": "WOM IMAP Mailbox Adapter Manifest",
+  "type": "object",
+  "required": [
+    "schema",
+    "manifest_kind",
+    "manifest_version",
+    "archive_id",
+    "adapter_id",
+    "adapter_kind",
+    "adapter_family",
+    "platform",
+    "consumer",
+    "supported_providers",
+    "supported_operations",
+    "supported_selection_rules",
+    "requires",
+    "privacy_contract",
+    "closed_actions"
+  ],
+  "properties": {
+    "schema": {
+      "const": "wom-kit/imap-mailbox-adapter-manifest/v0.1"
+    },
+    "manifest_kind": {
+      "const": "imap_mailbox_adapter_manifest"
+    },
+    "manifest_version": {
+      "const": "v0.1"
+    },
+    "archive_id": {
+      "type": "string"
+    },
+    "adapter_id": {
+      "type": "string"
+    },
+    "adapter_kind": {
+      "const": "imap_mailbox"
+    },
+    "adapter_family": {
+      "const": "mail_source"
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "cross_platform",
+        "linux",
+        "macos",
+        "windows"
+      ]
+    },
+    "consumer": {
+      "type": "string"
+    },
+    "supported_providers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "generic_imap",
+          "gmail",
+          "naver"
+        ]
+      }
+    },
+    "supported_operations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "attachment_capture",
+          "derived_text_capture",
+          "header_metadata_scan",
+          "message_rfc822_capture"
+        ]
+      }
+    },
+    "supported_selection_rules": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "human_review_queue",
+          "newest_first",
+          "since_days_window",
+          "unread_first"
+        ]
+      }
+    },
+    "requires": {
+      "type": "object",
+      "required": [
+        "imap_mailbox_source_plan_before_use",
+        "operation_request_package_before_use",
+        "credential_policy_gate_before_use",
+        "human_approval_receipt_before_use",
+        "mailbox_selection_plan_before_use",
+        "non_secret_adapter_audit_receipt_after_use",
+        "message_capture_separate_approval"
+      ],
+      "properties": {
+        "imap_mailbox_source_plan_before_use": {
+          "type": "boolean"
+        },
+        "operation_request_package_before_use": {
+          "type": "boolean"
+        },
+        "credential_policy_gate_before_use": {
+          "type": "boolean"
+        },
+        "human_approval_receipt_before_use": {
+          "type": "boolean"
+        },
+        "mailbox_selection_plan_before_use": {
+          "type": "boolean"
+        },
+        "non_secret_adapter_audit_receipt_after_use": {
+          "type": "boolean"
+        },
+        "message_capture_separate_approval": {
+          "type": "boolean"
+        }
+      }
+    },
+    "privacy_contract": {
+      "type": "object",
+      "required": [
+        "email_addresses_in_manifest",
+        "username_values_in_manifest",
+        "exact_account_refs_in_manifest",
+        "exact_credential_refs_in_manifest",
+        "exact_mailbox_refs_in_manifest",
+        "imap_host_values_in_manifest",
+        "provider_urls_in_manifest",
+        "message_ids_in_manifest",
+        "subjects_in_manifest",
+        "sender_or_recipient_values_in_manifest",
+        "message_headers_in_manifest",
+        "message_bodies_in_manifest",
+        "attachment_names_in_manifest",
+        "local_absolute_paths_in_manifest",
+        "secret_values_in_manifest",
+        "ai_visible_secret_output_allowed"
+      ],
+      "properties": {
+        "email_addresses_in_manifest": {
+          "type": "boolean"
+        },
+        "username_values_in_manifest": {
+          "type": "boolean"
+        },
+        "exact_account_refs_in_manifest": {
+          "type": "boolean"
+        },
+        "exact_credential_refs_in_manifest": {
+          "type": "boolean"
+        },
+        "exact_mailbox_refs_in_manifest": {
+          "type": "boolean"
+        },
+        "imap_host_values_in_manifest": {
+          "type": "boolean"
+        },
+        "provider_urls_in_manifest": {
+          "type": "boolean"
+        },
+        "message_ids_in_manifest": {
+          "type": "boolean"
+        },
+        "subjects_in_manifest": {
+          "type": "boolean"
+        },
+        "sender_or_recipient_values_in_manifest": {
+          "type": "boolean"
+        },
+        "message_headers_in_manifest": {
+          "type": "boolean"
+        },
+        "message_bodies_in_manifest": {
+          "type": "boolean"
+        },
+        "attachment_names_in_manifest": {
+          "type": "boolean"
+        },
+        "local_absolute_paths_in_manifest": {
+          "type": "boolean"
+        },
+        "secret_values_in_manifest": {
+          "type": "boolean"
+        },
+        "ai_visible_secret_output_allowed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "closed_actions": {
+      "type": "object",
+      "required": [
+        "adapter_manifest_written",
+        "imap_connection_opened",
+        "imap_login_attempted",
+        "mailbox_selected",
+        "mailbox_searched",
+        "candidate_messages_listed",
+        "message_uids_read",
+        "message_ids_read",
+        "message_headers_read",
+        "message_bodies_read",
+        "attachments_read",
+        "derived_text_created",
+        "credential_value_read",
+        "secret_value_read",
+        "provider_api_called",
+        "oauth_started"
+      ],
+      "properties": {
+        "adapter_manifest_written": {
+          "type": "boolean"
+        },
+        "imap_connection_opened": {
+          "type": "boolean"
+        },
+        "imap_login_attempted": {
+          "type": "boolean"
+        },
+        "mailbox_selected": {
+          "type": "boolean"
+        },
+        "mailbox_searched": {
+          "type": "boolean"
+        },
+        "candidate_messages_listed": {
+          "type": "boolean"
+        },
+        "message_uids_read": {
+          "type": "boolean"
+        },
+        "message_ids_read": {
+          "type": "boolean"
+        },
+        "message_headers_read": {
+          "type": "boolean"
+        },
+        "message_bodies_read": {
+          "type": "boolean"
+        },
+        "attachments_read": {
+          "type": "boolean"
+        },
+        "derived_text_created": {
+          "type": "boolean"
+        },
+        "credential_value_read": {
+          "type": "boolean"
+        },
+        "secret_value_read": {
+          "type": "boolean"
+        },
+        "provider_api_called": {
+          "type": "boolean"
+        },
+        "oauth_started": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

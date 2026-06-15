@@ -279,6 +279,7 @@ Specs:
 Schemas:
 
 - [Schemas Directory](../schemas/)
+- [IMAP Mailbox Adapter Manifest Schema](../schemas/imap-mailbox-adapter-manifest.schema.json)
 
 These documents are closer to implementation contracts. They should stay more precise than product philosophy documents.
 
