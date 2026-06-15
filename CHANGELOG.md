@@ -6,6 +6,30 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.47 - 2026-06-15
+
+- Added read-only IMAP mailbox adapter readiness checks:
+  `archive imap-mailbox-adapter-readiness-plan --dry-run`, alias
+  `archive imap-mailbox-adapter-plan --dry-run`, and alias
+  `archive mailbox-adapter-readiness --dry-run`.
+- Added MCP tool `imap_mailbox_adapter_readiness_plan` for the same
+  read-only readiness surface.
+- The readiness planner composes the IMAP operation request package with local
+  runtime module checks for the future adapter path.
+- `readiness_state` now distinguishes `ready_for_request_package`,
+  `ready_for_future_adapter_after_approval`, human denial, policy denial, and
+  blockers without treating runtime readiness as live mailbox access.
+- Added `wom-kit/docs/imap-mailbox-adapter-readiness-plan.md` and public
+  documentation links.
+- Kept the planner read-only: it opens no IMAP connection, attempts no login,
+  selects no mailbox, reads no headers, bodies, or attachments, creates no
+  derived text, retrieves no secrets, starts no OAuth, sends no mail, deletes no
+  mail, changes no flags, writes no files or receipts, and echoes no email
+  addresses, username values, exact account refs, exact credential refs, exact
+  mailbox refs, IMAP host values, provider URLs, message headers, message
+  bodies, attachment names, approval receipt paths, local absolute paths,
+  tokens, or secret values.
+
 ## v0.3.46 - 2026-06-15
 
 - Added read-only IMAP mailbox operation request packages:

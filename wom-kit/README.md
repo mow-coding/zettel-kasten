@@ -94,6 +94,7 @@ docs/object-storage-adapter-readiness-plan.md
 docs/object-storage-operation-request-plan.md
 docs/imap-mailbox-source.md
 docs/imap-mailbox-operation-request-plan.md
+docs/imap-mailbox-adapter-readiness-plan.md
 docs/connected-accounts.md
 docs/credential-keepassxc-command-plan.md
 docs/credential-keepassxc-write.md
@@ -159,6 +160,9 @@ imap-mailbox-plan
 
 imap-mailbox-operation-request-plan
   Compose a future IMAP mailbox operation approval request package. Dry-run only; combines IMAP source planning and credential policy checks without connecting, logging in, selecting mailboxes, reading headers/bodies/attachments, retrieving secrets, starting OAuth, or writing files.
+
+imap-mailbox-adapter-readiness-plan
+  Check readiness for a future IMAP mailbox adapter. Dry-run only; combines the IMAP operation request package with local runtime module checks without connecting, logging in, reading headers/bodies/attachments, retrieving secrets, starting OAuth, or writing files.
 
 human-artifact-store
   Plan a user-facing note/workspace/publication surface such as WordPress, Joplin, Notion, Obsidian, Evernote, or generic Markdown. Dry-run only; writes nothing, calls no providers, creates no notes, publishes no posts, and keeps system/AI artifacts separate from human-readable artifacts.

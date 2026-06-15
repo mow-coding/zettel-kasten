@@ -642,6 +642,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("human_artifact_store_plan", tool_names)
             self.assertIn("imap_mailbox_plan", tool_names)
             self.assertIn("imap_mailbox_operation_request_plan", tool_names)
+            self.assertIn("imap_mailbox_adapter_readiness_plan", tool_names)
             self.assertIn("credential_ref_plan", tool_names)
             self.assertIn("credential_ref_inventory", tool_names)
             self.assertIn("credential_store_recommendation", tool_names)
@@ -1990,6 +1991,123 @@ class McpServerTests(unittest.TestCase):
                         "method": "tools/call",
                         "params": {
                             "name": "imap_mailbox_operation_request_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "source_id": "imap:naver",
+                                "provider": "naver",
+                                "account_ref": "imap:account:naver-personal",
+                                "username_ref": "env:NAVER_IMAP_USERNAME",
+                                "app_password_ref": "keyring:naver-app-password",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_imap_mailbox_adapter_readiness_tool_writes_nothing_and_respects_allowed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "imap_mailbox_adapter_readiness_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "source_id": "imap:naver",
+                                "provider": "naver",
+                                "account_ref": "imap:account:naver-personal",
+                                "username_ref": "env:NAVER_IMAP_USERNAME",
+                                "auth_mode": "app_password_ref",
+                                "app_password_ref": "keyring:naver-app-password",
+                                "mailbox_ref": "imap:mailbox:inbox",
+                                "credential_id": "cred:naver-mail-access",
+                                "operation": "header_metadata_scan",
+                                "max_messages": 25,
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"], structured)
+                self.assertTrue(structured["dry_run"])
+                self.assertEqual(structured["lifecycle_action"], "imap_mailbox_adapter_readiness_plan")
+                self.assertEqual(structured["readiness_state"], "ready_for_request_package")
+                self.assertEqual(structured["request_package_summary"]["request_state"], "needs_human_approval")
+                self.assertTrue(structured["runtime_summary"]["required_python_modules"]["imaplib"]["available"])
+                self.assertTrue(structured["runtime_summary"]["required_python_modules"]["email"]["available"])
+                self.assertEqual(structured["runtime_summary"]["missing_module_count"], 0)
+                self.assertFalse(structured["runtime_summary"]["network_access_checked"])
+                self.assertFalse(structured["current_capability"]["live_imap_adapter_implemented"])
+                self.assertFalse(structured["closed_actions"]["imap_connection_opened"])
+                self.assertFalse(structured["closed_actions"]["credential_value_read"])
+                self.assertFalse(structured["privacy_guards"]["exact_credential_refs_echoed"])
+                structured_dump = json.dumps(structured)
+                self.assertNotIn("keyring:naver-app-password", structured_dump)
+                self.assertNotIn("env:NAVER_IMAP_USERNAME", structured_dump)
+                self.assertNotIn("imap:account:naver-personal", structured_dump)
+                self.assertNotIn("imap:mailbox:inbox", structured_dump)
+                self.assertNotIn(str(allowed_archive), structured_dump)
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "imap_mailbox_adapter_readiness_plan",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "source_id": "imap:naver",
+                                "provider": "naver",
+                                "account_ref": "imap:account:naver-personal",
+                                "username_ref": "env:NAVER_IMAP_USERNAME",
+                                "app_password_ref": "keyring:naver-app-password",
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "imap_mailbox_adapter_readiness_plan",
                             "arguments": {
                                 "archive_root": str(allowed_archive),
                                 "source_id": "imap:naver",

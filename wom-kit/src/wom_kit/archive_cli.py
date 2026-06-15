@@ -21,6 +21,8 @@ Commands:
           Recommend an object storage provider path before setup planning.
   object-storage-adapter-readiness-plan
           Check readiness for a future object storage adapter without provider calls.
+  imap-mailbox-adapter-readiness-plan
+          Check readiness for a future IMAP mailbox adapter without connecting or reading mail.
   prehashed-objet-ledger
           Preview or approve-register an already-hashed external objet ledger without reading blob bytes.
   resolve-objet-ref
@@ -5263,6 +5265,70 @@ def command_object_storage_adapter_readiness_plan(args: argparse.Namespace) -> i
     return 0 if result.get("ok", True) else 1
 
 
+def command_imap_mailbox_adapter_readiness_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("imap-mailbox-adapter-readiness-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.imap_mailbox_adapter_readiness_plan(
+            Path(args.archive_root),
+            source_id=args.source_id,
+            provider=args.provider,
+            imap_host=args.imap_host,
+            imap_port=args.imap_port,
+            account_ref=args.account_ref,
+            username_ref=args.username_ref,
+            auth_mode=args.auth_mode,
+            app_password_ref=args.app_password_ref,
+            oauth_token_ref=args.oauth_token_ref,
+            mailbox_ref=args.mailbox_ref,
+            operation=args.operation,
+            max_messages=args.max_messages,
+            since_days=args.since_days,
+            credential_id=args.credential_id,
+            credential_ref=args.credential_ref,
+            credential_kind=args.credential_kind,
+            credential_provider=args.credential_provider,
+            store_kind=args.store_kind,
+            adapter_kind=args.adapter_kind,
+            approval_decision=args.approval_decision,
+            approval_receipt=args.approval_receipt,
+            consumer=args.consumer,
+            reviewed_by=args.reviewed_by,
+            platform=args.platform,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        request = result.get("request_package_summary") if isinstance(result.get("request_package_summary"), dict) else {}
+        runtime = result.get("runtime_summary") if isinstance(result.get("runtime_summary"), dict) else {}
+        print(f"IMAP mailbox adapter readiness dry-run {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Readiness: {result.get('readiness_state') or '-'}")
+        print(f"Source: {result.get('source_id') or '-'}")
+        print(f"Provider: {result.get('provider') or '-'}")
+        print(f"Operation: {result.get('operation') or '-'}")
+        print(f"Request package: {request.get('request_state') or '-'}")
+        print(f"Missing runtime modules: {runtime.get('missing_module_count', 0)}")
+        print("IMAP connection opened: no")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_sources(args: argparse.Namespace) -> int:
     try:
         result = archive_services.list_sources(Path(args.archive_root))
@@ -9022,6 +9088,116 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_adapter_readiness.add_argument("--dry-run", action="store_true", help="Required. Plan only; never calls providers.")
     object_storage_adapter_readiness.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_adapter_readiness.set_defaults(func=command_object_storage_adapter_readiness_plan)
+
+    imap_mailbox_adapter_readiness = subcommands.add_parser(
+        "imap-mailbox-adapter-readiness-plan",
+        aliases=["imap-mailbox-adapter-plan", "mailbox-adapter-readiness"],
+        help="Check readiness for a future IMAP mailbox adapter without connecting or reading mail.",
+    )
+    imap_mailbox_adapter_readiness.add_argument("archive_root", help="Archive root to inspect.")
+    imap_mailbox_adapter_readiness.add_argument("--source-id", required=True, help="Stable source id, e.g. imap:gmail-personal.")
+    imap_mailbox_adapter_readiness.add_argument(
+        "--provider",
+        choices=sorted(archive_services.IMAP_MAILBOX_ALLOWED_PROVIDERS),
+        default="generic_imap",
+        help="Provider preset. generic_imap requires --imap-host.",
+    )
+    imap_mailbox_adapter_readiness.add_argument("--imap-host", help="Safe IMAP host label. Required for generic_imap.")
+    imap_mailbox_adapter_readiness.add_argument("--imap-port", type=int, default=993, help="IMAP SSL port. Defaults to 993.")
+    imap_mailbox_adapter_readiness.add_argument(
+        "--account-ref",
+        required=True,
+        help="Safe account reference, e.g. imap:account:personal-mail. Do not pass an email address.",
+    )
+    imap_mailbox_adapter_readiness.add_argument(
+        "--username-ref",
+        required=True,
+        help="env/keyring/secret/wallet reference for the username. Do not pass the username value.",
+    )
+    imap_mailbox_adapter_readiness.add_argument(
+        "--auth-mode",
+        choices=sorted(archive_services.IMAP_MAILBOX_ALLOWED_AUTH_MODES),
+        default="app_password_ref",
+        help="Credential reference kind.",
+    )
+    imap_mailbox_adapter_readiness.add_argument(
+        "--app-password-ref",
+        help="env/keyring/secret/wallet reference for an app password. Do not pass the password value.",
+    )
+    imap_mailbox_adapter_readiness.add_argument(
+        "--oauth-token-ref",
+        help="env/keyring/secret/wallet reference for an OAuth token. Do not pass the token value.",
+    )
+    imap_mailbox_adapter_readiness.add_argument(
+        "--mailbox-ref",
+        default="imap:mailbox:inbox",
+        help="Safe mailbox reference. Do not pass private mailbox names.",
+    )
+    imap_mailbox_adapter_readiness.add_argument(
+        "--operation",
+        choices=sorted(archive_services.IMAP_MAILBOX_OPERATION_REQUEST_OPERATIONS),
+        default="header_metadata_scan",
+        help="Future IMAP mailbox operation to evaluate.",
+    )
+    imap_mailbox_adapter_readiness.add_argument(
+        "--max-messages",
+        type=int,
+        default=archive_services.IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT,
+        help="Future message limit to request. Must be between 1 and 2000.",
+    )
+    imap_mailbox_adapter_readiness.add_argument(
+        "--since-days",
+        type=int,
+        help="Optional future recency window. Must be between 1 and 3650 days.",
+    )
+    imap_mailbox_adapter_readiness.add_argument(
+        "--credential-id",
+        default="cred:mail-source-access",
+        help="Safe credential label for the future mail credential.",
+    )
+    imap_mailbox_adapter_readiness.add_argument("--credential-ref", help="Optional env/keyring/secret/wallet ref; exact value is not echoed.")
+    imap_mailbox_adapter_readiness.add_argument(
+        "--credential-kind",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+        help="Credential kind. Defaults from IMAP auth mode.",
+    )
+    imap_mailbox_adapter_readiness.add_argument(
+        "--credential-provider",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+        help="Credential provider label. Defaults from IMAP provider.",
+    )
+    imap_mailbox_adapter_readiness.add_argument(
+        "--store-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+        default="password_manager",
+        help="Credential store class for the future mail credential retrieval.",
+    )
+    imap_mailbox_adapter_readiness.add_argument(
+        "--adapter-kind",
+        choices=sorted(archive_services.CREDENTIAL_ADAPTER_KINDS),
+        help="Future credential adapter kind. Defaults from store kind and platform.",
+    )
+    imap_mailbox_adapter_readiness.add_argument(
+        "--approval-decision",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_APPROVAL_DECISIONS),
+        default="needs_review",
+        help="Human decision state to evaluate.",
+    )
+    imap_mailbox_adapter_readiness.add_argument(
+        "--approval-receipt",
+        help="Archive-relative approval receipt path to verify. The path is not echoed in output.",
+    )
+    imap_mailbox_adapter_readiness.add_argument("--consumer", default="wom:adapter:imap-mailbox", help="Safe label for the future adapter.")
+    imap_mailbox_adapter_readiness.add_argument("--reviewed-by", default="human:pending-review", help="Safe non-secret reviewer label.")
+    imap_mailbox_adapter_readiness.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Local platform for default credential adapter selection.",
+    )
+    imap_mailbox_adapter_readiness.add_argument("--dry-run", action="store_true", help="Required. Plan only; never connects to IMAP or reads secrets.")
+    imap_mailbox_adapter_readiness.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    imap_mailbox_adapter_readiness.set_defaults(func=command_imap_mailbox_adapter_readiness_plan)
 
     sources = subcommands.add_parser("sources", help="Inspect source bindings and source map status.")
     sources.add_argument("archive_root", help="Archive root to inspect.")
