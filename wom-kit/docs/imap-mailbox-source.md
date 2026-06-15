@@ -99,6 +99,34 @@ This checks the source plan, operation request package, and local Python module
 readiness for a future adapter. It still opens no IMAP connection and reads no
 mail.
 
+v0.3.49 adds a read-only mailbox selection planning step:
+
+```powershell
+python cli\archive.py imap-mailbox-selection-plan .\my-archive `
+  --source-id imap:gmail-personal `
+  --provider gmail `
+  --account-ref imap:account:gmail-personal `
+  --username-ref env:WOM_GMAIL_USERNAME `
+  --auth-mode oauth_token_ref `
+  --oauth-token-ref keyring:gmail-oauth `
+  --mailbox-ref imap:mailbox:inbox `
+  --credential-id cred:gmail-mail-access `
+  --operation header_metadata_scan `
+  --selection-rule newest_first `
+  --selector-id mail-selection:recent-inbox `
+  --dry-run `
+  --format json
+```
+
+and the matching MCP tool:
+
+```text
+imap_mailbox_selection_plan
+```
+
+This plans how a future adapter may choose candidate messages without listing
+message ids, subjects, senders, headers, bodies, or attachments now.
+
 ## Provider Presets
 
 The planning command is provider-neutral. It currently recognizes:
@@ -194,17 +222,19 @@ The intended sequence is:
 3. Prepare an operation request package with
    `imap-mailbox-operation-request-plan`.
 4. Check adapter readiness with `imap-mailbox-adapter-readiness-plan`.
-5. Add a future header-only dry-run scan that selects the mailbox read-only and
+5. Plan a future mailbox selection rule with `imap-mailbox-selection-plan`.
+6. Add a future header-only dry-run scan that selects the mailbox read-only and
    fetches safe message metadata only.
-6. Add a future approved fetch that preserves each selected RFC822 message as a
+7. Add a future approved fetch that preserves each selected RFC822 message as a
    `.eml` source objet.
-7. Add future MIME attachment capture as separate objets.
-8. Add future derived-text extraction from `text/plain` and reviewed `text/html`
+8. Add future MIME attachment capture as separate objets.
+9. Add future derived-text extraction from `text/plain` and reviewed `text/html`
    parts.
 
-Each later phase needs its own approval and privacy boundary. v0.3.47 can now
-package the approval request and summarize adapter readiness, but it still does
-not implement those reads or captures.
+Each later phase needs its own approval and privacy boundary. v0.3.49 can now
+package the approval request, summarize adapter readiness, and plan a mailbox
+selection rule, but it still does not implement reads, searches, message lists,
+or captures.
 
 ## Closed Actions
 

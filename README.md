@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.48 pre-release
+v0.3.49 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -41,7 +41,7 @@ What exists today:
 - human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
 - read-only beginner setup manual with KeePassXC first-vault field walkthroughs and KeePassXC CSV bulk migration import/merge guidance, connected accounts bridge with separate credential-catalog status, plus read-only credential reference planning, inventory, external store recommendation, vault onboarding planning, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, CLI-only KeePassXC write execution with non-secret execution receipts, adapter readiness planning, adapter manifest preview, and adapter audit receipt preview for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
 - read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces, plus manifest-aware object-storage recommendation matching, adapter readiness planning, operation request packaging, and presigned URL planning before live provider adapters,
-- read-only IMAP mailbox source planning, operation request packaging, and adapter readiness checks for Gmail, Naver, and generic IMAP account refs,
+- read-only IMAP mailbox source planning, operation request packaging, adapter readiness checks, and mailbox selection planning for Gmail, Naver, and generic IMAP account refs,
 - documented Notion page snapshot and `store-ref` boundaries for page/block JSON exports,
 - read-only objet reference resolution, presigned URL planning, and zettel objet link previews for mapping `sha256:<hex>` refs to safe local/external candidates without creating provider URLs,
 - approval-gated local write paths for selected private archive, foreign-block review records, and the first v0.3.0 shared update attestation/review record,
@@ -55,7 +55,7 @@ What does not exist yet:
 - production-grade installation and platform support,
 - real OS keyring read/write adapters, secret retrieval, OAuth flows, OpenAI API calls, or paid OCR API calls,
 - live provider integrations or provider API sync,
-- live IMAP login, mailbox header scans, message capture, attachment capture, or email-derived text extraction,
+- live IMAP login, mailbox selection/search, mailbox header scans, message capture, attachment capture, or email-derived text extraction,
 - production `ZET` transport, sharing service, feed update, or mirroring delivery,
 - real wallet creation, private-key custody, cryptographic signing, token mechanics, payments, staking, consensus, or blockchain integration,
 - recommendation fetching, ranking, automatic neighbor feed updates, or provider-backed recommendation services,
@@ -126,6 +126,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)
 - [IMAP Mailbox Operation Request Plan](wom-kit/docs/imap-mailbox-operation-request-plan.md)
 - [IMAP Mailbox Adapter Readiness Plan](wom-kit/docs/imap-mailbox-adapter-readiness-plan.md)
+- [IMAP Mailbox Selection Plan](wom-kit/docs/imap-mailbox-selection-plan.md)
 - [Notion Page Snapshot Model](wom-kit/docs/notion-page-snapshot-model.md)
 - [Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)
 - [Presigned URL Plan](wom-kit/docs/presigned-url-plan.md)
@@ -249,6 +250,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.49
 v0.3.48
 v0.3.47
 v0.3.46
