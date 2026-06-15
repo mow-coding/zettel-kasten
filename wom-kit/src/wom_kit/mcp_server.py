@@ -198,6 +198,24 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "object_storage_adapter_readiness_plan",
+        "description": "Check readiness for a future object-storage adapter. Read-only; never calls providers, retrieves secrets, uploads, downloads, creates presigned URLs, reads object bytes, or writes files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "operation": {
+                    "type": "string",
+                    "enum": sorted(archive_services.OBJECT_STORAGE_ADAPTER_OPERATIONS),
+                    "default": "presigned_download",
+                },
+                "provider_ref": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "human_artifact_store_plan",
         "description": "Plan a user-facing human artifact surface. Read-only; never creates notes, publishes posts, uploads files, starts OAuth, calls providers, mints, or runs ZET transport.",
         "inputSchema": {
@@ -1866,6 +1884,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_object_storage_setup_plan(arguments)
     if name == "provider_setup_status":
         return tool_provider_setup_status(arguments)
+    if name == "object_storage_adapter_readiness_plan":
+        return tool_object_storage_adapter_readiness_plan(arguments)
     if name == "human_artifact_store_plan":
         return tool_human_artifact_store_plan(arguments)
     if name == "imap_mailbox_plan":
@@ -2174,6 +2194,21 @@ def tool_provider_setup_status(arguments: dict[str, Any]) -> dict[str, Any]:
     result = call_service(archive_services.provider_setup_status, archive_root)
     state = str(result.get("status") or ("passed" if result["ok"] else "blocked"))
     return tool_success_result(f"provider_setup_status: {state}.", result)
+
+
+def tool_object_storage_adapter_readiness_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("object_storage_adapter_readiness_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.object_storage_adapter_readiness_plan,
+        archive_root,
+        operation=optional_string_arg(arguments, "operation") or "presigned_download",
+        provider_ref=optional_string_arg(arguments, "provider_ref"),
+        dry_run=True,
+    )
+    state = str(result.get("readiness_state") or ("passed" if result["ok"] else "blocked"))
+    return tool_success_result(f"object_storage_adapter_readiness_plan: {state}.", result)
 
 
 def tool_human_artifact_store_plan(arguments: dict[str, Any]) -> dict[str, Any]:

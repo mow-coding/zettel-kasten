@@ -90,6 +90,7 @@ docs/project-intake-cookbook.md
 docs/derived-text-coverage-and-toolchain.md
 docs/human-artifact-store-contract.md
 docs/object-storage-recommendations.md
+docs/object-storage-adapter-readiness-plan.md
 docs/connected-accounts.md
 docs/credential-keepassxc-command-plan.md
 docs/credential-keepassxc-write.md
