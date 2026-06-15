@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.42 - 2026-06-15
+
+- Updated `archive connected-accounts --dry-run` so account-map success is
+  separate from the optional local credential catalog status.
+- Malformed ignored local credential catalog rows now appear under nested
+  `credential_catalog.ok`, `credential_catalog.status`, and
+  `credential_catalog.blockers` instead of making the whole connected account
+  overview return `ok: false`.
+- Kept true account-map blockers, such as unsafe account labels or unreadable
+  provider/source binding files, as top-level blockers.
+- Updated connected-accounts documentation and capability matrix language for
+  the split status model.
+- Kept the command read-only: it still writes no files, opens no password
+  manager/keyring/browser store, reads no environment variables, calls no
+  providers, opens no IMAP connection, reads no source bytes, and echoes no
+  exact credential refs, emails, usernames, tokens, provider URLs, local paths,
+  or secret values.
+
 ## v0.3.41 - 2026-06-15
 
 - Added read-only object storage adapter readiness commands:

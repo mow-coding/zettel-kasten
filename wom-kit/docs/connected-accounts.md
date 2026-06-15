@@ -1,6 +1,6 @@
 # Connected Accounts
 
-Status: v0.3.38 read-only connected accounts bridge
+Status: v0.3.42 read-only connected accounts bridge
 Date: 2026-06-15
 
 `connected-accounts` is a read-only map of external account metadata that WOM
@@ -64,6 +64,12 @@ provider:account:openai-personal
 
 It does not show exact credential refs such as `keyring:...` or `secret:...`.
 It reports only the store type and ref prefix.
+
+`ok` reports whether the account map itself is usable. The nested
+`credential_catalog.ok` reports whether the optional local credential catalog is
+clean. This means a malformed ignored local catalog can return
+`credential_catalog.status: needs_review` while `connected-accounts` still
+returns `ok: true` and lists safe provider/source account labels.
 
 ## Current Closed Actions
 

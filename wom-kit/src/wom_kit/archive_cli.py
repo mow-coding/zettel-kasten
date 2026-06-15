@@ -2171,6 +2171,11 @@ def command_connected_accounts(args: argparse.Namespace) -> int:
             )
         catalog = result.get("credential_catalog") if isinstance(result.get("credential_catalog"), dict) else {}
         print(f"Credential catalog refs: {catalog.get('credential_count', 0)}")
+        print(f"Credential catalog status: {catalog.get('status') or '-'}")
+        if catalog.get("blockers"):
+            print("Credential catalog blockers:")
+            for blocker in catalog["blockers"]:
+                print(f"- {blocker}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:

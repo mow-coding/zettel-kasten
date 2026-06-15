@@ -11369,8 +11369,11 @@ def connected_accounts_overview(
             blockers.append(f"source-bindings.yml could not be read safely: {exc}")
 
     inventory = credential_ref_inventory(root, dry_run=True)
-    blockers.extend(str(item) for item in inventory.get("blockers") or [])
-    warnings.extend(str(item) for item in inventory.get("warnings") or [])
+    inventory_blockers = [str(item) for item in inventory.get("blockers") or []]
+    inventory_warnings = [str(item) for item in inventory.get("warnings") or []]
+    for item in inventory_blockers:
+        warnings.append(f"credential catalog issue: {item}")
+    warnings.extend(inventory_warnings)
     sources_checked.extend(
         item
         for item in inventory.get("sources_checked") or []
@@ -11400,9 +11403,13 @@ def connected_accounts_overview(
         "account_count": len(accounts),
         "accounts": accounts,
         "credential_catalog": {
+            "ok": not inventory_blockers,
+            "status": "ready" if not inventory_blockers else "needs_review",
             "credential_count": len(credential_catalog),
             "credentials": credential_catalog,
             "store_summary": catalog_store_summary,
+            "blockers": unique_preserve_order(inventory_blockers),
+            "warnings": unique_preserve_order(inventory_warnings),
         },
         "credential_store_summary": account_store_summary,
         "sources_checked": connected_account_dedupe_sources_checked(sources_checked),
