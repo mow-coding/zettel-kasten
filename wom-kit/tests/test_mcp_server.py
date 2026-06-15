@@ -644,6 +644,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("credential_store_recommendation", tool_names)
             self.assertIn("credential_vault_onboarding_plan", tool_names)
             self.assertIn("credential_plaintext_migration_plan", tool_names)
+            self.assertIn("credential_policy_check", tool_names)
             self.assertIn("credential_access_broker_plan", tool_names)
             self.assertIn("credential_access_approval_plan", tool_names)
             self.assertIn("credential_adapter_readiness_plan", tool_names)
@@ -2127,6 +2128,138 @@ class McpServerTests(unittest.TestCase):
                                 "archive_root": str(allowed_archive),
                                 "source_label": "plaintext-note-001",
                                 "credential_id": "cred:openai-api",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("read-only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_credential_policy_check_tool_gates_without_running_adapters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_policy_check",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "credential_id": "cred:openai-api",
+                                "credential_ref": "secret:keepassxc-openai-api",
+                                "credential_kind": "openai_api_key",
+                                "provider": "openai",
+                                "action_kind": "plaintext_secret_migration",
+                                "approval_decision": "approve_once",
+                                "store_kind": "password_manager",
+                                "adapter_kind": "keepassxc_cli",
+                                "operation": "plaintext_secret_migration",
+                                "consumer": "wom:adapter:keepassxc",
+                                "reviewed_by": "human:tester",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                serialized = json.dumps(structured)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "credential_policy_check")
+                self.assertEqual(structured["policy_result"], "ready_after_approval_receipt")
+                self.assertTrue(structured["policy_evaluation"]["would_allow_future_adapter_after_receipt"])
+                self.assertFalse(structured["policy_evaluation"]["live_execution_allowed_now"])
+                self.assertFalse(structured["closed_actions"]["approval_receipt_written"])
+                self.assertFalse(structured["closed_actions"]["live_adapter_executed"])
+                self.assertFalse(structured["closed_actions"]["secret_value_written"])
+                self.assertNotIn("secret:keepassxc-openai-api", serialized)
+                self.assertNotIn("sk-proj-", serialized)
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                denied_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_policy_check",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "credential_id": "cred:openai-api",
+                                "credential_kind": "openai_api_key",
+                                "provider": "openai",
+                                "action_kind": "model_api_call",
+                                "approval_decision": "approve_once",
+                                "store_kind": "browser_platform_manager",
+                                "adapter_kind": "browser_platform_manager",
+                                "operation": "resolve_for_approved_action",
+                            },
+                        },
+                    },
+                )
+                denied = denied_response["result"]["structuredContent"]
+                self.assertFalse(denied["ok"])
+                self.assertEqual(denied["policy_result"], "denied_by_policy")
+                self.assertTrue(denied["policy_evaluation"]["denied_rules"])
+                self.assertFalse(denied["closed_actions"]["browser_password_store_opened"])
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_policy_check",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "credential_id": "cred:openai-api",
+                                "action_kind": "model_api_call",
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 4,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_policy_check",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "credential_id": "cred:openai-api",
+                                "action_kind": "model_api_call",
                                 "dry_run": False,
                             },
                         },

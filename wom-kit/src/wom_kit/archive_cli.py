@@ -33,6 +33,8 @@ Commands:
           Plan safe human vault onboarding without opening or reading a vault.
   credential-plaintext-migration-plan
           Plan safe plaintext-secret migration without reading or importing secrets.
+  credential-policy-check
+          Check a credential request against the approval policy gate.
   credential-access-broker-plan
           Plan a future approved credential broker request without retrieving secrets.
   credential-access-approval-plan
@@ -2167,6 +2169,58 @@ def command_credential_plaintext_migration_plan(args: argparse.Namespace) -> int
             print("Blockers:")
             for blocker in result["blockers"]:
                 print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_credential_policy_check(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("credential-policy-check is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.credential_policy_check(
+            Path(args.archive_root),
+            credential_id=args.credential_id,
+            credential_ref=args.credential_ref,
+            credential_kind=args.credential_kind,
+            provider=args.provider,
+            action_kind=args.action_kind,
+            approval_decision=args.approval_decision,
+            store_kind=args.store_kind,
+            adapter_kind=args.adapter_kind,
+            operation=args.operation,
+            consumer=args.consumer,
+            reviewed_by=args.reviewed_by,
+            platform=args.platform,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        request = result.get("request") if isinstance(result.get("request"), dict) else {}
+        evaluation = result.get("policy_evaluation") if isinstance(result.get("policy_evaluation"), dict) else {}
+        print(f"Credential policy check: {result.get('policy_result') or '-'}")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Credential: {request.get('credential_id') or '-'} ({request.get('credential_kind') or '-'})")
+        print(f"Action: {request.get('action_kind') or '-'}")
+        print(f"Adapter: {request.get('adapter_kind') or '-'} / {request.get('operation') or '-'}")
+        print(f"Future adapter allowed after approval receipt: {evaluation.get('would_allow_future_adapter_after_receipt')}")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if evaluation.get("denied_rules"):
+            print("Denied rules:")
+            for rule in evaluation["denied_rules"]:
+                print(f"- {rule}")
         if result.get("warnings"):
             print("Warnings:")
             for warning in result["warnings"]:
@@ -6663,6 +6717,64 @@ def build_parser() -> argparse.ArgumentParser:
     credential_plaintext_migration_plan.add_argument("--dry-run", action="store_true", help="Required; read-only migration plan.")
     credential_plaintext_migration_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_plaintext_migration_plan.set_defaults(func=command_credential_plaintext_migration_plan)
+
+    credential_policy_check = subcommands.add_parser(
+        "credential-policy-check",
+        aliases=["credential-access-policy-check", "secret-policy-check"],
+        help="Check a credential request against the approval policy gate.",
+    )
+    credential_policy_check.add_argument("archive_root", help="Archive root to inspect.")
+    credential_policy_check.add_argument("--credential-id", required=True, help="Safe credential label, e.g. cred:openai-api.")
+    credential_policy_check.add_argument("--credential-ref", help="Optional env/keyring/secret/wallet ref; exact value is not echoed.")
+    credential_policy_check.add_argument(
+        "--credential-kind",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+        help="Credential kind; defaults from action kind.",
+    )
+    credential_policy_check.add_argument(
+        "--provider",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+        help="Optional provider context.",
+    )
+    credential_policy_check.add_argument(
+        "--action-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_ACTIONS),
+        required=True,
+        help="Requested action that would need a credential capability.",
+    )
+    credential_policy_check.add_argument(
+        "--approval-decision",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_APPROVAL_DECISIONS),
+        default="needs_review",
+        help="Human approval decision currently available to the policy gate.",
+    )
+    credential_policy_check.add_argument(
+        "--store-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+        default="password_manager",
+        help="External store class that would hold the real secret.",
+    )
+    credential_policy_check.add_argument(
+        "--adapter-kind",
+        choices=sorted(archive_services.CREDENTIAL_ADAPTER_KINDS),
+        help="Future local adapter class. Defaults from store/platform.",
+    )
+    credential_policy_check.add_argument(
+        "--operation",
+        choices=sorted(archive_services.CREDENTIAL_ADAPTER_OPERATIONS),
+        help="Future adapter operation. Defaults from action kind.",
+    )
+    credential_policy_check.add_argument("--consumer", default="wom_local_adapter", help="Safe label for the tool/adapter asking to use the credential.")
+    credential_policy_check.add_argument("--reviewed-by", default="human:pending-review", help="Safe non-secret reviewer label.")
+    credential_policy_check.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Host platform for OS keyring wording.",
+    )
+    credential_policy_check.add_argument("--dry-run", action="store_true", help="Required; read-only policy check.")
+    credential_policy_check.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    credential_policy_check.set_defaults(func=command_credential_policy_check)
 
     credential_access_broker_plan = subcommands.add_parser(
         "credential-access-broker-plan",

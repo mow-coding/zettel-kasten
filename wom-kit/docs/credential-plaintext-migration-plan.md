@@ -135,6 +135,7 @@ credential-store-recommendation
 -> credential-ref-inventory
 -> credential-access-broker-plan
 -> credential-access-approval-plan
+-> credential-policy-check
 -> credential-adapter-readiness-plan
 -> credential-adapter-manifest-plan
 -> credential-adapter-audit-plan
@@ -143,3 +144,6 @@ credential-store-recommendation
 v0.3.29 adds only the pathless, non-secret migration planning step. Actual
 secret detection, vault writes, keyring writes, cleanup, and deletion remain
 future local UI and adapter work.
+
+v0.3.30 adds a read-only execution gate. See
+[Credential Policy Check](credential-policy-check.md).

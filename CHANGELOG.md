@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.30 - 2026-06-15
+
+- Added read-only CLI `archive credential-policy-check --dry-run` and MCP
+  `credential_policy_check` for evaluating a proposed credential use request
+  before any future live adapter can run.
+- Added CLI aliases `archive credential-access-policy-check --dry-run` and
+  `archive secret-policy-check --dry-run`.
+- Added policy results `ready_after_approval_receipt`, `needs_human_review`,
+  `denied_by_human_decision`, `denied_by_policy`, and `blocked`.
+- Added a concrete policy object preview for approval decision, store kind,
+  adapter kind, adapter operation, action kind, and non-echo rules.
+- Kept the checker non-mutating and non-executing: it writes no approval
+  receipts, executes no live adapters, opens no vaults, keyrings, browser
+  stores, environment variables, plaintext secret files, provider APIs, or
+  OAuth flows, and even a passing result keeps `live_execution_allowed_now`
+  false.
+- Added `wom-kit/docs/credential-policy-check.md` plus CLI/MCP/docs tests for
+  policy pass, policy denial, dry-run-only behavior, allowed-root enforcement,
+  no-write behavior, and privacy boundaries.
+
 ## v0.3.29 - 2026-06-15
 
 - Added read-only CLI `archive credential-plaintext-migration-plan --dry-run`

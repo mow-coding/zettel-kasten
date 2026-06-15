@@ -144,6 +144,9 @@ v0.3.29 adds [Credential Plaintext Migration Plan](credential-plaintext-migratio
 so WOM can plan pathless migration from a human-selected plaintext note without
 reading the note or writing a vault entry.
 
+v0.3.30 adds [Credential Policy Check](credential-policy-check.md) so future
+adapter execution has a concrete read-only policy gate before any secret use.
+
 ## Mail Sources
 
 Mail source access should use refs such as:

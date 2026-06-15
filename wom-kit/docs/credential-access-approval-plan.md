@@ -110,4 +110,5 @@ It is an approval receipt preview, not an approval writer.
 
 Next layer:
 
+- [Credential Policy Check](credential-policy-check.md)
 - [Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md)
