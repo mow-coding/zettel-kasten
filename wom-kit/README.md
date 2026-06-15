@@ -87,6 +87,7 @@ docs/security-audit-2026-05-21.md
 docs/new-user-flow.md
 docs/project-intake-session.md
 docs/project-intake-cookbook.md
+docs/derived-text-coverage-and-toolchain.md
 docs/human-artifact-store-contract.md
 docs/credential-keepassxc-command-plan.md
 docs/credential-keepassxc-write.md
@@ -157,6 +158,15 @@ credential-keepassxc-command-plan
 
 credential-keepassxc-write
   Execute a minimal KeePassXC CLI add after verifying a credential access approval receipt. Dry-run previews first; approved mode is CLI-only, requires a local .kdbx path, invokes keepassxc-cli add --password-prompt, writes a non-secret execution receipt, blocks replay with the same approval receipt, and echoes no secret value, exact credential ref, database path, username, email, token, provider URL, or raw adapter output.
+
+derive-text-coverage
+  Check derived-text coverage for textual or plausibly textual objets without reading source bodies. Dry-run only; compares files.jsonl to derived-text.jsonl, classifies missing/encrypted items, echoes no source filenames or local paths, and writes nothing.
+
+derive-text-toolchain
+  Recommend a derived-text extraction route for one extension or MIME hint. Dry-run only; suggests parser/OCR/ASR/vision routing for PDF, Office, HWP/HWPX, images, audio, and text formats without running tools or calling providers.
+
+derive-text-agent-contract
+  Print the derived-text agent operating contract. Dry-run only; encodes the maximum textual coverage default and required preflight order without reading source bytes or writing files.
 
 source-intake
   Classify one source/objet locator before draft creation. Dry-run only; returns safe source refs without reading bodies, hashing, copying, uploading, importing, OCR, transcription, extraction, or provider API calls. It can optionally validate a project-intake decisions receipt as session context only.

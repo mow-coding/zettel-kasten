@@ -53,6 +53,35 @@ DERIVED_TEXT_CAPTURE_MANIFEST_REQUIRED_FIELDS = (
     "tool_version",
     "review_status",
 )
+DERIVED_TEXT_TOOLCHAIN_SOURCE_URLS = {
+    "python-docx": "https://python-docx.readthedocs.io/",
+    "openpyxl": "https://openpyxl.readthedocs.io/",
+    "python-pptx": "https://python-pptx.readthedocs.io/",
+    "libreoffice": "https://help.libreoffice.org/latest/en-US/text/shared/guide/start_parameters.html",
+    "tesseract": "https://tesseract-ocr.github.io/",
+    "pymupdf": "https://pymupdf.readthedocs.io/",
+    "pyhwp": "https://pyhwp.readthedocs.io/en/latest/converters.html",
+}
+DERIVED_TEXT_PLAIN_TEXT_EXTENSIONS = {
+    ".txt",
+    ".md",
+    ".markdown",
+    ".csv",
+    ".tsv",
+    ".json",
+    ".jsonl",
+    ".xml",
+    ".html",
+    ".htm",
+    ".yml",
+    ".yaml",
+}
+DERIVED_TEXT_OOXML_EXTENSIONS = {".docx", ".xlsx", ".pptx"}
+DERIVED_TEXT_LEGACY_OFFICE_EXTENSIONS = {".doc", ".xls", ".ppt"}
+DERIVED_TEXT_HWP_EXTENSIONS = {".hwp", ".hwpx"}
+DERIVED_TEXT_PDF_EXTENSIONS = {".pdf"}
+DERIVED_TEXT_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp"}
+DERIVED_TEXT_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".opus", ".aac"}
 KIT_ROOT = Path(__file__).resolve().parents[2]
 WORKPACK_MODES = {"reference", "copy", "mount", "derive", "handover", "return"}
 ARCHIVE_SCOPES = {"personal", "relationship", "family", "child", "project", "company", "business_unit"}
@@ -28072,6 +28101,504 @@ class _DerivedTextManifestLock:
 
 def derived_text_canonical_record_ids(records: list[dict[str, Any]]) -> set[str]:
     return {str(record.get("derived_text_id") or "") for record in records if record.get("derived_text_id")}
+
+
+def derived_text_agent_operating_contract() -> dict[str, Any]:
+    return {
+        "contract_kind": "derived_text_agent_operating_contract",
+        "schema_version": "wom-derived-text-agent-contract/v0.1",
+        "default_posture": "maximum_textual_objet_coverage",
+        "rules": [
+            "Derived text is expected for every textual or plausibly textual objet unless a blocker is recorded.",
+            "Maximum coverage is the default; narrowing scope requires an explicit human or policy reason.",
+            "Do not stop at PDFs when office documents, HWP/HWPX, spreadsheets, slides, images, audio, or other text-bearing formats remain.",
+            "Use coverage facts from objects/manifests/files.jsonl and objects/manifests/derived-text.jsonl instead of subjective confidence.",
+            "Classify blocked items honestly as encrypted, password-required, unsupported, or needs human/toolchain review.",
+            "Do not fabricate text when OCR/parser output is weak; prefer empty or low-confidence derived text plus review status.",
+            "Do not read source bytes, run OCR, call providers, write derived text, draft zets, or mint zets from this contract surface.",
+        ],
+        "required_preflight_order": [
+            "derive-text coverage --dry-run",
+            "derive-text toolchain --dry-run for uncovered families",
+            "human/toolchain extraction outside this gate",
+            "derive-text capture --dry-run",
+            "derive-text capture --approve after review",
+            "derive-text coverage --dry-run again",
+        ],
+        "completion_definition": {
+            "coverage_gate": "zero missing_derived_text items among textual candidates, or every exception classified with a blocker",
+            "human_review_needed": True,
+            "coverage_source_of_truth": [
+                "objects/manifests/files.jsonl",
+                DERIVED_TEXT_MANIFEST_RELATIVE_PATH,
+            ],
+        },
+    }
+
+
+def derived_text_agent_contract(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    if not dry_run:
+        blockers.append("derive-text agent-contract is read-only; pass --dry-run.")
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "derived_text_agent_contract",
+        "archive_id": archive_id,
+        "agent_operating_contract": derived_text_agent_operating_contract(),
+        "closed_actions": derived_text_read_only_closed_actions(),
+        "privacy_guards": derived_text_read_only_privacy_guards(),
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": [],
+    }
+
+
+def derived_text_read_only_closed_actions() -> dict[str, bool]:
+    return {
+        "source_file_body_read": False,
+        "source_bytes_hashed": False,
+        "ocr_run": False,
+        "parser_run": False,
+        "asr_run": False,
+        "llm_vision_called": False,
+        "provider_api_called": False,
+        "derived_text_written": False,
+        "receipt_written": False,
+        "draft_created": False,
+        "zet_minted": False,
+        "files_written": False,
+    }
+
+
+def derived_text_read_only_privacy_guards() -> dict[str, bool]:
+    return {
+        "source_body_echoed": False,
+        "local_absolute_paths_echoed": False,
+        "provider_urls_echoed": False,
+        "object_filenames_echoed": False,
+        "secret_values_echoed": False,
+        "writes": False,
+    }
+
+
+def derived_text_toolchain_profile(extension: str | None = None, mime: str | None = None) -> dict[str, Any]:
+    ext = normalize_extension_label(extension)
+    mime_value = (mime or "").strip().lower()
+    if not ext and mime_value:
+        ext = extension_from_mime_hint(mime_value)
+
+    def profile(
+        *,
+        family: str,
+        textual_candidate: bool,
+        extraction_route: str,
+        derivation_kind: str,
+        primary_tools: list[str],
+        fallback_tools: list[str] | None = None,
+        human_review: str = "review derived text before capture",
+        blockers: list[str] | None = None,
+        notes: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "format_family": family,
+            "extension": ext or None,
+            "mime": mime_value or None,
+            "textual_candidate": textual_candidate,
+            "extraction_route": extraction_route,
+            "recommended_derivation_kind": derivation_kind,
+            "primary_tools": primary_tools,
+            "fallback_tools": fallback_tools or [],
+            "human_review": human_review,
+            "blocker_labels": blockers or [],
+            "notes": notes or [],
+            "source_urls": derived_text_toolchain_source_urls(primary_tools + (fallback_tools or [])),
+        }
+
+    if ext in DERIVED_TEXT_PLAIN_TEXT_EXTENSIONS or mime_value.startswith("text/"):
+        return profile(
+            family="plain_text_or_markup",
+            textual_candidate=True,
+            extraction_route="utf8_parser",
+            derivation_kind="parser",
+            primary_tools=["built-in utf-8 text parser"],
+            notes=["Verify encoding and preserve original objet separately."],
+        )
+    if ext == ".docx":
+        return profile(
+            family="office_open_xml_word",
+            textual_candidate=True,
+            extraction_route="structured_ooxml_parser",
+            derivation_kind="parser",
+            primary_tools=["python-docx"],
+            fallback_tools=["LibreOffice headless conversion"],
+            notes=["Also consider headers, footers, comments, and embedded images as separate future coverage cases."],
+        )
+    if ext == ".xlsx":
+        return profile(
+            family="office_open_xml_spreadsheet",
+            textual_candidate=True,
+            extraction_route="structured_ooxml_parser",
+            derivation_kind="parser",
+            primary_tools=["openpyxl"],
+            fallback_tools=["LibreOffice headless conversion"],
+            notes=["Preserve sheet names, cell coordinates, and formulas as review metadata when available."],
+        )
+    if ext == ".pptx":
+        return profile(
+            family="office_open_xml_presentation",
+            textual_candidate=True,
+            extraction_route="structured_ooxml_parser",
+            derivation_kind="parser",
+            primary_tools=["python-pptx"],
+            fallback_tools=["LibreOffice headless conversion"],
+            notes=["Slides can contain text in shapes, notes, tables, and embedded images."],
+        )
+    if ext in DERIVED_TEXT_LEGACY_OFFICE_EXTENSIONS:
+        return profile(
+            family="legacy_office_binary",
+            textual_candidate=True,
+            extraction_route="libreoffice_headless_conversion_then_parser",
+            derivation_kind="parser",
+            primary_tools=["LibreOffice headless conversion"],
+            fallback_tools=["format-specific parser after conversion", "OCR if rendered output is image-only"],
+            notes=["Treat old OLE Office files as text-bearing by default unless conversion fails."],
+        )
+    if ext in DERIVED_TEXT_HWP_EXTENSIONS:
+        return profile(
+            family="hwp_or_hwpx",
+            textual_candidate=True,
+            extraction_route="hwp_parser_or_conversion_fallback",
+            derivation_kind="parser",
+            primary_tools=["pyhwp hwp5txt"],
+            fallback_tools=["LibreOffice headless conversion", "zip+xml extraction for hwpx", "OCR if rendered output is image-only"],
+            notes=["Classify unsupported or damaged files honestly instead of pretending coverage."],
+        )
+    if ext in DERIVED_TEXT_PDF_EXTENSIONS or mime_value == "application/pdf":
+        return profile(
+            family="pdf",
+            textual_candidate=True,
+            extraction_route="pdf_triage_then_parser_or_ocr_or_vision",
+            derivation_kind="parser",
+            primary_tools=["PyMuPDF text extraction", "PyMuPDF render metadata"],
+            fallback_tools=["Tesseract OCR", "LLM vision for complex layout", "human password entry for encrypted PDFs"],
+            human_review="review reading order, page coverage, and OCR confidence",
+            blockers=["encrypted_pdf_needs_password"],
+            notes=["Born-digital PDFs can use parser extraction; scans, two-column layouts, forms, and handwriting need OCR or vision routing."],
+        )
+    if ext in DERIVED_TEXT_IMAGE_EXTENSIONS or mime_value.startswith("image/"):
+        return profile(
+            family="image_scan",
+            textual_candidate=True,
+            extraction_route="ocr_then_human_review",
+            derivation_kind="ocr",
+            primary_tools=["Tesseract OCR"],
+            fallback_tools=["LLM vision for handwriting, tables, forms, or complex layout"],
+            human_review="review OCR confidence and mark uncertain spans",
+            notes=["Skip only when the image is confirmed non-textual or intentionally excluded."],
+        )
+    if ext in DERIVED_TEXT_AUDIO_EXTENSIONS or mime_value.startswith("audio/"):
+        return profile(
+            family="audio",
+            textual_candidate=True,
+            extraction_route="asr_then_human_review",
+            derivation_kind="asr",
+            primary_tools=["reviewed local ASR tool"],
+            fallback_tools=["provider ASR only after credential and cost approval"],
+            notes=["ASR is a future extraction route; this planner does not call any model or provider."],
+        )
+    if ext in {".odt", ".ods", ".odp", ".rtf"}:
+        return profile(
+            family="open_document_or_rtf",
+            textual_candidate=True,
+            extraction_route="libreoffice_or_structured_parser",
+            derivation_kind="parser",
+            primary_tools=["LibreOffice headless conversion"],
+            fallback_tools=["format-specific parser"],
+            notes=["Treat open office documents and RTF as text-bearing by default."],
+        )
+    return profile(
+        family="unknown_or_non_textual",
+        textual_candidate=False,
+        extraction_route="manual_triage",
+        derivation_kind="parser",
+        primary_tools=["manual review"],
+        notes=["Not counted as textual coverage unless extension, MIME, or human review marks it as text-bearing."],
+    )
+
+
+def normalize_extension_label(extension: str | None) -> str:
+    text = (extension or "").strip().lower()
+    if not text:
+        return ""
+    if "/" in text or "\\" in text or contains_forbidden_location_reference(text):
+        return ""
+    if not text.startswith("."):
+        text = "." + text
+    if not re.match(r"^\.[a-z0-9][a-z0-9._+-]{0,20}$", text):
+        return ""
+    return text
+
+
+def extension_from_mime_hint(mime: str) -> str:
+    mapping = {
+        "application/pdf": ".pdf",
+        "text/plain": ".txt",
+        "text/markdown": ".md",
+        "text/csv": ".csv",
+        "application/json": ".json",
+        "application/xml": ".xml",
+        "text/html": ".html",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+        "application/msword": ".doc",
+        "application/vnd.ms-excel": ".xls",
+        "application/vnd.ms-powerpoint": ".ppt",
+        "application/haansofthwp": ".hwp",
+        "application/x-hwp": ".hwp",
+    }
+    if mime in mapping:
+        return mapping[mime]
+    if mime.startswith("image/"):
+        return ".png"
+    if mime.startswith("audio/"):
+        return ".wav"
+    return ""
+
+
+def derived_text_toolchain_source_urls(tool_names: list[str]) -> list[dict[str, str]]:
+    urls: list[dict[str, str]] = []
+    for name in tool_names:
+        key = name.lower()
+        if "python-docx" in key:
+            urls.append({"tool": "python-docx", "url": DERIVED_TEXT_TOOLCHAIN_SOURCE_URLS["python-docx"]})
+        elif "openpyxl" in key:
+            urls.append({"tool": "openpyxl", "url": DERIVED_TEXT_TOOLCHAIN_SOURCE_URLS["openpyxl"]})
+        elif "python-pptx" in key:
+            urls.append({"tool": "python-pptx", "url": DERIVED_TEXT_TOOLCHAIN_SOURCE_URLS["python-pptx"]})
+        elif "libreoffice" in key:
+            urls.append({"tool": "LibreOffice", "url": DERIVED_TEXT_TOOLCHAIN_SOURCE_URLS["libreoffice"]})
+        elif "tesseract" in key:
+            urls.append({"tool": "Tesseract OCR", "url": DERIVED_TEXT_TOOLCHAIN_SOURCE_URLS["tesseract"]})
+        elif "pymupdf" in key:
+            urls.append({"tool": "PyMuPDF", "url": DERIVED_TEXT_TOOLCHAIN_SOURCE_URLS["pymupdf"]})
+        elif "pyhwp" in key or "hwp5txt" in key:
+            urls.append({"tool": "pyhwp/hwp5txt", "url": DERIVED_TEXT_TOOLCHAIN_SOURCE_URLS["pyhwp"]})
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in urls:
+        key = (item["tool"], item["url"])
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+    return deduped
+
+
+def derived_text_toolchain(
+    archive_root: Path | str,
+    *,
+    extension: str | None = None,
+    mime: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    if not dry_run:
+        blockers.append("derive-text toolchain is read-only; pass --dry-run.")
+    if not extension and not mime:
+        blockers.append("Provide --extension or --mime.")
+    profile = derived_text_toolchain_profile(extension, mime)
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "derived_text_toolchain_recommendation",
+        "archive_id": archive_id,
+        "toolchain": profile,
+        "agent_operating_contract": derived_text_agent_operating_contract(),
+        "closed_actions": derived_text_read_only_closed_actions(),
+        "privacy_guards": derived_text_read_only_privacy_guards(),
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": [],
+    }
+
+
+def derived_text_record_source_object_ids(records: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        source_id = str(record.get("source_object_id") or "").strip().lower()
+        if OBJECT_ID_RE.match(source_id):
+            counts[source_id] = counts.get(source_id, 0) + 1
+    return counts
+
+
+def derived_text_manifest_record_extension(record: dict[str, Any]) -> str:
+    logical_key = str(record.get("logical_key") or "").strip()
+    if logical_key:
+        suffix = PurePosixPath(logical_key.replace("\\", "/")).suffix.lower()
+        if suffix:
+            return normalize_extension_label(suffix)
+    mime = str(record.get("mime") or "").strip().lower()
+    return extension_from_mime_hint(mime)
+
+
+def derived_text_record_has_encryption_hint(value: Any) -> bool:
+    encrypted_keys = {"encrypted", "is_encrypted", "password_required", "requires_password", "needs_password"}
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if str(key).lower() in encrypted_keys and child is True:
+                return True
+            if derived_text_record_has_encryption_hint(child):
+                return True
+    if isinstance(value, list):
+        return any(derived_text_record_has_encryption_hint(child) for child in value)
+    return False
+
+
+def derived_text_size_bucket(size_value: Any) -> str:
+    if isinstance(size_value, bool) or not isinstance(size_value, (int, float)) or size_value < 0:
+        return "unknown"
+    size = int(size_value)
+    if size == 0:
+        return "zero"
+    if size < 10_000:
+        return "tiny"
+    if size < 1_000_000:
+        return "small"
+    if size < 25_000_000:
+        return "medium"
+    return "large"
+
+
+def derived_text_coverage(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = True,
+    max_items: int = 25,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("derive-text coverage is read-only; pass --dry-run.")
+    max_items = max(0, min(int(max_items), 200))
+
+    manifest_records = load_manifest_records(root)
+    derived_records = load_derived_text_records(root)
+    source_counts = derived_text_record_source_object_ids(derived_records)
+    by_status: dict[str, int] = {}
+    by_extension: dict[str, int] = {}
+    by_toolchain_family: dict[str, int] = {}
+    missing_items: list[dict[str, Any]] = []
+    blocked_items: list[dict[str, Any]] = []
+    covered_items: list[dict[str, Any]] = []
+    textual_candidate_count = 0
+    covered_textual_count = 0
+
+    for record in manifest_records:
+        object_id = str(record.get("object_id") or "").strip().lower()
+        if not OBJECT_ID_RE.match(object_id):
+            warnings.append("manifest_record_with_invalid_object_id_skipped")
+            continue
+        extension = derived_text_manifest_record_extension(record)
+        mime = str(record.get("mime") or "").strip().lower()
+        toolchain = derived_text_toolchain_profile(extension, mime)
+        family = str(toolchain.get("format_family") or "unknown_or_non_textual")
+        textual_candidate = bool(toolchain.get("textual_candidate"))
+        encrypted = derived_text_record_has_encryption_hint(record)
+        derived_count = source_counts.get(object_id, 0)
+        if textual_candidate:
+            textual_candidate_count += 1
+        if not textual_candidate:
+            status = "not_textual_or_unknown"
+        elif encrypted and derived_count == 0:
+            status = "needs_password_or_encrypted"
+        elif derived_count > 0:
+            status = "covered"
+            covered_textual_count += 1
+        else:
+            status = "missing_derived_text"
+        by_status[status] = by_status.get(status, 0) + 1
+        by_extension[extension or "<none>"] = by_extension.get(extension or "<none>", 0) + 1
+        by_toolchain_family[family] = by_toolchain_family.get(family, 0) + 1
+        item = {
+            "object_id": object_id,
+            "extension": extension or None,
+            "mime": mime or None,
+            "coverage_status": status,
+            "derived_text_record_count": derived_count,
+            "toolchain_family": family,
+            "recommended_derivation_kind": toolchain.get("recommended_derivation_kind"),
+            "suggested_route": toolchain.get("extraction_route"),
+            "size_bucket": derived_text_size_bucket(record.get("size_bytes")),
+            "source_name_echoed": False,
+            "local_path_echoed": False,
+        }
+        if status == "missing_derived_text":
+            if len(missing_items) < max_items:
+                missing_items.append(item)
+        elif status == "needs_password_or_encrypted":
+            if len(blocked_items) < max_items:
+                blocked_items.append(item)
+        elif status == "covered":
+            if len(covered_items) < max_items:
+                covered_items.append(item)
+
+    missing_count = by_status.get("missing_derived_text", 0)
+    blocked_count = by_status.get("needs_password_or_encrypted", 0)
+    coverage_ratio = None
+    if textual_candidate_count:
+        coverage_ratio = covered_textual_count / textual_candidate_count
+    gate_passed = missing_count == 0
+    if blocked_count:
+        warnings.append("encrypted_or_password_required_textual_objets_need_human_resolution")
+    return {
+        "ok": not blockers and gate_passed,
+        "dry_run": True,
+        "lifecycle_action": "derived_text_coverage_gate",
+        "archive_id": archive_id,
+        "coverage_gate": {
+            "status": "passed" if gate_passed and not blockers else "blocked",
+            "default_posture": "maximum_textual_objet_coverage",
+            "textual_candidate_count": textual_candidate_count,
+            "covered_textual_count": covered_textual_count,
+            "missing_derived_text_count": missing_count,
+            "needs_password_or_encrypted_count": blocked_count,
+            "coverage_ratio": coverage_ratio,
+            "missing_items_truncated": missing_count > len(missing_items),
+            "blocked_items_truncated": blocked_count > len(blocked_items),
+        },
+        "manifest_counts": {
+            "object_manifest_record_count": len(manifest_records),
+            "derived_text_record_count": len(derived_records),
+            "by_status": by_status,
+            "by_extension": by_extension,
+            "by_toolchain_family": by_toolchain_family,
+        },
+        "missing_items": missing_items,
+        "blocked_items": blocked_items,
+        "covered_sample": covered_items,
+        "agent_operating_contract": derived_text_agent_operating_contract(),
+        "closed_actions": derived_text_read_only_closed_actions(),
+        "privacy_guards": derived_text_read_only_privacy_guards(),
+        "would_change": [],
+        "next_safe_actions": [
+            "Run derive-text toolchain for the missing families before extraction.",
+            "Produce derived text outside this read-only gate, then capture it with derive-text capture --dry-run and --approve.",
+            "Re-run derive-text coverage until missing_derived_text_count is zero or every exception has a blocker.",
+        ],
+        "blockers": unique_preserve_order(blockers + (["missing_derived_text"] if missing_count else [])),
+        "warnings": unique_preserve_order(warnings),
+    }
 
 
 def derived_text_identity_digest(
