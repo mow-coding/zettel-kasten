@@ -1513,6 +1513,66 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(aws_code, 0, aws_output)
             self.assertEqual(aws["primary_recommendation"]["provider"], "aws-s3")
 
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            video_bytes = 164_800_000_000
+            document_bytes = 37_400_000_000
+            manifest_path.write_text(
+                "\n".join(
+                    json.dumps(item, sort_keys=True)
+                    for item in [
+                        {
+                            "object_id": "sha256:" + "a" * 64,
+                            "sha256": "a" * 64,
+                            "logical_key": "objects/sample/private-family-video.mov",
+                            "mime": "video/quicktime",
+                            "size_bytes": video_bytes,
+                            "locations": [{"provider": "local", "path": "objects/sample/private-family-video.mov"}],
+                            "provenance": {"source": "test"},
+                        },
+                        {
+                            "object_id": "sha256:" + "b" * 64,
+                            "sha256": "b" * 64,
+                            "logical_key": "objects/sample/private-client-contract.pdf",
+                            "mime": "application/pdf",
+                            "size_bytes": document_bytes,
+                            "locations": [{"provider": "local", "path": "objects/sample/private-client-contract.pdf"}],
+                            "provenance": {"source": "test"},
+                        },
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            auto_code, auto_output = self.run_cli(
+                [
+                    "object-storage-recommendation",
+                    str(archive_root),
+                    "--scenario",
+                    "auto_from_manifest",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            auto = json.loads(auto_output)
+            self.assertEqual(auto_code, 0, auto_output)
+            self.assertEqual(auto["requested_scenario"], "auto_from_manifest")
+            self.assertEqual(auto["scenario_source"], "manifest_analysis")
+            self.assertEqual(auto["scenario"], "personal_low_ops")
+            self.assertEqual(auto["manifest_analysis"]["total_size_gb_decimal"], 202.2)
+            self.assertEqual(auto["manifest_analysis"]["dominant_content_class"]["content_class"], "video")
+            self.assertEqual(auto["manifest_analysis"]["dominant_content_class"]["share_percent"], 81.5)
+            self.assertEqual(auto["manifest_analysis"]["inference_confidence"], "medium")
+            self.assertFalse(auto["rough_cost_estimates"]["live_pricing_checked"])
+            self.assertEqual(auto["primary_recommendation"]["provider"], "cloudflare-r2")
+            self.assertEqual(auto["primary_recommendation"]["rough_cost_estimate"]["monthly_storage_usd_estimate"], 2.88)
+            self.assertEqual(auto["primary_recommendation"]["rough_cost_estimate"]["one_full_restore_egress_usd_estimate"], 0.0)
+            self.assertFalse(auto["closed_actions"]["object_bytes_read"])
+            self.assertFalse(auto["closed_actions"]["pricing_api_called"])
+            self.assertNotIn("private-family-video.mov", auto_output)
+            self.assertNotIn("private-client-contract.pdf", auto_output)
+            self.assertNotIn("https://", auto_output)
+
             no_dry_code, no_dry_output = self.run_cli(["object-storage-recommendation", str(archive_root)])
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)

@@ -1,6 +1,6 @@
 # Object Storage Recommendations
 
-Status: v0.3.39 read-only object storage recommendation matching
+Status: v0.3.43 read-only manifest-aware object storage recommendation matching
 Date: 2026-06-15
 
 `object-storage-recommendation` maps a human storage scenario to the existing
@@ -14,6 +14,15 @@ remote availability proof.
 ```bash
 archive object-storage-recommendation <archive-root> \
   --scenario personal_low_ops \
+  --dry-run \
+  --format json
+```
+
+For a manifest-based suggestion:
+
+```bash
+archive object-storage-recommendation <archive-root> \
+  --scenario auto_from_manifest \
   --dry-run \
   --format json
 ```
@@ -41,6 +50,7 @@ When those are supplied, the output includes a ready next-command shape for
 Supported scenarios:
 
 - `personal_low_ops`
+- `auto_from_manifest`
 - `s3_compatible`
 - `backup_cost_sensitive`
 - `aws_native`
@@ -54,6 +64,36 @@ The matcher prefers existing WOM-kit setup providers:
 - `aws-s3`
 - `google-cloud-storage`
 - `generic-s3`
+
+## Manifest-Aware Mode
+
+`--scenario auto_from_manifest` reads aggregate metadata from:
+
+```text
+objects/manifests/files.jsonl
+```
+
+It reports:
+
+- total manifest size,
+- sized record count,
+- dominant content class,
+- content-class byte percentages,
+- inferred scenario and confidence,
+- rough storage/egress estimates for the candidate providers.
+
+It does not echo object filenames, local paths, provider URLs, exact credential
+refs, or object bytes. It uses `logical_key` only internally to infer a file
+kind when MIME is missing.
+
+Rough estimates are not live pricing. They are a comparison aid based on a
+static 2026-06-15 public-pricing snapshot. Before spending money, the human must
+check the official calculator/docs:
+
+- [Cloudflare R2 pricing](https://developers.cloudflare.com/r2/pricing/)
+- [Backblaze B2 pricing](https://www.backblaze.com/cloud-storage/pricing)
+- [Amazon S3 pricing](https://aws.amazon.com/s3/pricing/)
+- [Google Cloud Storage pricing examples](https://cloud.google.com/storage/pricing-examples)
 
 ## Provider Notes
 
@@ -78,11 +118,13 @@ provider account ownership, and recovery/restore needs.
 
 - call provider APIs,
 - look up live prices,
+- call pricing APIs,
 - check bucket availability,
 - create buckets,
 - upload files,
 - download files,
 - read object bytes,
+- echo object filenames,
 - create presigned URLs,
 - start OAuth,
 - read secret values,
