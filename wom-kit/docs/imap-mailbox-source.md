@@ -72,6 +72,33 @@ This composes the mailbox source plan with `credential-policy-check` for
 headers, read bodies, read attachments, retrieve secrets, start OAuth, or write
 files.
 
+v0.3.47 adds a read-only adapter readiness step:
+
+```powershell
+python cli\archive.py imap-mailbox-adapter-readiness-plan .\my-archive `
+  --source-id imap:gmail-personal `
+  --provider gmail `
+  --account-ref imap:account:gmail-personal `
+  --username-ref env:WOM_GMAIL_USERNAME `
+  --auth-mode oauth_token_ref `
+  --oauth-token-ref keyring:gmail-oauth `
+  --mailbox-ref imap:mailbox:inbox `
+  --credential-id cred:gmail-mail-access `
+  --operation header_metadata_scan `
+  --dry-run `
+  --format json
+```
+
+and the matching MCP tool:
+
+```text
+imap_mailbox_adapter_readiness_plan
+```
+
+This checks the source plan, operation request package, and local Python module
+readiness for a future adapter. It still opens no IMAP connection and reads no
+mail.
+
 ## Provider Presets
 
 The planning command is provider-neutral. It currently recognizes:
@@ -166,17 +193,18 @@ The intended sequence is:
 2. Register the `imap_mailbox` source after human review.
 3. Prepare an operation request package with
    `imap-mailbox-operation-request-plan`.
-4. Add a future header-only dry-run scan that selects the mailbox read-only and
+4. Check adapter readiness with `imap-mailbox-adapter-readiness-plan`.
+5. Add a future header-only dry-run scan that selects the mailbox read-only and
    fetches safe message metadata only.
-5. Add a future approved fetch that preserves each selected RFC822 message as a
+6. Add a future approved fetch that preserves each selected RFC822 message as a
    `.eml` source objet.
-6. Add future MIME attachment capture as separate objets.
-7. Add future derived-text extraction from `text/plain` and reviewed `text/html`
+7. Add future MIME attachment capture as separate objets.
+8. Add future derived-text extraction from `text/plain` and reviewed `text/html`
    parts.
 
-Each later phase needs its own approval and privacy boundary. v0.3.46 can now
-package the approval request, but it still does not implement those reads or
-captures.
+Each later phase needs its own approval and privacy boundary. v0.3.47 can now
+package the approval request and summarize adapter readiness, but it still does
+not implement those reads or captures.
 
 ## Closed Actions
 

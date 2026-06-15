@@ -47,6 +47,13 @@ MCP:
 imap_mailbox_operation_request_plan
 ```
 
+Related adapter readiness check added in v0.3.47:
+
+```text
+archive imap-mailbox-adapter-readiness-plan <archive-root> --dry-run
+MCP: imap_mailbox_adapter_readiness_plan
+```
+
 ## What It Composes
 
 The request package reuses existing read-only gates:
@@ -149,7 +156,8 @@ It is an approval request package for a future adapter, not the adapter itself.
 imap-mailbox-plan
 -> credential-access-approval
 -> imap-mailbox-operation-request-plan
--> future IMAP adapter, not implemented in v0.3.46
+-> imap-mailbox-adapter-readiness-plan
+-> future IMAP adapter, not implemented in v0.3.47
 -> future non-secret adapter audit receipt
 ```
 

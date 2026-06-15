@@ -1224,6 +1224,7 @@ IMAP_MAILBOX_OPERATION_REQUEST_OPERATIONS = {
 IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT = 100
 IMAP_MAILBOX_OPERATION_MAX_MESSAGES_LIMIT = 2000
 IMAP_MAILBOX_OPERATION_SINCE_DAYS_LIMIT = 3650
+IMAP_MAILBOX_ADAPTER_REQUIRED_MODULES = ("imaplib", "email")
 CREDENTIAL_REF_PREFIXES = ("env:", "keyring:", "secret:", "wallet:")
 CREDENTIAL_REF_ALLOWED_KINDS = {
     "mail_username",
@@ -11416,6 +11417,263 @@ def imap_mailbox_operation_request_plan(
         },
         "would_change": [],
         "next_safe_actions": unique_preserve_order(next_safe_actions),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def imap_mailbox_adapter_readiness_plan(
+    archive_root: Path | str,
+    *,
+    source_id: str,
+    provider: str | None = None,
+    imap_host: str | None = None,
+    imap_port: int | None = None,
+    account_ref: str | None = None,
+    username_ref: str | None = None,
+    auth_mode: str | None = None,
+    app_password_ref: str | None = None,
+    oauth_token_ref: str | None = None,
+    mailbox_ref: str | None = None,
+    operation: str = "header_metadata_scan",
+    max_messages: int = IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT,
+    since_days: int | None = None,
+    credential_id: str = "cred:mail-source-access",
+    credential_ref: str | None = None,
+    credential_kind: str | None = None,
+    credential_provider: str | None = None,
+    store_kind: str = "password_manager",
+    adapter_kind: str | None = None,
+    approval_decision: str = "needs_review",
+    approval_receipt: str | None = None,
+    consumer: str = "wom:adapter:imap-mailbox",
+    reviewed_by: str | None = None,
+    platform: str = "windows",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("imap-mailbox-adapter-readiness-plan is read-only and requires --dry-run.")
+
+    request_preview = imap_mailbox_operation_request_plan(
+        root,
+        source_id=source_id,
+        provider=provider,
+        imap_host=imap_host,
+        imap_port=imap_port,
+        account_ref=account_ref,
+        username_ref=username_ref,
+        auth_mode=auth_mode,
+        app_password_ref=app_password_ref,
+        oauth_token_ref=oauth_token_ref,
+        mailbox_ref=mailbox_ref,
+        operation=operation,
+        max_messages=max_messages,
+        since_days=since_days,
+        credential_id=credential_id,
+        credential_ref=credential_ref,
+        credential_kind=credential_kind,
+        credential_provider=credential_provider,
+        store_kind=store_kind,
+        adapter_kind=adapter_kind,
+        approval_decision=approval_decision,
+        approval_receipt=approval_receipt,
+        consumer=consumer,
+        reviewed_by=reviewed_by,
+        platform=platform,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in request_preview.get("blockers") or [])
+    warnings.extend(str(item) for item in request_preview.get("warnings") or [])
+
+    module_checks = {
+        name: {
+            "available": importlib.util.find_spec(name) is not None,
+            "purpose": "future IMAP/TLS client" if name == "imaplib" else "future RFC822/MIME parsing",
+        }
+        for name in IMAP_MAILBOX_ADAPTER_REQUIRED_MODULES
+    }
+    missing_modules = [name for name, summary in module_checks.items() if not summary["available"]]
+    for name in missing_modules:
+        blockers.append(f"python_module_missing_for_future_imap_adapter:{name}")
+
+    request_state = str(request_preview.get("request_state") or "blocked")
+    if blockers:
+        readiness_state = "blocked"
+    elif request_state == "needs_human_approval":
+        readiness_state = "ready_for_request_package"
+    elif request_state == "ready_for_future_adapter_after_approval":
+        readiness_state = "ready_for_future_adapter_after_approval"
+    elif request_state in {"denied_by_human_decision", "denied_by_policy"}:
+        readiness_state = request_state
+    else:
+        readiness_state = "blocked"
+
+    ok = readiness_state in {"ready_for_request_package", "ready_for_future_adapter_after_approval"}
+    credential_policy = (
+        request_preview.get("credential_policy_summary")
+        if isinstance(request_preview.get("credential_policy_summary"), dict)
+        else {}
+    )
+    mailbox_summary = (
+        request_preview.get("mailbox_plan_summary")
+        if isinstance(request_preview.get("mailbox_plan_summary"), dict)
+        else {}
+    )
+    operation_scope = (
+        request_preview.get("operation_scope")
+        if isinstance(request_preview.get("operation_scope"), dict)
+        else {}
+    )
+
+    return {
+        "ok": ok,
+        "dry_run": True,
+        "lifecycle_action": "imap_mailbox_adapter_readiness_plan",
+        "archive_id": archive_id,
+        "readiness_state": readiness_state,
+        "operation": request_preview.get("operation"),
+        "source_id": request_preview.get("source_id"),
+        "provider": request_preview.get("provider"),
+        "source_summary": json_safe(
+            {
+                "source_type": mailbox_summary.get("source_type"),
+                "source_registration_plan_available": mailbox_summary.get("source_registration_plan_available"),
+                "provider": mailbox_summary.get("provider"),
+                "host_present": mailbox_summary.get("server", {}).get("host_present")
+                if isinstance(mailbox_summary.get("server"), dict)
+                else None,
+                "host_value_echoed": False,
+                "auth_mode": mailbox_summary.get("auth", {}).get("auth_mode")
+                if isinstance(mailbox_summary.get("auth"), dict)
+                else None,
+                "account_ref_present": bool(
+                    mailbox_summary.get("auth", {}).get("account_ref", {}).get("present")
+                )
+                if isinstance(mailbox_summary.get("auth"), dict)
+                and isinstance(mailbox_summary.get("auth", {}).get("account_ref"), dict)
+                else False,
+                "username_ref_present": bool(
+                    mailbox_summary.get("auth", {}).get("username_ref", {}).get("present")
+                )
+                if isinstance(mailbox_summary.get("auth"), dict)
+                and isinstance(mailbox_summary.get("auth", {}).get("username_ref"), dict)
+                else False,
+                "credential_ref_store": mailbox_summary.get("auth", {}).get("credential_ref", {}).get("ref_store")
+                if isinstance(mailbox_summary.get("auth"), dict)
+                and isinstance(mailbox_summary.get("auth", {}).get("credential_ref"), dict)
+                else None,
+                "mailbox_ref_present": bool(
+                    mailbox_summary.get("auth", {}).get("mailbox_ref", {}).get("present")
+                )
+                if isinstance(mailbox_summary.get("auth"), dict)
+                and isinstance(mailbox_summary.get("auth", {}).get("mailbox_ref"), dict)
+                else False,
+                "exact_refs_echoed": False,
+                "imap_connection_opened": False,
+            }
+        ),
+        "request_package_summary": json_safe(
+            {
+                "request_state": request_state,
+                "policy_result": credential_policy.get("policy_result"),
+                "approval_decision": credential_policy.get("approval_decision"),
+                "approval_receipt_required_before_use": True,
+                "approval_receipt_supplied": credential_policy.get("approval_receipt_supplied"),
+                "approval_receipt_verified": credential_policy.get("approval_receipt_verified"),
+                "future_adapter_has_verified_receipt": credential_policy.get("future_adapter_has_verified_receipt"),
+                "live_execution_allowed_now": False,
+                "secret_value_echoed": False,
+                "exact_ref_value_echoed": False,
+                "approval_receipt_path_echoed": False,
+            }
+        ),
+        "runtime_summary": {
+            "required_python_modules": json_safe(module_checks),
+            "required_module_count": len(IMAP_MAILBOX_ADAPTER_REQUIRED_MODULES),
+            "missing_module_count": len(missing_modules),
+            "runtime_import_check_only": True,
+            "network_access_checked": False,
+            "tls_context_created": False,
+            "imap_connection_opened": False,
+        },
+        "operation_scope": json_safe(operation_scope),
+        "required_gates": {
+            "imap_mailbox_plan": True,
+            "imap_mailbox_operation_request_plan": True,
+            "credential_policy_check": True,
+            "human_approval_receipt": True,
+            "credential_adapter_manifest": True,
+            "imap_adapter_manifest": True,
+            "adapter_audit_receipt_after_execution": True,
+            "read_only_mailbox_select": True,
+            "message_capture_receipt": request_preview.get("operation")
+            in {"message_rfc822_capture", "attachment_capture", "derived_text_capture"},
+            "attachment_object_records": request_preview.get("operation") == "attachment_capture",
+        },
+        "current_capability": {
+            "readiness_planning_available": True,
+            "operation_request_package_available": True,
+            "runtime_module_check_available": True,
+            "live_imap_adapter_implemented": False,
+            "imap_connection_implemented": False,
+            "imap_login_implemented": False,
+            "header_scan_implemented": False,
+            "rfc822_capture_implemented": False,
+            "attachment_capture_implemented": False,
+            "derived_text_capture_implemented": False,
+            "credential_secret_retrieval_implemented": False,
+            "oauth_flow_implemented": False,
+        },
+        "closed_actions": {
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "mailbox_selected": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "derived_text_created": False,
+            "emails_sent": False,
+            "messages_deleted": False,
+            "message_flags_changed": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "oauth_started": False,
+            "approval_receipt_written": False,
+            "adapter_audit_receipt_written": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "email_addresses_echoed": False,
+            "username_values_echoed": False,
+            "exact_account_refs_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "exact_mailbox_refs_echoed": False,
+            "secret_values_echoed": False,
+            "imap_host_values_echoed": False,
+            "provider_urls_echoed": False,
+            "message_headers_echoed": False,
+            "message_bodies_echoed": False,
+            "attachment_names_echoed": False,
+            "approval_receipt_path_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "writes": False,
+        },
+        "next_safe_actions": [
+            "Run archive imap-mailbox-plan --dry-run and resolve mailbox-source blockers.",
+            "Run archive imap-mailbox-operation-request-plan --dry-run to prepare the future adapter request package.",
+            "Run archive credential-policy-check with a human approval receipt before any future live IMAP adapter.",
+            "Prepare an adapter manifest before implementing any command that opens a mailbox.",
+            "Keep email addresses, mailbox names, message content, attachment names, credential refs, and host values out of public records.",
+        ],
+        "would_change": [],
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
