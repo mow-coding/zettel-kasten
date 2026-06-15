@@ -135,6 +135,9 @@ v0.3.27 adds a read-only adapter audit receipt preview. See
 v0.3.28 adds a read-only vault onboarding plan. See
 [Credential Vault Onboarding Plan](credential-vault-onboarding-plan.md).
 
+v0.3.32 adds a KeePassXC-specific command preflight after approval receipt
+verification. See [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md).
+
 v0.3.29 adds a read-only plaintext migration plan. See
 [Credential Plaintext Migration Plan](credential-plaintext-migration-plan.md).
 

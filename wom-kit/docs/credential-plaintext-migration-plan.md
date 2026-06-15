@@ -136,6 +136,7 @@ credential-store-recommendation
 -> credential-access-broker-plan
 -> credential-access-approval-plan
 -> credential-policy-check
+-> credential-keepassxc-command-plan
 -> credential-adapter-readiness-plan
 -> credential-adapter-manifest-plan
 -> credential-adapter-audit-plan
@@ -151,3 +152,6 @@ v0.3.30 adds a read-only execution gate. See
 v0.3.31 adds a non-secret approval receipt writer that policy-check can verify
 before any future migration adapter runs. See
 [Credential Access Approval Plan](credential-access-approval-plan.md).
+
+v0.3.32 adds a KeePassXC command preflight after receipt verification. See
+[Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md).

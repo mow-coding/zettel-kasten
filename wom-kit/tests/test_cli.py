@@ -2114,6 +2114,163 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_credential_keepassxc_command_plan_requires_verified_receipt_and_never_executes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "credential-access-approval",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--credential-ref",
+                    "secret:keepassxc-openai-api",
+                    "--credential-kind",
+                    "openai_api_key",
+                    "--provider",
+                    "openai",
+                    "--action-kind",
+                    "plaintext_secret_migration",
+                    "--decision",
+                    "approve_once",
+                    "--store-kind",
+                    "password_manager",
+                    "--consumer",
+                    "wom:adapter:keepassxc",
+                    "--reviewed-by",
+                    "human:tester",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            approved = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "credential-keepassxc-command-plan",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--credential-ref",
+                    "secret:keepassxc-openai-api",
+                    "--credential-kind",
+                    "openai_api_key",
+                    "--provider",
+                    "openai",
+                    "--action-kind",
+                    "plaintext_secret_migration",
+                    "--operation",
+                    "plaintext_secret_migration",
+                    "--approval-receipt",
+                    approved["receipt_path"],
+                    "--entry-label",
+                    "openai-api",
+                    "--group-label",
+                    "wom-secrets",
+                    "--database-ref",
+                    "keepassxc:personal-vault",
+                    "--consumer",
+                    "wom:adapter:keepassxc",
+                    "--reviewed-by",
+                    "human:tester",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "credential_keepassxc_command_plan")
+            self.assertTrue(result["adapter"]["approval_receipt_verified"])
+            self.assertEqual(result["policy_check_summary"]["policy_result"], "ready_after_approval_receipt")
+            self.assertTrue(result["policy_check_summary"]["future_adapter_has_verified_receipt"])
+            self.assertFalse(result["policy_check_summary"]["live_execution_allowed_now"])
+            command_plan = result["command_plan"]
+            self.assertEqual(command_plan["argv_preview"][0:3], ["keepassxc-cli", "add", "--password-prompt"])
+            self.assertEqual(command_plan["argv_preview"][3], "<database.kdbx selected by human outside WOM>")
+            self.assertEqual(command_plan["argv_preview"][4], "wom-secrets/openai-api")
+            self.assertFalse(command_plan["database_path_included"])
+            self.assertFalse(command_plan["secret_value_in_argv"])
+            self.assertFalse(command_plan["secret_value_in_stdin"])
+            self.assertFalse(command_plan["exact_credential_ref_echoed"])
+            self.assertFalse(command_plan["command_execution_implemented"])
+            self.assertFalse(result["closed_actions"]["keepassxc_opened"])
+            self.assertFalse(result["closed_actions"]["live_adapter_executed"])
+            self.assertFalse(result["closed_actions"]["secret_value_written"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("secret:keepassxc-openai-api", output)
+            self.assertNotIn("sk-proj-", output)
+            self.assertNotIn("C:\\", output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            missing_receipt_code, missing_receipt_output = self.run_cli(
+                [
+                    "credential-keepassxc-command-plan",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--action-kind",
+                    "plaintext_secret_migration",
+                    "--approval-receipt",
+                    "receipts/credentials/access-approvals/missing.credential-access-approval.json",
+                    "--entry-label",
+                    "openai-api",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            missing_receipt = json.loads(missing_receipt_output)
+            self.assertEqual(missing_receipt_code, 1)
+            self.assertFalse(missing_receipt["ok"])
+            self.assertTrue(any("approval_receipt was not found" in blocker for blocker in missing_receipt["blockers"]))
+            self.assertFalse(missing_receipt["closed_actions"]["live_adapter_executed"])
+
+            bad_path_code, bad_path_output = self.run_cli(
+                [
+                    "credential-keepassxc-command-plan",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--action-kind",
+                    "plaintext_secret_migration",
+                    "--approval-receipt",
+                    approved["receipt_path"],
+                    "--entry-label",
+                    "C:\\Users\\example\\Desktop\\secret.kdbx",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            bad_path = json.loads(bad_path_output)
+            self.assertEqual(bad_path_code, 1)
+            self.assertFalse(bad_path["ok"])
+            self.assertTrue(any("entry_label must be" in blocker for blocker in bad_path["blockers"]))
+            self.assertNotIn("secret.kdbx", bad_path_output)
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "credential-keepassxc-command-plan",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--approval-receipt",
+                    approved["receipt_path"],
+                    "--entry-label",
+                    "openai-api",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_credential_access_broker_plan_is_read_only_and_never_echoes_refs_or_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

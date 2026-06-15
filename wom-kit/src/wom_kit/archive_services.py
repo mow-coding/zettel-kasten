@@ -12808,6 +12808,221 @@ def credential_policy_check(
     }
 
 
+def credential_keepassxc_command_plan(
+    archive_root: Path | str,
+    *,
+    credential_id: str,
+    approval_receipt: str | None,
+    entry_label: str,
+    group_label: str | None = None,
+    database_ref: str | None = None,
+    action_kind: str = "plaintext_secret_migration",
+    operation: str = "plaintext_secret_migration",
+    credential_ref: str | None = None,
+    credential_kind: str | None = None,
+    provider: str | None = None,
+    consumer: str | None = None,
+    reviewed_by: str | None = None,
+    platform: str = "windows",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("credential-keepassxc-command-plan is read-only and requires --dry-run.")
+
+    resolved_consumer = (consumer or credential_adapter_profile("keepassxc_cli", platform)["default_consumer"]).strip()
+    if not safe_source_intake_plan_scalar(resolved_consumer):
+        blockers.append("consumer must be a safe non-secret label.")
+        resolved_consumer = "wom:adapter:keepassxc"
+
+    resolved_action = (action_kind or "plaintext_secret_migration").strip().lower().replace("-", "_")
+    if resolved_action not in CREDENTIAL_ACCESS_BROKER_ACTIONS:
+        blockers.append("action_kind must be one of: " + ", ".join(sorted(CREDENTIAL_ACCESS_BROKER_ACTIONS)) + ".")
+        resolved_action = "plaintext_secret_migration"
+
+    resolved_operation = (operation or "plaintext_secret_migration").strip().lower().replace("-", "_")
+    allowed_keepassxc_operations = {"plaintext_secret_migration", "write_new_secret"}
+    if resolved_operation not in allowed_keepassxc_operations:
+        blockers.append("operation must be plaintext_secret_migration or write_new_secret for credential-keepassxc-command-plan.")
+        resolved_operation = "plaintext_secret_migration"
+
+    resolved_platform = (platform or "windows").strip().lower().replace("-", "_")
+    if resolved_platform not in CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS:
+        blockers.append("platform must be one of: " + ", ".join(sorted(CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS)) + ".")
+        resolved_platform = "windows"
+
+    resolved_entry_label = safe_keepassxc_command_label(entry_label, "entry_label", blockers)
+    resolved_group_label = safe_optional_keepassxc_command_label(group_label, "group_label", blockers)
+    resolved_database_ref = safe_optional_keepassxc_command_label(
+        database_ref or "keepassxc:human-selected-database",
+        "database_ref",
+        blockers,
+    )
+    if not approval_receipt:
+        blockers.append("approval_receipt is required before planning a KeePassXC command.")
+
+    policy_check = credential_policy_check(
+        root,
+        credential_id=credential_id,
+        credential_ref=credential_ref,
+        credential_kind=credential_kind,
+        provider=provider,
+        action_kind=resolved_action,
+        approval_decision="approve_once",
+        store_kind="password_manager",
+        adapter_kind="keepassxc_cli",
+        operation=resolved_operation,
+        consumer=resolved_consumer,
+        reviewed_by=reviewed_by or "human:pending-review",
+        platform=resolved_platform,
+        approval_receipt=approval_receipt,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in policy_check.get("blockers") or [])
+    warnings.extend(str(item) for item in policy_check.get("warnings") or [])
+    policy_evaluation = policy_check.get("policy_evaluation") if isinstance(policy_check.get("policy_evaluation"), dict) else {}
+    approval_receipt_verified = bool(policy_evaluation.get("approval_receipt_verified"))
+    if approval_receipt and not approval_receipt_verified:
+        blockers.append("approval_receipt must verify before a KeePassXC command plan can be considered ready.")
+    if policy_check.get("policy_result") != "ready_after_approval_receipt":
+        blockers.append("credential policy must be ready_after_approval_receipt before a KeePassXC command plan can be considered ready.")
+
+    entry_target_placeholder = "<safe-entry-label>"
+    if resolved_entry_label:
+        entry_target_placeholder = resolved_entry_label
+        if resolved_group_label:
+            entry_target_placeholder = f"{resolved_group_label}/{resolved_entry_label}"
+
+    command_plan = {
+        "adapter_kind": "keepassxc_cli",
+        "subcommand": "add",
+        "argv_preview": [
+            "keepassxc-cli",
+            "add",
+            "--password-prompt",
+            "<database.kdbx selected by human outside WOM>",
+            entry_target_placeholder,
+        ],
+        "database_ref": resolved_database_ref,
+        "database_path_included": False,
+        "database_unlock_mode": "local_keepassxc_cli_prompt",
+        "entry_label": resolved_entry_label or None,
+        "group_label": resolved_group_label,
+        "entry_target_label_included": bool(resolved_entry_label),
+        "password_entry_mode": "local_cli_password_prompt",
+        "secret_value_in_argv": False,
+        "secret_value_in_stdin": False,
+        "username_included": False,
+        "url_included": False,
+        "exact_credential_ref_echoed": False,
+        "command_execution_implemented": False,
+        "live_execution_allowed_now": False,
+    }
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "credential_keepassxc_command_plan",
+        "archive_id": archive_id,
+        "adapter": {
+            "adapter_kind": "keepassxc_cli",
+            "store_kind": "password_manager",
+            "operation": resolved_operation,
+            "action_kind": resolved_action,
+            "consumer": resolved_consumer,
+            "platform": resolved_platform,
+            "approval_receipt_required": True,
+            "approval_receipt_verified": approval_receipt_verified,
+            "live_execution_allowed_now": False,
+        },
+        "policy_check_summary": {
+            "policy_result": policy_check.get("policy_result"),
+            "ok": bool(policy_check.get("ok")),
+            "approval_receipt_verified": approval_receipt_verified,
+            "future_adapter_has_verified_receipt": bool(policy_evaluation.get("future_adapter_has_verified_receipt")),
+            "live_execution_allowed_now": bool(policy_evaluation.get("live_execution_allowed_now")),
+        },
+        "command_plan": command_plan,
+        "execution_boundary": {
+            "official_keepassxc_cli_shape": "keepassxc-cli add [options] <database> <entry>",
+            "uses_password_prompt": True,
+            "database_selected_outside_wom": True,
+            "database_path_recorded_in_wom": False,
+            "secret_value_return_to_ai": False,
+            "requires_local_human_terminal_or_adapter_ui": True,
+            "requires_followup_audit_receipt_after_future_execution": True,
+        },
+        "next_safe_actions": [
+            "Use credential-access-approval --approve to create one scoped receipt before this plan.",
+            "Use this plan only as a local preflight; do not paste vault passwords, entry passwords, usernames, URLs, or API keys into chat.",
+            "When a future live adapter exists, it must select the KeePassXC database outside WOM and use the local CLI prompt for secret entry.",
+            "After any future execution, record a non-secret credential adapter audit receipt.",
+        ],
+        "current_capability": {
+            "keepassxc_command_plan_available": True,
+            "approval_receipt_verification_required": True,
+            "policy_check_reused": True,
+            "command_execution_implemented": False,
+            "secret_value_write_implemented": False,
+            "database_path_storage_implemented": False,
+        },
+        "closed_actions": {
+            "live_adapter_executed": False,
+            "keepassxc_opened": False,
+            "password_manager_opened": False,
+            "database_path_read": False,
+            "database_password_read": False,
+            "secret_prompted_in_chat": False,
+            "secret_value_read": False,
+            "secret_value_written": False,
+            "secret_value_piped_to_stdin": False,
+            "plaintext_file_read": False,
+            "provider_api_called": False,
+            "oauth_started": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "credential_ref_values_echoed": False,
+            "database_paths_echoed": False,
+            "email_addresses_echoed": False,
+            "tokens_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def safe_keepassxc_command_label(value: str | None, field_name: str, blockers: list[str]) -> str:
+    text = (value or "").strip()
+    if not text:
+        blockers.append(f"{field_name} is required.")
+        return ""
+    sanitized = text[:80]
+    if not safe_source_intake_plan_scalar(text) or "/" in text or "\\" in text or text.startswith("-"):
+        blockers.append(f"{field_name} must be a safe non-secret label, not a path, URL, email, token, password, or CLI option.")
+        return ""
+    if len(text) > 80:
+        blockers.append(f"{field_name} must be 80 characters or fewer.")
+        return sanitized
+    return text
+
+
+def safe_optional_keepassxc_command_label(value: str | None, field_name: str, blockers: list[str]) -> str | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    return safe_keepassxc_command_label(text, field_name, blockers) or None
+
+
 def credential_policy_default_adapter_kind(store_kind: str, platform: str) -> str:
     if store_kind == "browser_platform_manager":
         return "browser_platform_manager"

@@ -161,4 +161,5 @@ This planner prepares that contract before any real secret access exists.
 
 Next layer:
 
+- [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md)
 - [Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md)

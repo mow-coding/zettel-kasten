@@ -85,6 +85,9 @@ Even a recorded `approve_once` receipt does not grant live access by itself. A
 future adapter still needs a policy check and its own non-echoing execution
 gate.
 
+For KeePassXC, v0.3.32 adds a read-only command preflight after the policy
+check. See [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md).
+
 ## Receipt Preview Rules
 
 The preview may include:
@@ -145,4 +148,6 @@ Next layer:
 
 - [Credential Policy Check](credential-policy-check.md), optionally with
   `--approval-receipt <path>`
+- [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md),
+  also requiring `--approval-receipt <path>`
 - [Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md)

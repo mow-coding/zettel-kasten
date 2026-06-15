@@ -118,6 +118,7 @@ credential ref
 -> adapter manifest
 -> readiness check
 -> human approval receipt
+-> KeePassXC command preflight, where relevant
 -> local adapter operation
 -> audit receipt
 ```
