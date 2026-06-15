@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.41 - 2026-06-15
+
+- Added read-only object storage adapter readiness commands:
+  `archive object-storage-adapter-readiness-plan --dry-run`, alias
+  `archive object-storage-adapter-plan --dry-run`, and alias
+  `archive objet-storage-adapter-readiness --dry-run`.
+- Added MCP tool `object_storage_adapter_readiness_plan` for the same
+  read-only readiness surface.
+- The planner bridges `provider-status`, object-storage setup receipts,
+  credential access broker requirements, credential policy checks, human
+  approval receipts, adapter manifests, and future audit receipts without
+  executing an adapter.
+- Added `wom-kit/docs/object-storage-adapter-readiness-plan.md` and public
+  documentation links.
+- Kept the command read-only: it calls no providers, retrieves no secrets,
+  creates no presigned URLs, uploads or downloads nothing, reads no object
+  bytes, checks no remote availability, writes no files or receipts, and echoes
+  no bucket names, prefixes, provider URLs, local absolute paths, exact
+  credential refs, provider setup receipt paths, tokens, or secret values.
+
 ## v0.3.40 - 2026-06-15
 
 - Added read-only presigned URL planning commands:

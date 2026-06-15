@@ -17646,6 +17646,96 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(len(managed), 1)
             self.assertEqual(managed[0]["status"], "metadata_without_receipt")
 
+    def test_object_storage_adapter_readiness_checks_setup_without_echoing_resources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:storage-adapter")
+            self.assertEqual(init_code, 0, init_output)
+
+            bucket_name = "zettel-kasten-storage-adapter-objets"
+            storage_code, storage_output = self.run_cli(
+                [
+                    "object-storage",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "reviewer:test",
+                    "--provider",
+                    "cloudflare-r2",
+                    "--profile-id",
+                    "person:test",
+                    "--profile-slug",
+                    "storage-adapter",
+                    "--storage-account-ref",
+                    "storage:account:test",
+                    "--bucket-name",
+                    bucket_name,
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(storage_code, 0, storage_output)
+            storage_result = json.loads(storage_output)
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "object-storage-adapter-readiness-plan",
+                    str(archive_root),
+                    "--operation",
+                    "presigned_download",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "object_storage_adapter_readiness_plan")
+            self.assertEqual(result["readiness_state"], "ready_for_future_adapter")
+            self.assertEqual(result["operation"], "presigned_download")
+            self.assertEqual(result["provider_summary"]["setup_managed_object_storage_count"], 1)
+            self.assertEqual(result["provider_summary"]["selected_provider_kind"], "cloudflare-r2")
+            self.assertTrue(result["provider_summary"]["selected_provider_setup_ready"])
+            self.assertFalse(result["provider_summary"]["resource_details_echoed"])
+            self.assertFalse(result["provider_summary"]["receipt_path_echoed"])
+            self.assertTrue(result["required_gates"]["credential_policy_check"])
+            self.assertTrue(result["required_gates"]["human_approval_receipt"])
+            self.assertFalse(result["current_capability"]["live_object_storage_adapter_implemented"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["presigned_url_created"])
+            self.assertFalse(result["closed_actions"]["credential_value_read"])
+            self.assertFalse(result["privacy_guards"]["bucket_names_echoed"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn(bucket_name, output)
+            self.assertNotIn(storage_result["receipt_path"], output)
+            self.assertNotIn(str(archive_root), output)
+
+            (archive_root / storage_result["receipt_path"]).unlink()
+            blocked_code, blocked_output = self.run_cli(
+                [
+                    "object-storage-adapter-readiness-plan",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            blocked_result = json.loads(blocked_output)
+            self.assertEqual(blocked_code, 1, blocked_output)
+            self.assertFalse(blocked_result["ok"])
+            self.assertIn("object_storage_provider_setup_not_ready", blocked_result["blockers"])
+            self.assertNotIn(bucket_name, blocked_output)
+
+            no_dry_code, no_dry_output = self.run_cli(["object-storage-adapter-readiness-plan", str(archive_root)])
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+
     def test_doctor_validates_ownership_transfer_receipt_examples(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         code, output = self.run_cli(["doctor", str(archive_root), "--strict"])

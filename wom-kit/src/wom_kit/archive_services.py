@@ -1123,6 +1123,14 @@ OBJECT_STORAGE_ALLOWED_VISIBILITIES = {"private"}
 OBJECT_STORAGE_BUCKET_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$")
 OBJECT_STORAGE_REGION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$")
 OBJECT_STORAGE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,119}$")
+OBJECT_STORAGE_ADAPTER_OPERATIONS = {
+    "upload_object",
+    "download_object",
+    "head_object",
+    "presigned_download",
+    "presigned_head",
+    "list_metadata_only",
+}
 OBJECT_STORAGE_PROVIDER_TOKEN_ENVS = {
     "cloudflare-r2": "R2_TOKEN",
     "aws-s3": "AWS_OBJECT_STORAGE_TOKEN",
@@ -19466,6 +19474,156 @@ def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
         "warnings": unique_preserve_order(warnings),
         "would_change": [],
         "next_safe_actions": provider_setup_next_safe_actions(status, managed_count),
+    }
+
+
+def object_storage_adapter_readiness_plan(
+    archive_root: Path | str,
+    *,
+    operation: str = "presigned_download",
+    provider_ref: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("object-storage-adapter-readiness-plan is read-only and requires --dry-run.")
+
+    normalized_operation = str(operation or "").strip().lower().replace("-", "_")
+    if normalized_operation not in OBJECT_STORAGE_ADAPTER_OPERATIONS:
+        blockers.append("operation must be one of: " + ", ".join(sorted(OBJECT_STORAGE_ADAPTER_OPERATIONS)) + ".")
+        normalized_operation = "presigned_download"
+
+    normalized_provider_ref = str(provider_ref or "").strip()
+    if normalized_provider_ref and not safe_source_intake_ref(normalized_provider_ref):
+        blockers.append("provider_ref must be a safe label/ref, not a URL, email, token, secret, or path.")
+        normalized_provider_ref = ""
+
+    provider_status = provider_setup_status(root)
+    for warning in provider_status.get("warnings", []):
+        warnings.append(str(warning))
+
+    provider_items = [
+        item
+        for item in provider_status.get("providers", [])
+        if isinstance(item, dict)
+        and (
+            str(item.get("provider") or "").lower() == "object_storage"
+            or str(item.get("provider_kind") or "").lower() in OBJECT_STORAGE_ALLOWED_PROVIDERS
+        )
+    ]
+    setup_managed_items = [item for item in provider_items if item.get("setup_managed") is True and item.get("enabled") is not False]
+
+    selected_items: list[dict[str, Any]] = []
+    if normalized_provider_ref:
+        selected_items = [
+            item
+            for item in setup_managed_items
+            if normalized_provider_ref
+            in {
+                str(item.get("binding_id") or ""),
+                str(item.get("provider_kind") or ""),
+                str(item.get("provider") or ""),
+            }
+        ]
+        if setup_managed_items and not selected_items:
+            blockers.append("provider_ref_not_found_for_object_storage_binding")
+    elif len(setup_managed_items) == 1:
+        selected_items = setup_managed_items
+    elif len(setup_managed_items) > 1:
+        blockers.append("provider_ref_required_when_multiple_object_storage_bindings")
+
+    if not setup_managed_items:
+        blockers.append("object_storage_provider_not_configured")
+
+    selected = selected_items[0] if selected_items else None
+    selected_status = str(selected.get("status") or "") if selected else None
+    selected_provider_kind = str(selected.get("provider_kind") or selected.get("provider") or "") if selected else None
+    provider_setup_ready = bool(selected_status == "metadata_and_receipt_present")
+    if selected and not provider_setup_ready:
+        for blocker in selected.get("blockers", []):
+            blockers.append(str(blocker))
+        blockers.append("object_storage_provider_setup_not_ready")
+
+    if provider_status.get("ok") is False:
+        for blocker in provider_status.get("blockers", []):
+            text = str(blocker)
+            if "object" in text.lower() or "provider" in text.lower():
+                warnings.append(text)
+
+    readiness_state = "blocked" if blockers else "ready_for_future_adapter"
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "object_storage_adapter_readiness_plan",
+        "archive_id": archive_id,
+        "readiness_state": readiness_state,
+        "operation": normalized_operation,
+        "provider_ref_supplied": bool(normalized_provider_ref),
+        "provider_summary": {
+            "object_storage_binding_count": len(provider_items),
+            "setup_managed_object_storage_count": len(setup_managed_items),
+            "selected_provider_kind": selected_provider_kind or None,
+            "selected_setup_status": selected_status,
+            "selected_provider_setup_ready": provider_setup_ready,
+            "selected_provider_setup_receipt_present": bool(selected and selected.get("receipt_path")),
+            "resource_details_echoed": False,
+            "receipt_path_echoed": False,
+        },
+        "required_gates": {
+            "provider_status": "metadata_and_receipt_present",
+            "credential_access_broker_plan": True,
+            "credential_policy_check": True,
+            "human_approval_receipt": True,
+            "adapter_manifest": True,
+            "adapter_audit_receipt_after_execution": True,
+            "private_url_handling_policy": normalized_operation.startswith("presigned_"),
+        },
+        "current_capability": {
+            "readiness_planning_available": True,
+            "live_object_storage_adapter_implemented": False,
+            "provider_api_call_implemented": False,
+            "credential_secret_retrieval_implemented": False,
+            "upload_implemented": False,
+            "download_implemented": False,
+            "presigned_url_creation_implemented": False,
+            "remote_availability_probe_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "credential_value_read": False,
+            "provider_url_echoed": False,
+            "object_file_bytes_read": False,
+            "object_uploaded": False,
+            "object_downloaded": False,
+            "presigned_url_created": False,
+            "remote_availability_checked": False,
+            "receipt_written": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "provider_resource_values_echoed": False,
+            "bucket_names_echoed": False,
+            "prefixes_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "secret_values_echoed": False,
+            "object_file_bytes_read": False,
+            "writes": False,
+        },
+        "next_safe_actions": [
+            "Run archive provider-status --dry-run and resolve any object-storage setup blockers.",
+            "Run archive credential-access-broker-plan --action-kind object_storage_request --dry-run for the future credential request.",
+            "Run archive credential-policy-check with a human approval receipt before any future live adapter.",
+            "Use archive presigned-url-plan --dry-run before any future presigned URL adapter path.",
+            "Keep provider resources, URLs, credential refs, and generated URLs out of public records.",
+        ],
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
     }
 
 

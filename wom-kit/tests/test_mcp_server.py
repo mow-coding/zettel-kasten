@@ -637,6 +637,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("github_repository_setup_plan", tool_names)
             self.assertIn("object_storage_setup_plan", tool_names)
             self.assertIn("provider_setup_status", tool_names)
+            self.assertIn("object_storage_adapter_readiness_plan", tool_names)
             self.assertIn("human_artifact_store_plan", tool_names)
             self.assertIn("imap_mailbox_plan", tool_names)
             self.assertIn("credential_ref_plan", tool_names)
@@ -1444,6 +1445,104 @@ class McpServerTests(unittest.TestCase):
                 outside_result = outside_response["result"]
                 self.assertTrue(outside_result["isError"])
                 self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_object_storage_adapter_readiness_tool_writes_nothing_and_respects_allowed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            bucket_name = "zettel-kasten-mcp-adapter-objets"
+            setup = archive_services.approve_object_storage_setup_plan(
+                allowed_archive,
+                reviewed_by="reviewer:test",
+                provider="cloudflare-r2",
+                profile_id="person:test",
+                profile_slug="mcp-adapter",
+                storage_account_ref="storage:account:test",
+                bucket_name=bucket_name,
+            )
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "object_storage_adapter_readiness_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "operation": "presigned_download",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"], structured)
+                self.assertEqual(structured["lifecycle_action"], "object_storage_adapter_readiness_plan")
+                self.assertEqual(structured["readiness_state"], "ready_for_future_adapter")
+                self.assertEqual(structured["provider_summary"]["selected_provider_kind"], "cloudflare-r2")
+                self.assertTrue(structured["provider_summary"]["selected_provider_setup_ready"])
+                self.assertFalse(structured["provider_summary"]["resource_details_echoed"])
+                self.assertFalse(structured["closed_actions"]["provider_api_called"])
+                self.assertFalse(structured["closed_actions"]["credential_value_read"])
+                self.assertFalse(structured["closed_actions"]["presigned_url_created"])
+                self.assertFalse(structured["privacy_guards"]["bucket_names_echoed"])
+                structured_dump = json.dumps(structured)
+                self.assertNotIn(bucket_name, structured_dump)
+                self.assertNotIn(setup["receipt_path"], structured_dump)
+                self.assertNotIn(str(allowed_archive), structured_dump)
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "object_storage_adapter_readiness_plan",
+                            "arguments": {"archive_root": str(outside_archive)},
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "object_storage_adapter_readiness_plan",
+                            "arguments": {"archive_root": str(allowed_archive), "dry_run": False},
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
             finally:
                 self.stop_server(process)
 

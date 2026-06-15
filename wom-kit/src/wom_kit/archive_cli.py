@@ -19,6 +19,8 @@ Commands:
           Plan object storage metadata for WOM objets.
   object-storage-recommendation
           Recommend an object storage provider path before setup planning.
+  object-storage-adapter-readiness-plan
+          Check readiness for a future object storage adapter without provider calls.
   prehashed-objet-ledger
           Preview or approve-register an already-hashed external objet ledger without reading blob bytes.
   resolve-objet-ref
@@ -5067,6 +5069,46 @@ def command_provider_status(args: argparse.Namespace) -> int:
     return 0 if result["ok"] else 1
 
 
+def command_object_storage_adapter_readiness_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("object-storage-adapter-readiness-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.object_storage_adapter_readiness_plan(
+            Path(args.archive_root),
+            operation=args.operation,
+            provider_ref=args.provider_ref,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        summary = result.get("provider_summary") if isinstance(result.get("provider_summary"), dict) else {}
+        print(f"Object storage adapter readiness dry-run {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Readiness: {result.get('readiness_state') or '-'}")
+        print(f"Operation: {result.get('operation') or '-'}")
+        print(f"Object-storage bindings: {summary.get('setup_managed_object_storage_count', 0)}")
+        print(f"Selected provider kind: {summary.get('selected_provider_kind') or '-'}")
+        print(f"Selected provider setup ready: {summary.get('selected_provider_setup_ready')}")
+        print("Provider API called: no")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_sources(args: argparse.Namespace) -> int:
     try:
         result = archive_services.list_sources(Path(args.archive_root))
@@ -8623,6 +8665,26 @@ def build_parser() -> argparse.ArgumentParser:
     provider_status.add_argument("--dry-run", action="store_true", help="Required. Read provider metadata and receipts only.")
     provider_status.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     provider_status.set_defaults(func=command_provider_status)
+
+    object_storage_adapter_readiness = subcommands.add_parser(
+        "object-storage-adapter-readiness-plan",
+        aliases=["object-storage-adapter-plan", "objet-storage-adapter-readiness"],
+        help="Check readiness for a future object-storage adapter without provider calls.",
+    )
+    object_storage_adapter_readiness.add_argument("archive_root", help="Archive root to inspect.")
+    object_storage_adapter_readiness.add_argument(
+        "--operation",
+        choices=sorted(archive_services.OBJECT_STORAGE_ADAPTER_OPERATIONS),
+        default="presigned_download",
+        help="Future object-storage adapter operation to evaluate.",
+    )
+    object_storage_adapter_readiness.add_argument(
+        "--provider-ref",
+        help="Optional safe provider binding label/ref. Do not pass a URL, path, token, or secret.",
+    )
+    object_storage_adapter_readiness.add_argument("--dry-run", action="store_true", help="Required. Plan only; never calls providers.")
+    object_storage_adapter_readiness.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    object_storage_adapter_readiness.set_defaults(func=command_object_storage_adapter_readiness_plan)
 
     sources = subcommands.add_parser("sources", help="Inspect source bindings and source map status.")
     sources.add_argument("archive_root", help="Archive root to inspect.")
