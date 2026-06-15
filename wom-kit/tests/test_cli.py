@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import io
 import hashlib
@@ -3900,6 +3900,227 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+    def test_object_storage_operation_request_plan_packages_approval_gate_without_live_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            bucket_name = "zettel-kasten-request-plan-objets"
+            setup = archive_services.approve_object_storage_setup_plan(
+                archive_root,
+                reviewed_by="person:tester",
+                provider="cloudflare-r2",
+                profile_id="profile:personal:username",
+                profile_slug="request-plan",
+                storage_account_ref="storage:account:request-plan",
+                bucket_name=bucket_name,
+            )
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+            digest = "d" * 64
+            unsafe_url = "https://" + "redacted.example/private-operation-request"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "object_id": f"sha256:{digest}",
+                        "sha256": digest,
+                        "logical_key": f"objects/external/prehashed/r2_private/{digest[:2]}/{digest}",
+                        "mime": "application/octet-stream",
+                        "size_bytes": 789,
+                        "locations": [
+                            {
+                                "provider": "cloudflare_r2",
+                                "store_kind": "object_storage",
+                                "store_ref": "object-store-request-plan",
+                                "availability": "declared_external",
+                                "content_addressed": True,
+                                "byte_verification_by_wom_kit": False,
+                                "provider_url": unsafe_url,
+                            }
+                        ],
+                        "provenance": {"source": "prehashed_external_objet_ledger"},
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "object-storage-operation-request-plan",
+                    str(archive_root),
+                    "--operation",
+                    "presigned_download",
+                    "--object-id",
+                    f"sha256:{digest}",
+                    "--store-ref",
+                    "object-store-request-plan",
+                    "--ttl-seconds",
+                    "600",
+                    "--credential-id",
+                    "cred:object-storage",
+                    "--credential-ref",
+                    "secret:object-storage-token",
+                    "--credential-kind",
+                    "object_storage_token",
+                    "--provider",
+                    "generic_provider",
+                    "--approval-decision",
+                    "needs_review",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "object_storage_operation_request_plan")
+            self.assertEqual(result["request_state"], "needs_human_approval")
+            self.assertEqual(result["operation"], "presigned_download")
+            self.assertEqual(result["target_summary"]["target_kind"], "presigned_url_plan")
+            self.assertEqual(result["target_summary"]["plan_state"], "ready_for_future_adapter")
+            self.assertEqual(result["target_summary"]["store_ref"], "object-store-request-plan")
+            self.assertEqual(result["credential_policy_summary"]["policy_result"], "needs_human_review")
+            self.assertFalse(result["future_adapter_contract"]["live_execution_allowed_now"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["credential_value_read"])
+            self.assertFalse(result["closed_actions"]["presigned_url_created"])
+            self.assertFalse(result["closed_actions"]["object_uploaded"])
+            self.assertFalse(result["closed_actions"]["object_downloaded"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["exact_credential_refs_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn(unsafe_url, output)
+            self.assertNotIn("secret:object-storage-token", output)
+            self.assertNotIn(bucket_name, output)
+            self.assertNotIn(setup["receipt_path"], output)
+            self.assertNotIn(str(archive_root), output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "credential-access-approval",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:object-storage",
+                    "--credential-ref",
+                    "secret:object-storage-token",
+                    "--credential-kind",
+                    "object_storage_token",
+                    "--provider",
+                    "generic_provider",
+                    "--action-kind",
+                    "object_storage_request",
+                    "--decision",
+                    "approve_once",
+                    "--store-kind",
+                    "password_manager",
+                    "--consumer",
+                    "wom:adapter:object-storage",
+                    "--reviewed-by",
+                    "human:tester",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            approved = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approved["approved"], approved)
+            after_approval = self.snapshot_archive_files(archive_root)
+
+            ready_code, ready_output = self.run_cli(
+                [
+                    "object-storage-operation-request-plan",
+                    str(archive_root),
+                    "--operation",
+                    "presigned_download",
+                    "--object-id",
+                    f"sha256:{digest}",
+                    "--store-ref",
+                    "object-store-request-plan",
+                    "--ttl-seconds",
+                    "600",
+                    "--credential-id",
+                    "cred:object-storage",
+                    "--credential-ref",
+                    "secret:object-storage-token",
+                    "--credential-kind",
+                    "object_storage_token",
+                    "--provider",
+                    "generic_provider",
+                    "--approval-decision",
+                    "approve_once",
+                    "--approval-receipt",
+                    approved["receipt_path"],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            ready = json.loads(ready_output)
+            self.assertEqual(ready_code, 0, ready_output)
+            self.assertEqual(ready["request_state"], "ready_for_future_adapter_after_approval")
+            self.assertEqual(ready["credential_policy_summary"]["policy_result"], "ready_after_approval_receipt")
+            self.assertTrue(ready["credential_policy_summary"]["approval_receipt_verified"])
+            self.assertTrue(ready["credential_policy_summary"]["future_adapter_has_verified_receipt"])
+            self.assertFalse(ready["credential_policy_summary"]["live_execution_allowed_now"])
+            self.assertFalse(ready["approval_summary"]["approval_receipt_written"])
+            self.assertFalse(ready["privacy_guards"]["approval_receipt_path_echoed"])
+            self.assertNotIn(approved["receipt_path"], ready_output)
+            self.assertNotIn("secret:object-storage-token", ready_output)
+            self.assertNotIn(bucket_name, ready_output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), after_approval)
+
+            missing_receipt_code, missing_receipt_output = self.run_cli(
+                [
+                    "object-storage-operation-request-plan",
+                    str(archive_root),
+                    "--operation",
+                    "presigned_download",
+                    "--object-id",
+                    f"sha256:{digest}",
+                    "--store-ref",
+                    "object-store-request-plan",
+                    "--credential-id",
+                    "cred:object-storage",
+                    "--credential-ref",
+                    "secret:object-storage-token",
+                    "--credential-kind",
+                    "object_storage_token",
+                    "--provider",
+                    "generic_provider",
+                    "--approval-decision",
+                    "approve_once",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            missing_receipt = json.loads(missing_receipt_output)
+            self.assertEqual(missing_receipt_code, 1, missing_receipt_output)
+            self.assertEqual(missing_receipt["request_state"], "blocked")
+            self.assertIn("approval_receipt_required_for_object_storage_request", missing_receipt["blockers"])
+
+            no_dry_code, no_dry_output = self.run_cli(
+                [
+                    "object-storage-operation-request-plan",
+                    str(archive_root),
+                    "--operation",
+                    "presigned_download",
+                    "--object-id",
+                    f"sha256:{digest}",
+                ]
+            )
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
 
     def test_zettel_objet_links_preview_resolves_refs_without_echoing_body_or_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

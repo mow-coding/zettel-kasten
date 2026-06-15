@@ -216,6 +216,38 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "object_storage_operation_request_plan",
+        "description": "Compose a read-only approval request package before a future object-storage operation. Never calls providers, retrieves secrets, uploads, downloads, creates presigned URLs, reads object bytes, or writes files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "operation": {
+                    "type": "string",
+                    "enum": sorted(archive_services.OBJECT_STORAGE_ADAPTER_OPERATIONS),
+                    "default": "presigned_download",
+                },
+                "object_id": {"type": "string"},
+                "store_ref": {"type": "string"},
+                "ttl_seconds": {"type": "integer", "default": archive_services.PRESIGNED_URL_DEFAULT_TTL_SECONDS},
+                "provider_ref": {"type": "string"},
+                "credential_id": {"type": "string", "default": "cred:object-storage"},
+                "credential_ref": {"type": "string"},
+                "credential_kind": {"type": "string", "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS)},
+                "provider": {"type": "string", "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS)},
+                "store_kind": {"type": "string", "enum": sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS), "default": "password_manager"},
+                "adapter_kind": {"type": "string", "enum": sorted(archive_services.CREDENTIAL_ADAPTER_KINDS)},
+                "approval_decision": {"type": "string", "enum": sorted(archive_services.CREDENTIAL_ACCESS_APPROVAL_DECISIONS), "default": "needs_review"},
+                "approval_receipt": {"type": "string"},
+                "consumer": {"type": "string", "default": "wom:adapter:object-storage"},
+                "reviewed_by": {"type": "string", "default": "human:pending-review"},
+                "platform": {"type": "string", "enum": sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS), "default": "windows"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "human_artifact_store_plan",
         "description": "Plan a user-facing human artifact surface. Read-only; never creates notes, publishes posts, uploads files, starts OAuth, calls providers, mints, or runs ZET transport.",
         "inputSchema": {
@@ -1886,6 +1918,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_provider_setup_status(arguments)
     if name == "object_storage_adapter_readiness_plan":
         return tool_object_storage_adapter_readiness_plan(arguments)
+    if name == "object_storage_operation_request_plan":
+        return tool_object_storage_operation_request_plan(arguments)
     if name == "human_artifact_store_plan":
         return tool_human_artifact_store_plan(arguments)
     if name == "imap_mailbox_plan":
@@ -2209,6 +2243,39 @@ def tool_object_storage_adapter_readiness_plan(arguments: dict[str, Any]) -> dic
     )
     state = str(result.get("readiness_state") or ("passed" if result["ok"] else "blocked"))
     return tool_success_result(f"object_storage_adapter_readiness_plan: {state}.", result)
+
+
+def tool_object_storage_operation_request_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("object_storage_operation_request_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    try:
+        ttl_seconds = int(arguments.get("ttl_seconds", archive_services.PRESIGNED_URL_DEFAULT_TTL_SECONDS))
+    except (TypeError, ValueError):
+        raise ToolError("ttl_seconds must be an integer.")
+    result = call_service(
+        archive_services.object_storage_operation_request_plan,
+        archive_root,
+        operation=optional_string_arg(arguments, "operation") or "presigned_download",
+        object_id=optional_string_arg(arguments, "object_id"),
+        store_ref=optional_string_arg(arguments, "store_ref"),
+        ttl_seconds=ttl_seconds,
+        provider_ref=optional_string_arg(arguments, "provider_ref"),
+        credential_id=optional_string_arg(arguments, "credential_id") or "cred:object-storage",
+        credential_ref=optional_string_arg(arguments, "credential_ref"),
+        credential_kind=optional_string_arg(arguments, "credential_kind"),
+        provider=optional_string_arg(arguments, "provider"),
+        store_kind=optional_string_arg(arguments, "store_kind") or "password_manager",
+        adapter_kind=optional_string_arg(arguments, "adapter_kind"),
+        approval_decision=optional_string_arg(arguments, "approval_decision") or "needs_review",
+        approval_receipt=optional_string_arg(arguments, "approval_receipt"),
+        consumer=optional_string_arg(arguments, "consumer") or "wom:adapter:object-storage",
+        reviewed_by=optional_string_arg(arguments, "reviewed_by") or "human:pending-review",
+        platform=optional_string_arg(arguments, "platform") or "windows",
+        dry_run=True,
+    )
+    state = str(result.get("request_state") or ("passed" if result["ok"] else "blocked"))
+    return tool_success_result(f"object_storage_operation_request_plan: {state}.", result)
 
 
 def tool_human_artifact_store_plan(arguments: dict[str, Any]) -> dict[str, Any]:

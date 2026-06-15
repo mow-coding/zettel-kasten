@@ -6,6 +6,31 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.45 - 2026-06-15
+
+- Added read-only object-storage operation request packages:
+  `archive object-storage-operation-request-plan --dry-run`, alias
+  `archive object-storage-request-plan --dry-run`, and alias
+  `archive objet-storage-operation-request --dry-run`.
+- Added MCP tool `object_storage_operation_request_plan` for the same
+  read-only request package surface.
+- The package composes provider readiness, object target validation,
+  presigned URL planning or objet-ref resolution, and `credential-policy-check`
+  for `object_storage_request` into one future-adapter approval gate.
+- `request_state` now distinguishes `needs_human_approval`,
+  `ready_for_future_adapter_after_approval`, human denial, policy denial, and
+  blockers without treating missing human approval as live execution readiness.
+- `approve_once` requires a verified archive-relative approval receipt before
+  the request package can become `ready_for_future_adapter_after_approval`.
+- Added `wom-kit/docs/object-storage-operation-request-plan.md` and public
+  documentation links.
+- Kept the planner read-only: it calls no providers, retrieves no secrets,
+  creates no presigned URLs, uploads or downloads nothing, lists no remote
+  metadata, reads no object bytes, checks no remote availability, writes no
+  files or receipts, and echoes no bucket names, prefixes, provider URLs,
+  generated URLs, local absolute paths, exact credential refs, approval receipt
+  paths, provider setup receipt paths, tokens, or secret values.
+
 ## v0.3.44 - 2026-06-15
 
 - Added a KeePassXC 2.7.x first-vault walkthrough to

@@ -30,6 +30,13 @@ MCP:
 object_storage_adapter_readiness_plan
 ```
 
+Related request package:
+
+```text
+archive object-storage-operation-request-plan <archive-root> --dry-run
+MCP: object_storage_operation_request_plan
+```
+
 ## What It Checks
 
 The planner reads local provider metadata and setup receipts through
@@ -77,6 +84,7 @@ Before any future live adapter can run, WOM still needs:
 - credential access broker plan,
 - credential policy check,
 - human approval receipt,
+- object-storage operation request plan,
 - adapter manifest,
 - private URL handling policy for presigned operations,
 - non-secret adapter audit receipt after execution.

@@ -134,6 +134,7 @@ Onboarding and setup plans:
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
 - [Object Storage Recommendations](object-storage-recommendations.md)
 - [Object Storage Adapter Readiness Plan](object-storage-adapter-readiness-plan.md)
+- [Object Storage Operation Request Plan](object-storage-operation-request-plan.md)
 - [IMAP Mailbox Source](imap-mailbox-source.md)
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)
 - [Objet Ref Resolution](objet-ref-resolution.md)
