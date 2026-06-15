@@ -183,7 +183,7 @@ credential-keepassxc-write
   Execute a minimal KeePassXC CLI add after verifying a credential access approval receipt. Dry-run previews first; approved mode is CLI-only, requires a local .kdbx path, invokes keepassxc-cli add --password-prompt, writes a non-secret execution receipt, blocks replay with the same approval receipt, and echoes no secret value, exact credential ref, database path, username, email, token, provider URL, or raw adapter output.
 
 beginner-setup-manual
-  Print beginner-friendly secret vault and derived-text tool setup steps. Dry-run only; explains what to do in external UIs, shows safe non-secret labels and dry-run commands, writes nothing, opens no vault, installs no tools, runs no extraction, and echoes no secret values or local paths.
+  Print beginner-friendly secret vault, KeePassXC CSV bulk migration, and derived-text tool setup steps. Dry-run only; explains what to do in external UIs, shows safe non-secret labels and dry-run commands, writes nothing, opens no vault, reads no CSV, imports or merges no database, installs no tools, runs no extraction, deletes no temporary files, and echoes no secret values or local paths.
 
 connected-accounts
   Summarize provider/source account metadata and credential store types. Dry-run only; reads metadata from provider bindings, source bindings, and ignored local credential inventory, writes nothing, opens no vault/keyring/browser store, calls no providers, opens no IMAP connection, and echoes no exact credential refs or secret values.

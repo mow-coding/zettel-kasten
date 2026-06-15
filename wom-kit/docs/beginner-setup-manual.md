@@ -1,6 +1,6 @@
 # Beginner Setup Manual
 
-Status: v0.3.44 read-only beginner setup manual
+Status: v0.3.48 read-only beginner setup manual
 Date: 2026-06-15
 
 This document is the beginner-facing bridge between recommendations and actual
@@ -35,6 +35,7 @@ Supported topics:
 
 - `first_secret_and_text_tools`
 - `credential_vault`
+- `credential_bulk_migration`
 - `derived_text_tools`
 
 ## What It Explains
@@ -48,6 +49,9 @@ The manual explains:
 - how to walk through the KeePassXC 2.7.x new database wizard screen by screen,
 - which first-vault KeePassXC fields WOM recommends for a local offline KDBX
   threat model,
+- how to bulk-import existing secrets from a human-prepared CSV into
+  KeePassXC by importing to a temporary database, merging into the main vault,
+  and cleaning up temporary files,
 - how to use safe non-secret group and entry labels,
 - how to prepare derived-text tools such as LibreOffice and Tesseract,
 - how to use a private local `--tool-hints` JSON file when a tool is installed
@@ -98,6 +102,56 @@ policy wins.
 The walkthrough also tells the beginner which button to press on the general,
 encryption, credentials, save, and first-entry screens. It still does not open
 KeePassXC, create the database, record the database path, or read any secret.
+
+## KeePassXC Bulk Migration Walkthrough
+
+For existing secrets that the human has already prepared as CSV, run:
+
+```bash
+archive beginner-setup-manual <archive-root> \
+  --topic credential_bulk_migration \
+  --scenario personal_local_first \
+  --store-id keepassxc \
+  --platform windows \
+  --dry-run \
+  --format json
+```
+
+The output includes a `credential_bulk_migration` section and a
+`product_walkthrough` for KeePassXC 2.7.x CSV import.
+
+The beginner defaults are:
+
+```text
+CSV encoding: UTF-8
+First row has field names: on
+Field separator: ,
+Text qualifier: "
+Comment character: #
+Column mapping: Group, Title, Username, Password, URL, Notes
+```
+
+The key trap is that CSV import may put the entries into a temporary/new
+database first. The beginner path is:
+
+```text
+prepare CSV outside WOM
+-> import CSV into a temporary KeePassXC database
+-> open the main vault
+-> Database > Merge from Database
+-> select the temporary database and unlock it locally
+-> save and verify the main vault
+-> delete the temporary database and working CSV copy
+```
+
+Use the normal import path for CSV secrets. Do not choose passkey import unless
+the source is actually a WebAuthn/passkey export. If the Group column contains
+slashes, KeePassXC may show nested folders; that can be normal when the nesting
+was intentional.
+
+The manual still does not read the CSV, open KeePassXC, create a temporary
+database, merge a vault, delete files, record local paths, or see any secret
+value. It is a screen-by-screen human guide.
 
 ## Safe Label Examples
 
