@@ -6,6 +6,32 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.49 - 2026-06-16
+
+- Added read-only IMAP mailbox selection planning:
+  `archive imap-mailbox-selection-plan --dry-run`, alias
+  `archive imap-mailbox-message-selection-plan --dry-run`, and alias
+  `archive mailbox-selection-plan --dry-run`.
+- Added MCP tool `imap_mailbox_selection_plan` for the same read-only planning
+  surface.
+- The planner composes the IMAP operation request package with a safe future
+  selector rule such as `newest_first`, `unread_first`, `since_days_window`, or
+  `human_review_queue`.
+- `selection_state` distinguishes `needs_human_approval`,
+  `ready_for_future_adapter_after_approval`, human denial, policy denial, and
+  blockers without treating a selector plan as mailbox access.
+- Added `wom-kit/docs/imap-mailbox-selection-plan.md` and public documentation
+  links.
+- Kept the planner read-only: it opens no IMAP connection, attempts no login,
+  selects no mailbox, searches no mailbox, lists no candidate messages, reads no
+  IMAP UIDs, Message-ID values, headers, bodies, or attachments, creates no
+  derived text, retrieves no secrets, starts no OAuth, sends no mail, deletes no
+  mail, changes no flags, writes no files or receipts, and echoes no email
+  addresses, username values, exact account refs, exact credential refs, exact
+  mailbox refs, IMAP host values, provider URLs, message ids, subjects, sender
+  or recipient values, attachment names, approval receipt paths, local absolute
+  paths, tokens, or secret values.
+
 ## v0.3.48 - 2026-06-15
 
 - Added KeePassXC CSV bulk migration guidance to

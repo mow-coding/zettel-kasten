@@ -54,6 +54,15 @@ archive imap-mailbox-adapter-readiness-plan <archive-root> --dry-run
 MCP: imap_mailbox_adapter_readiness_plan
 ```
 
+That v0.3.47 checkpoint still ended at a future IMAP adapter, not implemented in v0.3.47.
+
+Related selection planning check added in v0.3.49:
+
+```text
+archive imap-mailbox-selection-plan <archive-root> --dry-run
+MCP: imap_mailbox_selection_plan
+```
+
 ## What It Composes
 
 The request package reuses existing read-only gates:
@@ -157,7 +166,8 @@ imap-mailbox-plan
 -> credential-access-approval
 -> imap-mailbox-operation-request-plan
 -> imap-mailbox-adapter-readiness-plan
--> future IMAP adapter, not implemented in v0.3.47
+-> imap-mailbox-selection-plan
+-> future IMAP adapter, not implemented in v0.3.49
 -> future non-secret adapter audit receipt
 ```
 
