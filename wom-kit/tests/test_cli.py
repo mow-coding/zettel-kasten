@@ -2503,6 +2503,80 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_beginner_setup_manual_guides_keepassxc_bulk_migration_without_reading_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "beginner-setup-manual",
+                    str(archive_root),
+                    "--topic",
+                    "credential_bulk_migration",
+                    "--scenario",
+                    "personal_local_first",
+                    "--store-id",
+                    "keepassxc",
+                    "--platform",
+                    "windows",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["topic"], "credential_bulk_migration")
+            self.assertEqual(result["selected_store_id"], "keepassxc")
+            self.assertIn("credential-plaintext-migration-plan", result["cross_links"])
+            self.assertTrue(any("--topic credential_bulk_migration" in command for command in result["command_checklist"]))
+            self.assertTrue(any("credential-plaintext-migration-plan" in command for command in result["command_checklist"]))
+
+            section_ids = [section["section_id"] for section in result["sections"]]
+            self.assertIn("credential_vault", section_ids)
+            self.assertIn("credential_bulk_migration", section_ids)
+            migration_section = next(section for section in result["sections"] if section["section_id"] == "credential_bulk_migration")
+            self.assertEqual(migration_section["safe_csv_header"], ["Group", "Title", "Username", "Password", "URL", "Notes"])
+            walkthrough = migration_section["product_walkthrough"]
+            self.assertEqual(walkthrough["walkthrough_kind"], "csv_import_then_merge_existing_database")
+            self.assertEqual(walkthrough["csv_field_decisions"]["encoding"], "UTF-8")
+            self.assertTrue(walkthrough["csv_field_decisions"]["first_row_has_field_names"])
+            self.assertEqual(walkthrough["csv_field_decisions"]["field_separator"], ",")
+            self.assertEqual(walkthrough["csv_field_decisions"]["text_qualifier"], "\"")
+            self.assertEqual(walkthrough["csv_field_decisions"]["comment_character"], "#")
+            self.assertEqual(
+                walkthrough["csv_field_decisions"]["recommended_column_mapping"],
+                ["Group", "Title", "Username", "Password", "URL", "Notes"],
+            )
+            step_ids = [step["step_id"] for step in walkthrough["screens"]]
+            self.assertIn("choose_import_kind", step_ids)
+            self.assertIn("create_temp_database", step_ids)
+            self.assertIn("csv_settings", step_ids)
+            self.assertIn("column_mapping", step_ids)
+            self.assertIn("merge_into_main_database", step_ids)
+            self.assertIn("cleanup", step_ids)
+            stops = {item["stop"] for item in walkthrough["common_stops_and_answers"]}
+            self.assertEqual(len(stops), 11)
+            self.assertIn("csv_import_creates_new_database", stops)
+            self.assertIn("unexpected_tree_structure", stops)
+            self.assertFalse(walkthrough["closed_actions"]["keepassxc_opened"])
+            self.assertFalse(walkthrough["closed_actions"]["csv_file_read"])
+            self.assertFalse(walkthrough["closed_actions"]["vault_import_performed"])
+            self.assertFalse(walkthrough["closed_actions"]["vault_merge_performed"])
+            self.assertFalse(result["closed_actions"]["csv_file_read"])
+            self.assertFalse(result["closed_actions"]["vault_merge_performed"])
+            self.assertFalse(result["closed_actions"]["temporary_file_deleted"])
+            self.assertFalse(result["privacy_guards"]["secret_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["csv_paths_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn("C:\\", serialized)
+            self.assertNotIn("sk-proj-", serialized)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+
     def test_credential_plaintext_migration_plan_is_read_only_and_pathless(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

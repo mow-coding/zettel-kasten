@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.48 - 2026-06-15
+
+- Added KeePassXC CSV bulk migration guidance to
+  `archive beginner-setup-manual --topic credential_bulk_migration --dry-run`.
+- The new beginner topic covers normal import vs passkey import, temporary
+  import database creation, UTF-8 CSV settings, header/field separator/text
+  qualifier/comment character choices, Group/Title/Username/Password/URL/Notes
+  column mapping, `Database > Merge from Database`, expected root/group tree
+  shape, slash-created nested groups, and safe cleanup order.
+- Linked the bulk migration guide back to
+  `credential-plaintext-migration-plan` so the plan-level and screen-level
+  workflows are easier to follow together.
+- Updated the beginner setup manual, capability matrix, README summary, and
+  release notes.
+- Kept the topic read-only: it reads no CSV, opens no KeePassXC window, creates
+  no temporary database, imports or merges no vault, records no database path,
+  deletes no temporary files, writes nothing, and echoes no secret values,
+  usernames, emails, provider URLs, local paths, CSV paths, or vault paths.
+
 ## v0.3.47 - 2026-06-15
 
 - Added read-only IMAP mailbox adapter readiness checks:

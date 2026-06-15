@@ -1286,6 +1286,7 @@ CREDENTIAL_VAULT_ONBOARDING_STORE_IDS = {
 BEGINNER_SETUP_MANUAL_TOPICS = {
     "first_secret_and_text_tools",
     "credential_vault",
+    "credential_bulk_migration",
     "derived_text_tools",
 }
 CONNECTED_ACCOUNT_SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -12917,8 +12918,13 @@ def beginner_setup_manual(
         )
         resolved_platform = "cross_platform"
 
-    include_credentials = resolved_topic in {"first_secret_and_text_tools", "credential_vault"}
+    include_credentials = resolved_topic in {
+        "first_secret_and_text_tools",
+        "credential_vault",
+        "credential_bulk_migration",
+    }
     include_text_tools = resolved_topic in {"first_secret_and_text_tools", "derived_text_tools"}
+    include_bulk_migration = resolved_topic == "credential_bulk_migration"
 
     vault_preview: dict[str, Any] | None = None
     if include_credentials:
@@ -13002,6 +13008,26 @@ def beginner_setup_manual(
             }
         )
 
+    if include_bulk_migration:
+        selected_store_id = (vault_preview or {}).get("selected_store_id") or resolved_store_id
+        if str(selected_store_id).replace("-", "_") != "keepassxc":
+            warnings.append("credential_bulk_migration currently gives KeePassXC CSV import/merge guidance only.")
+        sections.append(
+            {
+                "section_id": "credential_bulk_migration",
+                "title": "Bulk-import existing secrets into KeePassXC",
+                "beginner_explanation": "Bulk migration means the human prepares a CSV outside WOM, imports it into a temporary KeePassXC database, merges that temporary database into the main vault, verifies the result, and then cleans up temporary files. WOM explains the screens but never reads the CSV or vault.",
+                "recommended_store_id": "keepassxc",
+                "source_examples": [
+                    "human-prepared CSV from a notes app export",
+                    "human-prepared CSV from a browser/password-manager export",
+                    "small hand-built CSV used as a rehearsal before a larger import",
+                ],
+                "safe_csv_header": ["Group", "Title", "Username", "Password", "URL", "Notes"],
+                "product_walkthrough": beginner_setup_manual_keepassxc_bulk_migration_walkthrough(resolved_platform),
+            }
+        )
+
     if include_text_tools:
         sections.append(
             {
@@ -13052,6 +13078,21 @@ def beginner_setup_manual(
                 "archive credential-ref-plan <archive-root> --credential-id cred:openai-api --credential-ref secret:keepassxc-openai-api --credential-kind openai_api_key --provider openai --dry-run --format json",
             ]
         )
+    if include_bulk_migration:
+        command_checklist.extend(
+            [
+                "archive beginner-setup-manual <archive-root> --topic credential_bulk_migration --scenario "
+                + resolved_scenario
+                + " --store-id keepassxc --platform "
+                + resolved_platform
+                + " --dry-run --format json",
+                "archive credential-plaintext-migration-plan <archive-root> --source-label notes-export-csv --credential-id cred:example-secret --target-store-id keepassxc --scenario "
+                + resolved_scenario
+                + " --platform "
+                + resolved_platform
+                + " --dry-run --format json",
+            ]
+        )
     if include_text_tools:
         command_checklist.extend(
             [
@@ -13083,6 +13124,7 @@ def beginner_setup_manual(
         "cross_links": [
             "credential-store-recommendation",
             "credential-vault-onboarding-plan",
+            "credential-plaintext-migration-plan",
             "credential-ref-plan",
             "credential-access-approval-plan",
             "credential-keepassxc-command-plan",
@@ -13102,6 +13144,11 @@ def beginner_setup_manual(
             "tool_executed": False,
             "tool_hint_file_written": False,
             "source_bytes_read": False,
+            "csv_file_read": False,
+            "csv_file_written": False,
+            "vault_import_performed": False,
+            "vault_merge_performed": False,
+            "temporary_file_deleted": False,
             "ocr_run": False,
             "parser_run": False,
             "asr_run": False,
@@ -13115,6 +13162,7 @@ def beginner_setup_manual(
             "usernames_echoed": False,
             "tokens_echoed": False,
             "local_absolute_paths_echoed": False,
+            "csv_paths_echoed": False,
             "tool_hint_paths_echoed": False,
             "provider_urls_echoed": False,
             "writes": False,
@@ -13122,6 +13170,178 @@ def beginner_setup_manual(
         "would_change": [],
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
+    }
+
+
+def beginner_setup_manual_keepassxc_bulk_migration_walkthrough(platform: str) -> dict[str, Any]:
+    normalized_platform = (platform or "cross_platform").strip().lower().replace("-", "_")
+    return {
+        "store_id": "keepassxc",
+        "platform": normalized_platform,
+        "product_version_family": "KeePassXC 2.7.x",
+        "walkthrough_kind": "csv_import_then_merge_existing_database",
+        "status": "wom_context_recommendation",
+        "source_basis": [
+            "KeePassXC supports importing databases from CSV and stores secrets in encrypted KDBX databases.",
+            "KeePassXC CSV import may create a new imported database; merging that database into the main vault is the safe beginner workflow.",
+            "WOM scopes this guidance to screen and field choices only; the human keeps CSV contents, vault paths, passwords, and cleanup actions local.",
+        ],
+        "preflight": [
+            "Work from a copy of the CSV and keep the original export outside this public repository.",
+            "Open the main KeePassXC vault yourself and make sure it is saved before starting.",
+            "Do not paste the CSV, vault path, master password, usernames, passwords, URLs, API keys, or tokens into chat.",
+            "Use a tiny rehearsal CSV first if the import contains many entries.",
+        ],
+        "critical_behavior": [
+            "Choose the normal import path, not passkey import. Passkeys are WebAuthn credentials, not ordinary passwords or API keys.",
+            "For KeePassXC CSV import, expect a temporary/new database workflow before the entries reach the main vault.",
+            "After import, open the main vault and use Database > Merge from Database to merge the temporary import database.",
+            "Save the main vault after checking the merged entries.",
+        ],
+        "csv_field_decisions": {
+            "encoding": "UTF-8",
+            "first_row_has_field_names": True,
+            "field_separator": ",",
+            "text_qualifier": "\"",
+            "comment_character": "#",
+            "recommended_column_mapping": ["Group", "Title", "Username", "Password", "URL", "Notes"],
+            "group_slash_behavior": "A slash in Group can create nested folders; use it only when that nesting is intentional.",
+        },
+        "screens": [
+            {
+                "step_id": "choose_import_kind",
+                "screen": "Import choice",
+                "do_this": "Choose the normal CSV/import option for passwords or secret entries.",
+                "avoid": "Passkey import",
+                "why": "Passkeys are a different WebAuthn credential type. A CSV of passwords, app passwords, API keys, or notes is not a passkey import.",
+            },
+            {
+                "step_id": "create_temp_database",
+                "screen": "New database for imported CSV",
+                "do_this": "Create a temporary import database such as temp-import.",
+                "fields": [
+                    {
+                        "field": "Database name",
+                        "recommended_value": "temp-import",
+                        "reason": "It is clearly temporary and contains no personal account data.",
+                    },
+                    {
+                        "field": "Temporary master password",
+                        "recommended_value": "Human chooses locally; never send to AI.",
+                        "reason": "The temporary database contains real secrets until cleanup is done.",
+                    },
+                ],
+            },
+            {
+                "step_id": "csv_settings",
+                "screen": "CSV import settings",
+                "fields": [
+                    {
+                        "field": "Encoding",
+                        "recommended_value": "UTF-8",
+                        "reason": "System default encodings can corrupt non-ASCII labels or notes.",
+                    },
+                    {
+                        "field": "First row has field names",
+                        "recommended_value": "On",
+                        "reason": "The recommended CSV header is a header row, not a secret entry.",
+                    },
+                    {
+                        "field": "Field separator",
+                        "recommended_value": ",",
+                        "reason": "Use a normal comma-separated CSV unless the human deliberately prepared another delimiter.",
+                    },
+                    {
+                        "field": "Text qualifier",
+                        "recommended_value": "\"",
+                        "reason": "Quoted fields allow commas inside notes without shifting columns.",
+                    },
+                    {
+                        "field": "Comment character",
+                        "recommended_value": "#",
+                        "reason": "KeePassXC may require a value; choose a character that no real data row starts with.",
+                    },
+                ],
+            },
+            {
+                "step_id": "column_mapping",
+                "screen": "Column mapping",
+                "do_this": "Map the CSV columns in order: Group, Title, Username, Password, URL, Notes.",
+                "why": "A wrong mapping can turn usernames into notes or passwords into the wrong field.",
+            },
+            {
+                "step_id": "review_temp_database",
+                "screen": "Temporary imported database",
+                "do_this": "Check a few entries locally inside KeePassXC. Confirm the expected group tree, titles, usernames, URLs, and notes.",
+                "normal_tree_notes": [
+                    "Items at the root can be normal if the Group column is blank or root-like.",
+                    "Groups can appear as folders under the root.",
+                    "Slash-separated groups can become nested folders.",
+                ],
+            },
+            {
+                "step_id": "merge_into_main_database",
+                "screen": "Main database merge",
+                "do_this": "Open the main vault, choose Database > Merge from Database, select the temporary import database, enter its temporary password locally, then save the main vault.",
+                "why": "This is how the temporary imported entries become part of the real main vault without WOM reading any secret.",
+            },
+            {
+                "step_id": "cleanup",
+                "screen": "Temporary file cleanup",
+                "do_this": "Only after the main vault is saved and verified, delete the temporary import database and the CSV copy from the private local location.",
+                "safe_order": [
+                    "Save the main vault.",
+                    "Reopen or inspect the main vault enough to confirm the imported entries are present.",
+                    "Delete the temporary import database.",
+                    "Delete the working CSV copy.",
+                    "Keep or destroy the original source export according to the human's own retention policy.",
+                ],
+            },
+        ],
+        "common_stops_and_answers": [
+            {
+                "stop": "passkey_import_or_normal_import",
+                "answer": "Use normal import for passwords/API keys; passkey import is not the CSV password path.",
+            },
+            {
+                "stop": "csv_import_creates_new_database",
+                "answer": "Expected for this workflow; import to temp database, then merge from the main database.",
+            },
+            {
+                "stop": "temp_database_name_and_password",
+                "answer": "Use a boring temp name and choose the temporary password locally.",
+            },
+            {"stop": "encoding_choice", "answer": "Use UTF-8."},
+            {"stop": "header_checkbox", "answer": "Turn it on when using the recommended header row."},
+            {"stop": "comment_character_required", "answer": "Use # if no data row begins with #."},
+            {"stop": "text_qualifier", "answer": "Use double quote."},
+            {"stop": "column_mapping", "answer": "Map Group, Title, Username, Password, URL, Notes."},
+            {
+                "stop": "merge_procedure",
+                "answer": "Open main vault, Database > Merge from Database, select temp database, unlock temp database, save main vault.",
+            },
+            {
+                "stop": "unexpected_tree_structure",
+                "answer": "Root entries plus group folders can be normal; slash groups can create nested folders.",
+            },
+            {
+                "stop": "cleanup_timing",
+                "answer": "Delete temp database and CSV only after the main vault is saved and verified.",
+            },
+        ],
+        "closed_actions": {
+            "keepassxc_opened": False,
+            "csv_file_read": False,
+            "csv_file_written": False,
+            "database_created": False,
+            "database_path_recorded": False,
+            "master_password_read": False,
+            "secret_value_read": False,
+            "vault_import_performed": False,
+            "vault_merge_performed": False,
+            "temporary_file_deleted": False,
+            "files_written": False,
+        },
     }
 
 
