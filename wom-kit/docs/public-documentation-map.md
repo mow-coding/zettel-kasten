@@ -121,6 +121,7 @@ Onboarding and setup plans:
 - [Credential Plaintext Migration Plan](credential-plaintext-migration-plan.md)
 - [Credential Access Broker Plan](credential-access-broker-plan.md)
 - [Credential Access Approval Plan](credential-access-approval-plan.md)
+- [Credential Policy Check](credential-policy-check.md)
 - [Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md)
 - [Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md)
 - [Credential Adapter Audit Plan](credential-adapter-audit-plan.md)

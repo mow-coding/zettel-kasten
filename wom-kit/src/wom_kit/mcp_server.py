@@ -383,6 +383,57 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "credential_policy_check",
+        "description": "Check a credential request against the approval policy gate before any future adapter can run. Read-only; never opens stores, reads secrets, writes receipts, or executes adapters.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "credential_id": {"type": "string"},
+                "credential_ref": {"type": "string"},
+                "credential_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+                },
+                "provider": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+                },
+                "action_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ACCESS_BROKER_ACTIONS),
+                },
+                "approval_decision": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ACCESS_APPROVAL_DECISIONS),
+                    "default": "needs_review",
+                },
+                "store_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+                    "default": "password_manager",
+                },
+                "adapter_kind": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ADAPTER_KINDS),
+                },
+                "operation": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_ADAPTER_OPERATIONS),
+                },
+                "consumer": {"type": "string", "default": "wom_local_adapter"},
+                "reviewed_by": {"type": "string", "default": "human:pending-review"},
+                "platform": {
+                    "type": "string",
+                    "enum": sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+                    "default": "windows",
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "credential_id", "action_kind"],
+        },
+    },
+    {
         "name": "credential_access_broker_plan",
         "description": "Plan a future approved credential broker request without retrieving secrets. Read-only; never opens password managers, browser stores, keyrings, files, or environment variables.",
         "inputSchema": {
@@ -1752,6 +1803,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_credential_vault_onboarding_plan(arguments)
     if name == "credential_plaintext_migration_plan":
         return tool_credential_plaintext_migration_plan(arguments)
+    if name == "credential_policy_check":
+        return tool_credential_policy_check(arguments)
     if name == "credential_access_broker_plan":
         return tool_credential_access_broker_plan(arguments)
     if name == "credential_access_approval_plan":
@@ -2175,6 +2228,33 @@ def tool_credential_plaintext_migration_plan(arguments: dict[str, Any]) -> dict[
     target = result.get("target") if isinstance(result.get("target"), dict) else {}
     return tool_success_result(
         f"credential_plaintext_migration_plan: {state}, target={target.get('selected_store_id') or '-'}.",
+        result,
+    )
+
+
+def tool_credential_policy_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("credential_policy_check is read-only and requires dry-run.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.credential_policy_check,
+        archive_root,
+        credential_id=require_string_arg(arguments, "credential_id"),
+        credential_ref=optional_string_arg(arguments, "credential_ref"),
+        credential_kind=optional_string_arg(arguments, "credential_kind"),
+        provider=optional_string_arg(arguments, "provider"),
+        action_kind=require_string_arg(arguments, "action_kind"),
+        approval_decision=optional_string_arg(arguments, "approval_decision") or "needs_review",
+        store_kind=optional_string_arg(arguments, "store_kind") or "password_manager",
+        adapter_kind=optional_string_arg(arguments, "adapter_kind"),
+        operation=optional_string_arg(arguments, "operation"),
+        consumer=optional_string_arg(arguments, "consumer"),
+        reviewed_by=optional_string_arg(arguments, "reviewed_by"),
+        platform=optional_string_arg(arguments, "platform") or "windows",
+        dry_run=True,
+    )
+    return tool_success_result(
+        f"credential_policy_check: {result.get('policy_result') or '-'}.",
         result,
     )
 

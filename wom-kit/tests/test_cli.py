@@ -1990,6 +1990,129 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_credential_policy_check_gates_adapter_requests_without_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "credential-policy-check",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--credential-ref",
+                    "secret:keepassxc-openai-api",
+                    "--credential-kind",
+                    "openai_api_key",
+                    "--provider",
+                    "openai",
+                    "--action-kind",
+                    "plaintext_secret_migration",
+                    "--approval-decision",
+                    "approve_once",
+                    "--store-kind",
+                    "password_manager",
+                    "--adapter-kind",
+                    "keepassxc_cli",
+                    "--operation",
+                    "plaintext_secret_migration",
+                    "--consumer",
+                    "wom:adapter:keepassxc",
+                    "--reviewed-by",
+                    "human:tester",
+                    "--platform",
+                    "windows",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "credential_policy_check")
+            self.assertEqual(result["policy_result"], "ready_after_approval_receipt")
+            self.assertEqual(result["request"]["adapter_kind"], "keepassxc_cli")
+            self.assertEqual(result["request"]["operation"], "plaintext_secret_migration")
+            self.assertTrue(result["policy_evaluation"]["would_allow_future_adapter_after_receipt"])
+            self.assertFalse(result["policy_evaluation"]["live_execution_allowed_now"])
+            self.assertFalse(result["closed_actions"]["approval_receipt_written"])
+            self.assertFalse(result["closed_actions"]["live_adapter_executed"])
+            self.assertFalse(result["closed_actions"]["secret_value_written"])
+            self.assertFalse(result["privacy_guards"]["secret_values_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("secret:keepassxc-openai-api", output)
+            self.assertNotIn("sk-proj-", output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            denied_code, denied_output = self.run_cli(
+                [
+                    "credential-policy-check",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--credential-kind",
+                    "openai_api_key",
+                    "--provider",
+                    "openai",
+                    "--action-kind",
+                    "model_api_call",
+                    "--approval-decision",
+                    "approve_once",
+                    "--store-kind",
+                    "browser_platform_manager",
+                    "--adapter-kind",
+                    "browser_platform_manager",
+                    "--operation",
+                    "resolve_for_approved_action",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            denied = json.loads(denied_output)
+            self.assertEqual(denied_code, 1)
+            self.assertFalse(denied["ok"])
+            self.assertEqual(denied["policy_result"], "denied_by_policy")
+            self.assertTrue(denied["policy_evaluation"]["denied_rules"])
+            self.assertFalse(denied["policy_evaluation"]["would_allow_future_adapter_after_receipt"])
+            self.assertFalse(denied["closed_actions"]["browser_password_store_opened"])
+
+            review_code, review_output = self.run_cli(
+                [
+                    "credential-policy-check",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--action-kind",
+                    "model_api_call",
+                    "--store-kind",
+                    "password_manager",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            review = json.loads(review_output)
+            self.assertEqual(review_code, 1)
+            self.assertEqual(review["policy_result"], "needs_human_review")
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "credential-policy-check",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--action-kind",
+                    "model_api_call",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_credential_access_broker_plan_is_read_only_and_never_echoes_refs_or_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

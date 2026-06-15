@@ -1051,6 +1051,13 @@ CREDENTIAL_ACCESS_BROKER_STORE_KINDS = {
 }
 CREDENTIAL_ACCESS_APPROVAL_DECISIONS = {"needs_review", "approve_once", "deny"}
 CREDENTIAL_ACCESS_APPROVAL_RECEIPTS_DIR = "receipts/credentials/access-approvals"
+CREDENTIAL_POLICY_RESULTS = {
+    "ready_after_approval_receipt",
+    "needs_human_review",
+    "denied_by_human_decision",
+    "denied_by_policy",
+    "blocked",
+}
 CREDENTIAL_ADAPTER_KINDS = {
     "keepassxc_cli",
     "bitwarden_cli",
@@ -12444,6 +12451,251 @@ def credential_access_approval_case_id(
     }
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
     return f"credential-access-{digest}"
+
+
+def credential_policy_check(
+    archive_root: Path | str,
+    *,
+    credential_id: str,
+    action_kind: str,
+    approval_decision: str = "needs_review",
+    store_kind: str = "password_manager",
+    adapter_kind: str | None = None,
+    operation: str | None = None,
+    credential_ref: str | None = None,
+    credential_kind: str | None = None,
+    provider: str | None = None,
+    consumer: str | None = None,
+    reviewed_by: str | None = None,
+    platform: str = "windows",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    denied_rules: list[str] = []
+    satisfied_rules: list[str] = []
+
+    if not dry_run:
+        blockers.append("credential-policy-check is read-only and requires --dry-run.")
+
+    resolved_action = (action_kind or "").strip().lower().replace("-", "_")
+    if resolved_action not in CREDENTIAL_ACCESS_BROKER_ACTIONS:
+        blockers.append("action_kind must be one of: " + ", ".join(sorted(CREDENTIAL_ACCESS_BROKER_ACTIONS)) + ".")
+        resolved_action = "model_api_call"
+
+    resolved_decision = (approval_decision or "needs_review").strip().lower().replace("-", "_")
+    if resolved_decision not in CREDENTIAL_ACCESS_APPROVAL_DECISIONS:
+        blockers.append("approval_decision must be one of: " + ", ".join(sorted(CREDENTIAL_ACCESS_APPROVAL_DECISIONS)) + ".")
+        resolved_decision = "needs_review"
+
+    resolved_store = (store_kind or "password_manager").strip().lower().replace("-", "_")
+    if resolved_store not in CREDENTIAL_ACCESS_BROKER_STORE_KINDS:
+        blockers.append("store_kind must be one of: " + ", ".join(sorted(CREDENTIAL_ACCESS_BROKER_STORE_KINDS)) + ".")
+        resolved_store = "password_manager"
+
+    resolved_platform = (platform or "windows").strip().lower().replace("-", "_")
+    if resolved_platform not in CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS:
+        blockers.append("platform must be one of: " + ", ".join(sorted(CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS)) + ".")
+        resolved_platform = "cross_platform"
+
+    resolved_adapter = (adapter_kind or credential_policy_default_adapter_kind(resolved_store, resolved_platform)).strip().lower().replace("-", "_")
+    if resolved_adapter not in CREDENTIAL_ADAPTER_KINDS:
+        blockers.append("adapter_kind must be one of: " + ", ".join(sorted(CREDENTIAL_ADAPTER_KINDS)) + ".")
+        resolved_adapter = credential_policy_default_adapter_kind(resolved_store, resolved_platform)
+
+    resolved_operation = (operation or credential_policy_default_operation(resolved_action)).strip().lower().replace("-", "_")
+    if resolved_operation not in CREDENTIAL_ADAPTER_OPERATIONS:
+        blockers.append("operation must be one of: " + ", ".join(sorted(CREDENTIAL_ADAPTER_OPERATIONS)) + ".")
+        resolved_operation = credential_policy_default_operation(resolved_action)
+
+    approval_preview = credential_access_approval_plan(
+        root,
+        credential_id=credential_id,
+        credential_ref=credential_ref,
+        credential_kind=credential_kind,
+        provider=provider,
+        action_kind=resolved_action,
+        decision=resolved_decision,
+        store_kind=resolved_store,
+        consumer=consumer or credential_adapter_profile(resolved_adapter, resolved_platform)["default_consumer"],
+        reviewed_by=reviewed_by or "human:pending-review",
+        platform=resolved_platform,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in approval_preview.get("blockers") or [])
+    warnings.extend(str(item) for item in approval_preview.get("warnings") or [])
+
+    adapter_profile = credential_adapter_profile(resolved_adapter, resolved_platform)
+    supported_operations = credential_adapter_supported_operations(resolved_adapter)
+    if adapter_profile["store_kind"] != resolved_store:
+        denied_rules.append(f"adapter_kind={resolved_adapter} maps to store_kind={adapter_profile['store_kind']}, not {resolved_store}.")
+    else:
+        satisfied_rules.append("adapter kind matches requested store kind.")
+
+    if resolved_operation not in supported_operations:
+        denied_rules.append(f"adapter_kind={resolved_adapter} does not support operation={resolved_operation}.")
+    else:
+        satisfied_rules.append("adapter supports requested operation.")
+
+    allowed_operations = credential_policy_allowed_operations_for_action(resolved_action)
+    if resolved_operation not in allowed_operations:
+        denied_rules.append(
+            f"action_kind={resolved_action} allows operation(s) {', '.join(sorted(allowed_operations))}, not {resolved_operation}."
+        )
+    else:
+        satisfied_rules.append("operation matches requested action kind.")
+
+    if resolved_store == "browser_platform_manager" and resolved_action not in {"browser_login_fill", "plaintext_secret_migration"}:
+        denied_rules.append("browser/platform password managers are not valid for API, OCR, object-storage, CLI-token, or generic model secret retrieval.")
+
+    if resolved_store == "environment" and resolved_operation in {"write_new_secret", "rotate_secret", "plaintext_secret_migration"}:
+        denied_rules.append("environment variables are not a durable target for secret write, rotation, or plaintext migration.")
+
+    if resolved_action == "plaintext_secret_migration" and resolved_operation == "plaintext_secret_migration":
+        satisfied_rules.append("plaintext migration is scoped to human-selected local UI and per-entry confirmation.")
+
+    if resolved_decision == "deny":
+        policy_result = "denied_by_human_decision"
+    elif blockers:
+        policy_result = "blocked"
+    elif denied_rules:
+        policy_result = "denied_by_policy"
+    elif resolved_decision == "needs_review":
+        policy_result = "needs_human_review"
+    else:
+        policy_result = "ready_after_approval_receipt"
+
+    receipt_preview = approval_preview.get("receipt_preview") if isinstance(approval_preview.get("receipt_preview"), dict) else {}
+    broker_request = receipt_preview.get("broker_request") if isinstance(receipt_preview.get("broker_request"), dict) else {}
+    credential = receipt_preview.get("credential") if isinstance(receipt_preview.get("credential"), dict) else {}
+    live_execution_allowed_now = False
+    would_allow_future_adapter_after_receipt = policy_result == "ready_after_approval_receipt"
+
+    return {
+        "ok": policy_result == "ready_after_approval_receipt",
+        "dry_run": True,
+        "lifecycle_action": "credential_policy_check",
+        "archive_id": archive_id,
+        "policy_result": policy_result,
+        "policy_object_preview": {
+            "policy_kind": "credential_access_policy",
+            "schema_version": "wom-credential-policy/v0.1",
+            "archive_id": archive_id,
+            "rules": [
+                "secret values must never be returned to AI/chat/logs/receipts",
+                "exact credential refs must not be echoed in AI-visible output",
+                "one action requires one scoped human approval receipt",
+                "adapter kind must match the requested store kind",
+                "adapter operation must match the requested action kind",
+                "plaintext migration requires visible local UI and per-entry confirmation",
+                "browser/platform stores are login/passkey surfaces, not general API-key vaults",
+            ],
+        },
+        "request": {
+            "credential_id": credential.get("credential_id"),
+            "credential_kind": credential.get("credential_kind"),
+            "provider": credential.get("provider"),
+            "ref_store": credential.get("ref_store"),
+            "ref_prefix": credential.get("ref_prefix"),
+            "exact_ref_value_echoed": False,
+            "action_kind": broker_request.get("action_kind") or resolved_action,
+            "store_kind": broker_request.get("store_kind") or resolved_store,
+            "adapter_kind": resolved_adapter,
+            "operation": resolved_operation,
+            "consumer": broker_request.get("consumer") or consumer or adapter_profile["default_consumer"],
+            "platform": resolved_platform,
+            "approval_decision": resolved_decision,
+        },
+        "policy_evaluation": {
+            "satisfied_rules": unique_preserve_order(satisfied_rules),
+            "denied_rules": unique_preserve_order(denied_rules),
+            "approval_receipt_required_before_use": True,
+            "approval_receipt_written": False,
+            "approval_receipt_preview_path": approval_preview.get("proposed_receipt_path"),
+            "live_execution_allowed_now": live_execution_allowed_now,
+            "would_allow_future_adapter_after_receipt": would_allow_future_adapter_after_receipt,
+            "secret_value_return_to_ai": False,
+            "secret_value_echoed": False,
+            "exact_ref_value_echoed": False,
+        },
+        "next_gate": {
+            "if_ready": "future approval writer must persist the scoped approval receipt before an adapter can run",
+            "if_needs_review": "human must approve_once or deny through a local approval UI",
+            "if_denied": "do not call a live adapter",
+        },
+        "current_capability": {
+            "policy_check_available": True,
+            "policy_object_preview_available": True,
+            "approval_receipt_preview_available": True,
+            "approval_receipt_write_implemented": False,
+            "live_adapter_implemented": False,
+            "secret_value_read_implemented": False,
+            "secret_value_write_implemented": False,
+        },
+        "closed_actions": {
+            "approval_receipt_written": False,
+            "live_adapter_executed": False,
+            "secret_prompted_in_chat": False,
+            "secret_value_read": False,
+            "secret_value_written": False,
+            "password_manager_opened": False,
+            "browser_password_store_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "plaintext_file_read": False,
+            "provider_api_called": False,
+            "oauth_started": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "credential_ref_values_echoed": False,
+            "email_addresses_echoed": False,
+            "tokens_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def credential_policy_default_adapter_kind(store_kind: str, platform: str) -> str:
+    if store_kind == "browser_platform_manager":
+        return "browser_platform_manager"
+    if store_kind == "os_keyring":
+        if platform == "windows":
+            return "windows_credential_manager"
+        if platform == "macos":
+            return "macos_keychain"
+        return "linux_secret_service"
+    if store_kind == "developer_secret_manager":
+        return "developer_secret_manager"
+    if store_kind == "environment":
+        return "environment_injection"
+    if store_kind == "future_wallet":
+        return "future_wallet"
+    return "keepassxc_cli"
+
+
+def credential_policy_default_operation(action_kind: str) -> str:
+    if action_kind == "plaintext_secret_migration":
+        return "plaintext_secret_migration"
+    if action_kind == "browser_login_fill":
+        return "browser_login_fill"
+    return "resolve_for_approved_action"
+
+
+def credential_policy_allowed_operations_for_action(action_kind: str) -> set[str]:
+    if action_kind == "plaintext_secret_migration":
+        return {"plaintext_secret_migration", "write_new_secret"}
+    if action_kind == "browser_login_fill":
+        return {"browser_login_fill"}
+    return {"resolve_for_approved_action"}
 
 
 def credential_adapter_readiness_plan(
