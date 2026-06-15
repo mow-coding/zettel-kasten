@@ -36,6 +36,7 @@ IMAP_MAILBOX_SOURCE_PATH = KIT_ROOT / "docs" / "imap-mailbox-source.md"
 IMAP_MAILBOX_OPERATION_REQUEST_PATH = KIT_ROOT / "docs" / "imap-mailbox-operation-request-plan.md"
 IMAP_MAILBOX_ADAPTER_READINESS_PATH = KIT_ROOT / "docs" / "imap-mailbox-adapter-readiness-plan.md"
 IMAP_MAILBOX_SELECTION_PATH = KIT_ROOT / "docs" / "imap-mailbox-selection-plan.md"
+IMAP_MAILBOX_ADAPTER_AUDIT_PATH = KIT_ROOT / "docs" / "imap-mailbox-adapter-audit-plan.md"
 NOTION_PAGE_SNAPSHOT_MODEL_PATH = KIT_ROOT / "docs" / "notion-page-snapshot-model.md"
 OBJET_REF_RESOLUTION_PATH = KIT_ROOT / "docs" / "objet-ref-resolution.md"
 ZETTEL_OBJET_LINKS_PATH = KIT_ROOT / "docs" / "zettel-objet-links.md"
@@ -91,6 +92,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "IMAP mailbox operation request plan",
             "IMAP mailbox adapter readiness plan",
             "IMAP mailbox selection plan",
+            "IMAP mailbox adapter audit plan",
             "Notion page snapshot model",
             "Objet ref resolver",
             "Presigned URL plan",
@@ -313,7 +315,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, resolver_text)
         for phrase in (
-            "Status: v0.3.49 IMAP mailbox selection planning checkpoint",
+            "Status: v0.3.50 IMAP adapter audit planning checkpoint",
             "Objet ref resolver",
             "archive resolve-objet-ref --object-id sha256:<hex> --dry-run",
             "MCP `resolve_objet_ref`",
@@ -322,7 +324,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)",
             "read-only objet reference resolution",
         ):
@@ -357,7 +359,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, plan_text)
         for phrase in (
-            "Status: v0.3.49 IMAP mailbox selection planning checkpoint",
+            "Status: v0.3.50 IMAP adapter audit planning checkpoint",
             "Presigned URL plan",
             "archive presigned-url-plan --object-id sha256:<hex> --dry-run",
             "MCP `presigned_url_plan`",
@@ -368,7 +370,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Presigned URL Plan](wom-kit/docs/presigned-url-plan.md)",
             "presigned URL planning",
         ):
@@ -472,7 +474,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Derived Text Coverage And Toolchain](wom-kit/docs/derived-text-coverage-and-toolchain.md)",
             "derived-text coverage/toolchain/doctor/agent-contract",
             "tool-hint paths",
@@ -530,7 +532,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)",
             "read-only IMAP mailbox source planning",
         ):
@@ -578,7 +580,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, imap_text)
         for phrase in (
-            "Status: v0.3.49 IMAP mailbox selection planning checkpoint",
+            "Status: v0.3.50 IMAP adapter audit planning checkpoint",
             "IMAP mailbox operation request plan",
             "archive imap-mailbox-operation-request-plan --dry-run",
             "MCP `imap_mailbox_operation_request_plan`",
@@ -590,7 +592,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[IMAP Mailbox Operation Request Plan](wom-kit/docs/imap-mailbox-operation-request-plan.md)",
             "operation request packaging",
         ):
@@ -652,7 +654,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, request_text)
         for phrase in (
-            "Status: v0.3.49 IMAP mailbox selection planning checkpoint",
+            "Status: v0.3.50 IMAP adapter audit planning checkpoint",
             "IMAP mailbox adapter readiness plan",
             "archive imap-mailbox-adapter-readiness-plan --dry-run",
             "MCP `imap_mailbox_adapter_readiness_plan`",
@@ -664,7 +666,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[IMAP Mailbox Adapter Readiness Plan](wom-kit/docs/imap-mailbox-adapter-readiness-plan.md)",
             "adapter readiness checks",
         ):
@@ -708,7 +710,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "read IMAP UIDs",
             "read Message-ID values",
             "read message headers",
-            "not implemented in v0.3.49",
+            "not implemented in v0.3.50",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, selection_text)
@@ -723,7 +725,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for phrase in (
             "imap-mailbox-selection-plan",
             "imap_mailbox_selection_plan",
-            "future IMAP adapter, not implemented in v0.3.49",
+            "future IMAP adapter, not implemented in v0.3.50",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, request_text)
@@ -734,7 +736,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readiness_text)
         for phrase in (
-            "Status: v0.3.49 IMAP mailbox selection planning checkpoint",
+            "Status: v0.3.50 IMAP adapter audit planning checkpoint",
             "IMAP mailbox selection plan",
             "archive imap-mailbox-selection-plan --dry-run",
             "MCP `imap_mailbox_selection_plan`",
@@ -746,7 +748,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[IMAP Mailbox Selection Plan](wom-kit/docs/imap-mailbox-selection-plan.md)",
             "mailbox selection planning",
         ):
@@ -760,6 +762,93 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, kit_readme_text)
         self.assertIn("[IMAP Mailbox Selection Plan](imap-mailbox-selection-plan.md)", public_map_text)
         self.assertIn("[IMAP Mailbox Selection Plan](imap-mailbox-selection-plan.md)", public_map_ko_text)
+
+    def test_imap_mailbox_adapter_audit_doc_and_matrix_keep_receipt_preview_safe(self) -> None:
+        audit_text = IMAP_MAILBOX_ADAPTER_AUDIT_PATH.read_text(encoding="utf-8")
+        imap_text = IMAP_MAILBOX_SOURCE_PATH.read_text(encoding="utf-8")
+        request_text = IMAP_MAILBOX_OPERATION_REQUEST_PATH.read_text(encoding="utf-8")
+        readiness_text = IMAP_MAILBOX_ADAPTER_READINESS_PATH.read_text(encoding="utf-8")
+        selection_text = IMAP_MAILBOX_SELECTION_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.50 read-only IMAP adapter audit receipt preview baseline",
+            "archive imap-mailbox-adapter-audit-plan <archive-root>",
+            "imap-mailbox-adapter-audit",
+            "mailbox-adapter-audit-plan",
+            "imap_mailbox_adapter_audit_plan",
+            "receipts/imap/adapter-audits/",
+            "candidate count bucket",
+            "does not write audit receipts",
+            "It is an audit receipt preview, not an adapter runner.",
+            "open an IMAP connection",
+            "list candidate messages",
+            "read IMAP UIDs",
+            "read Message-ID values",
+            "read message headers",
+            "read message bodies",
+            "read attachments",
+            "not implemented in v0.3.50",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, audit_text)
+        for phrase in (
+            "imap-mailbox-adapter-audit-plan",
+            "imap_mailbox_adapter_audit_plan",
+            "non-secret receipt shape",
+            "does not execute the adapter",
+            "v0.3.50 can now",
+            "receipt writes",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, imap_text)
+        for phrase in (
+            "imap-mailbox-adapter-audit-plan",
+            "imap_mailbox_adapter_audit_plan",
+            "future IMAP adapter, not implemented in v0.3.50",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, request_text)
+        for phrase in (
+            "imap-mailbox-adapter-audit-plan",
+            "imap_mailbox_adapter_audit_plan",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readiness_text)
+                self.assertIn(phrase, selection_text)
+        for phrase in (
+            "Status: v0.3.50 IMAP adapter audit planning checkpoint",
+            "IMAP mailbox adapter audit plan",
+            "archive imap-mailbox-adapter-audit-plan --adapter-id <id>",
+            "MCP `imap_mailbox_adapter_audit_plan`",
+            "write no audit receipts",
+            "execute no live adapters",
+            "search no mailbox",
+            "list no candidate messages",
+            "Message-ID values",
+            "selection receipt paths",
+            "echo no email addresses",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.50 pre-release",
+            "[IMAP Mailbox Adapter Audit Plan](wom-kit/docs/imap-mailbox-adapter-audit-plan.md)",
+            "adapter audit receipt previews",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        for phrase in (
+            "imap-mailbox-adapter-audit-plan",
+            "docs/imap-mailbox-adapter-audit-plan.md",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, kit_readme_text)
+        self.assertIn("[IMAP Mailbox Adapter Audit Plan](imap-mailbox-adapter-audit-plan.md)", public_map_text)
+        self.assertIn("[IMAP Mailbox Adapter Audit Plan](imap-mailbox-adapter-audit-plan.md)", public_map_ko_text)
 
     def test_credential_store_contract_doc_and_matrix_keep_secret_boundaries(self) -> None:
         contract_text = CREDENTIAL_STORE_CONTRACT_PATH.read_text(encoding="utf-8")
@@ -802,7 +891,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Credential Store Contract](wom-kit/docs/credential-store-contract.md)",
             "read-only credential reference planning",
         ):
@@ -859,7 +948,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Credential Ref Inventory And Onboarding](wom-kit/docs/credential-ref-inventory-and-onboarding.md)",
             "read-only credential reference planning, inventory",
         ):
@@ -914,7 +1003,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Credential Store Recommendations](wom-kit/docs/credential-store-recommendations.md)",
             "external store recommendation",
         ):
@@ -962,7 +1051,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Credential Vault Onboarding Plan](wom-kit/docs/credential-vault-onboarding-plan.md)",
             "vault onboarding planning",
         ):
@@ -1123,7 +1212,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readiness_text)
         for phrase in (
-            "Status: v0.3.49 IMAP mailbox selection planning checkpoint",
+            "Status: v0.3.50 IMAP adapter audit planning checkpoint",
             "Object storage adapter readiness plan",
             "archive object-storage-adapter-readiness-plan --operation presigned_download --dry-run",
             "MCP `object_storage_adapter_readiness_plan`",
@@ -1136,7 +1225,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Object Storage Adapter Readiness Plan](wom-kit/docs/object-storage-adapter-readiness-plan.md)",
             "adapter readiness planning",
         ):
@@ -1194,7 +1283,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Object Storage Operation Request Plan](wom-kit/docs/object-storage-operation-request-plan.md)",
             "operation request packaging",
         ):
@@ -1240,7 +1329,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Credential Plaintext Migration Plan](wom-kit/docs/credential-plaintext-migration-plan.md)",
             "plaintext migration planning",
         ):
@@ -1297,7 +1386,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Credential Access Broker Plan](wom-kit/docs/credential-access-broker-plan.md)",
             "future access broker planning",
         ):
@@ -1352,7 +1441,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Credential Access Approval Plan](wom-kit/docs/credential-access-approval-plan.md)",
             "local approval receipt preview/write",
         ):
@@ -1397,7 +1486,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Credential Policy Check](wom-kit/docs/credential-policy-check.md)",
             "credential policy checking",
         ):
@@ -1453,7 +1542,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Credential KeePassXC Command Plan](wom-kit/docs/credential-keepassxc-command-plan.md)",
             "KeePassXC command preflight",
         ):
@@ -1504,7 +1593,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Credential KeePassXC Write](wom-kit/docs/credential-keepassxc-write.md)",
             "CLI-only KeePassXC write execution",
         ):
@@ -1558,7 +1647,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Credential Adapter Readiness Plan](wom-kit/docs/credential-adapter-readiness-plan.md)",
             "adapter readiness planning",
         ):
@@ -1612,7 +1701,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Credential Adapter Manifest Plan](wom-kit/docs/credential-adapter-manifest-plan.md)",
             "adapter manifest preview",
         ):
@@ -1655,7 +1744,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.49 pre-release",
+            "v0.3.50 pre-release",
             "[Credential Adapter Audit Plan](wom-kit/docs/credential-adapter-audit-plan.md)",
             "adapter audit receipt preview",
         ):

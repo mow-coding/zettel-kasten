@@ -53,6 +53,13 @@ archive imap-mailbox-selection-plan <archive-root> --dry-run
 MCP: imap_mailbox_selection_plan
 ```
 
+Related adapter audit receipt preview:
+
+```text
+archive imap-mailbox-adapter-audit-plan <archive-root> --dry-run
+MCP: imap_mailbox_adapter_audit_plan
+```
+
 ## What It Checks
 
 The planner composes the existing read-only request package and adds a local
@@ -126,6 +133,7 @@ Before any future live adapter can run, WOM still needs:
 - an IMAP adapter manifest,
 - a read-only mailbox selection rule,
 - `imap-mailbox-selection-plan`,
+- `imap-mailbox-adapter-audit-plan`,
 - a non-secret adapter audit receipt after execution.
 
 ## Closed Actions

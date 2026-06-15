@@ -96,6 +96,7 @@ docs/imap-mailbox-source.md
 docs/imap-mailbox-operation-request-plan.md
 docs/imap-mailbox-adapter-readiness-plan.md
 docs/imap-mailbox-selection-plan.md
+docs/imap-mailbox-adapter-audit-plan.md
 docs/connected-accounts.md
 docs/credential-keepassxc-command-plan.md
 docs/credential-keepassxc-write.md
@@ -167,6 +168,9 @@ imap-mailbox-adapter-readiness-plan
 
 imap-mailbox-selection-plan
   Plan a future read-only IMAP mailbox message selection rule. Dry-run only; combines the IMAP operation request package with safe selector labels without connecting, logging in, selecting/searching a mailbox, listing message ids, reading headers/bodies/attachments, retrieving secrets, starting OAuth, or writing files.
+
+imap-mailbox-adapter-audit-plan
+  Preview a non-secret future IMAP adapter audit receipt. Dry-run only; combines the mailbox selection plan with safe receipt metadata without connecting, logging in, selecting/searching a mailbox, listing message ids, reading headers/bodies/attachments, retrieving secrets, starting OAuth, or writing files.
 
 human-artifact-store
   Plan a user-facing note/workspace/publication surface such as WordPress, Joplin, Notion, Obsidian, Evernote, or generic Markdown. Dry-run only; writes nothing, calls no providers, creates no notes, publishes no posts, and keeps system/AI artifacts separate from human-readable artifacts.
