@@ -2041,6 +2041,191 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn("imap:mailbox:inbox", output)
             self.assertNotIn(str(archive_root), output)
 
+    def test_imap_mailbox_adapter_preflight_blocks_until_manifest_and_approval_are_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            blocked_code, blocked_output = self.run_cli(
+                [
+                    "imap-mailbox-adapter-preflight-plan",
+                    str(archive_root),
+                    "--adapter-id",
+                    "local-imap",
+                    "--source-id",
+                    "imap:naver",
+                    "--provider",
+                    "naver",
+                    "--account-ref",
+                    "imap:account:naver-personal",
+                    "--username-ref",
+                    "env:NAVER_IMAP_USERNAME",
+                    "--auth-mode",
+                    "app_password_ref",
+                    "--app-password-ref",
+                    "keyring:naver-app-password",
+                    "--mailbox-ref",
+                    "imap:mailbox:inbox",
+                    "--credential-id",
+                    "cred:naver-mail-access",
+                    "--operation",
+                    "header_metadata_scan",
+                    "--selection-rule",
+                    "newest_first",
+                    "--selector-id",
+                    "mail-selection:recent-inbox",
+                    "--max-messages",
+                    "25",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            blocked = json.loads(blocked_output)
+            self.assertEqual(blocked_code, 1, blocked_output)
+            self.assertFalse(blocked["ok"])
+            self.assertEqual(blocked["lifecycle_action"], "imap_mailbox_adapter_preflight_plan")
+            self.assertEqual(blocked["preflight_state"], "blocked")
+            self.assertEqual(blocked["gate_summary"]["request_state"], "needs_human_approval")
+            self.assertEqual(blocked["gate_summary"]["selection_state"], "needs_human_approval")
+            self.assertEqual(blocked["gate_summary"]["adapter_manifest_status"], "missing")
+            self.assertIn("imap_adapter_manifest_not_ready:missing", blocked["blockers"])
+            self.assertIn("approval_receipt_required_for_imap_adapter_preflight", blocked["blockers"])
+            self.assertFalse(blocked["closed_actions"]["imap_connection_opened"])
+            self.assertFalse(blocked["closed_actions"]["mailbox_selected"])
+            self.assertFalse(blocked["closed_actions"]["message_headers_read"])
+            self.assertFalse(blocked["closed_actions"]["credential_value_read"])
+            self.assertEqual(blocked["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn("keyring:naver-app-password", blocked_output)
+            self.assertNotIn("env:NAVER_IMAP_USERNAME", blocked_output)
+            self.assertNotIn("imap:account:naver-personal", blocked_output)
+            self.assertNotIn("imap:mailbox:inbox", blocked_output)
+
+            manifest_code, manifest_output = self.run_cli(
+                [
+                    "imap-mailbox-adapter-manifest-write",
+                    str(archive_root),
+                    "--adapter-id",
+                    "local-imap",
+                    "--provider",
+                    "gmail",
+                    "--provider",
+                    "naver",
+                    "--operation",
+                    "header_metadata_scan",
+                    "--selection-rule",
+                    "newest_first",
+                    "--reviewed-by",
+                    "person:me",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            manifest_result = json.loads(manifest_output)
+            self.assertEqual(manifest_code, 0, manifest_output)
+            self.assertTrue((archive_root / manifest_result["manifest_path"]).is_file())
+
+            approval_code, approval_output = self.run_cli(
+                [
+                    "credential-access-approval",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:naver-mail-access",
+                    "--credential-ref",
+                    "keyring:naver-app-password",
+                    "--credential-kind",
+                    "mail_app_password",
+                    "--provider",
+                    "naver",
+                    "--action-kind",
+                    "mail_source_read",
+                    "--decision",
+                    "approve_once",
+                    "--store-kind",
+                    "password_manager",
+                    "--consumer",
+                    "wom:adapter:imap-mailbox",
+                    "--reviewed-by",
+                    "human:tester",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            approval = json.loads(approval_output)
+            self.assertEqual(approval_code, 0, approval_output)
+            approval_receipt = approval["receipt_path"]
+            after_setup = self.snapshot_archive_files(archive_root)
+
+            ready_code, ready_output = self.run_cli(
+                [
+                    "imap-mailbox-adapter-preflight-plan",
+                    str(archive_root),
+                    "--adapter-id",
+                    "local-imap",
+                    "--source-id",
+                    "imap:naver",
+                    "--provider",
+                    "naver",
+                    "--account-ref",
+                    "imap:account:naver-personal",
+                    "--username-ref",
+                    "env:NAVER_IMAP_USERNAME",
+                    "--auth-mode",
+                    "app_password_ref",
+                    "--app-password-ref",
+                    "keyring:naver-app-password",
+                    "--mailbox-ref",
+                    "imap:mailbox:inbox",
+                    "--credential-id",
+                    "cred:naver-mail-access",
+                    "--operation",
+                    "header_metadata_scan",
+                    "--selection-rule",
+                    "newest_first",
+                    "--selector-id",
+                    "mail-selection:recent-inbox",
+                    "--max-messages",
+                    "25",
+                    "--approval-decision",
+                    "approve_once",
+                    "--approval-receipt",
+                    approval_receipt,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            ready = json.loads(ready_output)
+            self.assertEqual(ready_code, 0, ready_output)
+            self.assertTrue(ready["ok"], ready)
+            self.assertEqual(ready["preflight_state"], "ready_for_future_adapter_after_approval")
+            self.assertEqual(ready["gate_summary"]["request_state"], "ready_for_future_adapter_after_approval")
+            self.assertEqual(ready["gate_summary"]["selection_state"], "ready_for_future_adapter_after_approval")
+            self.assertEqual(ready["gate_summary"]["adapter_manifest_status"], "present_and_schema_valid")
+            self.assertTrue(ready["gate_summary"]["approval_receipt_verified"])
+            self.assertFalse(ready["gate_summary"]["live_execution_allowed_now"])
+            self.assertEqual(ready["adapter_manifest_summary"]["manifest_path"], "config/imap-adapters/local-imap.imap-mailbox-adapter.json")
+            self.assertEqual(ready["selector_summary"]["selection_rule"], "newest_first")
+            self.assertFalse(ready["selector_summary"]["candidate_list_returned_now"])
+            self.assertEqual(ready["audit_preview_summary"]["result_status"], "not_run")
+            self.assertEqual(ready["audit_preview_summary"]["receipt_path_kind"], "archive_relative")
+            self.assertFalse(ready["closed_actions"]["live_adapter_executed"])
+            self.assertFalse(ready["closed_actions"]["imap_connection_opened"])
+            self.assertFalse(ready["closed_actions"]["mailbox_selected"])
+            self.assertFalse(ready["closed_actions"]["message_headers_read"])
+            self.assertFalse(ready["closed_actions"]["credential_value_read"])
+            self.assertEqual(ready["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), after_setup)
+            self.assertNotIn(approval_receipt, ready_output)
+            self.assertNotIn("keyring:naver-app-password", ready_output)
+            self.assertNotIn("env:NAVER_IMAP_USERNAME", ready_output)
+            self.assertNotIn("imap:account:naver-personal", ready_output)
+            self.assertNotIn("imap:mailbox:inbox", ready_output)
+            self.assertNotIn(str(archive_root), ready_output)
+
     def test_imap_mailbox_selection_plan_is_read_only_and_does_not_list_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

@@ -1,6 +1,6 @@
 # IMAP Mailbox Adapter Readiness Plan
 
-Status: v0.3.54 read-only adapter readiness plus manifest status baseline
+Status: v0.3.55 read-only adapter readiness plus manifest status baseline
 Date: 2026-06-16
 
 `imap-mailbox-adapter-readiness-plan` checks whether WOM-kit has the local
@@ -74,6 +74,13 @@ archive imap-mailbox-adapter-audit-plan <archive-root> --dry-run
 MCP: imap_mailbox_adapter_audit_plan
 ```
 
+Related final adapter preflight:
+
+```text
+archive imap-mailbox-adapter-preflight-plan <archive-root> --dry-run
+MCP: imap_mailbox_adapter_preflight_plan
+```
+
 ## What It Checks
 
 The planner composes the existing read-only request package and adds local
@@ -101,7 +108,7 @@ Supported future operation labels:
 - `attachment_capture`
 - `derived_text_capture`
 
-These are readiness labels only. v0.3.54 still does not implement the live
+These are readiness labels only. v0.3.55 still does not implement the live
 adapter that would perform them.
 
 ## Readiness States
