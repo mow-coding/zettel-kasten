@@ -1,6 +1,6 @@
 # IMAP Mailbox Adapter Manifest Write
 
-Status: v0.3.54 approval-gated local manifest write baseline
+Status: v0.3.55 approval-gated local manifest write baseline
 Date: 2026-06-16
 
 `imap-mailbox-adapter-manifest-write` records a reviewed, non-secret IMAP
@@ -105,7 +105,7 @@ Safe public labels such as `gmail`, `naver`, `generic_imap`, `local-imap`,
 
 ## Current Boundary
 
-v0.3.54 can write a reviewed, non-secret local adapter manifest and one
+v0.3.55 can write a reviewed, non-secret local adapter manifest and one
 non-secret write receipt.
 
 It still does not:

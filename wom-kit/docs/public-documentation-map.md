@@ -142,6 +142,7 @@ Onboarding and setup plans:
 - [IMAP Mailbox Adapter Readiness Plan](imap-mailbox-adapter-readiness-plan.md)
 - [IMAP Mailbox Selection Plan](imap-mailbox-selection-plan.md)
 - [IMAP Mailbox Adapter Audit Plan](imap-mailbox-adapter-audit-plan.md)
+- [IMAP Mailbox Adapter Preflight Plan](imap-mailbox-adapter-preflight-plan.md)
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)
 - [Objet Ref Resolution](objet-ref-resolution.md)
 - [Zettel Objet Links](zettel-objet-links.md)

@@ -99,6 +99,7 @@ docs/imap-mailbox-adapter-manifest-write.md
 docs/imap-mailbox-adapter-readiness-plan.md
 docs/imap-mailbox-selection-plan.md
 docs/imap-mailbox-adapter-audit-plan.md
+docs/imap-mailbox-adapter-preflight-plan.md
 docs/connected-accounts.md
 docs/credential-keepassxc-command-plan.md
 docs/credential-keepassxc-write.md
@@ -179,6 +180,9 @@ imap-mailbox-adapter-manifest-write
 
 imap-mailbox-adapter-audit-plan
   Preview a non-secret future IMAP adapter audit receipt. Dry-run only; combines the mailbox selection plan with safe receipt metadata without connecting, logging in, selecting/searching a mailbox, listing message ids, reading headers/bodies/attachments, retrieving secrets, starting OAuth, or writing files.
+
+imap-mailbox-adapter-preflight-plan
+  Compose readiness, manifest status, approval receipt verification, mailbox selection, and audit receipt preview into one final read-only gate before any future IMAP adapter execution. Dry-run only; writes nothing, connects to no mailbox, reads no mail, retrieves no secrets, starts no OAuth, and calls no providers.
 
 human-artifact-store
   Plan a user-facing note/workspace/publication surface such as WordPress, Joplin, Notion, Obsidian, Evernote, or generic Markdown. Dry-run only; writes nothing, calls no providers, creates no notes, publishes no posts, and keeps system/AI artifacts separate from human-readable artifacts.

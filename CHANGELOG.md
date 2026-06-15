@@ -6,6 +6,33 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.55 - 2026-06-16
+
+- Added read-only IMAP adapter preflight planning:
+  `archive imap-mailbox-adapter-preflight-plan --dry-run`, alias
+  `archive imap-mailbox-adapter-execution-preflight --dry-run`, and alias
+  `archive mailbox-adapter-preflight --dry-run`.
+- Added MCP tool `imap_mailbox_adapter_preflight_plan` for the same read-only
+  preflight surface.
+- The preflight composes adapter readiness, manifest status, approval receipt
+  verification, mailbox selection planning, and adapter audit receipt preview
+  into one final gate before any future live IMAP adapter.
+- `preflight_state` returns `ready_for_future_adapter_after_approval` only when
+  the adapter manifest is `present_and_schema_valid`, the request package has a
+  verified approval receipt, selection is ready, and the audit preview is ready.
+- Added `wom-kit/docs/imap-mailbox-adapter-preflight-plan.md`, public
+  documentation links, capability matrix coverage, and CLI/MCP tests.
+- Kept the preflight read-only: it writes nothing, exposes no live IMAP tool,
+  opens no IMAP connection, attempts no login, selects no mailbox, searches no
+  mailbox, lists no candidate messages, reads no IMAP UIDs, Message-ID values,
+  headers, bodies, or attachments, creates no derived text, retrieves no
+  secrets, starts no OAuth, calls no providers, and echoes no email addresses,
+  username values, exact account refs, exact credential refs, exact mailbox
+  refs, IMAP host values, provider URLs, message ids, subjects, sender or
+  recipient values, attachment names, approval receipt paths, selection receipt
+  paths, schema validation issue values, local absolute paths, tokens, or secret
+  values.
+
 ## v0.3.54 - 2026-06-16
 
 - Extended `archive imap-mailbox-adapter-readiness-plan --dry-run` and MCP

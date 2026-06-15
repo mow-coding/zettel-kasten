@@ -159,7 +159,7 @@ execution. It still does not execute the adapter, write the receipt, list
 messages, read UIDs, read Message-ID values, read headers, read bodies, or read
 attachments.
 
-v0.3.54 keeps the read-only adapter manifest preview, schema validation, and
+v0.3.55 keeps the read-only adapter manifest preview, schema validation, and
 adds an approval-gated local manifest write:
 
 ```powershell
@@ -294,20 +294,22 @@ The intended sequence is:
 6. Plan a future mailbox selection rule with `imap-mailbox-selection-plan`.
 7. Preview the future non-secret audit receipt with
    `imap-mailbox-adapter-audit-plan`.
-8. Add a future header-only dry-run scan that selects the mailbox read-only and
+8. Run the final read-only preflight with
+   `imap-mailbox-adapter-preflight-plan`.
+9. Add a future header-only dry-run scan that selects the mailbox read-only and
    fetches safe message metadata only.
-9. Add a future approved fetch that preserves each selected RFC822 message as a
+10. Add a future approved fetch that preserves each selected RFC822 message as a
    `.eml` source objet.
-10. Add future MIME attachment capture as separate objets.
-11. Add future derived-text extraction from `text/plain` and reviewed `text/html`
+11. Add future MIME attachment capture as separate objets.
+12. Add future derived-text extraction from `text/plain` and reviewed `text/html`
    parts.
 
-Each later phase needs its own approval and privacy boundary. v0.3.54 can now
+Each later phase needs its own approval and privacy boundary. v0.3.55 can now
 package the approval request, preview and schema-check the future adapter
 manifest, write the reviewed non-secret manifest, summarize adapter readiness,
-plan a mailbox selection rule, and preview a non-secret future adapter audit
-receipt, but it still does not implement reads, searches, message lists, live
-adapter audit receipt writes, or captures.
+plan a mailbox selection rule, preview a non-secret future adapter audit
+receipt, and run a final read-only adapter preflight, but it still does not implement reads, searches, message lists,
+live adapter audit receipt writes, or captures.
 
 ## Closed Actions
 
