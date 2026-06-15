@@ -1207,6 +1207,11 @@ CREDENTIAL_VAULT_ONBOARDING_STORE_IDS = {
     "developer_secret_manager",
     "environment_variable",
 }
+BEGINNER_SETUP_MANUAL_TOPICS = {
+    "first_secret_and_text_tools",
+    "credential_vault",
+    "derived_text_tools",
+}
 CREDENTIAL_ACCESS_BROKER_ACTIONS = {
     "mail_source_read",
     "model_api_call",
@@ -11844,6 +11849,259 @@ def credential_vault_onboarding_plan(
             "email_addresses_echoed": False,
             "tokens_echoed": False,
             "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def beginner_setup_manual(
+    archive_root: Path | str,
+    *,
+    topic: str = "first_secret_and_text_tools",
+    scenario: str = "personal_local_first",
+    store_id: str = "recommended",
+    platform: str = "windows",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("beginner-setup-manual is read-only and requires --dry-run.")
+
+    resolved_topic = (topic or "first_secret_and_text_tools").strip().lower().replace("-", "_")
+    if resolved_topic not in BEGINNER_SETUP_MANUAL_TOPICS:
+        blockers.append("topic must be one of: " + ", ".join(sorted(BEGINNER_SETUP_MANUAL_TOPICS)) + ".")
+        resolved_topic = "first_secret_and_text_tools"
+
+    resolved_scenario = (scenario or "personal_local_first").strip().lower().replace("-", "_")
+    if resolved_scenario not in CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS:
+        blockers.append(
+            "scenario must be one of: "
+            + ", ".join(sorted(CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS))
+            + "."
+        )
+        resolved_scenario = "personal_local_first"
+
+    resolved_store_id = (store_id or "recommended").strip().lower().replace("-", "_")
+    if resolved_store_id not in CREDENTIAL_VAULT_ONBOARDING_STORE_IDS:
+        blockers.append(
+            "store_id must be one of: "
+            + ", ".join(sorted(CREDENTIAL_VAULT_ONBOARDING_STORE_IDS))
+            + "."
+        )
+        resolved_store_id = "recommended"
+
+    resolved_platform = (platform or "windows").strip().lower().replace("-", "_")
+    if resolved_platform not in CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS:
+        blockers.append(
+            "platform must be one of: "
+            + ", ".join(sorted(CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS))
+            + "."
+        )
+        resolved_platform = "cross_platform"
+
+    include_credentials = resolved_topic in {"first_secret_and_text_tools", "credential_vault"}
+    include_text_tools = resolved_topic in {"first_secret_and_text_tools", "derived_text_tools"}
+
+    vault_preview: dict[str, Any] | None = None
+    if include_credentials:
+        vault_preview = credential_vault_onboarding_plan(
+            root,
+            scenario=resolved_scenario,
+            store_id=resolved_store_id,
+            credential_id="cred:openai-api",
+            credential_kind="openai_api_key",
+            provider="openai",
+            action_kind="model_api_call",
+            platform=resolved_platform,
+            dry_run=True,
+        )
+        blockers.extend(str(item) for item in vault_preview.get("blockers") or [])
+        warnings.extend(str(item) for item in vault_preview.get("warnings") or [])
+
+    toolchain_doctor_summary: dict[str, Any] | None = None
+    if include_text_tools:
+        doctor_preview = derived_text_toolchain_doctor(root, dry_run=True)
+        warnings.extend(str(item) for item in doctor_preview.get("warnings") or [])
+        summary = doctor_preview.get("readiness_summary") if isinstance(doctor_preview.get("readiness_summary"), dict) else {}
+        toolchain_doctor_summary = {
+            "available_tool_count": summary.get("available_tool_count"),
+            "checked_tool_count": summary.get("checked_tool_count"),
+            "ready_family_count": summary.get("ready_family_count"),
+            "total_family_count": summary.get("total_family_count"),
+            "not_ready_families": summary.get("not_ready_families") or [],
+            "paths_echoed": False,
+        }
+
+    sections: list[dict[str, Any]] = [
+        {
+            "section_id": "first_rule",
+            "title": "First rule: do not paste secrets into chat",
+            "beginner_explanation": "The AI can help with labels, steps, commands, and checks. It should not see passwords, API keys, app passwords, OAuth tokens, database paths, or account emails.",
+            "steps": [
+                "Use visible local app windows or terminal prompts for real secret entry.",
+                "Use boring labels in WOM, such as cred:openai-api or secret:keepassxc-openai-api.",
+                "Keep real values in the external vault, OS keyring, provider console, or runtime environment.",
+            ],
+        }
+    ]
+
+    if include_credentials:
+        selected_store = vault_preview.get("selected_store") if isinstance(vault_preview, dict) and isinstance(vault_preview.get("selected_store"), dict) else {}
+        sections.append(
+            {
+                "section_id": "credential_vault",
+                "title": "Set up the first secret vault",
+                "beginner_explanation": "A vault is the real lockbox. WOM only records a safe reference label so future approval gates know which lockbox entry a human meant.",
+                "recommended_store_id": selected_store.get("store_id") or resolved_store_id,
+                "recommended_store_class": selected_store.get("store_class"),
+                "safe_database_naming_guidance": [
+                    "Use a boring local vault name such as WOM Personal Secrets.",
+                    "Do not include an email address, username, provider URL, API key name, or project secret in the vault filename.",
+                    "Keep the vault file outside this public repository and outside archive records.",
+                ],
+                "safe_group_guidance": [
+                    "Create simple groups such as wom/api, wom/mail, or wom/providers.",
+                    "Use entry labels such as openai-api, mail-app-password, or object-storage-token.",
+                    "Do not put the real username, email, URL, password, token, or database path in the label.",
+                ],
+                "steps": [
+                    "Install or open the chosen vault product yourself.",
+                    "Create the vault/database in a private local location chosen by the human.",
+                    "Choose and remember the master password outside WOM; do not ask AI to store it.",
+                    "Create one test entry with a non-secret label.",
+                    "Record only a WOM ref label after checking it with credential-ref-plan.",
+                ],
+                "example_safe_refs": [
+                    "cred:openai-api",
+                    "secret:keepassxc-openai-api",
+                    "keyring:wom-mail-access",
+                    "env:WOM_OPENAI_API_KEY",
+                ],
+            }
+        )
+
+    if include_text_tools:
+        sections.append(
+            {
+                "section_id": "derived_text_tools",
+                "title": "Set up derived-text extraction tools",
+                "beginner_explanation": "These tools help turn files into text, but this manual only checks setup readiness. It does not run extraction.",
+                "recommended_tools": [
+                    {"tool": "LibreOffice", "best_for": "legacy Office conversion and fallback conversion"},
+                    {"tool": "Tesseract OCR", "best_for": "free local OCR for scanned PDFs and images"},
+                    {"tool": "PyMuPDF", "best_for": "PDF text/render triage through Python"},
+                    {"tool": "python-docx/openpyxl/python-pptx", "best_for": "OOXML Word, spreadsheet, and presentation parsing"},
+                ],
+                "tool_hints_template": {
+                    "schema": "wom-kit/derived-text-tool-hints/v0.1",
+                    "executables": {
+                        "soffice": "<local-soffice-path>",
+                        "tesseract": "<local-tesseract-path>",
+                        "hwp5txt": "<local-hwp5txt-path>",
+                    },
+                },
+                "steps": [
+                    "Install tools through their normal official installers or package managers.",
+                    "Run derive-text-doctor without tool hints first.",
+                    "If a tool is installed but missing from PATH, create a private local tool-hints JSON with placeholder keys replaced locally.",
+                    "Run derive-text-doctor again with --tool-hints.",
+                    "Do not run OCR, parsers, ASR, provider APIs, capture, drafting, or minting from the setup check.",
+                ],
+                "doctor_summary": toolchain_doctor_summary,
+            }
+        )
+
+    command_checklist = []
+    if include_credentials:
+        command_checklist.extend(
+            [
+                "archive credential-store-recommendation <archive-root> --scenario "
+                + resolved_scenario
+                + " --platform "
+                + resolved_platform
+                + " --dry-run --format json",
+                "archive credential-vault-onboarding-plan <archive-root> --scenario "
+                + resolved_scenario
+                + " --store-id "
+                + resolved_store_id
+                + " --platform "
+                + resolved_platform
+                + " --dry-run --format json",
+                "archive credential-ref-plan <archive-root> --credential-id cred:openai-api --credential-ref secret:keepassxc-openai-api --credential-kind openai_api_key --provider openai --dry-run --format json",
+            ]
+        )
+    if include_text_tools:
+        command_checklist.extend(
+            [
+                "archive derive-text-doctor <archive-root> --dry-run --format json",
+                "archive derive-text-doctor <archive-root> --tool-hints <private-local-tool-hints.json> --dry-run --format json",
+                "archive derive-text-coverage <archive-root> --dry-run --format json",
+            ]
+        )
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "beginner_setup_manual",
+        "archive_id": archive_id,
+        "topic": resolved_topic,
+        "scenario": resolved_scenario,
+        "platform": resolved_platform,
+        "selected_store_id": (vault_preview or {}).get("selected_store_id") if include_credentials else None,
+        "manual_contract": {
+            "speak_before_jargon": True,
+            "explain_what_a_vault_is_before_naming_products": True,
+            "show_non_secret_labels_before_commands": True,
+            "human_secret_entry_stays_visible_and_local": True,
+            "ai_may_help_prepare_commands": True,
+            "ai_may_not_receive_secret_values": True,
+        },
+        "sections": sections,
+        "command_checklist": command_checklist,
+        "cross_links": [
+            "credential-store-recommendation",
+            "credential-vault-onboarding-plan",
+            "credential-ref-plan",
+            "credential-access-approval-plan",
+            "credential-keepassxc-command-plan",
+            "credential-keepassxc-write",
+            "derive-text-doctor",
+            "derive-text-coverage",
+        ],
+        "closed_actions": {
+            "secret_prompted_in_chat": False,
+            "secret_value_read": False,
+            "secret_value_written": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "browser_password_store_opened": False,
+            "environment_read": False,
+            "tool_installed": False,
+            "tool_executed": False,
+            "tool_hint_file_written": False,
+            "source_bytes_read": False,
+            "ocr_run": False,
+            "parser_run": False,
+            "asr_run": False,
+            "provider_api_called": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "credential_ref_values_echoed": False,
+            "email_addresses_echoed": False,
+            "usernames_echoed": False,
+            "tokens_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "tool_hint_paths_echoed": False,
             "provider_urls_echoed": False,
             "writes": False,
         },

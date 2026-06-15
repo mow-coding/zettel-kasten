@@ -1904,6 +1904,83 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_beginner_setup_manual_guides_vault_and_text_tools_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "beginner-setup-manual",
+                    str(archive_root),
+                    "--topic",
+                    "first_secret_and_text_tools",
+                    "--scenario",
+                    "personal_local_first",
+                    "--store-id",
+                    "keepassxc",
+                    "--platform",
+                    "windows",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "beginner_setup_manual")
+            self.assertEqual(result["topic"], "first_secret_and_text_tools")
+            self.assertEqual(result["selected_store_id"], "keepassxc")
+            self.assertTrue(result["manual_contract"]["explain_what_a_vault_is_before_naming_products"])
+            self.assertTrue(result["manual_contract"]["human_secret_entry_stays_visible_and_local"])
+            section_ids = [section["section_id"] for section in result["sections"]]
+            self.assertIn("credential_vault", section_ids)
+            self.assertIn("derived_text_tools", section_ids)
+            self.assertIn("credential-vault-onboarding-plan", result["cross_links"])
+            self.assertIn("derive-text-doctor", result["cross_links"])
+            self.assertTrue(any("credential-ref-plan" in command for command in result["command_checklist"]))
+            self.assertTrue(any("--tool-hints" in command for command in result["command_checklist"]))
+            self.assertFalse(result["closed_actions"]["password_manager_opened"])
+            self.assertFalse(result["closed_actions"]["tool_executed"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertFalse(result["privacy_guards"]["secret_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["local_absolute_paths_echoed"])
+            self.assertFalse(result["privacy_guards"]["tool_hint_paths_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertIn("<local-soffice-path>", serialized)
+            self.assertNotIn("sk-proj-", serialized)
+            self.assertNotIn("C:\\", serialized)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            topic_code, topic_output = self.run_cli(
+                [
+                    "beginner-setup-manual",
+                    str(archive_root),
+                    "--topic",
+                    "derived_text_tools",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            topic_result = json.loads(topic_output)
+            self.assertEqual(topic_code, 0, topic_output)
+            self.assertEqual([section["section_id"] for section in topic_result["sections"]], ["first_rule", "derived_text_tools"])
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "beginner-setup-manual",
+                    str(archive_root),
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_credential_plaintext_migration_plan_is_read_only_and_pathless(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

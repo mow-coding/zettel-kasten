@@ -31,6 +31,8 @@ Commands:
           Recommend a secret store class for a human scenario without reading secrets.
   credential-vault-onboarding-plan
           Plan safe human vault onboarding without opening or reading a vault.
+  beginner-setup-manual
+          Print beginner-friendly secret vault and text-tool setup steps.
   credential-plaintext-migration-plan
           Plan safe plaintext-secret migration without reading or importing secrets.
   credential-policy-check
@@ -2141,6 +2143,55 @@ def command_credential_vault_onboarding_plan(args: argparse.Namespace) -> int:
                 print(f"- {blocker}")
         if result.get("warnings"):
             print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_beginner_setup_manual(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("beginner-setup-manual is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.beginner_setup_manual(
+            Path(args.archive_root),
+            topic=args.topic,
+            scenario=args.scenario,
+            store_id=args.store_id,
+            platform=args.platform,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        print(f"Beginner setup manual {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Topic: {result.get('topic') or '-'}")
+        print(f"Scenario: {result.get('scenario') or '-'}")
+        print(f"Store: {result.get('selected_store_id') or '-'}")
+        for section in result.get("sections", []):
+            if not isinstance(section, dict):
+                continue
+            print(f"\n{section.get('title') or section.get('section_id') or 'Section'}")
+            if section.get("beginner_explanation"):
+                print(str(section["beginner_explanation"]))
+            for step in section.get("steps") or []:
+                print(f"- {step}")
+        if result.get("command_checklist"):
+            print("\nCommands to dry-run:")
+            for command in result["command_checklist"]:
+                print(f"- {command}")
+        if result.get("blockers"):
+            print("\nBlockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("\nWarnings:")
             for warning in result["warnings"]:
                 print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
@@ -6921,6 +6972,40 @@ def build_parser() -> argparse.ArgumentParser:
     credential_vault_onboarding_plan.add_argument("--dry-run", action="store_true", help="Required; read-only onboarding plan.")
     credential_vault_onboarding_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_vault_onboarding_plan.set_defaults(func=command_credential_vault_onboarding_plan)
+
+    beginner_setup_manual = subcommands.add_parser(
+        "beginner-setup-manual",
+        aliases=["first-use-setup-manual", "setup-manual"],
+        help="Print beginner-friendly secret vault and text-tool setup steps without reading secrets.",
+    )
+    beginner_setup_manual.add_argument("archive_root", help="Archive root to inspect.")
+    beginner_setup_manual.add_argument(
+        "--topic",
+        choices=sorted(archive_services.BEGINNER_SETUP_MANUAL_TOPICS),
+        default="first_secret_and_text_tools",
+        help="Setup manual topic.",
+    )
+    beginner_setup_manual.add_argument(
+        "--scenario",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS),
+        default="personal_local_first",
+        help="Human secret-vault usage scenario.",
+    )
+    beginner_setup_manual.add_argument(
+        "--store-id",
+        choices=sorted(archive_services.CREDENTIAL_VAULT_ONBOARDING_STORE_IDS),
+        default="recommended",
+        help="Selected external vault/store family. Defaults to the scenario recommendation.",
+    )
+    beginner_setup_manual.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Host platform for OS keyring wording.",
+    )
+    beginner_setup_manual.add_argument("--dry-run", action="store_true", help="Required; read-only manual.")
+    beginner_setup_manual.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    beginner_setup_manual.set_defaults(func=command_beginner_setup_manual)
 
     credential_plaintext_migration_plan = subcommands.add_parser(
         "credential-plaintext-migration-plan",
