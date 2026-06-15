@@ -28557,16 +28557,90 @@ def derived_text_executable_available(executable_name: str) -> bool:
     return shutil.which(executable_name) is not None
 
 
+def derived_text_tool_hint_probe_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.strip().lower())
+
+
+def derived_text_load_tool_hints(tool_hints: Path | str | None) -> tuple[dict[str, list[Path]], dict[str, Any], list[str]]:
+    if tool_hints is None:
+        return {}, {"provided": False, "accepted_probe_count": 0, "ignored_probe_count": 0, "path_echoed": False}, []
+
+    hints_path = Path(tool_hints)
+    raw = json.loads(hints_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        return {}, {"provided": True, "accepted_probe_count": 0, "ignored_probe_count": 1, "path_echoed": False}, [
+            "tool_hints_file_must_be_json_object"
+        ]
+    executables = raw.get("executables", {})
+    if not isinstance(executables, dict):
+        return {}, {"provided": True, "accepted_probe_count": 0, "ignored_probe_count": 1, "path_echoed": False}, [
+            "tool_hints_executables_must_be_object"
+        ]
+
+    allowed_probe_keys = {
+        derived_text_tool_hint_probe_key(str(check["probe"])): str(check["probe"])
+        for check in DERIVED_TEXT_TOOLCHAIN_DOCTOR_CHECKS
+        if check.get("kind") == "executable"
+    }
+    aliases = {
+        "tesseractocr": "tesseract",
+        "libreoffice": "libreoffice",
+        "soffice": "soffice",
+        "hwp5txt": "hwp5txt",
+        "pyhwphwp5txt": "hwp5txt",
+    }
+    by_probe: dict[str, list[Path]] = {}
+    ignored_count = 0
+    warnings: list[str] = []
+    for key, paths in executables.items():
+        probe_key = aliases.get(derived_text_tool_hint_probe_key(str(key)), derived_text_tool_hint_probe_key(str(key)))
+        probe = allowed_probe_keys.get(probe_key)
+        if not probe:
+            ignored_count += 1
+            warnings.append("tool_hints_unknown_executable_probe_ignored")
+            continue
+        path_values = paths if isinstance(paths, list) else [paths]
+        for item in path_values:
+            if not isinstance(item, str) or not item.strip():
+                ignored_count += 1
+                warnings.append("tool_hints_invalid_path_value_ignored")
+                continue
+            path = Path(item).expanduser()
+            if not path.is_absolute():
+                path = hints_path.parent / path
+            by_probe.setdefault(probe, []).append(path)
+    accepted_count = sum(len(paths) for paths in by_probe.values())
+    summary = {
+        "provided": True,
+        "accepted_probe_count": accepted_count,
+        "ignored_probe_count": ignored_count,
+        "path_echoed": False,
+    }
+    return by_probe, summary, unique_preserve_order(warnings)
+
+
+def derived_text_executable_hint_available(executable_name: str, executable_hints: dict[str, list[Path]]) -> bool:
+    for hint in executable_hints.get(executable_name, []):
+        try:
+            if hint.is_file():
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def derived_text_toolchain_doctor(
     archive_root: Path | str,
     *,
     dry_run: bool = True,
+    tool_hints: Path | str | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
     if not dry_run:
         blockers.append("derive-text doctor is read-only; pass --dry-run.")
+    executable_hints, tool_hint_summary, hint_warnings = derived_text_load_tool_hints(tool_hints)
 
     checks: list[dict[str, Any]] = [
         {
@@ -28578,6 +28652,7 @@ def derived_text_toolchain_doctor(
             "format_families": ["plain_text_or_markup"],
             "path_echoed": False,
             "secret_echoed": False,
+            "hint_used": False,
         }
     ]
     tool_available: dict[str, bool] = {"built-in utf-8 text parser": True}
@@ -28589,11 +28664,19 @@ def derived_text_toolchain_doctor(
         if kind == "python_module":
             available = derived_text_python_module_available(probe)
         elif kind == "executable":
-            available = derived_text_executable_available(probe)
+            path_available = derived_text_executable_available(probe)
+            hint_available = derived_text_executable_hint_available(probe, executable_hints)
+            available = path_available or hint_available
         elif kind == "built_in":
             available = True
         elif kind == "not_configured":
             available = False
+        else:
+            path_available = False
+            hint_available = False
+        if kind != "executable":
+            path_available = False
+            hint_available = False
         tool = str(check["tool"])
         tool_available[tool] = tool_available.get(tool, False) or available
         checks.append(
@@ -28606,6 +28689,9 @@ def derived_text_toolchain_doctor(
                 "format_families": check["format_families"],
                 "path_echoed": False,
                 "secret_echoed": False,
+                "path_probe_available": path_available if kind == "executable" else None,
+                "hint_probe_available": hint_available if kind == "executable" else None,
+                "hint_used": hint_available,
             }
         )
 
@@ -28630,9 +28716,8 @@ def derived_text_toolchain_doctor(
 
     ready_family_count = sum(1 for item in family_readiness if item["ready"])
     available_tool_count = sum(1 for item in checks if item["available"])
-    missing_tools = unique_preserve_order(
-        str(item["tool"]) for item in checks if not item["available"] and item["kind"] != "not_configured"
-    )
+    known_tools = unique_preserve_order(str(item["tool"]) for item in checks if item["kind"] != "not_configured")
+    missing_tools = [tool for tool in known_tools if not tool_available.get(tool, False)]
     not_ready_families = [str(item["format_family"]) for item in family_readiness if not item["ready"]]
     warnings: list[str] = []
     if not_ready_families:
@@ -28649,6 +28734,7 @@ def derived_text_toolchain_doctor(
             "total_family_count": len(family_readiness),
             "not_ready_families": not_ready_families,
             "missing_tools": missing_tools,
+            "tool_hints": tool_hint_summary,
         },
         "tool_checks": checks,
         "family_readiness": family_readiness,
@@ -28658,10 +28744,11 @@ def derived_text_toolchain_doctor(
             **derived_text_read_only_privacy_guards(),
             "tool_paths_echoed": False,
             "import_paths_echoed": False,
+            "tool_hint_paths_echoed": False,
         },
         "would_change": [],
         "blockers": unique_preserve_order(blockers),
-        "warnings": unique_preserve_order(warnings),
+        "warnings": unique_preserve_order(warnings + hint_warnings),
     }
 
 

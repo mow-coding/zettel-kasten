@@ -46,6 +46,19 @@ python wom-kit\cli\archive.py derive-text doctor <archive-root> `
   --format json
 ```
 
+If an extractor is installed outside `PATH`, pass a local hint file:
+
+```powershell
+python wom-kit\cli\archive.py derive-text doctor <archive-root> `
+  --tool-hints local-tool-hints.json `
+  --dry-run `
+  --format json
+```
+
+The hint file can name executable paths for `soffice`, `libreoffice`,
+`tesseract`, or `hwp5txt`. The doctor checks existence only and does not echo
+the hint file path or executable paths.
+
 ## Batch Manifest Command
 
 For hundreds or thousands of already extracted text files, use a JSONL manifest:
@@ -158,8 +171,8 @@ receipt records remain durable archive records.
 
 ## Coverage And Toolchain
 
-v0.3.35 includes read-only derived-text coverage, toolchain recommendation,
-toolchain doctor, and agent operating contract commands. They help agents
+v0.3.36 includes read-only derived-text coverage, toolchain recommendation,
+toolchain doctor, non-echoed local tool hints, and agent operating contract commands. They help agents
 enforce the rule that textual objets should be covered by derived text by
 default, but they do not run OCR/parsers/ASR/vision and do not write files.
 

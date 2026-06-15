@@ -1,6 +1,6 @@
 # Derived Text Coverage And Toolchain
 
-Status: v0.3.35 read-only coverage, toolchain doctor, and agent contract
+Status: v0.3.36 read-only coverage, toolchain doctor hints, and agent contract
 Date: 2026-06-15
 
 This document defines the read-only layer that helps an AI agent act on the
@@ -34,6 +34,7 @@ Toolchain readiness doctor:
 ```bash
 archive derive-text doctor <archive-root> --dry-run --format json
 archive derive-text-doctor <archive-root> --dry-run --format json
+archive derive-text-doctor <archive-root> --tool-hints local-tool-hints.json --dry-run --format json
 ```
 
 Agent operating contract:
@@ -129,6 +130,23 @@ The doctor output does not echo executable paths, import paths, usernames,
 local absolute paths, source filenames, source bodies, provider URLs, or secret
 values. It reports only tool names, probe labels, booleans, route families, and
 missing readiness categories.
+
+If a tool is installed but not visible on `PATH`, provide a local JSON hint file:
+
+```json
+{
+  "schema": "wom-kit/derived-text-tool-hints/v0.1",
+  "executables": {
+    "soffice": "<local-soffice-path>",
+    "tesseract": "<local-tesseract-path>"
+  }
+}
+```
+
+Accepted executable hint keys are `soffice`, `libreoffice`, `tesseract`, and
+`hwp5txt`. The doctor checks only whether the hinted file exists.
+It does not execute the hinted tool. It does not echo the hint file path or any
+hinted executable path.
 
 The doctor does not install tools, import source files, run parsers, run OCR,
 run ASR, call vision models, call providers, write derived text, or write
