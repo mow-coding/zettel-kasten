@@ -19844,6 +19844,296 @@ def object_storage_adapter_readiness_plan(
     }
 
 
+def object_storage_operation_request_plan(
+    archive_root: Path | str,
+    *,
+    operation: str = "presigned_download",
+    object_id: str | None = None,
+    store_ref: str | None = None,
+    ttl_seconds: int = PRESIGNED_URL_DEFAULT_TTL_SECONDS,
+    provider_ref: str | None = None,
+    credential_id: str = "cred:object-storage",
+    credential_ref: str | None = None,
+    credential_kind: str | None = None,
+    provider: str | None = None,
+    store_kind: str = "password_manager",
+    adapter_kind: str | None = None,
+    approval_decision: str = "needs_review",
+    approval_receipt: str | None = None,
+    consumer: str = "wom:adapter:object-storage",
+    reviewed_by: str | None = None,
+    platform: str = "windows",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("object-storage-operation-request-plan is read-only and requires --dry-run.")
+
+    normalized_operation = str(operation or "").strip().lower().replace("-", "_")
+    if normalized_operation not in OBJECT_STORAGE_ADAPTER_OPERATIONS:
+        blockers.append("operation must be one of: " + ", ".join(sorted(OBJECT_STORAGE_ADAPTER_OPERATIONS)) + ".")
+        normalized_operation = "presigned_download"
+
+    object_required = normalized_operation in {
+        "upload_object",
+        "download_object",
+        "head_object",
+        "presigned_download",
+        "presigned_head",
+    }
+    normalized_object_id = ""
+    if object_required:
+        normalized_object_id = normalize_object_id(str(object_id or ""), blockers)
+    elif object_id:
+        normalized_object_id = normalize_object_id(str(object_id), blockers)
+
+    readiness_preview = object_storage_adapter_readiness_plan(
+        root,
+        operation=normalized_operation,
+        provider_ref=provider_ref,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in readiness_preview.get("blockers") or [])
+    warnings.extend(str(item) for item in readiness_preview.get("warnings") or [])
+
+    target_summary: dict[str, Any] = {
+        "target_kind": "none",
+        "object_id": normalized_object_id or None,
+        "store_ref": None,
+        "ready": normalized_operation == "list_metadata_only",
+        "provider_api_called": False,
+        "object_file_bytes_read": False,
+        "presigned_url_created": False,
+        "object_uploaded": False,
+        "object_downloaded": False,
+    }
+    if normalized_operation in {"presigned_download", "presigned_head"}:
+        presigned_operation = "head" if normalized_operation == "presigned_head" else "download"
+        presigned_preview = presigned_url_plan(
+            root,
+            object_id=normalized_object_id or str(object_id or ""),
+            store_ref=store_ref,
+            operation=presigned_operation,
+            ttl_seconds=ttl_seconds,
+            dry_run=True,
+        )
+        blockers.extend(str(item) for item in presigned_preview.get("blockers") or [])
+        warnings.extend(str(item) for item in presigned_preview.get("warnings") or [])
+        request = presigned_preview.get("presigned_url_request") if isinstance(presigned_preview.get("presigned_url_request"), dict) else {}
+        resolution = presigned_preview.get("resolution_summary") if isinstance(presigned_preview.get("resolution_summary"), dict) else {}
+        target_summary = {
+            "target_kind": "presigned_url_plan",
+            "object_id": presigned_preview.get("object_id"),
+            "store_ref": request.get("store_ref"),
+            "operation": request.get("operation"),
+            "ttl_seconds": request.get("ttl_seconds"),
+            "plan_state": presigned_preview.get("plan_state"),
+            "ready": bool(presigned_preview.get("ok")),
+            "external_candidate_count": resolution.get("external_candidate_count", 0),
+            "local_openable": bool(resolution.get("local_openable")),
+            "provider_api_called": False,
+            "object_file_bytes_read": False,
+            "presigned_url_created": False,
+            "provider_url_echoed": False,
+        }
+    elif normalized_operation in {"upload_object", "download_object", "head_object"}:
+        resolution_preview = resolve_objet_ref(root, object_id=normalized_object_id or str(object_id or ""), dry_run=True)
+        blockers.extend(str(item) for item in resolution_preview.get("blockers") or [])
+        warnings.extend(str(item) for item in resolution_preview.get("warnings") or [])
+        target_summary = {
+            "target_kind": "objet_ref_resolution",
+            "object_id": resolution_preview.get("object_id"),
+            "resolution_state": resolution_preview.get("resolution_state"),
+            "ready": bool(resolution_preview.get("ok")),
+            "manifest_record_count": resolution_preview.get("manifest_record_count", 0),
+            "local_candidate_count": len(resolution_preview.get("local_candidates") or []),
+            "external_candidate_count": len(resolution_preview.get("external_candidates") or []),
+            "local_openable": bool(resolution_preview.get("local_openable")),
+            "external_declared": bool(resolution_preview.get("external_declared")),
+            "provider_api_called": False,
+            "object_file_bytes_read": False,
+            "object_uploaded": False,
+            "object_downloaded": False,
+            "provider_url_echoed": False,
+        }
+    else:
+        target_summary = {
+            "target_kind": "metadata_listing_scope",
+            "object_id": normalized_object_id or None,
+            "ready": not blockers,
+            "provider_api_called": False,
+            "object_file_bytes_read": False,
+            "object_uploaded": False,
+            "object_downloaded": False,
+            "provider_url_echoed": False,
+        }
+
+    action_profile = credential_access_action_profile("object_storage_request")
+    resolved_credential_kind = (credential_kind or action_profile["recommended_credential_kind"]).strip().lower().replace("-", "_")
+    resolved_provider = (provider or default_credential_ref_provider(resolved_credential_kind)).strip().lower().replace("-", "_")
+    policy_preview = credential_policy_check(
+        root,
+        credential_id=credential_id,
+        credential_ref=credential_ref,
+        credential_kind=resolved_credential_kind,
+        provider=resolved_provider,
+        action_kind="object_storage_request",
+        approval_decision=approval_decision,
+        store_kind=store_kind,
+        adapter_kind=adapter_kind,
+        operation="resolve_for_approved_action",
+        consumer=consumer,
+        reviewed_by=reviewed_by or "human:pending-review",
+        platform=platform,
+        approval_receipt=approval_receipt,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in policy_preview.get("blockers") or [])
+    warnings.extend(str(item) for item in policy_preview.get("warnings") or [])
+
+    policy_result = str(policy_preview.get("policy_result") or "blocked")
+    policy_request = policy_preview.get("request") if isinstance(policy_preview.get("request"), dict) else {}
+    policy_evaluation = policy_preview.get("policy_evaluation") if isinstance(policy_preview.get("policy_evaluation"), dict) else {}
+    if policy_result == "ready_after_approval_receipt" and not policy_evaluation.get("approval_receipt_verified"):
+        blockers.append("approval_receipt_required_for_object_storage_request")
+        policy_result = "blocked"
+    if policy_result == "denied_by_human_decision":
+        request_state = "denied_by_human_decision"
+    elif policy_result == "denied_by_policy":
+        request_state = "denied_by_policy"
+    elif blockers or policy_result == "blocked":
+        request_state = "blocked"
+    elif policy_result == "needs_human_review":
+        request_state = "needs_human_approval"
+    elif policy_result == "ready_after_approval_receipt":
+        request_state = "ready_for_future_adapter_after_approval"
+    else:
+        request_state = "blocked"
+
+    ok = request_state in {"needs_human_approval", "ready_for_future_adapter_after_approval"}
+    readiness_summary = {
+        "readiness_state": readiness_preview.get("readiness_state"),
+        "operation": readiness_preview.get("operation"),
+        "ready": bool(readiness_preview.get("ok")),
+        "provider_summary": readiness_preview.get("provider_summary"),
+        "provider_api_called": False,
+        "credential_value_read": False,
+        "provider_resource_values_echoed": False,
+    }
+    credential_policy_summary = {
+        "policy_result": policy_result,
+        "credential_id": policy_request.get("credential_id"),
+        "credential_kind": policy_request.get("credential_kind"),
+        "provider": policy_request.get("provider"),
+        "action_kind": policy_request.get("action_kind"),
+        "store_kind": policy_request.get("store_kind"),
+        "adapter_kind": policy_request.get("adapter_kind"),
+        "operation": policy_request.get("operation"),
+        "consumer": policy_request.get("consumer"),
+        "approval_decision": policy_request.get("approval_decision"),
+        "approval_receipt_required_before_use": True,
+        "approval_receipt_supplied": bool(approval_receipt),
+        "approval_receipt_verified": bool(policy_evaluation.get("approval_receipt_verified")),
+        "future_adapter_has_verified_receipt": bool(policy_evaluation.get("future_adapter_has_verified_receipt")),
+        "live_execution_allowed_now": False,
+        "secret_value_echoed": False,
+        "exact_ref_value_echoed": False,
+        "approval_receipt_path_echoed": False,
+    }
+
+    next_safe_actions: list[str] = []
+    if blockers:
+        next_safe_actions.append("Fix blockers before treating this request package as usable.")
+    if request_state == "needs_human_approval":
+        next_safe_actions.append("Human must approve_once or deny before any future live object-storage adapter can run.")
+        next_safe_actions.append("Record a scoped credential access approval receipt outside chat.")
+    elif request_state == "ready_for_future_adapter_after_approval":
+        next_safe_actions.append("A future adapter may use this package only after independently verifying the same approval receipt.")
+    elif request_state.startswith("denied"):
+        next_safe_actions.append("Do not call a future live object-storage adapter for this request.")
+    next_safe_actions.append("Keep provider resources, generated URLs, credential refs, and secret values out of public records.")
+
+    return {
+        "ok": ok,
+        "dry_run": True,
+        "lifecycle_action": "object_storage_operation_request_plan",
+        "archive_id": archive_id,
+        "request_state": request_state,
+        "operation": normalized_operation,
+        "object_id": normalized_object_id or None,
+        "readiness_summary": json_safe(readiness_summary),
+        "target_summary": json_safe(target_summary),
+        "credential_policy_summary": json_safe(credential_policy_summary),
+        "approval_summary": {
+            "approval_decision": credential_policy_summary["approval_decision"],
+            "approval_receipt_required_before_use": True,
+            "approval_receipt_supplied": bool(approval_receipt),
+            "approval_receipt_verified": credential_policy_summary["approval_receipt_verified"],
+            "approval_receipt_path_echoed": False,
+            "approval_receipt_written": False,
+        },
+        "future_adapter_contract": {
+            "live_execution_allowed_now": False,
+            "future_live_adapter_implemented": False,
+            "approval_receipt_must_be_verified_again": True,
+            "provider_adapter_must_keep_generated_urls_private": normalized_operation.startswith("presigned_"),
+            "non_secret_audit_receipt_required_after_execution": True,
+            "expected_result_metadata": action_profile["expected_result_metadata"],
+            "never_return": action_profile["never_return"],
+        },
+        "current_capability": {
+            "request_planning_available": True,
+            "readiness_planning_available": True,
+            "presigned_url_planning_available": True,
+            "credential_policy_check_available": True,
+            "live_object_storage_adapter_implemented": False,
+            "provider_api_call_implemented": False,
+            "credential_secret_retrieval_implemented": False,
+            "upload_implemented": False,
+            "download_implemented": False,
+            "presigned_url_creation_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "provider_url_echoed": False,
+            "object_file_bytes_read": False,
+            "object_uploaded": False,
+            "object_downloaded": False,
+            "presigned_url_created": False,
+            "remote_availability_checked": False,
+            "approval_receipt_written": False,
+            "adapter_audit_receipt_written": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "provider_resource_values_echoed": False,
+            "bucket_names_echoed": False,
+            "prefixes_echoed": False,
+            "provider_urls_echoed": False,
+            "generated_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "secret_values_echoed": False,
+            "approval_receipt_path_echoed": False,
+            "object_file_bytes_read": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": unique_preserve_order(next_safe_actions),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
 def load_provider_setup_receipts(root: Path, blockers: list[str]) -> list[dict[str, Any]]:
     receipt_root = archive_internal_path(root, PROVIDER_SETUP_RECEIPTS_DIR)
     if not receipt_root.is_dir():

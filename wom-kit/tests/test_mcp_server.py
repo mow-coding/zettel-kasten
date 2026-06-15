@@ -638,6 +638,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("object_storage_setup_plan", tool_names)
             self.assertIn("provider_setup_status", tool_names)
             self.assertIn("object_storage_adapter_readiness_plan", tool_names)
+            self.assertIn("object_storage_operation_request_plan", tool_names)
             self.assertIn("human_artifact_store_plan", tool_names)
             self.assertIn("imap_mailbox_plan", tool_names)
             self.assertIn("credential_ref_plan", tool_names)
@@ -1536,6 +1537,150 @@ class McpServerTests(unittest.TestCase):
                         "method": "tools/call",
                         "params": {
                             "name": "object_storage_adapter_readiness_plan",
+                            "arguments": {"archive_root": str(allowed_archive), "dry_run": False},
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_object_storage_operation_request_tool_writes_nothing_and_respects_allowed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            bucket_name = "zettel-kasten-mcp-request-objets"
+            setup = archive_services.approve_object_storage_setup_plan(
+                allowed_archive,
+                reviewed_by="reviewer:test",
+                provider="cloudflare-r2",
+                profile_id="person:test",
+                profile_slug="mcp-request",
+                storage_account_ref="storage:account:test",
+                bucket_name=bucket_name,
+            )
+            digest = "e" * 64
+            unsafe_url = "https://" + "redacted.example/mcp-operation-request"
+            manifest_path = allowed_archive / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "object_id": f"sha256:{digest}",
+                        "sha256": digest,
+                        "logical_key": f"objects/external/prehashed/r2_private/{digest[:2]}/{digest}",
+                        "mime": "application/octet-stream",
+                        "size_bytes": 901,
+                        "locations": [
+                            {
+                                "provider": "cloudflare_r2",
+                                "store_kind": "object_storage",
+                                "store_ref": "object-store-mcp-request",
+                                "availability": "declared_external",
+                                "content_addressed": True,
+                                "byte_verification_by_wom_kit": False,
+                                "provider_url": unsafe_url,
+                            }
+                        ],
+                        "provenance": {"source": "prehashed_external_objet_ledger"},
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "object_storage_operation_request_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "operation": "presigned_download",
+                                "object_id": f"sha256:{digest}",
+                                "store_ref": "object-store-mcp-request",
+                                "ttl_seconds": 600,
+                                "credential_id": "cred:object-storage",
+                                "credential_ref": "secret:object-storage-token",
+                                "credential_kind": "object_storage_token",
+                                "provider": "generic_provider",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"], structured)
+                self.assertEqual(structured["lifecycle_action"], "object_storage_operation_request_plan")
+                self.assertEqual(structured["request_state"], "needs_human_approval")
+                self.assertEqual(structured["target_summary"]["target_kind"], "presigned_url_plan")
+                self.assertEqual(structured["credential_policy_summary"]["policy_result"], "needs_human_review")
+                self.assertFalse(structured["future_adapter_contract"]["live_execution_allowed_now"])
+                self.assertFalse(structured["closed_actions"]["provider_api_called"])
+                self.assertFalse(structured["closed_actions"]["credential_value_read"])
+                self.assertFalse(structured["closed_actions"]["presigned_url_created"])
+                self.assertFalse(structured["privacy_guards"]["provider_urls_echoed"])
+                self.assertFalse(structured["privacy_guards"]["exact_credential_refs_echoed"])
+                structured_dump = json.dumps(structured)
+                self.assertNotIn(unsafe_url, structured_dump)
+                self.assertNotIn("secret:object-storage-token", structured_dump)
+                self.assertNotIn(bucket_name, structured_dump)
+                self.assertNotIn(setup["receipt_path"], structured_dump)
+                self.assertNotIn(str(allowed_archive), structured_dump)
+
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "object_storage_operation_request_plan",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "operation": "presigned_download",
+                                "object_id": f"sha256:{digest}",
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "object_storage_operation_request_plan",
                             "arguments": {"archive_root": str(allowed_archive), "dry_run": False},
                         },
                     },

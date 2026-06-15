@@ -39,6 +39,13 @@ MCP:
 presigned_url_plan
 ```
 
+Related request package:
+
+```text
+archive object-storage-operation-request-plan <archive-root> --operation presigned_download --dry-run
+MCP: object_storage_operation_request_plan
+```
+
 ## Inputs
 
 - `--object-id` must be `sha256:<64 lowercase hex>` or a bare 64-character
@@ -111,6 +118,7 @@ resolve-objet-ref
 -> provider-status
 -> credential-policy-check
 -> human approval receipt
+-> object-storage-operation-request-plan
 -> future provider adapter, not implemented in v0.3.40
 ```
 

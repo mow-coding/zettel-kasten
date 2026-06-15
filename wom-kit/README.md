@@ -91,6 +91,7 @@ docs/derived-text-coverage-and-toolchain.md
 docs/human-artifact-store-contract.md
 docs/object-storage-recommendations.md
 docs/object-storage-adapter-readiness-plan.md
+docs/object-storage-operation-request-plan.md
 docs/connected-accounts.md
 docs/credential-keepassxc-command-plan.md
 docs/credential-keepassxc-write.md
@@ -147,6 +148,9 @@ object-storage
 
 object-storage-recommendation
   Recommend an object storage provider path before setup planning. Dry-run only; writes nothing, calls no providers, performs no live price lookup, checks no bucket availability, uploads nothing, creates no presigned URLs, and returns the next object-storage dry-run command shape.
+
+object-storage-operation-request-plan
+  Compose a future object-storage operation approval request package. Dry-run only; combines provider readiness, object target validation, presigned URL planning or objet-ref resolution, and credential policy checks without calling providers, reading secrets, creating presigned URLs, uploading, downloading, or writing files.
 
 human-artifact-store
   Plan a user-facing note/workspace/publication surface such as WordPress, Joplin, Notion, Obsidian, Evernote, or generic Markdown. Dry-run only; writes nothing, calls no providers, creates no notes, publishes no posts, and keeps system/AI artifacts separate from human-readable artifacts.

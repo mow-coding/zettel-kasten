@@ -27,6 +27,8 @@ Commands:
           Resolve one sha256 objet reference to safe local/external candidates.
   presigned-url-plan
           Plan a future provider presigned URL request without creating URLs.
+  object-storage-operation-request-plan
+          Compose the read-only approval request package before any future object storage operation.
   imap-mailbox-plan
           Plan a read-only IMAP mailbox source without connecting or storing secrets.
   credential-ref-plan
@@ -2020,6 +2022,39 @@ def command_presigned_url_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_object_storage_operation_request_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("object-storage-operation-request-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.object_storage_operation_request_plan(
+            Path(args.archive_root),
+            operation=args.operation,
+            object_id=args.object_id,
+            store_ref=args.store_ref,
+            ttl_seconds=args.ttl_seconds,
+            provider_ref=args.provider_ref,
+            credential_id=args.credential_id,
+            credential_ref=args.credential_ref,
+            credential_kind=args.credential_kind,
+            provider=args.provider,
+            store_kind=args.store_kind,
+            adapter_kind=args.adapter_kind,
+            approval_decision=args.approval_decision,
+            approval_receipt=args.approval_receipt,
+            consumer=args.consumer,
+            reviewed_by=args.reviewed_by,
+            platform=args.platform,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_object_storage_operation_request_plan_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
 def command_imap_mailbox_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("imap-mailbox-plan is dry-run only and requires --dry-run.", file=sys.stderr)
@@ -2956,6 +2991,36 @@ def print_presigned_url_plan_result(result: dict[str, Any], output_format: str) 
     print(f"Resolution: {summary.get('resolution_state') or '-'}")
     print(f"External candidates: {summary.get('external_candidate_count', 0)}")
     print("Presigned URL created: no")
+    print("Provider API called: no")
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
+
+
+def print_object_storage_operation_request_plan_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    policy = result.get("credential_policy_summary") if isinstance(result.get("credential_policy_summary"), dict) else {}
+    target = result.get("target_summary") if isinstance(result.get("target_summary"), dict) else {}
+    print(f"Object storage operation request plan: {result.get('request_state') or '-'}")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Operation: {result.get('operation') or '-'}")
+    print(f"Object id: {result.get('object_id') or '-'}")
+    print(f"Target: {target.get('target_kind') or '-'}")
+    print(f"Credential policy: {policy.get('policy_result') or '-'}")
+    print(f"Approval receipt verified: {policy.get('approval_receipt_verified')}")
+    print("Live execution allowed now: no")
     print("Provider API called: no")
     print("Writes: none")
     if result.get("blockers"):
@@ -7063,6 +7128,79 @@ def build_parser() -> argparse.ArgumentParser:
     presigned_url_plan.add_argument("--dry-run", action="store_true", help="Required. Plan only; never creates URLs or calls providers.")
     presigned_url_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     presigned_url_plan.set_defaults(func=command_presigned_url_plan)
+
+    object_storage_operation_request = subcommands.add_parser(
+        "object-storage-operation-request-plan",
+        aliases=["object-storage-request-plan", "objet-storage-operation-request"],
+        help="Compose a read-only approval request package before a future object-storage operation.",
+    )
+    object_storage_operation_request.add_argument("archive_root", help="Archive root to inspect.")
+    object_storage_operation_request.add_argument(
+        "--operation",
+        choices=sorted(archive_services.OBJECT_STORAGE_ADAPTER_OPERATIONS),
+        default="presigned_download",
+        help="Future object-storage operation to request.",
+    )
+    object_storage_operation_request.add_argument("--object-id", help="Object id formatted as sha256:<64 hex> or bare 64 hex.")
+    object_storage_operation_request.add_argument("--store-ref", help="Safe external store label/ref. Do not pass a URL, path, token, or secret.")
+    object_storage_operation_request.add_argument(
+        "--ttl-seconds",
+        type=int,
+        default=archive_services.PRESIGNED_URL_DEFAULT_TTL_SECONDS,
+        help="Future presigned URL TTL to plan. Must be between 60 and 86400 seconds.",
+    )
+    object_storage_operation_request.add_argument(
+        "--provider-ref",
+        help="Optional safe provider binding label/ref. Do not pass a URL, path, token, or secret.",
+    )
+    object_storage_operation_request.add_argument(
+        "--credential-id",
+        default="cred:object-storage",
+        help="Safe credential label for the future object-storage token.",
+    )
+    object_storage_operation_request.add_argument("--credential-ref", help="Optional env/keyring/secret/wallet ref; exact value is not echoed.")
+    object_storage_operation_request.add_argument(
+        "--credential-kind",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+        help="Credential kind. Defaults to object_storage_token.",
+    )
+    object_storage_operation_request.add_argument(
+        "--provider",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+        help="Credential provider label. Defaults from credential kind.",
+    )
+    object_storage_operation_request.add_argument(
+        "--store-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+        default="password_manager",
+        help="Credential store class for the future token retrieval.",
+    )
+    object_storage_operation_request.add_argument(
+        "--adapter-kind",
+        choices=sorted(archive_services.CREDENTIAL_ADAPTER_KINDS),
+        help="Future credential adapter kind. Defaults from store kind and platform.",
+    )
+    object_storage_operation_request.add_argument(
+        "--approval-decision",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_APPROVAL_DECISIONS),
+        default="needs_review",
+        help="Human decision state to evaluate.",
+    )
+    object_storage_operation_request.add_argument(
+        "--approval-receipt",
+        help="Archive-relative approval receipt path to verify. The path is not echoed in output.",
+    )
+    object_storage_operation_request.add_argument("--consumer", default="wom:adapter:object-storage", help="Safe label for the future adapter.")
+    object_storage_operation_request.add_argument("--reviewed-by", default="human:pending-review", help="Safe non-secret reviewer label.")
+    object_storage_operation_request.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Local platform for default credential adapter selection.",
+    )
+    object_storage_operation_request.add_argument("--dry-run", action="store_true", help="Required. Plan only; never calls providers or reads secrets.")
+    object_storage_operation_request.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    object_storage_operation_request.set_defaults(func=command_object_storage_operation_request_plan)
 
     imap_mailbox_plan = subcommands.add_parser(
         "imap-mailbox-plan",

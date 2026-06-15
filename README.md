@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.44 pre-release
+v0.3.45 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -40,7 +40,7 @@ What exists today:
 - approval-gated `.gitignore` repair for missing WOM-kit safe defaults,
 - human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
 - read-only beginner setup manual with KeePassXC first-vault field walkthroughs, connected accounts bridge with separate credential-catalog status, plus read-only credential reference planning, inventory, external store recommendation, vault onboarding planning, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, CLI-only KeePassXC write execution with non-secret execution receipts, adapter readiness planning, adapter manifest preview, and adapter audit receipt preview for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
-- read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces, plus manifest-aware object-storage recommendation matching, adapter readiness planning, and presigned URL planning before live provider adapters,
+- read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces, plus manifest-aware object-storage recommendation matching, adapter readiness planning, operation request packaging, and presigned URL planning before live provider adapters,
 - read-only IMAP mailbox source planning for Gmail, Naver, and generic IMAP account refs,
 - documented Notion page snapshot and `store-ref` boundaries for page/block JSON exports,
 - read-only objet reference resolution, presigned URL planning, and zettel objet link previews for mapping `sha256:<hex>` refs to safe local/external candidates without creating provider URLs,
@@ -122,6 +122,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Human Artifact Store Contract](wom-kit/docs/human-artifact-store-contract.md)
 - [Object Storage Recommendations](wom-kit/docs/object-storage-recommendations.md)
 - [Object Storage Adapter Readiness Plan](wom-kit/docs/object-storage-adapter-readiness-plan.md)
+- [Object Storage Operation Request Plan](wom-kit/docs/object-storage-operation-request-plan.md)
 - [IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)
 - [Notion Page Snapshot Model](wom-kit/docs/notion-page-snapshot-model.md)
 - [Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)
@@ -246,6 +247,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.45
 v0.3.44
 v0.3.43
 v0.3.42
