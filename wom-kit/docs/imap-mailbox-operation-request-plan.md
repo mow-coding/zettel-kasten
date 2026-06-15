@@ -56,7 +56,7 @@ MCP: imap_mailbox_adapter_readiness_plan
 
 That v0.3.47 checkpoint still ended at a future IMAP adapter, not implemented in v0.3.47.
 
-Related adapter manifest preview, schema baseline, and local write baseline added by v0.3.53:
+Related adapter manifest preview, schema baseline, and local write baseline added by v0.3.54:
 
 ```text
 archive imap-mailbox-adapter-manifest-plan <archive-root> --dry-run

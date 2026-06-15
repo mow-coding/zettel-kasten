@@ -1908,8 +1908,12 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["runtime_summary"]["missing_module_count"], 0)
             self.assertTrue(result["runtime_summary"]["runtime_import_check_only"])
             self.assertFalse(result["runtime_summary"]["network_access_checked"])
+            self.assertEqual(result["adapter_manifest_summary"]["status"], "not_checked")
+            self.assertFalse(result["adapter_manifest_summary"]["checked"])
             self.assertTrue(result["required_gates"]["imap_mailbox_operation_request_plan"])
             self.assertTrue(result["required_gates"]["human_approval_receipt"])
+            self.assertTrue(result["current_capability"]["imap_adapter_manifest_status_check_available"])
+            self.assertTrue(result["current_capability"]["imap_adapter_manifest_write_implemented"])
             self.assertFalse(result["current_capability"]["live_imap_adapter_implemented"])
             self.assertFalse(result["closed_actions"]["imap_connection_opened"])
             self.assertFalse(result["closed_actions"]["message_headers_read"])
@@ -1941,6 +1945,101 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
+
+    def test_imap_mailbox_adapter_readiness_plan_checks_written_manifest_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            write_code, write_output = self.run_cli(
+                [
+                    "imap-mailbox-adapter-manifest-write",
+                    str(archive_root),
+                    "--adapter-id",
+                    "local-imap",
+                    "--provider",
+                    "gmail",
+                    "--provider",
+                    "naver",
+                    "--operation",
+                    "header_metadata_scan",
+                    "--selection-rule",
+                    "newest_first",
+                    "--reviewed-by",
+                    "person:me",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            write_result = json.loads(write_output)
+            self.assertEqual(write_code, 0, write_output)
+            self.assertTrue((archive_root / write_result["manifest_path"]).is_file())
+            after_write = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "imap-mailbox-adapter-readiness-plan",
+                    str(archive_root),
+                    "--source-id",
+                    "imap:naver",
+                    "--adapter-id",
+                    "local-imap",
+                    "--provider",
+                    "naver",
+                    "--account-ref",
+                    "imap:account:naver-personal",
+                    "--username-ref",
+                    "env:NAVER_IMAP_USERNAME",
+                    "--auth-mode",
+                    "app_password_ref",
+                    "--app-password-ref",
+                    "keyring:naver-app-password",
+                    "--mailbox-ref",
+                    "imap:mailbox:inbox",
+                    "--credential-id",
+                    "cred:naver-mail-access",
+                    "--operation",
+                    "header_metadata_scan",
+                    "--max-messages",
+                    "25",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            manifest = result["adapter_manifest_summary"]
+            self.assertTrue(manifest["checked"])
+            self.assertEqual(manifest["status"], "present_and_schema_valid")
+            self.assertEqual(manifest["adapter_id"], "local-imap")
+            self.assertEqual(manifest["manifest_path"], "config/imap-adapters/local-imap.imap-mailbox-adapter.json")
+            self.assertEqual(manifest["manifest_path_kind"], "archive_relative")
+            self.assertTrue(manifest["manifest_exists"])
+            self.assertTrue(manifest["schema_validation"]["ok"])
+            self.assertEqual(manifest["schema_validation"]["issue_count"], 0)
+            self.assertFalse(manifest["schema_validation"]["issues_echoed"])
+            contract = manifest["manifest_contract"]
+            self.assertTrue(contract["adapter_id_matches_request"])
+            self.assertTrue(contract["archive_id_matches_archive"])
+            self.assertTrue(contract["privacy_contract_non_secret"])
+            self.assertTrue(contract["closed_actions_remain_closed"])
+            self.assertEqual(contract["supported_providers"], ["gmail", "naver"])
+            self.assertEqual(contract["supported_operations"], ["header_metadata_scan"])
+            self.assertEqual(contract["supported_selection_rules"], ["newest_first"])
+            self.assertFalse(manifest["local_absolute_path_echoed"])
+            self.assertFalse(manifest["secret_values_echoed"])
+            self.assertFalse(result["closed_actions"]["imap_connection_opened"])
+            self.assertFalse(result["closed_actions"]["message_headers_read"])
+            self.assertFalse(result["closed_actions"]["credential_value_read"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), after_write)
+            self.assertNotIn("keyring:naver-app-password", output)
+            self.assertNotIn("env:NAVER_IMAP_USERNAME", output)
+            self.assertNotIn("imap:account:naver-personal", output)
+            self.assertNotIn("imap:mailbox:inbox", output)
+            self.assertNotIn(str(archive_root), output)
 
     def test_imap_mailbox_selection_plan_is_read_only_and_does_not_list_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -159,7 +159,7 @@ execution. It still does not execute the adapter, write the receipt, list
 messages, read UIDs, read Message-ID values, read headers, read bodies, or read
 attachments.
 
-v0.3.53 keeps the read-only adapter manifest preview, schema validation, and
+v0.3.54 keeps the read-only adapter manifest preview, schema validation, and
 adds an approval-gated local manifest write:
 
 ```powershell
@@ -302,7 +302,7 @@ The intended sequence is:
 11. Add future derived-text extraction from `text/plain` and reviewed `text/html`
    parts.
 
-Each later phase needs its own approval and privacy boundary. v0.3.53 can now
+Each later phase needs its own approval and privacy boundary. v0.3.54 can now
 package the approval request, preview and schema-check the future adapter
 manifest, write the reviewed non-secret manifest, summarize adapter readiness,
 plan a mailbox selection rule, and preview a non-secret future adapter audit

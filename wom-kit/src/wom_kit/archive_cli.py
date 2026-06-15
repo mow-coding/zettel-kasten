@@ -5281,6 +5281,7 @@ def command_imap_mailbox_adapter_readiness_plan(args: argparse.Namespace) -> int
         result = archive_services.imap_mailbox_adapter_readiness_plan(
             Path(args.archive_root),
             source_id=args.source_id,
+            adapter_id=args.adapter_id,
             provider=args.provider,
             imap_host=args.imap_host,
             imap_port=args.imap_port,
@@ -5323,6 +5324,8 @@ def command_imap_mailbox_adapter_readiness_plan(args: argparse.Namespace) -> int
         print(f"Provider: {result.get('provider') or '-'}")
         print(f"Operation: {result.get('operation') or '-'}")
         print(f"Request package: {request.get('request_state') or '-'}")
+        manifest = result.get("adapter_manifest_summary") if isinstance(result.get("adapter_manifest_summary"), dict) else {}
+        print(f"Adapter manifest: {manifest.get('status') or '-'}")
         print(f"Missing runtime modules: {runtime.get('missing_module_count', 0)}")
         print("IMAP connection opened: no")
         print("Writes: none")
@@ -9330,6 +9333,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     imap_mailbox_adapter_readiness.add_argument("archive_root", help="Archive root to inspect.")
     imap_mailbox_adapter_readiness.add_argument("--source-id", required=True, help="Stable source id, e.g. imap:gmail-personal.")
+    imap_mailbox_adapter_readiness.add_argument(
+        "--adapter-id",
+        help="Optional safe adapter manifest id to check under config/imap-adapters/.",
+    )
     imap_mailbox_adapter_readiness.add_argument(
         "--provider",
         choices=sorted(archive_services.IMAP_MAILBOX_ALLOWED_PROVIDERS),
