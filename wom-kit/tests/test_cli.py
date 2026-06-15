@@ -1752,6 +1752,128 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(any("credential_ref must be a safe ref" in blocker for blocker in bad_result["blockers"]))
             self.assertNotIn(raw_secret, bad_output)
 
+    def test_connected_accounts_bridges_accounts_and_stores_without_secret_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            provider_path = archive_root / "provider-bindings.yml"
+            provider_data = archive_cli.load_yaml(provider_path.read_text(encoding="utf-8"))
+            provider_data["bindings"].append(
+                {
+                    "binding_id": "openai:personal-model",
+                    "provider": "openai",
+                    "enabled": True,
+                    "purpose": "model_api_access",
+                    "auth": {
+                        "account_ref": "provider:account:openai-personal",
+                        "api_key_ref": "keyring:openai-api-key",
+                    },
+                }
+            )
+            provider_path.write_text(archive_cli.dump_yaml(provider_data), encoding="utf-8")
+
+            source_path = archive_root / "source-bindings.yml"
+            source_data = archive_cli.load_yaml(source_path.read_text(encoding="utf-8"))
+            source_data["sources"].append(
+                {
+                    "source_id": "imap:gmail-personal",
+                    "source_type": "imap_mailbox",
+                    "enabled": True,
+                    "root_ref": "imap:account:gmail-personal",
+                    "connection": {
+                        "provider": "gmail",
+                        "account_ref": "imap:account:gmail-personal",
+                        "username_ref": "keyring:gmail-username",
+                        "auth_mode": "oauth_token_ref",
+                        "credential_ref": "keyring:gmail-oauth",
+                        "mailbox_ref": "imap:mailbox:inbox",
+                    },
+                }
+            )
+            source_path.write_text(archive_cli.dump_yaml(source_data), encoding="utf-8")
+
+            local_inventory = archive_root / "profiles" / "local" / "credential-refs.local.yml"
+            local_inventory.parent.mkdir(parents=True, exist_ok=True)
+            local_inventory.write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "version": "wom-local-credential-ref-inventory/v0.1",
+                        "credentials": [
+                            {
+                                "credential_id": "cred:openai-api",
+                                "credential_kind": "openai_api_key",
+                                "provider": "openai",
+                                "credential_ref": "keyring:openai-api-key",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "connected-accounts",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "connected_accounts_overview")
+            self.assertGreaterEqual(result["account_count"], 2)
+            account_kinds = {item["account_kind"] for item in result["accounts"]}
+            self.assertIn("provider_binding", account_kinds)
+            self.assertIn("imap_mailbox_source", account_kinds)
+            labels = {item["account_label"] for item in result["accounts"]}
+            self.assertIn("provider:account:openai-personal", labels)
+            self.assertIn("imap:account:gmail-personal", labels)
+            self.assertGreaterEqual(result["credential_catalog"]["credential_count"], 1)
+            self.assertIn("keyring", result["credential_catalog"]["store_summary"])
+            self.assertFalse(result["current_capability"]["live_account_verification_implemented"])
+            self.assertFalse(result["current_capability"]["secret_value_retrieval_implemented"])
+            self.assertFalse(result["closed_actions"]["password_manager_opened"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["imap_connection_opened"])
+            self.assertFalse(result["privacy_guards"]["credential_ref_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["raw_provider_auth_values_echoed"])
+            self.assertEqual(result["would_change"], [])
+            for hidden in (
+                "keyring:openai-api-key",
+                "keyring:gmail-username",
+                "keyring:gmail-oauth",
+                "GITHUB_TOKEN",
+            ):
+                self.assertNotIn(hidden, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            no_dry_code, no_dry_output = self.run_cli(["connected-accounts", str(archive_root)])
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+
+            source_data["sources"][-1]["connection"]["account_ref"] = "person@example.com"
+            source_path.write_text(archive_cli.dump_yaml(source_data), encoding="utf-8")
+            bad_code, bad_output = self.run_cli(
+                [
+                    "connected-accounts",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            bad_result = json.loads(bad_output)
+            self.assertEqual(bad_code, 1, bad_output)
+            self.assertFalse(bad_result["ok"])
+            self.assertTrue(any("account label" in blocker for blocker in bad_result["blockers"]))
+            self.assertNotIn("person@example.com", bad_output)
+
     def test_credential_store_recommendation_routes_human_scenarios_without_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

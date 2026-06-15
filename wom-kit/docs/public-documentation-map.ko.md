@@ -116,6 +116,7 @@
 - [Credential Store Recommendations](credential-store-recommendations.md)
 - [Credential Vault Onboarding Plan](credential-vault-onboarding-plan.md)
 - [Beginner Setup Manual](beginner-setup-manual.md)
+- [Connected Accounts](connected-accounts.md)
 - [Credential Plaintext Migration Plan](credential-plaintext-migration-plan.md)
 - [Credential Access Broker Plan](credential-access-broker-plan.md)
 - [Credential Access Approval Plan](credential-access-approval-plan.md)

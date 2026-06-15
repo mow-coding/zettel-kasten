@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.38 - 2026-06-15
+
+- Added read-only connected account overview commands:
+  `archive connected-accounts --dry-run`, alias `archive accounts --dry-run`,
+  and alias `archive account-status --dry-run`.
+- The overview bridges provider bindings, IMAP mailbox source accounts, and the
+  ignored local credential-ref inventory into one account/status map.
+- Added `wom-kit/docs/connected-accounts.md` and public documentation links.
+- Kept the command read-only: it reads metadata only, writes no files, opens no
+  vault/keyring/browser store, reads no environment variables or source bytes,
+  starts no OAuth, calls no providers, opens no IMAP connection, reads no mail,
+  and echoes no exact credential refs, local paths, usernames, emails, tokens,
+  provider URLs, or secret values.
+
 ## v0.3.37 - 2026-06-15
 
 - Added read-only beginner setup manual commands:
