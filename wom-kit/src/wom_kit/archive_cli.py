@@ -54,7 +54,7 @@ Commands:
   derive-text-toolchain
           Recommend an extraction route for one derived-text format.
   derive-text-doctor
-          Check local derived-text toolchain readiness without echoing tool paths.
+          Check local derived-text toolchain readiness, with optional non-echoed tool hints.
   derive-text-agent-contract
           Print the derived-text agent operating contract.
   source-intake
@@ -4504,6 +4504,7 @@ def command_derive_text_doctor(args: argparse.Namespace) -> int:
         result = archive_services.derived_text_toolchain_doctor(
             Path(args.archive_root),
             dry_run=True,
+            tool_hints=Path(args.tool_hints) if args.tool_hints else None,
         )
     except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError) as exc:
         print(f"Derived text doctor failed: {exc}", file=sys.stderr)
@@ -8191,6 +8192,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check local derived-text toolchain readiness without echoing tool paths.",
     )
     derive_text_doctor.add_argument("archive_root", help="Archive root to inspect.")
+    derive_text_doctor.add_argument("--tool-hints", help="Optional JSON file with executable path hints; paths are never echoed.")
     derive_text_doctor.add_argument("--dry-run", action="store_true", help="Required; read-only toolchain readiness check.")
     derive_text_doctor.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     derive_text_doctor.set_defaults(func=command_derive_text_doctor)
@@ -8230,6 +8232,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Alias for derive-text doctor.",
     )
     derive_text_doctor_alias.add_argument("archive_root", help="Archive root to inspect.")
+    derive_text_doctor_alias.add_argument("--tool-hints", help="Optional JSON file with executable path hints; paths are never echoed.")
     derive_text_doctor_alias.add_argument("--dry-run", action="store_true", help="Required; read-only toolchain readiness check.")
     derive_text_doctor_alias.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     derive_text_doctor_alias.set_defaults(func=command_derive_text_doctor)

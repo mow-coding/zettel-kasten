@@ -19871,6 +19871,68 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertNotIn(r"C:\Users", serialized)
             self.assertEqual(self._inventory(archive_root), before)
 
+    def test_derive_text_doctor_accepts_tool_hint_paths_without_echoing_them(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-hints")
+            before = self._inventory(archive_root)
+            tools_dir = Path(tmp) / "tools with spaces"
+            tools_dir.mkdir()
+            soffice = tools_dir / "soffice.exe"
+            tesseract = tools_dir / "tesseract.exe"
+            soffice.write_text("fake executable marker\n", encoding="utf-8")
+            tesseract.write_text("fake executable marker\n", encoding="utf-8")
+            hints = Path(tmp) / "tool-hints.json"
+            hints.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/derived-text-tool-hints/v0.1",
+                        "executables": {
+                            "soffice": str(soffice),
+                            "tesseract": [str(tesseract)],
+                            "unknown-tool": str(tools_dir / "ignored.exe"),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(archive_services, "derived_text_executable_available", return_value=False):
+                code, output = self.run_cli(
+                    [
+                        "derive-text-doctor",
+                        str(archive_root),
+                        "--tool-hints",
+                        str(hints),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["readiness_summary"]["tool_hints"]["accepted_probe_count"], 2)
+            self.assertEqual(result["readiness_summary"]["tool_hints"]["ignored_probe_count"], 1)
+            self.assertFalse(result["readiness_summary"]["tool_hints"]["path_echoed"])
+            self.assertIn("tool_hints_unknown_executable_probe_ignored", result["warnings"])
+            self.assertFalse(result["privacy_guards"]["tool_hint_paths_echoed"])
+            by_family = {item["format_family"]: item for item in result["family_readiness"]}
+            self.assertTrue(by_family["legacy_office_binary"]["ready"])
+            self.assertTrue(by_family["image_scan"]["ready"])
+            self.assertNotIn("LibreOffice", result["readiness_summary"]["missing_tools"])
+            self.assertNotIn("Tesseract OCR", result["readiness_summary"]["missing_tools"])
+            checks_by_probe = {item["probe"]: item for item in result["tool_checks"]}
+            self.assertTrue(checks_by_probe["soffice"]["hint_probe_available"])
+            self.assertFalse(checks_by_probe["soffice"]["path_probe_available"])
+            self.assertTrue(checks_by_probe["tesseract"]["hint_probe_available"])
+            self.assertNotIn(str(tools_dir), serialized)
+            self.assertNotIn(str(soffice), serialized)
+            self.assertNotIn(str(tesseract), serialized)
+            self.assertNotIn(str(hints), serialized)
+            self.assertEqual(self._inventory(archive_root), before)
+
     def test_doctor_flags_malformed_derived_text_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self._sandbox(tmp, "archive:personal:derived-doctor")

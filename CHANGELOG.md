@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.36 - 2026-06-15
+
+- Added `--tool-hints <json>` to read-only derived-text doctor commands:
+  `archive derive-text doctor --tool-hints <json> --dry-run` and
+  `archive derive-text-doctor --tool-hints <json> --dry-run`.
+- Tool hints let a local user provide executable path hints for PATH-missing
+  extractors such as `soffice`, `libreoffice`, `tesseract`, and `hwp5txt`
+  without echoing those paths in JSON or text output.
+- Fixed the doctor readiness summary so a tool with multiple executable probes,
+  such as LibreOffice via `soffice` or `libreoffice`, is not listed as missing
+  when any accepted probe is available.
+- Kept the doctor read-only: it only checks local path existence for user-supplied
+  hints, installs nothing, executes nothing, reads no source bytes, writes
+  nothing, and emits no tool paths, import paths, local absolute paths, provider
+  URLs, source bodies, usernames, or secret values.
+
 ## v0.3.35 - 2026-06-15
 
 - Added read-only derived-text toolchain doctor commands:
