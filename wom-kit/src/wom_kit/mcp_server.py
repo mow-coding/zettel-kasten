@@ -743,6 +743,29 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "presigned_url_plan",
+        "description": "Plan a future provider presigned URL request for an objet. Read-only; never creates URLs, calls providers, reads object bytes, downloads, uploads, retrieves secrets, or writes files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "object_id": {"type": "string", "description": "sha256:<64 lowercase hex> or bare 64 lowercase hex."},
+                "store_ref": {"type": "string", "description": "Safe external store label/ref, not a URL, path, token, or secret."},
+                "operation": {
+                    "type": "string",
+                    "enum": sorted(archive_services.PRESIGNED_URL_OPERATIONS),
+                    "default": "download",
+                },
+                "ttl_seconds": {
+                    "type": "integer",
+                    "default": archive_services.PRESIGNED_URL_DEFAULT_TTL_SECONDS,
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "object_id"],
+        },
+    },
+    {
         "name": "project_intake_plan",
         "description": "Plan one staged project folder intake session. Read-only; returns human review questions and never reads bodies, recurses, writes, uploads, drafts, mints, or cleans.",
         "inputSchema": {
@@ -1877,6 +1900,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_prehashed_objet_ledger_preview(arguments)
     if name == "resolve_objet_ref":
         return tool_resolve_objet_ref(arguments)
+    if name == "presigned_url_plan":
+        return tool_presigned_url_plan(arguments)
     if name == "project_intake_plan":
         return tool_project_intake_plan(arguments)
     if name == "project_intake_unpack_queue":
@@ -2524,6 +2549,27 @@ def tool_resolve_objet_ref(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = str(result.get("resolution_state") or ("passed" if result["ok"] else "blocked"))
     return tool_success_result(f"resolve_objet_ref: {state}.", result)
+
+
+def tool_presigned_url_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("presigned_url_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    try:
+        ttl_seconds = int(arguments.get("ttl_seconds", archive_services.PRESIGNED_URL_DEFAULT_TTL_SECONDS))
+    except (TypeError, ValueError):
+        raise ToolError("ttl_seconds must be an integer.")
+    result = call_service(
+        archive_services.presigned_url_plan,
+        archive_root,
+        object_id=require_string_arg(arguments, "object_id"),
+        store_ref=optional_string_arg(arguments, "store_ref"),
+        operation=optional_string_arg(arguments, "operation") or "download",
+        ttl_seconds=ttl_seconds,
+        dry_run=True,
+    )
+    state = str(result.get("plan_state") or ("passed" if result["ok"] else "blocked"))
+    return tool_success_result(f"presigned_url_plan: {state}.", result)
 
 
 def tool_project_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:

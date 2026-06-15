@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.40 - 2026-06-15
+
+- Added read-only presigned URL planning commands:
+  `archive presigned-url-plan --dry-run`, alias
+  `archive object-presigned-url-plan --dry-run`, and alias
+  `archive objet-presigned-url-plan --dry-run`.
+- Added MCP tool `presigned_url_plan` for the same read-only planning surface.
+- The planner reuses `resolve-objet-ref`, validates `object_id`, safe
+  `store_ref`, operation, TTL, and object-storage binding presence before any
+  future provider adapter.
+- Added `wom-kit/docs/presigned-url-plan.md` and public documentation links.
+- Kept the command read-only: it creates no presigned URLs, calls no providers,
+  retrieves no credential values, reads no object bytes, uploads or downloads
+  nothing, writes no files or receipts, and echoes no provider URLs, local
+  absolute paths, exact credential refs, bucket URLs, tokens, or secret values.
+
 ## v0.3.39 - 2026-06-15
 
 - Added read-only object storage recommendation commands:

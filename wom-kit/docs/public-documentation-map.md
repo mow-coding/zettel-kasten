@@ -45,6 +45,7 @@ Supporting philosophy and model docs:
 - [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md)
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)
 - [Objet Ref Resolution](objet-ref-resolution.md)
+- [Presigned URL Plan](presigned-url-plan.md)
 - [Zettel Objet Links](zettel-objet-links.md)
 
 These documents cover:

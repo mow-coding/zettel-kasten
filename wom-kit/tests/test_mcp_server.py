@@ -654,6 +654,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("zet_surface_prototype_plan", tool_names)
             self.assertIn("prehashed_objet_ledger_preview", tool_names)
             self.assertIn("resolve_objet_ref", tool_names)
+            self.assertIn("presigned_url_plan", tool_names)
             self.assertIn("zettel_objet_links", tool_names)
             self.assertIn("project_intake_plan", tool_names)
             self.assertIn("project_intake_unpack_queue", tool_names)
@@ -3216,6 +3217,132 @@ class McpServerTests(unittest.TestCase):
                         "method": "tools/call",
                         "params": {
                             "name": "resolve_objet_ref",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "object_id": f"sha256:{digest}",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_presigned_url_plan_tool_writes_nothing_and_respects_allowed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            digest = "b" * 64
+            unsafe_url = "https://" + "redacted.example/mcp-presigned"
+            manifest_path = allowed_archive / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "object_id": f"sha256:{digest}",
+                        "sha256": digest,
+                        "logical_key": f"objects/external/prehashed/r2_private/{digest[:2]}/{digest}",
+                        "mime": "application/octet-stream",
+                        "size_bytes": 789,
+                        "locations": [
+                            {
+                                "provider": "cloudflare_r2",
+                                "store_kind": "object_storage",
+                                "store_ref": "object-store-mcp",
+                                "availability": "declared_external",
+                                "content_addressed": True,
+                                "byte_verification_by_wom_kit": False,
+                                "provider_url": unsafe_url,
+                            }
+                        ],
+                        "provenance": {"source": "prehashed_external_objet_ledger"},
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "presigned_url_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "object_id": f"sha256:{digest}",
+                                "store_ref": "object-store-mcp",
+                                "ttl_seconds": 600,
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"], structured)
+                self.assertEqual(structured["lifecycle_action"], "presigned_url_plan")
+                self.assertEqual(structured["plan_state"], "ready_for_future_adapter")
+                self.assertEqual(structured["presigned_url_request"]["store_ref"], "object-store-mcp")
+                self.assertFalse(structured["closed_actions"]["provider_api_called"])
+                self.assertFalse(structured["closed_actions"]["presigned_url_created"])
+                self.assertFalse(structured["privacy_guards"]["provider_urls_echoed"])
+                self.assertFalse(structured["privacy_guards"]["object_file_bytes_read"])
+                structured_dump = json.dumps(structured)
+                self.assertNotIn(unsafe_url, structured_dump)
+                self.assertNotIn(str(allowed_archive), structured_dump)
+
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "presigned_url_plan",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "object_id": f"sha256:{digest}",
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "presigned_url_plan",
                             "arguments": {
                                 "archive_root": str(allowed_archive),
                                 "object_id": f"sha256:{digest}",

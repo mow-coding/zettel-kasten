@@ -23,6 +23,8 @@ Commands:
           Preview or approve-register an already-hashed external objet ledger without reading blob bytes.
   resolve-objet-ref
           Resolve one sha256 objet reference to safe local/external candidates.
+  presigned-url-plan
+          Plan a future provider presigned URL request without creating URLs.
   imap-mailbox-plan
           Plan a read-only IMAP mailbox source without connecting or storing secrets.
   credential-ref-plan
@@ -1985,6 +1987,27 @@ def command_resolve_objet_ref(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_presigned_url_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("presigned-url-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.presigned_url_plan(
+            Path(args.archive_root),
+            object_id=args.object_id,
+            store_ref=args.store_ref,
+            operation=args.operation,
+            ttl_seconds=args.ttl_seconds,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_presigned_url_plan_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
 def command_imap_mailbox_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("imap-mailbox-plan is dry-run only and requires --dry-run.", file=sys.stderr)
@@ -2885,6 +2908,38 @@ def print_resolve_objet_ref_result(result: dict[str, Any], output_format: str) -
             store_ref = candidate.get("store_ref") or "-"
             availability = candidate.get("availability") or "-"
             print(f"- {candidate.get('provider') or '-'} {store_kind} {store_ref} ({availability})")
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
+
+
+def print_presigned_url_plan_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    state = result.get("plan_state") or ("passed" if result.get("ok") else "blocked")
+    request = result.get("presigned_url_request") if isinstance(result.get("presigned_url_request"), dict) else {}
+    summary = result.get("resolution_summary") if isinstance(result.get("resolution_summary"), dict) else {}
+    print(f"Presigned URL plan {state}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Object id: {result.get('object_id') or '-'}")
+    print(f"Operation: {request.get('operation') or '-'}")
+    print(f"TTL seconds: {request.get('ttl_seconds') or '-'}")
+    print(f"Store ref: {request.get('store_ref') or '-'}")
+    print(f"Resolution: {summary.get('resolution_state') or '-'}")
+    print(f"External candidates: {summary.get('external_candidate_count', 0)}")
+    print("Presigned URL created: no")
+    print("Provider API called: no")
     print("Writes: none")
     if result.get("blockers"):
         print("Blockers:")
@@ -6927,6 +6982,30 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_objet_ref.add_argument("--dry-run", action="store_true", help="Required. Read manifests only; never writes, downloads, or calls providers.")
     resolve_objet_ref.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     resolve_objet_ref.set_defaults(func=command_resolve_objet_ref)
+
+    presigned_url_plan = subcommands.add_parser(
+        "presigned-url-plan",
+        aliases=["object-presigned-url-plan", "objet-presigned-url-plan"],
+        help="Plan a future provider presigned URL request without creating URLs.",
+    )
+    presigned_url_plan.add_argument("archive_root", help="Archive root to inspect.")
+    presigned_url_plan.add_argument("--object-id", required=True, help="Object id formatted as sha256:<64 hex> or bare 64 hex.")
+    presigned_url_plan.add_argument("--store-ref", help="Safe external store label/ref. Do not pass a URL, path, token, or secret.")
+    presigned_url_plan.add_argument(
+        "--operation",
+        choices=sorted(archive_services.PRESIGNED_URL_OPERATIONS),
+        default="download",
+        help="Future presigned URL operation to plan.",
+    )
+    presigned_url_plan.add_argument(
+        "--ttl-seconds",
+        type=int,
+        default=archive_services.PRESIGNED_URL_DEFAULT_TTL_SECONDS,
+        help="Future URL TTL to plan. Must be between 60 and 86400 seconds.",
+    )
+    presigned_url_plan.add_argument("--dry-run", action="store_true", help="Required. Plan only; never creates URLs or calls providers.")
+    presigned_url_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    presigned_url_plan.set_defaults(func=command_presigned_url_plan)
 
     imap_mailbox_plan = subcommands.add_parser(
         "imap-mailbox-plan",
