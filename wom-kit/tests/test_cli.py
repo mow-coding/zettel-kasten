@@ -2271,6 +2271,217 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_credential_keepassxc_write_executes_cli_with_verified_receipt_without_echoing_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = self.copy_fake_archive(tmp_root / "archive")
+            database_path = tmp_root / "human-selected-vault.kdbx"
+            database_path.write_bytes(b"fake kdbx placeholder")
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "credential-access-approval",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--credential-ref",
+                    "secret:keepassxc-openai-api",
+                    "--credential-kind",
+                    "openai_api_key",
+                    "--provider",
+                    "openai",
+                    "--action-kind",
+                    "plaintext_secret_migration",
+                    "--decision",
+                    "approve_once",
+                    "--store-kind",
+                    "password_manager",
+                    "--consumer",
+                    "wom:adapter:keepassxc",
+                    "--reviewed-by",
+                    "human:tester",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            approved = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            before = self.snapshot_archive_files(archive_root)
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "credential-keepassxc-write",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:openai-api",
+                    "--credential-ref",
+                    "secret:keepassxc-openai-api",
+                    "--credential-kind",
+                    "openai_api_key",
+                    "--provider",
+                    "openai",
+                    "--action-kind",
+                    "plaintext_secret_migration",
+                    "--operation",
+                    "write_new_secret",
+                    "--approval-receipt",
+                    approved["receipt_path"],
+                    "--entry-label",
+                    "openai-api",
+                    "--group-label",
+                    "wom-secrets",
+                    "--database-ref",
+                    "keepassxc:personal-vault",
+                    "--consumer",
+                    "wom:adapter:keepassxc",
+                    "--reviewed-by",
+                    "human:tester",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            dry = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertTrue(dry["ok"], dry)
+            self.assertEqual(dry["lifecycle_action"], "credential_keepassxc_write_plan")
+            self.assertEqual(dry["execution_status"], "planned")
+            self.assertTrue(dry["policy_check_summary"]["approval_receipt_verified"])
+            self.assertTrue(dry["current_capability"]["command_execution_implemented"])
+            self.assertFalse(dry["execution_boundary"]["mcp_live_tool_exposed"])
+            self.assertFalse(dry["target"]["database_path_included"])
+            self.assertEqual(dry["target"]["entry_target"], "wom-secrets/openai-api")
+            self.assertEqual(dry["files_written"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(database_path), dry_output)
+            self.assertNotIn("secret:keepassxc-openai-api", dry_output)
+
+            with patch.object(archive_services.shutil, "which", return_value="keepassxc-cli"):
+                with patch.object(archive_services, "run_keepassxc_cli_add", return_value=0) as run_add:
+                    code, output = self.run_cli(
+                        [
+                            "credential-keepassxc-write",
+                            str(archive_root),
+                            "--credential-id",
+                            "cred:openai-api",
+                            "--credential-ref",
+                            "secret:keepassxc-openai-api",
+                            "--credential-kind",
+                            "openai_api_key",
+                            "--provider",
+                            "openai",
+                            "--action-kind",
+                            "plaintext_secret_migration",
+                            "--operation",
+                            "write_new_secret",
+                            "--approval-receipt",
+                            approved["receipt_path"],
+                            "--entry-label",
+                            "openai-api",
+                            "--group-label",
+                            "wom-secrets",
+                            "--database-ref",
+                            "keepassxc:personal-vault",
+                            "--database-path",
+                            str(database_path),
+                            "--consumer",
+                            "wom:adapter:keepassxc",
+                            "--reviewed-by",
+                            "human:tester",
+                            "--approve",
+                            "--format",
+                            "json",
+                        ]
+                    )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "credential_keepassxc_write")
+            self.assertEqual(result["execution_status"], "succeeded")
+            self.assertTrue(result["closed_actions"]["live_adapter_executed"])
+            self.assertTrue(result["closed_actions"]["keepassxc_cli_invoked"])
+            self.assertFalse(result["closed_actions"]["database_path_echoed"])
+            self.assertFalse(result["closed_actions"]["secret_value_read_by_wom"])
+            self.assertTrue(result["closed_actions"]["secret_value_written"])
+            self.assertEqual(result["external_writes"], ["keepassxc_database_entry"])
+            self.assertEqual(len(result["files_written"]), 1)
+            receipt_path = archive_root / result["receipt_path"]
+            self.assertTrue(receipt_path.is_file())
+            receipt_text = receipt_path.read_text(encoding="utf-8")
+            self.assertIn('"status": "succeeded"', receipt_text)
+            self.assertIn('"database_path_included": false', receipt_text)
+            self.assertNotIn(str(database_path), output)
+            self.assertNotIn(str(database_path), receipt_text)
+            self.assertNotIn("secret:keepassxc-openai-api", output)
+            self.assertNotIn("secret:keepassxc-openai-api", receipt_text)
+            run_add.assert_called_once()
+            argv = run_add.call_args.args[0]
+            self.assertEqual(argv[0:3], ["keepassxc-cli", "add", "--password-prompt"])
+            self.assertEqual(argv[3], str(database_path.resolve()))
+            self.assertEqual(argv[4], "wom-secrets/openai-api")
+
+            with patch.object(archive_services.shutil, "which", return_value="keepassxc-cli"):
+                with patch.object(archive_services, "run_keepassxc_cli_add", return_value=0) as rerun_add:
+                    replay_code, replay_output = self.run_cli(
+                        [
+                            "credential-keepassxc-write",
+                            str(archive_root),
+                            "--credential-id",
+                            "cred:openai-api",
+                            "--action-kind",
+                            "plaintext_secret_migration",
+                            "--operation",
+                            "write_new_secret",
+                            "--approval-receipt",
+                            approved["receipt_path"],
+                            "--entry-label",
+                            "openai-api",
+                            "--group-label",
+                            "wom-secrets",
+                            "--database-path",
+                            str(database_path),
+                            "--consumer",
+                            "wom:adapter:keepassxc",
+                            "--reviewed-by",
+                            "human:tester",
+                            "--approve",
+                            "--format",
+                            "json",
+                        ]
+                    )
+            replay = json.loads(replay_output)
+            self.assertEqual(replay_code, 1)
+            self.assertFalse(replay["ok"])
+            self.assertTrue(any("already has a KeePassXC write execution receipt" in blocker for blocker in replay["blockers"]))
+            rerun_add.assert_not_called()
+            self.assertNotIn(str(database_path), replay_output)
+
+            missing_db_code, missing_db_output = self.run_cli(
+                [
+                    "credential-keepassxc-write",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:another-api",
+                    "--action-kind",
+                    "plaintext_secret_migration",
+                    "--operation",
+                    "write_new_secret",
+                    "--approval-receipt",
+                    approved["receipt_path"],
+                    "--entry-label",
+                    "another-api",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            missing_db = json.loads(missing_db_output)
+            self.assertEqual(missing_db_code, 1)
+            self.assertFalse(missing_db["ok"])
+            self.assertTrue(any("database_path is required" in blocker for blocker in missing_db["blockers"]))
+
     def test_credential_access_broker_plan_is_read_only_and_never_echoes_refs_or_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

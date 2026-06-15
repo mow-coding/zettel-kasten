@@ -123,6 +123,7 @@ Onboarding and setup plans:
 - [Credential Access Approval Plan](credential-access-approval-plan.md)
 - [Credential Policy Check](credential-policy-check.md)
 - [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md)
+- [Credential KeePassXC Write](credential-keepassxc-write.md)
 - [Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md)
 - [Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md)
 - [Credential Adapter Audit Plan](credential-adapter-audit-plan.md)

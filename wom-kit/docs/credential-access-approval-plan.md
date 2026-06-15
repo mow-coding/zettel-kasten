@@ -88,6 +88,10 @@ gate.
 For KeePassXC, v0.3.32 adds a read-only command preflight after the policy
 check. See [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md).
 
+v0.3.33 adds a separate CLI-only KeePassXC write adapter after that preflight.
+See [Credential KeePassXC Write](credential-keepassxc-write.md). MCP still
+cannot write approval receipts or execute the adapter.
+
 ## Receipt Preview Rules
 
 The preview may include:
@@ -149,5 +153,7 @@ Next layer:
 - [Credential Policy Check](credential-policy-check.md), optionally with
   `--approval-receipt <path>`
 - [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md),
+  also requiring `--approval-receipt <path>`
+- [Credential KeePassXC Write](credential-keepassxc-write.md), CLI-only and
   also requiring `--approval-receipt <path>`
 - [Credential Adapter Readiness Plan](credential-adapter-readiness-plan.md)

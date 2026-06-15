@@ -138,6 +138,9 @@ v0.3.28 adds a read-only vault onboarding plan. See
 v0.3.32 adds a KeePassXC-specific command preflight after approval receipt
 verification. See [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md).
 
+v0.3.33 adds a CLI-only KeePassXC write adapter after the same approval and
+policy gates. See [Credential KeePassXC Write](credential-keepassxc-write.md).
+
 v0.3.29 adds a read-only plaintext migration plan. See
 [Credential Plaintext Migration Plan](credential-plaintext-migration-plan.md).
 

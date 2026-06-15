@@ -79,7 +79,8 @@ A request can return `ready_after_approval_receipt` only when:
   consumer, decision, and archive,
 - no secret value or exact credential ref is echoed.
 
-Even then, `live_execution_allowed_now` is still `false` in v0.3.32.
+Even then, `live_execution_allowed_now` is still `false` in this read-only
+policy command.
 
 The result means:
 
@@ -150,8 +151,8 @@ credential-store-recommendation
 -> credential-access-approval-plan / credential-access-approval --approve
 -> credential-policy-check --approval-receipt <path>
 -> credential-keepassxc-command-plan --approval-receipt <path>
--> future adapter execution
--> credential-adapter-audit-plan
+-> credential-keepassxc-write --approval-receipt <path> --approve
+-> non-secret KeePassXC write execution receipt
 ```
 
 v0.3.31 connects the written approval receipt to the gate that future adapter
@@ -160,3 +161,7 @@ execution must satisfy. It still does not perform the execution.
 v0.3.32 adds [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md),
 which reuses this policy gate before previewing a safe `keepassxc-cli add`
 command shape. It still does not run KeePassXC.
+
+v0.3.33 adds [Credential KeePassXC Write](credential-keepassxc-write.md), a
+separate CLI-only adapter that reuses this policy gate before local execution.
+MCP still cannot execute the adapter.
