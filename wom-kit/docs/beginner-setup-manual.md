@@ -1,6 +1,6 @@
 # Beginner Setup Manual
 
-Status: v0.3.37 read-only beginner setup manual
+Status: v0.3.44 read-only beginner setup manual
 Date: 2026-06-15
 
 This document is the beginner-facing bridge between recommendations and actual
@@ -45,6 +45,9 @@ The manual explains:
 - why WOM records safe refs instead of real secrets,
 - how to name a first KeePassXC-style vault without putting private details in
   the filename,
+- how to walk through the KeePassXC 2.7.x new database wizard screen by screen,
+- which first-vault KeePassXC fields WOM recommends for a local offline KDBX
+  threat model,
 - how to use safe non-secret group and entry labels,
 - how to prepare derived-text tools such as LibreOffice and Tesseract,
 - how to use a private local `--tool-hints` JSON file when a tool is installed
@@ -70,6 +73,31 @@ The AI can help with:
 
 The human uses visible local app windows or terminal prompts for real secret
 entry.
+
+## KeePassXC First Vault Walkthrough
+
+When the selected store is `keepassxc`, the JSON output includes a
+`product_walkthrough` for the first database wizard.
+
+For the WOM beginner local-vault context, the recommended field decisions are:
+
+```text
+Database format: KDBX 4.0
+Encryption algorithm: AES-256
+Key derivation function: Argon2d
+Transform rounds / memory / threads: leave KeePassXC automatic or recommended values alone
+```
+
+Why Argon2d? This first-vault guidance is scoped to a local offline `.kdbx`
+file where the main risk is a stolen database being attacked offline with
+GPU/ASIC hardware. If generic internet advice says Argon2id but KeePassXC's
+local database wizard recommends Argon2d, follow this WOM first-vault guidance.
+If a workplace, school, or regulated environment has stricter policy, that
+policy wins.
+
+The walkthrough also tells the beginner which button to press on the general,
+encryption, credentials, save, and first-entry screens. It still does not open
+KeePassXC, create the database, record the database path, or read any secret.
 
 ## Safe Label Examples
 

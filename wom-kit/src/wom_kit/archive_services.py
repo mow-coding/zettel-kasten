@@ -12425,6 +12425,10 @@ def beginner_setup_manual(
                     "keyring:wom-mail-access",
                     "env:WOM_OPENAI_API_KEY",
                 ],
+                "product_walkthrough": beginner_setup_manual_vault_walkthrough(
+                    str(selected_store.get("store_id") or resolved_store_id),
+                    resolved_platform,
+                ),
             }
         )
 
@@ -12548,6 +12552,166 @@ def beginner_setup_manual(
         "would_change": [],
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
+    }
+
+
+def beginner_setup_manual_vault_walkthrough(store_id: str, platform: str) -> dict[str, Any] | None:
+    normalized_store = (store_id or "").strip().lower().replace("-", "_")
+    normalized_platform = (platform or "cross_platform").strip().lower().replace("-", "_")
+    if normalized_store != "keepassxc":
+        return None
+    return {
+        "store_id": "keepassxc",
+        "platform": normalized_platform,
+        "product_version_family": "KeePassXC 2.7.x",
+        "walkthrough_kind": "new_database_wizard",
+        "status": "wom_context_recommendation",
+        "threat_model": "local_offline_vault_file_stolen_and_attacked_offline",
+        "source_basis": [
+            "KeePassXC uses KeePass 2.x KDBX 3.1 and KDBX 4 as native database formats.",
+            "KeePass database-file security guidance distinguishes Argon2d GPU/ASIC resistance from Argon2id side-channel tradeoffs.",
+            "WOM first-vault setup assumes a local offline password database, not a multi-tenant server password hashing service.",
+        ],
+        "preflight": [
+            "Open KeePassXC yourself in a visible local desktop window.",
+            "Do not paste the master password, database path, API keys, app passwords, OAuth tokens, usernames, emails, or provider URLs into chat.",
+            "Pick a private local folder outside this public repository and outside archive records.",
+        ],
+        "wizard_steps": [
+            {
+                "step_id": "start_new_database",
+                "screen": "Start / Welcome",
+                "do_this": "Choose Create new database.",
+                "button": "Create new database",
+                "why": "This creates the real vault. WOM will only remember safe labels later.",
+            },
+            {
+                "step_id": "general",
+                "screen": "General",
+                "fields": [
+                    {
+                        "field": "Database name",
+                        "recommended_value": "WOM Personal Secrets",
+                        "reason": "Boring and non-secret; it avoids emails, usernames, provider names, and local paths.",
+                    },
+                    {
+                        "field": "Description",
+                        "recommended_value": "Blank or a boring non-secret note",
+                        "reason": "Descriptions can leak intent if they contain account or project details.",
+                    },
+                ],
+                "button": "Continue",
+            },
+            {
+                "step_id": "encryption",
+                "screen": "Encryption Settings",
+                "fields": [
+                    {
+                        "field": "Database format",
+                        "recommended_value": "KDBX 4.0",
+                        "reason": "Use the modern native database format path for Argon2-based key derivation.",
+                    },
+                    {
+                        "field": "Encryption algorithm",
+                        "recommended_value": "AES-256",
+                        "reason": "Use KeePassXC's boring default unless a real organization policy requires otherwise.",
+                    },
+                    {
+                        "field": "Key derivation function",
+                        "recommended_value": "Argon2d",
+                        "reason": "For a local offline vault, the main risk is a stolen database file being attacked with GPU/ASIC hardware; Argon2d is the WOM first-vault recommendation for that threat model.",
+                        "conflict_note": "If generic internet advice says Argon2id but KeePassXC recommends Argon2d, follow Argon2d for this local offline WOM vault. Argon2id is a stronger default for many server-side password-hashing discussions, but that is not this first-vault setup.",
+                    },
+                    {
+                        "field": "Decryption time / transform rounds / memory / parallelism",
+                        "recommended_value": "Leave the KeePassXC automatic or recommended values alone.",
+                        "reason": "KeePassXC benchmarks these settings for the device. Beginners should not manually tune iterations, memory, or threads during first setup.",
+                    },
+                ],
+                "button": "Continue",
+            },
+            {
+                "step_id": "credentials",
+                "screen": "Database Credentials",
+                "fields": [
+                    {
+                        "field": "Master password",
+                        "recommended_value": "Human chooses locally; never send to AI.",
+                        "reason": "This is the one key to the vault. WOM must never receive it.",
+                    },
+                    {
+                        "field": "Confirm password",
+                        "recommended_value": "Type the same master password locally.",
+                        "reason": "KeePassXC verifies that the human typed the intended password.",
+                    },
+                    {
+                        "field": "Additional protection such as key file or hardware key",
+                        "recommended_value": "Skip for the first beginner vault unless the human already understands backup/recovery.",
+                        "reason": "Extra factors can improve security, but they also create lockout risk for a first setup.",
+                    },
+                ],
+                "button": "Done",
+            },
+            {
+                "step_id": "save_database",
+                "screen": "Save database file",
+                "fields": [
+                    {
+                        "field": "File name",
+                        "recommended_value": "wom-personal-secrets.kdbx",
+                        "reason": "Boring, non-secret, and easy to recognize.",
+                    },
+                    {
+                        "field": "Folder",
+                        "recommended_value": "A private local folder chosen by the human outside WOM public repo records.",
+                        "reason": "The path can reveal personal machine details and should not enter public records or chat.",
+                    },
+                ],
+                "button": "Save",
+            },
+            {
+                "step_id": "first_entry",
+                "screen": "First entry",
+                "fields": [
+                    {
+                        "field": "Group",
+                        "recommended_value": "wom/api or wom/mail",
+                        "reason": "Safe labels help WOM map future approval requests without exposing account values.",
+                    },
+                    {
+                        "field": "Entry title",
+                        "recommended_value": "openai-api, mail-app-password, or object-storage-token",
+                        "reason": "Use a role label, not a real username, email, provider URL, token, or password.",
+                    },
+                    {
+                        "field": "Password / token value",
+                        "recommended_value": "Paste or type only inside KeePassXC's local UI.",
+                        "reason": "The AI can discuss the label, but the real secret must stay in the local vault UI.",
+                    },
+                ],
+                "button": "OK / Save entry",
+            },
+        ],
+        "field_decisions": {
+            "database_format": "KDBX 4.0",
+            "encryption_algorithm": "AES-256",
+            "key_derivation_function": "Argon2d",
+            "tuning": "Leave KeePassXC automatic or recommended values unchanged for first setup.",
+        },
+        "conflict_resolution": [
+            "If KeePassXC UI and generic internet advice disagree for this first local vault, follow the KeePassXC local-vault recommendation captured here.",
+            "If generic advice says Argon2id, remember that WOM's first KeePassXC vault guidance is for a local offline KDBX file, so Argon2d is the selected beginner default.",
+            "If a workplace, school, or regulated environment gives a stricter policy, follow that policy and record only non-secret labels in WOM.",
+            "If the UI labels differ in a future KeePassXC version, keep the same WOM intent: KDBX 4, AES-256, Argon2-family KDF, no manual tuning unless the app or policy requires it.",
+        ],
+        "closed_actions": {
+            "keepassxc_opened": False,
+            "database_created": False,
+            "database_path_recorded": False,
+            "master_password_read": False,
+            "secret_value_read": False,
+            "files_written": False,
+        },
     }
 
 
