@@ -1212,6 +1212,7 @@ BEGINNER_SETUP_MANUAL_TOPICS = {
     "credential_vault",
     "derived_text_tools",
 }
+CONNECTED_ACCOUNT_SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 CREDENTIAL_ACCESS_BROKER_ACTIONS = {
     "mail_source_read",
     "model_api_call",
@@ -11289,6 +11290,372 @@ def credential_ref_inventory(
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
+
+
+def connected_accounts_overview(
+    archive_root: Path | str,
+    *,
+    include_disabled: bool = False,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    accounts: list[dict[str, Any]] = []
+    sources_checked: list[dict[str, Any]] = []
+
+    if not dry_run:
+        blockers.append("connected-accounts is read-only and requires --dry-run.")
+
+    provider_path = archive_internal_path(root, "provider-bindings.yml")
+    sources_checked.append({"path": "provider-bindings.yml", "present": provider_path.is_file(), "scope": "archive"})
+    if provider_path.is_file():
+        try:
+            provider_doc = load_provider_bindings(root)
+            if provider_doc.get("archive_id") and provider_doc.get("archive_id") != archive_id:
+                blockers.append("provider-bindings.yml archive_id must match archive.yml archive_id.")
+            for index, binding in enumerate(provider_bindings_list(provider_doc), start=1):
+                account = connected_account_from_provider_binding(
+                    binding,
+                    entry_index=index,
+                    include_disabled=include_disabled,
+                    blockers=blockers,
+                    warnings=warnings,
+                )
+                if account is not None:
+                    accounts.append(account)
+        except (ArchiveServiceError, OSError, UnicodeError) as exc:
+            blockers.append(f"provider-bindings.yml could not be read safely: {exc}")
+
+    source_path = archive_internal_path(root, "source-bindings.yml")
+    sources_checked.append({"path": "source-bindings.yml", "present": source_path.is_file(), "scope": "archive"})
+    if source_path.is_file():
+        try:
+            source_doc = load_source_bindings(root)
+            if source_doc.get("archive_id") and source_doc.get("archive_id") != archive_id:
+                blockers.append("source-bindings.yml archive_id must match archive.yml archive_id.")
+            for index, binding in enumerate(source_bindings_list(source_doc), start=1):
+                account = connected_account_from_source_binding(
+                    binding,
+                    entry_index=index,
+                    include_disabled=include_disabled,
+                    blockers=blockers,
+                    warnings=warnings,
+                )
+                if account is not None:
+                    accounts.append(account)
+        except (ArchiveServiceError, OSError, UnicodeError) as exc:
+            blockers.append(f"source-bindings.yml could not be read safely: {exc}")
+
+    inventory = credential_ref_inventory(root, dry_run=True)
+    blockers.extend(str(item) for item in inventory.get("blockers") or [])
+    warnings.extend(str(item) for item in inventory.get("warnings") or [])
+    sources_checked.extend(
+        item
+        for item in inventory.get("sources_checked") or []
+        if isinstance(item, dict) and item.get("path") == CREDENTIAL_REF_LOCAL_INVENTORY_RELATIVE
+    )
+    credential_catalog = [
+        connected_account_safe_credential_summary(item)
+        for item in inventory.get("credentials") or []
+        if isinstance(item, dict)
+    ]
+
+    account_store_summary: dict[str, int] = {}
+    for account in accounts:
+        for location in account.get("credential_locations") or []:
+            if not isinstance(location, dict):
+                continue
+            store = str(location.get("ref_store") or "unknown")
+            account_store_summary[store] = account_store_summary.get(store, 0) + 1
+
+    catalog_store_summary = connected_account_credential_store_summary(credential_catalog)
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "connected_accounts_overview",
+        "archive_id": archive_id,
+        "account_count": len(accounts),
+        "accounts": accounts,
+        "credential_catalog": {
+            "credential_count": len(credential_catalog),
+            "credentials": credential_catalog,
+            "store_summary": catalog_store_summary,
+        },
+        "credential_store_summary": account_store_summary,
+        "sources_checked": connected_account_dedupe_sources_checked(sources_checked),
+        "current_capability": {
+            "connected_accounts_bridge_available": True,
+            "provider_binding_metadata_read_supported": True,
+            "source_binding_metadata_read_supported": True,
+            "local_credential_inventory_metadata_read_supported": True,
+            "live_account_verification_implemented": False,
+            "secret_value_retrieval_implemented": False,
+            "oauth_flow_implemented": False,
+            "imap_live_scan_implemented": False,
+            "provider_api_call_implemented": False,
+        },
+        "closed_actions": {
+            "secret_value_read": False,
+            "secret_value_written": False,
+            "environment_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "browser_password_store_opened": False,
+            "provider_api_called": False,
+            "oauth_started": False,
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "source_bytes_read": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "credential_ref_values_echoed": False,
+            "email_addresses_echoed": False,
+            "username_values_echoed": False,
+            "tokens_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "raw_provider_auth_values_echoed": False,
+            "source_bodies_read": False,
+            "writes": False,
+        },
+        "next_safe_actions": [
+            "Use connected-accounts as a map of non-secret account labels and credential store types.",
+            "Use credential-ref-inventory to inspect credential catalog metadata without exact ref values.",
+            "Use provider-status before relying on setup-managed GitHub or object-storage metadata.",
+            "Use imap-mailbox-plan before adding or changing a mail source; live IMAP scan remains closed.",
+        ],
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def connected_account_from_provider_binding(
+    binding: dict[str, Any],
+    *,
+    entry_index: int,
+    include_disabled: bool,
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any] | None:
+    enabled = binding.get("enabled") is not False
+    if not enabled and not include_disabled:
+        return None
+
+    provider = str(binding.get("provider") or "generic_provider").strip().lower().replace("-", "_")
+    provider_for_credentials = provider if provider in CREDENTIAL_REF_ALLOWED_PROVIDERS else "generic_provider"
+    binding_id = connected_account_safe_or_hidden(
+        binding.get("binding_id"),
+        fallback=f"provider-binding-{entry_index:04d}",
+        field_name="provider-bindings.yml.binding_id",
+        blockers=blockers,
+    )
+    auth = binding.get("auth") if isinstance(binding.get("auth"), dict) else {}
+    raw_account_ref = auth.get("account_ref")
+    account_ref = None
+    if raw_account_ref is not None:
+        account_ref = connected_account_safe_or_hidden(
+            raw_account_ref,
+            fallback=f"hidden-provider-account-{entry_index:04d}",
+            field_name="provider-bindings.yml.auth.account_ref",
+            blockers=blockers,
+        )
+        if account_ref.startswith("hidden-"):
+            account_ref = None
+
+    purpose = connected_account_optional_safe_text(binding.get("purpose"), field_name="provider-bindings.yml.purpose", warnings=warnings)
+    credentials = dedupe_credential_inventory(
+        discover_credential_refs_in_value(
+            binding,
+            document="provider-bindings.yml",
+            base_id=f"provider-account-{entry_index:04d}",
+            provider=provider_for_credentials,
+            context={
+                "binding_kind": str(binding.get("kind") or "provider"),
+                "binding_id": binding_id,
+            },
+        )
+    )
+    credential_locations = [connected_account_safe_credential_summary(item) for item in credentials]
+    label = account_ref or binding_id
+
+    return {
+        "account_id": f"provider:{binding_id}",
+        "account_kind": "provider_binding",
+        "account_label": label,
+        "account_ref": account_ref,
+        "binding_id": binding_id,
+        "provider": provider,
+        "provider_kind": connected_account_optional_safe_text(binding.get("provider_kind"), field_name="provider-bindings.yml.provider_kind", warnings=warnings),
+        "enabled": enabled,
+        "purpose": purpose,
+        "credential_locations": credential_locations,
+        "credential_store_summary": connected_account_credential_store_summary(credential_locations),
+        "source": {
+            "document": "provider-bindings.yml",
+            "scope": "archive",
+            "entry_index": entry_index,
+        },
+        "live_status": "metadata_only",
+    }
+
+
+def connected_account_from_source_binding(
+    binding: dict[str, Any],
+    *,
+    entry_index: int,
+    include_disabled: bool,
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any] | None:
+    enabled = binding.get("enabled") is not False
+    if not enabled and not include_disabled:
+        return None
+
+    source_type = str(binding.get("source_type") or "").strip().lower()
+    connection = binding.get("connection") if isinstance(binding.get("connection"), dict) else {}
+    has_account_connection = source_type == IMAP_MAILBOX_SOURCE_TYPE or bool(connection.get("account_ref"))
+    if not has_account_connection:
+        return None
+
+    source_id = connected_account_safe_or_hidden(
+        binding.get("source_id"),
+        fallback=f"source-binding-{entry_index:04d}",
+        field_name="source-bindings.yml.source_id",
+        blockers=blockers,
+    )
+    provider = str(connection.get("provider") or ("generic_imap" if source_type == IMAP_MAILBOX_SOURCE_TYPE else "generic_provider")).strip().lower().replace("-", "_")
+    provider_for_credentials = provider if provider in CREDENTIAL_REF_ALLOWED_PROVIDERS else "generic_provider"
+    raw_account_ref = connection.get("account_ref") or binding.get("root_ref")
+    account_ref = connected_account_safe_or_hidden(
+        raw_account_ref,
+        fallback=f"hidden-source-account-{entry_index:04d}",
+        field_name="source-bindings.yml.connection.account_ref",
+        blockers=blockers,
+    )
+    if account_ref.startswith("hidden-"):
+        account_ref = None
+
+    credentials = dedupe_credential_inventory(
+        discover_credential_refs_in_value(
+            connection or binding,
+            document="source-bindings.yml",
+            base_id=f"source-account-{entry_index:04d}",
+            provider=provider_for_credentials,
+            context={
+                "source_type": source_type or "unknown",
+                "source_id": source_id,
+            },
+        )
+    )
+    credential_locations = [connected_account_safe_credential_summary(item) for item in credentials]
+
+    return {
+        "account_id": f"source:{source_id}",
+        "account_kind": "imap_mailbox_source" if source_type == IMAP_MAILBOX_SOURCE_TYPE else "source_binding",
+        "account_label": account_ref or source_id,
+        "account_ref": account_ref,
+        "source_id": source_id,
+        "source_type": source_type or None,
+        "provider": provider,
+        "enabled": enabled,
+        "credential_locations": credential_locations,
+        "credential_store_summary": connected_account_credential_store_summary(credential_locations),
+        "source": {
+            "document": "source-bindings.yml",
+            "scope": "archive",
+            "entry_index": entry_index,
+        },
+        "live_status": "metadata_only",
+    }
+
+
+def connected_account_safe_or_hidden(
+    value: Any,
+    *,
+    fallback: str,
+    field_name: str,
+    blockers: list[str],
+) -> str:
+    text = str(value or "").strip()
+    if safe_connected_account_label(text):
+        return text
+    blockers.append(f"{field_name} must be a safe non-secret account label; value hidden.")
+    return fallback
+
+
+def connected_account_optional_safe_text(value: Any, *, field_name: str, warnings: list[str]) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if safe_connected_account_label(text):
+        return text
+    warnings.append(f"{field_name} was hidden because it is not a safe non-secret label.")
+    return None
+
+
+def safe_connected_account_label(value: str) -> bool:
+    text = value.strip()
+    if not text or not text.isascii() or "\x00" in text or "\n" in text or "\r" in text:
+        return False
+    if "@" in text or "://" in text or "/" in text or "\\" in text or "#" in text or "?" in text:
+        return False
+    if contains_forbidden_location_reference(text) or DRAFT_SECRET_VALUE_RE.search(text):
+        return False
+    return bool(CONNECTED_ACCOUNT_SAFE_LABEL_RE.match(text))
+
+
+def connected_account_safe_credential_summary(entry: dict[str, Any]) -> dict[str, Any]:
+    source = entry.get("source") if isinstance(entry.get("source"), dict) else {}
+    return {
+        "credential_id": entry.get("credential_id"),
+        "credential_kind": entry.get("credential_kind"),
+        "purpose": entry.get("purpose"),
+        "provider": entry.get("provider"),
+        "ref_store": entry.get("ref_store"),
+        "ref_prefix": entry.get("ref_prefix"),
+        "source": {
+            "document": source.get("document"),
+            "scope": source.get("scope"),
+            "field_path": source.get("field_path"),
+            "entry_index": source.get("entry_index"),
+            "binding_id": source.get("binding_id"),
+            "source_id": source.get("source_id"),
+            "source_type": source.get("source_type"),
+        },
+        "secret_value_present": False,
+    }
+
+
+def connected_account_credential_store_summary(entries: list[dict[str, Any]]) -> dict[str, int]:
+    summary: dict[str, int] = {}
+    for entry in entries:
+        store = str(entry.get("ref_store") or "unknown")
+        summary[store] = summary.get(store, 0) + 1
+    return dict(sorted(summary.items()))
+
+
+def connected_account_dedupe_sources_checked(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in entries:
+        path = str(item.get("path") or "")
+        scope = str(item.get("scope") or "")
+        key = (path, scope)
+        if not path or key in seen:
+            continue
+        seen.add(key)
+        result.append(json_safe(item))
+    return result
 
 
 def credential_store_recommendation(

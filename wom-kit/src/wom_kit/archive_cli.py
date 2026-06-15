@@ -33,6 +33,8 @@ Commands:
           Plan safe human vault onboarding without opening or reading a vault.
   beginner-setup-manual
           Print beginner-friendly secret vault and text-tool setup steps.
+  connected-accounts
+          Summarize connected provider/source accounts and credential store types without reading secrets.
   credential-plaintext-migration-plan
           Plan safe plaintext-secret migration without reading or importing secrets.
   credential-policy-check
@@ -2056,6 +2058,53 @@ def command_credential_ref_inventory(args: argparse.Namespace) -> int:
                 f"{item.get('provider') or '-'} "
                 f"{item.get('ref_prefix') or '-'}"
             )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_connected_accounts(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("connected-accounts is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.connected_accounts_overview(
+            Path(args.archive_root),
+            include_disabled=args.include_disabled,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        print(f"Connected accounts dry-run {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Accounts: {result.get('account_count', 0)}")
+        print("Writes: none")
+        for account in result.get("accounts") or []:
+            if not isinstance(account, dict):
+                continue
+            stores = account.get("credential_store_summary") if isinstance(account.get("credential_store_summary"), dict) else {}
+            store_text = ", ".join(f"{key}:{value}" for key, value in stores.items()) if stores else "none"
+            print(
+                "- "
+                f"{account.get('account_label') or '-'} "
+                f"{account.get('account_kind') or '-'} "
+                f"{account.get('provider') or '-'} "
+                f"stores={store_text}"
+            )
+        catalog = result.get("credential_catalog") if isinstance(result.get("credential_catalog"), dict) else {}
+        print(f"Credential catalog refs: {catalog.get('credential_count', 0)}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -6906,6 +6955,17 @@ def build_parser() -> argparse.ArgumentParser:
     credential_ref_inventory.add_argument("--dry-run", action="store_true", help="Required; read-only inventory.")
     credential_ref_inventory.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_ref_inventory.set_defaults(func=command_credential_ref_inventory)
+
+    connected_accounts = subcommands.add_parser(
+        "connected-accounts",
+        aliases=["accounts", "account-status"],
+        help="Summarize connected provider/source accounts and credential store types without reading secrets.",
+    )
+    connected_accounts.add_argument("archive_root", help="Archive root to inspect.")
+    connected_accounts.add_argument("--include-disabled", action="store_true", help="Include disabled bindings in the metadata-only overview.")
+    connected_accounts.add_argument("--dry-run", action="store_true", help="Required; read-only account bridge.")
+    connected_accounts.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    connected_accounts.set_defaults(func=command_connected_accounts)
 
     credential_store_recommendation = subcommands.add_parser(
         "credential-store-recommendation",

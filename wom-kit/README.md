@@ -89,6 +89,7 @@ docs/project-intake-session.md
 docs/project-intake-cookbook.md
 docs/derived-text-coverage-and-toolchain.md
 docs/human-artifact-store-contract.md
+docs/connected-accounts.md
 docs/credential-keepassxc-command-plan.md
 docs/credential-keepassxc-write.md
 docs/zet-surface-prototypes.md
@@ -161,6 +162,9 @@ credential-keepassxc-write
 
 beginner-setup-manual
   Print beginner-friendly secret vault and derived-text tool setup steps. Dry-run only; explains what to do in external UIs, shows safe non-secret labels and dry-run commands, writes nothing, opens no vault, installs no tools, runs no extraction, and echoes no secret values or local paths.
+
+connected-accounts
+  Summarize provider/source account metadata and credential store types. Dry-run only; reads metadata from provider bindings, source bindings, and ignored local credential inventory, writes nothing, opens no vault/keyring/browser store, calls no providers, opens no IMAP connection, and echoes no exact credential refs or secret values.
 
 derive-text-coverage
   Check derived-text coverage for textual or plausibly textual objets without reading source bodies. Dry-run only; compares files.jsonl to derived-text.jsonl, classifies missing/encrypted items, echoes no source filenames or local paths, and writes nothing.
