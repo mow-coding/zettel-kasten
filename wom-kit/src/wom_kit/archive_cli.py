@@ -29,6 +29,8 @@ Commands:
           Plan a future provider presigned URL request without creating URLs.
   object-storage-operation-request-plan
           Compose the read-only approval request package before any future object storage operation.
+  imap-mailbox-operation-request-plan
+          Compose the read-only approval request package before any future IMAP mailbox operation.
   imap-mailbox-plan
           Plan a read-only IMAP mailbox source without connecting or storing secrets.
   credential-ref-plan
@@ -2055,6 +2057,47 @@ def command_object_storage_operation_request_plan(args: argparse.Namespace) -> i
     return 0 if result.get("ok", True) else 1
 
 
+def command_imap_mailbox_operation_request_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("imap-mailbox-operation-request-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.imap_mailbox_operation_request_plan(
+            Path(args.archive_root),
+            source_id=args.source_id,
+            provider=args.provider,
+            imap_host=args.imap_host,
+            imap_port=args.imap_port,
+            account_ref=args.account_ref,
+            username_ref=args.username_ref,
+            auth_mode=args.auth_mode,
+            app_password_ref=args.app_password_ref,
+            oauth_token_ref=args.oauth_token_ref,
+            mailbox_ref=args.mailbox_ref,
+            operation=args.operation,
+            max_messages=args.max_messages,
+            since_days=args.since_days,
+            credential_id=args.credential_id,
+            credential_ref=args.credential_ref,
+            credential_kind=args.credential_kind,
+            credential_provider=args.credential_provider,
+            store_kind=args.store_kind,
+            adapter_kind=args.adapter_kind,
+            approval_decision=args.approval_decision,
+            approval_receipt=args.approval_receipt,
+            consumer=args.consumer,
+            reviewed_by=args.reviewed_by,
+            platform=args.platform,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_imap_mailbox_operation_request_plan_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
 def command_imap_mailbox_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("imap-mailbox-plan is dry-run only and requires --dry-run.", file=sys.stderr)
@@ -3022,6 +3065,37 @@ def print_object_storage_operation_request_plan_result(result: dict[str, Any], o
     print(f"Approval receipt verified: {policy.get('approval_receipt_verified')}")
     print("Live execution allowed now: no")
     print("Provider API called: no")
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
+
+
+def print_imap_mailbox_operation_request_plan_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    policy = result.get("credential_policy_summary") if isinstance(result.get("credential_policy_summary"), dict) else {}
+    scope = result.get("operation_scope") if isinstance(result.get("operation_scope"), dict) else {}
+    print(f"IMAP mailbox operation request plan: {result.get('request_state') or '-'}")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Source: {result.get('source_id') or '-'}")
+    print(f"Provider: {result.get('provider') or '-'}")
+    print(f"Operation: {result.get('operation') or '-'}")
+    print(f"Max messages: {scope.get('max_messages') or '-'}")
+    print(f"Credential policy: {policy.get('policy_result') or '-'}")
+    print(f"Approval receipt verified: {policy.get('approval_receipt_verified')}")
+    print("Live execution allowed now: no")
+    print("IMAP connection opened: no")
     print("Writes: none")
     if result.get("blockers"):
         print("Blockers:")
@@ -7201,6 +7275,116 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_operation_request.add_argument("--dry-run", action="store_true", help="Required. Plan only; never calls providers or reads secrets.")
     object_storage_operation_request.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_operation_request.set_defaults(func=command_object_storage_operation_request_plan)
+
+    imap_mailbox_operation_request = subcommands.add_parser(
+        "imap-mailbox-operation-request-plan",
+        aliases=["imap-mailbox-request-plan", "mailbox-operation-request-plan"],
+        help="Compose a read-only approval request package before a future IMAP mailbox operation.",
+    )
+    imap_mailbox_operation_request.add_argument("archive_root", help="Archive root to inspect.")
+    imap_mailbox_operation_request.add_argument("--source-id", required=True, help="Stable source id, e.g. imap:gmail-personal.")
+    imap_mailbox_operation_request.add_argument(
+        "--provider",
+        choices=sorted(archive_services.IMAP_MAILBOX_ALLOWED_PROVIDERS),
+        default="generic_imap",
+        help="Provider preset. generic_imap requires --imap-host.",
+    )
+    imap_mailbox_operation_request.add_argument("--imap-host", help="Safe IMAP host label. Required for generic_imap.")
+    imap_mailbox_operation_request.add_argument("--imap-port", type=int, default=993, help="IMAP SSL port. Defaults to 993.")
+    imap_mailbox_operation_request.add_argument(
+        "--account-ref",
+        required=True,
+        help="Safe account reference, e.g. imap:account:personal-mail. Do not pass an email address.",
+    )
+    imap_mailbox_operation_request.add_argument(
+        "--username-ref",
+        required=True,
+        help="env/keyring/secret/wallet reference for the username. Do not pass the username value.",
+    )
+    imap_mailbox_operation_request.add_argument(
+        "--auth-mode",
+        choices=sorted(archive_services.IMAP_MAILBOX_ALLOWED_AUTH_MODES),
+        default="app_password_ref",
+        help="Credential reference kind.",
+    )
+    imap_mailbox_operation_request.add_argument(
+        "--app-password-ref",
+        help="env/keyring/secret/wallet reference for an app password. Do not pass the password value.",
+    )
+    imap_mailbox_operation_request.add_argument(
+        "--oauth-token-ref",
+        help="env/keyring/secret/wallet reference for an OAuth token. Do not pass the token value.",
+    )
+    imap_mailbox_operation_request.add_argument(
+        "--mailbox-ref",
+        default="imap:mailbox:inbox",
+        help="Safe mailbox reference. Do not pass private mailbox names.",
+    )
+    imap_mailbox_operation_request.add_argument(
+        "--operation",
+        choices=sorted(archive_services.IMAP_MAILBOX_OPERATION_REQUEST_OPERATIONS),
+        default="header_metadata_scan",
+        help="Future IMAP mailbox operation to request.",
+    )
+    imap_mailbox_operation_request.add_argument(
+        "--max-messages",
+        type=int,
+        default=archive_services.IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT,
+        help="Future message limit to request. Must be between 1 and 2000.",
+    )
+    imap_mailbox_operation_request.add_argument(
+        "--since-days",
+        type=int,
+        help="Optional future recency window. Must be between 1 and 3650 days.",
+    )
+    imap_mailbox_operation_request.add_argument(
+        "--credential-id",
+        default="cred:mail-source-access",
+        help="Safe credential label for the future mail credential.",
+    )
+    imap_mailbox_operation_request.add_argument("--credential-ref", help="Optional env/keyring/secret/wallet ref; exact value is not echoed.")
+    imap_mailbox_operation_request.add_argument(
+        "--credential-kind",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+        help="Credential kind. Defaults from IMAP auth mode.",
+    )
+    imap_mailbox_operation_request.add_argument(
+        "--credential-provider",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+        help="Credential provider label. Defaults from IMAP provider.",
+    )
+    imap_mailbox_operation_request.add_argument(
+        "--store-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+        default="password_manager",
+        help="Credential store class for the future mail credential retrieval.",
+    )
+    imap_mailbox_operation_request.add_argument(
+        "--adapter-kind",
+        choices=sorted(archive_services.CREDENTIAL_ADAPTER_KINDS),
+        help="Future credential adapter kind. Defaults from store kind and platform.",
+    )
+    imap_mailbox_operation_request.add_argument(
+        "--approval-decision",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_APPROVAL_DECISIONS),
+        default="needs_review",
+        help="Human decision state to evaluate.",
+    )
+    imap_mailbox_operation_request.add_argument(
+        "--approval-receipt",
+        help="Archive-relative approval receipt path to verify. The path is not echoed in output.",
+    )
+    imap_mailbox_operation_request.add_argument("--consumer", default="wom:adapter:imap-mailbox", help="Safe label for the future adapter.")
+    imap_mailbox_operation_request.add_argument("--reviewed-by", default="human:pending-review", help="Safe non-secret reviewer label.")
+    imap_mailbox_operation_request.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Local platform for default credential adapter selection.",
+    )
+    imap_mailbox_operation_request.add_argument("--dry-run", action="store_true", help="Required. Plan only; never connects to IMAP or reads secrets.")
+    imap_mailbox_operation_request.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    imap_mailbox_operation_request.set_defaults(func=command_imap_mailbox_operation_request_plan)
 
     imap_mailbox_plan = subcommands.add_parser(
         "imap-mailbox-plan",

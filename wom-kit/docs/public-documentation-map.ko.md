@@ -129,6 +129,7 @@
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
 - [Object Storage Recommendations](object-storage-recommendations.md)
 - [IMAP Mailbox Source](imap-mailbox-source.md)
+- [IMAP Mailbox Operation Request Plan](imap-mailbox-operation-request-plan.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
 - [WOM Profile Registry](wom-profile-registry.md)
 - [WOM Profile Wallet Model](wom-profile-wallet-model.md)
