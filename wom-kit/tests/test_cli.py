@@ -1733,6 +1733,135 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIsNone(wrong_account["auth"]["account_ref"])
             self.assertNotIn("keyring:naver-account", wrong_account_output)
 
+    def test_imap_mailbox_operation_request_plan_requires_approval_and_redacts_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            base_args = [
+                "imap-mailbox-operation-request-plan",
+                str(archive_root),
+                "--source-id",
+                "imap:naver",
+                "--provider",
+                "naver",
+                "--account-ref",
+                "imap:account:naver-personal",
+                "--username-ref",
+                "env:NAVER_IMAP_USERNAME",
+                "--auth-mode",
+                "app_password_ref",
+                "--app-password-ref",
+                "keyring:naver-app-password",
+                "--mailbox-ref",
+                "imap:mailbox:inbox",
+                "--credential-id",
+                "cred:naver-mail-access",
+                "--operation",
+                "header_metadata_scan",
+                "--max-messages",
+                "25",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+
+            code, output = self.run_cli(base_args)
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "imap_mailbox_operation_request_plan")
+            self.assertEqual(result["request_state"], "needs_human_approval")
+            self.assertEqual(result["operation"], "header_metadata_scan")
+            self.assertEqual(result["mailbox_plan_summary"]["provider"], "naver")
+            self.assertFalse(result["mailbox_plan_summary"]["server"]["host_value_echoed"])
+            self.assertEqual(result["mailbox_plan_summary"]["auth"]["credential_ref"]["ref_store"], "keyring")
+            self.assertFalse(result["mailbox_plan_summary"]["auth"]["credential_ref"]["exact_ref_value_echoed"])
+            self.assertEqual(result["credential_policy_summary"]["policy_result"], "needs_human_review")
+            self.assertFalse(result["current_capability"]["live_imap_adapter_implemented"])
+            self.assertFalse(result["closed_actions"]["imap_connection_opened"])
+            self.assertFalse(result["closed_actions"]["message_headers_read"])
+            self.assertFalse(result["closed_actions"]["credential_value_read"])
+            self.assertFalse(result["privacy_guards"]["exact_credential_refs_echoed"])
+            self.assertFalse(result["privacy_guards"]["exact_account_refs_echoed"])
+            self.assertFalse(result["privacy_guards"]["exact_mailbox_refs_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("keyring:naver-app-password", output)
+            self.assertNotIn("env:NAVER_IMAP_USERNAME", output)
+            self.assertNotIn("imap:account:naver-personal", output)
+            self.assertNotIn("imap:mailbox:inbox", output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            missing_receipt_code, missing_receipt_output = self.run_cli(
+                base_args[:-3] + ["--approval-decision", "approve_once", "--dry-run", "--format", "json"]
+            )
+            missing_receipt = json.loads(missing_receipt_output)
+            self.assertEqual(missing_receipt_code, 1, missing_receipt_output)
+            self.assertFalse(missing_receipt["ok"])
+            self.assertEqual(missing_receipt["request_state"], "blocked")
+            self.assertIn("approval_receipt_required_for_imap_mailbox_request", missing_receipt["blockers"])
+            self.assertFalse(missing_receipt["approval_summary"]["approval_receipt_verified"])
+            self.assertNotIn("keyring:naver-app-password", missing_receipt_output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "credential-access-approval",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:naver-mail-access",
+                    "--credential-ref",
+                    "keyring:naver-app-password",
+                    "--credential-kind",
+                    "mail_app_password",
+                    "--provider",
+                    "naver",
+                    "--action-kind",
+                    "mail_source_read",
+                    "--decision",
+                    "approve_once",
+                    "--store-kind",
+                    "password_manager",
+                    "--consumer",
+                    "wom:adapter:imap-mailbox",
+                    "--reviewed-by",
+                    "human:tester",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            approved = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            receipt_path = approved["receipt_path"]
+            self.assertTrue((archive_root / receipt_path).is_file())
+            after_approval = self.snapshot_archive_files(archive_root)
+
+            ready_code, ready_output = self.run_cli(
+                base_args[:-3]
+                + [
+                    "--approval-decision",
+                    "approve_once",
+                    "--approval-receipt",
+                    receipt_path,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            ready = json.loads(ready_output)
+            self.assertEqual(ready_code, 0, ready_output)
+            self.assertTrue(ready["ok"])
+            self.assertEqual(ready["request_state"], "ready_for_future_adapter_after_approval")
+            self.assertTrue(ready["credential_policy_summary"]["approval_receipt_verified"])
+            self.assertFalse(ready["future_adapter_contract"]["live_execution_allowed_now"])
+            self.assertFalse(ready["closed_actions"]["imap_connection_opened"])
+            self.assertFalse(ready["closed_actions"]["credential_value_read"])
+            self.assertFalse(ready["approval_summary"]["approval_receipt_path_echoed"])
+            self.assertNotIn(receipt_path, ready_output)
+            self.assertNotIn("keyring:naver-app-password", ready_output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), after_approval)
+
     def test_credential_ref_plan_is_read_only_and_redacts_raw_secret_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

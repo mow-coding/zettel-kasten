@@ -43,6 +43,35 @@ Both are dry-run only. They write no files, open no network connection, perform
 no login, read no message headers, read no message bodies, read no attachments,
 send no email, delete no email, and change no message flags.
 
+v0.3.46 adds a second dry-run step for the next gate:
+
+```powershell
+python cli\archive.py imap-mailbox-operation-request-plan .\my-archive `
+  --source-id imap:gmail-personal `
+  --provider gmail `
+  --account-ref imap:account:gmail-personal `
+  --username-ref env:WOM_GMAIL_USERNAME `
+  --auth-mode oauth_token_ref `
+  --oauth-token-ref keyring:gmail-oauth `
+  --mailbox-ref imap:mailbox:inbox `
+  --credential-id cred:gmail-mail-access `
+  --operation header_metadata_scan `
+  --approval-decision needs_review `
+  --dry-run `
+  --format json
+```
+
+and the matching MCP tool:
+
+```text
+imap_mailbox_operation_request_plan
+```
+
+This composes the mailbox source plan with `credential-policy-check` for
+`mail_source_read`. It is still read-only: it does not connect, login, read
+headers, read bodies, read attachments, retrieve secrets, start OAuth, or write
+files.
+
 ## Provider Presets
 
 The planning command is provider-neutral. It currently recognizes:
@@ -135,16 +164,19 @@ The intended sequence is:
 
 1. Plan the mailbox source with refs only.
 2. Register the `imap_mailbox` source after human review.
-3. Add a future header-only dry-run scan that selects the mailbox read-only and
+3. Prepare an operation request package with
+   `imap-mailbox-operation-request-plan`.
+4. Add a future header-only dry-run scan that selects the mailbox read-only and
    fetches safe message metadata only.
-4. Add a future approved fetch that preserves each selected RFC822 message as a
+5. Add a future approved fetch that preserves each selected RFC822 message as a
    `.eml` source objet.
-5. Add future MIME attachment capture as separate objets.
-6. Add future derived-text extraction from `text/plain` and reviewed `text/html`
+6. Add future MIME attachment capture as separate objets.
+7. Add future derived-text extraction from `text/plain` and reviewed `text/html`
    parts.
 
-Each later phase needs its own approval and privacy boundary. v0.3.19 does not
-implement those reads or captures.
+Each later phase needs its own approval and privacy boundary. v0.3.46 can now
+package the approval request, but it still does not implement those reads or
+captures.
 
 ## Closed Actions
 

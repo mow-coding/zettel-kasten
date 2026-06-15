@@ -6,6 +6,32 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.46 - 2026-06-15
+
+- Added read-only IMAP mailbox operation request packages:
+  `archive imap-mailbox-operation-request-plan --dry-run`, alias
+  `archive imap-mailbox-request-plan --dry-run`, and alias
+  `archive mailbox-operation-request-plan --dry-run`.
+- Added MCP tool `imap_mailbox_operation_request_plan` for the same
+  read-only request package surface.
+- The package composes `imap-mailbox-plan` and `credential-policy-check` for
+  `mail_source_read` into one future-adapter approval gate.
+- `request_state` distinguishes `needs_human_approval`,
+  `ready_for_future_adapter_after_approval`, human denial, policy denial, and
+  blockers without treating missing human approval as live execution readiness.
+- `approve_once` requires a verified archive-relative approval receipt before
+  the request package can become `ready_for_future_adapter_after_approval`.
+- Added `wom-kit/docs/imap-mailbox-operation-request-plan.md` and public
+  documentation links.
+- Kept the planner read-only: it opens no IMAP connection, attempts no login,
+  selects no mailbox, reads no headers, bodies, or attachments, creates no
+  derived text, retrieves no secrets, starts no OAuth, sends no mail, deletes no
+  mail, changes no flags, writes no files or receipts, and echoes no email
+  addresses, username values, exact account refs, exact credential refs, exact
+  mailbox refs, IMAP host values, provider URLs, message headers, message
+  bodies, attachment names, approval receipt paths, local absolute paths,
+  tokens, or secret values.
+
 ## v0.3.45 - 2026-06-15
 
 - Added read-only object-storage operation request packages:

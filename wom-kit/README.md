@@ -92,6 +92,8 @@ docs/human-artifact-store-contract.md
 docs/object-storage-recommendations.md
 docs/object-storage-adapter-readiness-plan.md
 docs/object-storage-operation-request-plan.md
+docs/imap-mailbox-source.md
+docs/imap-mailbox-operation-request-plan.md
 docs/connected-accounts.md
 docs/credential-keepassxc-command-plan.md
 docs/credential-keepassxc-write.md
@@ -151,6 +153,12 @@ object-storage-recommendation
 
 object-storage-operation-request-plan
   Compose a future object-storage operation approval request package. Dry-run only; combines provider readiness, object target validation, presigned URL planning or objet-ref resolution, and credential policy checks without calling providers, reading secrets, creating presigned URLs, uploading, downloading, or writing files.
+
+imap-mailbox-plan
+  Plan a Gmail, Naver, or generic IMAP mailbox source with safe account, username, mailbox, and credential refs. Dry-run only; opens no connection, logs into nothing, reads no headers/bodies/attachments, sends no mail, changes no flags, stores no secrets, and writes no files.
+
+imap-mailbox-operation-request-plan
+  Compose a future IMAP mailbox operation approval request package. Dry-run only; combines IMAP source planning and credential policy checks without connecting, logging in, selecting mailboxes, reading headers/bodies/attachments, retrieving secrets, starting OAuth, or writing files.
 
 human-artifact-store
   Plan a user-facing note/workspace/publication surface such as WordPress, Joplin, Notion, Obsidian, Evernote, or generic Markdown. Dry-run only; writes nothing, calls no providers, creates no notes, publishes no posts, and keeps system/AI artifacts separate from human-readable artifacts.
