@@ -27,6 +27,8 @@ Commands:
           Plan a future read-only mailbox message selection without listing messages.
   imap-mailbox-adapter-manifest-plan
           Preview a non-secret future IMAP adapter manifest without writing it.
+  imap-mailbox-adapter-manifest-write
+          Preview or approve writing a non-secret IMAP adapter manifest locally.
   imap-mailbox-adapter-audit-plan
           Preview a non-secret future IMAP adapter audit receipt without reading mail.
   prehashed-objet-ledger
@@ -5510,6 +5512,57 @@ def command_imap_mailbox_adapter_manifest_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_imap_mailbox_adapter_manifest_write(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.imap_mailbox_adapter_manifest_write(
+            Path(args.archive_root),
+            adapter_id=args.adapter_id,
+            providers=args.provider,
+            operations=args.operation,
+            selection_rules=args.selection_rule,
+            consumer=args.consumer,
+            platform=args.platform,
+            reviewed_by=args.reviewed_by,
+            dry_run=args.dry_run,
+            approve=args.approve,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "written" if result.get("approved") else ("passed" if result.get("ok") else "blocked")
+        manifest = result.get("manifest_preview") if isinstance(result.get("manifest_preview"), dict) else {}
+        print(f"IMAP mailbox adapter manifest write {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Adapter: {manifest.get('adapter_id') or '-'} ({manifest.get('adapter_kind') or '-'})")
+        print(f"Manifest: {result.get('manifest_path') or result.get('proposed_manifest_path') or '-'}")
+        print(f"Receipt: {result.get('receipt_path') or result.get('proposed_receipt_path') or '-'}")
+        print("IMAP connection opened: no")
+        print("Mail read: no")
+        writes = result.get("files_written") or []
+        if writes:
+            print("Files written:")
+            for path in writes:
+                print(f"- {path}")
+        else:
+            print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_sources(args: argparse.Namespace) -> int:
     try:
         result = archive_services.list_sources(Path(args.archive_root))
@@ -9540,6 +9593,48 @@ def build_parser() -> argparse.ArgumentParser:
     imap_mailbox_adapter_manifest.add_argument("--dry-run", action="store_true", help="Required. Preview only; never writes manifests, connects, lists, or reads mail.")
     imap_mailbox_adapter_manifest.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     imap_mailbox_adapter_manifest.set_defaults(func=command_imap_mailbox_adapter_manifest_plan)
+
+    imap_mailbox_adapter_manifest_write = subcommands.add_parser(
+        "imap-mailbox-adapter-manifest-write",
+        aliases=["mailbox-adapter-manifest-write"],
+        help="Preview or approve writing a non-secret IMAP adapter manifest without connecting or reading mail.",
+    )
+    imap_mailbox_adapter_manifest_write.add_argument("archive_root", help="Archive root to inspect.")
+    imap_mailbox_adapter_manifest_write.add_argument(
+        "--adapter-id",
+        required=True,
+        help="Safe local adapter id, e.g. local-imap. Do not pass paths, URLs, emails, or secrets.",
+    )
+    imap_mailbox_adapter_manifest_write.add_argument(
+        "--provider",
+        action="append",
+        choices=sorted(archive_services.IMAP_MAILBOX_ALLOWED_PROVIDERS),
+        help="Supported provider label. May be repeated; defaults to all current IMAP providers.",
+    )
+    imap_mailbox_adapter_manifest_write.add_argument(
+        "--operation",
+        action="append",
+        choices=sorted(archive_services.IMAP_MAILBOX_OPERATION_REQUEST_OPERATIONS),
+        help="Supported future operation. May be repeated; defaults to all current IMAP operation labels.",
+    )
+    imap_mailbox_adapter_manifest_write.add_argument(
+        "--selection-rule",
+        action="append",
+        choices=sorted(archive_services.IMAP_MAILBOX_SELECTION_RULES),
+        help="Supported future selection rule. May be repeated; defaults to all current selection rules.",
+    )
+    imap_mailbox_adapter_manifest_write.add_argument("--consumer", default="wom:adapter:imap-mailbox", help="Safe label for the future adapter.")
+    imap_mailbox_adapter_manifest_write.add_argument("--reviewed-by", help="Safe non-secret reviewer label. Required with --approve.")
+    imap_mailbox_adapter_manifest_write.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Local platform context.",
+    )
+    imap_mailbox_adapter_manifest_write.add_argument("--dry-run", action="store_true", help="Preview the manifest and write receipt without writing files.")
+    imap_mailbox_adapter_manifest_write.add_argument("--approve", action="store_true", help="Write the non-secret manifest and write receipt after local human review.")
+    imap_mailbox_adapter_manifest_write.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    imap_mailbox_adapter_manifest_write.set_defaults(func=command_imap_mailbox_adapter_manifest_write)
 
     imap_mailbox_adapter_audit = subcommands.add_parser(
         "imap-mailbox-adapter-audit-plan",

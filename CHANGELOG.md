@@ -6,6 +6,27 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.53 - 2026-06-16
+
+- Added CLI `archive imap-mailbox-adapter-manifest-write --dry-run|--approve`
+  with alias `archive mailbox-adapter-manifest-write`.
+- `--dry-run` previews the schema-validated non-secret IMAP adapter manifest and
+  the write receipt paths without writing files.
+- `--approve --reviewed-by <actor>` writes exactly one manifest under
+  `config/imap-adapters/` and one non-secret receipt under
+  `receipts/imap/adapter-manifests/`, refusing overwrite/replay.
+- Added `wom-kit/docs/imap-mailbox-adapter-manifest-write.md`, public
+  documentation links, capability matrix coverage, and CLI tests.
+- Kept the command local and non-secret: it exposes no MCP live write tool,
+  opens no IMAP connection, attempts no login, selects no mailbox, searches no
+  mailbox, lists no candidate messages, reads no IMAP UIDs, Message-ID values,
+  headers, bodies, or attachments, creates no derived text, retrieves no
+  secrets, starts no OAuth, calls no providers, and echoes no email addresses,
+  username values, exact account refs, exact credential refs, exact mailbox
+  refs, IMAP host values, provider URLs, message ids, subjects, sender or
+  recipient values, attachment names, approval receipt paths, selection receipt
+  paths, local absolute paths, tokens, or secret values.
+
 ## v0.3.52 - 2026-06-16
 
 - Added JSON Schema `wom-kit/schemas/imap-mailbox-adapter-manifest.schema.json`

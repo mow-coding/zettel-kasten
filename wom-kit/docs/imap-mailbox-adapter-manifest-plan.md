@@ -1,6 +1,6 @@
 # IMAP Mailbox Adapter Manifest Plan
 
-Status: v0.3.52 read-only IMAP adapter manifest preview plus schema baseline
+Status: v0.3.53 read-only IMAP adapter manifest preview plus schema baseline
 Date: 2026-06-16
 
 `imap-mailbox-adapter-manifest-plan` previews the non-secret manifest shape for
@@ -109,7 +109,12 @@ Safe public labels such as `gmail`, `naver`, `generic_imap`, `local-imap`,
 
 ## Current Boundary
 
-v0.3.52 does not write IMAP adapter manifests.
+This planner does not write IMAP adapter manifests. v0.3.53 adds a separate
+approval-gated write command:
+
+```text
+imap-mailbox-adapter-manifest-write
+```
 
 It does not:
 
@@ -146,9 +151,10 @@ imap-mailbox-plan
 -> imap-mailbox-adapter-readiness-plan
 -> imap-mailbox-selection-plan
 -> imap-mailbox-adapter-audit-plan
--> future read-only mailbox selection adapter, not implemented in v0.3.52
--> future header-only metadata scan, not implemented in v0.3.52
--> future non-secret adapter audit receipt writer, not implemented in v0.3.52
+-> imap-mailbox-adapter-manifest-write
+-> future read-only mailbox selection adapter, not implemented in v0.3.53
+-> future header-only metadata scan, not implemented in v0.3.53
+-> future non-secret adapter audit receipt writer, not implemented in v0.3.53
 -> future message capture with separate approval
 ```
 

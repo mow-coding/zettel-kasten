@@ -159,7 +159,8 @@ execution. It still does not execute the adapter, write the receipt, list
 messages, read UIDs, read Message-ID values, read headers, read bodies, or read
 attachments.
 
-v0.3.52 keeps the read-only adapter manifest preview and adds schema validation:
+v0.3.53 keeps the read-only adapter manifest preview, schema validation, and
+adds an approval-gated local manifest write:
 
 ```powershell
 python cli\archive.py imap-mailbox-adapter-manifest-plan .\my-archive `
@@ -182,6 +183,15 @@ This previews a non-secret declaration of supported providers, operation
 labels, selection rules, and privacy gates. It still does not write a manifest,
 connect, login, select, search, list messages, read headers, read bodies, read
 attachments, or call providers.
+
+The matching write command is:
+
+```text
+imap-mailbox-adapter-manifest-write
+```
+
+It writes only `config/imap-adapters/` and
+`receipts/imap/adapter-manifests/` files after `--approve`.
 
 ## Provider Presets
 
@@ -276,7 +286,8 @@ The intended sequence is:
 1. Plan the mailbox source with refs only.
 2. Register the `imap_mailbox` source after human review.
 3. Preview the future adapter declaration with
-   `imap-mailbox-adapter-manifest-plan`.
+   `imap-mailbox-adapter-manifest-plan`, then write it after review with
+   `imap-mailbox-adapter-manifest-write`.
 4. Prepare an operation request package with
    `imap-mailbox-operation-request-plan`.
 5. Check adapter readiness with `imap-mailbox-adapter-readiness-plan`.
@@ -291,10 +302,12 @@ The intended sequence is:
 11. Add future derived-text extraction from `text/plain` and reviewed `text/html`
    parts.
 
-Each later phase needs its own approval and privacy boundary. v0.3.52 can now
+Each later phase needs its own approval and privacy boundary. v0.3.53 can now
 package the approval request, preview and schema-check the future adapter
-manifest, summarize adapter readiness, plan a mailbox selection rule, and
-preview a non-secret future adapter audit receipt, but it still does not implement reads, searches, message lists, manifest writes, receipt writes, or captures.
+manifest, write the reviewed non-secret manifest, summarize adapter readiness,
+plan a mailbox selection rule, and preview a non-secret future adapter audit
+receipt, but it still does not implement reads, searches, message lists, live
+adapter audit receipt writes, or captures.
 
 ## Closed Actions
 

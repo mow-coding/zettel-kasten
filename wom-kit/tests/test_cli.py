@@ -2259,6 +2259,114 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
 
+    def test_imap_mailbox_adapter_manifest_write_records_non_secret_manifest_and_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "imap-mailbox-adapter-manifest-write",
+                    str(archive_root),
+                    "--adapter-id",
+                    "local-imap",
+                    "--provider",
+                    "gmail",
+                    "--provider",
+                    "naver",
+                    "--operation",
+                    "header_metadata_scan",
+                    "--selection-rule",
+                    "newest_first",
+                    "--reviewed-by",
+                    "person:me",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertTrue(dry_result["ok"], dry_result)
+            self.assertTrue(dry_result["dry_run"])
+            self.assertFalse(dry_result["approved"])
+            self.assertEqual(dry_result["lifecycle_action"], "imap_mailbox_adapter_manifest_write_plan")
+            self.assertEqual(dry_result["proposed_manifest_path"], "config/imap-adapters/local-imap.imap-mailbox-adapter.json")
+            self.assertTrue(dry_result["schema_validation"]["ok"])
+            self.assertEqual(len(dry_result["would_change"]), 2)
+            self.assertEqual(dry_result["files_written"], [])
+            self.assertFalse(dry_result["closed_actions"]["imap_connection_opened"])
+            self.assertFalse(dry_result["closed_actions"]["message_headers_read"])
+            self.assertFalse(dry_result["privacy_guards"]["secret_values_echoed"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "imap-mailbox-adapter-manifest-write",
+                    str(archive_root),
+                    "--adapter-id",
+                    "local-imap",
+                    "--provider",
+                    "gmail",
+                    "--provider",
+                    "naver",
+                    "--operation",
+                    "header_metadata_scan",
+                    "--selection-rule",
+                    "newest_first",
+                    "--reviewed-by",
+                    "person:me",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            approve_result = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"], approve_result)
+            self.assertFalse(approve_result["dry_run"])
+            self.assertTrue(approve_result["approved"])
+            self.assertEqual(approve_result["lifecycle_action"], "imap_mailbox_adapter_manifest_write")
+            manifest_path = archive_root / approve_result["manifest_path"]
+            receipt_path = archive_root / approve_result["receipt_path"]
+            self.assertTrue(manifest_path.is_file())
+            self.assertTrue(receipt_path.is_file())
+            self.assertEqual(set(approve_result["files_written"]), {approve_result["manifest_path"], approve_result["receipt_path"]})
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["schema"], archive_services.IMAP_MAILBOX_ADAPTER_MANIFEST_SCHEMA)
+            self.assertEqual(manifest["adapter_id"], "local-imap")
+            self.assertEqual(manifest["supported_providers"], ["gmail", "naver"])
+            self.assertEqual(manifest["supported_operations"], ["header_metadata_scan"])
+            self.assertEqual(manifest["supported_selection_rules"], ["newest_first"])
+            self.assertEqual(receipt["receipt_kind"], "imap_mailbox_adapter_manifest_write")
+            self.assertEqual(receipt["manifest_path"], approve_result["manifest_path"])
+            self.assertEqual(receipt["review"]["reviewed_by"], "person:me")
+            self.assertFalse(receipt["closed_actions"]["imap_connection_opened"])
+            self.assertFalse(receipt["secret_material"]["secret_value_included"])
+            self.assertNotIn("imap:account:naver-personal", approve_output)
+            self.assertNotIn("keyring:naver-app-password", approve_output)
+            self.assertNotIn("Subject:", approve_output)
+            self.assertNotIn("Message-ID", approve_output)
+
+            replay_code, replay_output = self.run_cli(
+                [
+                    "imap-mailbox-adapter-manifest-write",
+                    str(archive_root),
+                    "--adapter-id",
+                    "local-imap",
+                    "--reviewed-by",
+                    "person:me",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            replay_result = json.loads(replay_output)
+            self.assertEqual(replay_code, 1, replay_output)
+            self.assertFalse(replay_result["ok"])
+            self.assertTrue(any("already exists" in blocker for blocker in replay_result["blockers"]))
+
     def test_credential_ref_plan_is_read_only_and_redacts_raw_secret_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
