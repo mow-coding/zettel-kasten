@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.39 - 2026-06-15
+
+- Added read-only object storage recommendation commands:
+  `archive object-storage-recommendation --dry-run`, alias
+  `archive object-storage-match --dry-run`, and alias
+  `archive objet-storage-recommendation --dry-run`.
+- The matcher maps human scenarios such as `personal_low_ops`,
+  `backup_cost_sensitive`, `aws_native`, and `google_cloud_native` to existing
+  WOM-kit object-storage setup provider ids and returns the next
+  `archive object-storage --dry-run` command shape.
+- Added `wom-kit/docs/object-storage-recommendations.md` and public
+  documentation links.
+- Kept the command read-only: it calls no providers, performs no live price
+  lookup, checks no bucket availability, creates no buckets, uploads or
+  downloads no files, reads no object bytes, creates no presigned URLs, starts
+  no OAuth, reads no secret values, writes no files, and echoes no provider
+  URLs, local paths, object filenames, tokens, or secret values.
+
 ## v0.3.38 - 2026-06-15
 
 - Added read-only connected account overview commands:

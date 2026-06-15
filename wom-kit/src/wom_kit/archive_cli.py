@@ -17,6 +17,8 @@ Commands:
           Plan GitHub repository metadata for a WOM profile.
   object-storage
           Plan object storage metadata for WOM objets.
+  object-storage-recommendation
+          Recommend an object storage provider path before setup planning.
   prehashed-objet-ledger
           Preview or approve-register an already-hashed external objet ledger without reading blob bytes.
   resolve-objet-ref
@@ -1849,6 +1851,45 @@ def command_object_storage(args: argparse.Namespace) -> int:
             print(f"Receipt: {result['receipt_path']}")
         elif result.get("provider_setup_receipt_preview"):
             print(f"Proposed receipt: {result['provider_setup_receipt_preview']['receipt_path']}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_object_storage_recommendation(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("object-storage-recommendation is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.object_storage_recommendation(
+            Path(args.archive_root),
+            scenario=args.scenario,
+            profile_id=args.profile_id,
+            profile_slug=args.profile_slug,
+            storage_account_ref=args.storage_account_ref,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        primary = result.get("primary_recommendation") if isinstance(result.get("primary_recommendation"), dict) else {}
+        print(f"Object storage recommendation dry-run {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Scenario: {result.get('scenario') or '-'}")
+        print(f"Primary: {primary.get('provider') or '-'} ({primary.get('label') or '-'})")
+        print("Writes: none")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -6808,6 +6849,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     object_storage.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     object_storage.set_defaults(func=command_object_storage)
+
+    object_storage_recommendation = subcommands.add_parser(
+        "object-storage-recommendation",
+        aliases=["object-storage-match", "objet-storage-recommendation"],
+        help="Recommend an object storage provider path before setup planning.",
+    )
+    object_storage_recommendation.add_argument("archive_root", help="Archive root to inspect.")
+    object_storage_recommendation.add_argument(
+        "--scenario",
+        choices=sorted(archive_services.OBJECT_STORAGE_RECOMMENDATION_SCENARIOS),
+        default="personal_low_ops",
+        help="Human object-storage usage scenario.",
+    )
+    object_storage_recommendation.add_argument("--profile-id", help="Optional safe profile id for the next object-storage dry-run command.")
+    object_storage_recommendation.add_argument("--profile-slug", help="Optional safe ASCII profile slug for the next object-storage dry-run command.")
+    object_storage_recommendation.add_argument("--storage-account-ref", help="Optional safe storage account ref for the next object-storage dry-run command.")
+    object_storage_recommendation.add_argument("--dry-run", action="store_true", help="Required; recommendation only.")
+    object_storage_recommendation.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    object_storage_recommendation.set_defaults(func=command_object_storage_recommendation)
 
     human_artifact_store = subcommands.add_parser(
         "human-artifact-store",

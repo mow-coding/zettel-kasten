@@ -127,6 +127,7 @@
 - [Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md)
 - [Credential Adapter Audit Plan](credential-adapter-audit-plan.md)
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
+- [Object Storage Recommendations](object-storage-recommendations.md)
 - [IMAP Mailbox Source](imap-mailbox-source.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
 - [WOM Profile Registry](wom-profile-registry.md)
