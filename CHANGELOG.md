@@ -6,6 +6,30 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.34 - 2026-06-15
+
+- Added read-only derived-text coverage gate commands:
+  `archive derive-text coverage --dry-run` and
+  `archive derive-text-coverage --dry-run`.
+- Added read-only derived-text toolchain recommendation commands:
+  `archive derive-text toolchain --extension <ext> --dry-run` and
+  `archive derive-text-toolchain --extension <ext> --dry-run`.
+- Added read-only derived-text agent operating contract commands:
+  `archive derive-text agent-contract --dry-run` and
+  `archive derive-text-agent-contract --dry-run`.
+- The coverage gate compares `objects/manifests/files.jsonl` with
+  `objects/manifests/derived-text.jsonl`, classifies textual candidates by
+  extension/MIME, flags `missing_derived_text` and
+  `needs_password_or_encrypted`, and blocks completion claims while uncovered
+  textual objets remain.
+- The toolchain recommendation surface covers PDF, Office OOXML, legacy Office,
+  HWP/HWPX, image, audio, and plain-text/markup families without running OCR,
+  parsers, ASR, LLM vision, or provider APIs.
+- Kept the release read-only and privacy-preserving: it reads no source bytes,
+  echoes no source filenames, local absolute paths, provider URLs, or source
+  bodies, writes no derived text or receipts, drafts no zets, and mints
+  nothing.
+
 ## v0.3.33 - 2026-06-15
 
 - Added CLI-only `archive credential-keepassxc-write --approve` for the first

@@ -49,6 +49,12 @@ Commands:
           Preview a non-secret future credential adapter manifest without writing it.
   credential-adapter-audit-plan
           Preview a non-secret future credential adapter audit receipt without writing it.
+  derive-text-coverage
+          Check textual objet derived-text coverage without reading source bodies.
+  derive-text-toolchain
+          Recommend an extraction route for one derived-text format.
+  derive-text-agent-contract
+          Print the derived-text agent operating contract.
   source-intake
           Plan safe source/objet refs before draft creation.
   source-intake-record
@@ -4393,6 +4399,101 @@ def command_derive_text_capture(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_derive_text_coverage(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("Derived text coverage is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.derived_text_coverage(
+            Path(args.archive_root),
+            dry_run=True,
+            max_items=args.max_items,
+        )
+    except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError) as exc:
+        print(f"Derived text coverage failed: {exc}", file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        gate = result.get("coverage_gate") if isinstance(result.get("coverage_gate"), dict) else {}
+        counts = result.get("manifest_counts") if isinstance(result.get("manifest_counts"), dict) else {}
+        print(f"Derived text coverage {gate.get('status') or ('passed' if result.get('ok') else 'blocked')}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Textual candidates: {gate.get('textual_candidate_count', 0)}")
+        print(f"Covered: {gate.get('covered_textual_count', 0)}")
+        print(f"Missing: {gate.get('missing_derived_text_count', 0)}")
+        print(f"Encrypted/password required: {gate.get('needs_password_or_encrypted_count', 0)}")
+        print(f"By family: {counts.get('by_toolchain_family') or {}}")
+        for item in result.get("missing_items", []):
+            print(
+                f"- missing {item.get('object_id')}: "
+                f"{item.get('extension') or item.get('mime') or '-'} "
+                f"via {item.get('suggested_route') or '-'}"
+            )
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+        for warning in result.get("warnings", []):
+            print(f"WARNING: {warning}")
+    return 0 if result.get("ok") else 1
+
+
+def command_derive_text_toolchain(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("Derived text toolchain is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.derived_text_toolchain(
+            Path(args.archive_root),
+            extension=args.extension,
+            mime=args.mime,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError) as exc:
+        print(f"Derived text toolchain failed: {exc}", file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        toolchain = result.get("toolchain") if isinstance(result.get("toolchain"), dict) else {}
+        print(f"Derived text toolchain: {toolchain.get('format_family') or '-'}")
+        print(f"Route: {toolchain.get('extraction_route') or '-'}")
+        print(f"Derivation kind: {toolchain.get('recommended_derivation_kind') or '-'}")
+        print(f"Primary tools: {', '.join(toolchain.get('primary_tools') or []) or '-'}")
+        print(f"Fallback tools: {', '.join(toolchain.get('fallback_tools') or []) or '-'}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+        for warning in result.get("warnings", []):
+            print(f"WARNING: {warning}")
+    return 0 if result.get("ok") else 1
+
+
+def command_derive_text_agent_contract(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("Derived text agent contract is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.derived_text_agent_contract(
+            Path(args.archive_root),
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError) as exc:
+        print(f"Derived text agent contract failed: {exc}", file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        contract = result.get("agent_operating_contract") if isinstance(result.get("agent_operating_contract"), dict) else {}
+        print(f"Derived text agent contract: {contract.get('default_posture') or '-'}")
+        for rule in contract.get("rules", []):
+            print(f"- {rule}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+    return 0 if result.get("ok") else 1
+
+
 def command_import_external(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -8030,6 +8131,66 @@ def build_parser() -> argparse.ArgumentParser:
     derive_text_capture.add_argument("--reviewed-by", help="Reviewer id required for approved capture.")
     derive_text_capture.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     derive_text_capture.set_defaults(func=command_derive_text_capture)
+
+    derive_text_coverage = derive_text_subcommands.add_parser(
+        "coverage",
+        help="Check textual objet derived-text coverage without reading source bodies.",
+    )
+    derive_text_coverage.add_argument("archive_root", help="Archive root to inspect.")
+    derive_text_coverage.add_argument("--max-items", type=int, default=25, help="Maximum missing/blocked object ids to include.")
+    derive_text_coverage.add_argument("--dry-run", action="store_true", help="Required; read-only coverage gate.")
+    derive_text_coverage.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    derive_text_coverage.set_defaults(func=command_derive_text_coverage)
+
+    derive_text_toolchain = derive_text_subcommands.add_parser(
+        "toolchain",
+        help="Recommend a derived-text extraction route for one format without running tools.",
+    )
+    derive_text_toolchain.add_argument("archive_root", help="Archive root to inspect.")
+    derive_text_toolchain.add_argument("--extension", help="File extension such as .pdf, .docx, .hwp, or .ppt.")
+    derive_text_toolchain.add_argument("--mime", help="Optional MIME type hint.")
+    derive_text_toolchain.add_argument("--dry-run", action="store_true", help="Required; read-only toolchain recommendation.")
+    derive_text_toolchain.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    derive_text_toolchain.set_defaults(func=command_derive_text_toolchain)
+
+    derive_text_agent_contract = derive_text_subcommands.add_parser(
+        "agent-contract",
+        help="Print the derived-text agent operating contract.",
+    )
+    derive_text_agent_contract.add_argument("archive_root", help="Archive root to inspect.")
+    derive_text_agent_contract.add_argument("--dry-run", action="store_true", help="Required; read-only agent contract.")
+    derive_text_agent_contract.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    derive_text_agent_contract.set_defaults(func=command_derive_text_agent_contract)
+
+    derive_text_coverage_alias = subcommands.add_parser(
+        "derive-text-coverage",
+        help="Alias for derive-text coverage.",
+    )
+    derive_text_coverage_alias.add_argument("archive_root", help="Archive root to inspect.")
+    derive_text_coverage_alias.add_argument("--max-items", type=int, default=25, help="Maximum missing/blocked object ids to include.")
+    derive_text_coverage_alias.add_argument("--dry-run", action="store_true", help="Required; read-only coverage gate.")
+    derive_text_coverage_alias.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    derive_text_coverage_alias.set_defaults(func=command_derive_text_coverage)
+
+    derive_text_toolchain_alias = subcommands.add_parser(
+        "derive-text-toolchain",
+        help="Alias for derive-text toolchain.",
+    )
+    derive_text_toolchain_alias.add_argument("archive_root", help="Archive root to inspect.")
+    derive_text_toolchain_alias.add_argument("--extension", help="File extension such as .pdf, .docx, .hwp, or .ppt.")
+    derive_text_toolchain_alias.add_argument("--mime", help="Optional MIME type hint.")
+    derive_text_toolchain_alias.add_argument("--dry-run", action="store_true", help="Required; read-only toolchain recommendation.")
+    derive_text_toolchain_alias.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    derive_text_toolchain_alias.set_defaults(func=command_derive_text_toolchain)
+
+    derive_text_agent_contract_alias = subcommands.add_parser(
+        "derive-text-agent-contract",
+        help="Alias for derive-text agent-contract.",
+    )
+    derive_text_agent_contract_alias.add_argument("archive_root", help="Archive root to inspect.")
+    derive_text_agent_contract_alias.add_argument("--dry-run", action="store_true", help="Required; read-only agent contract.")
+    derive_text_agent_contract_alias.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    derive_text_agent_contract_alias.set_defaults(func=command_derive_text_agent_contract)
 
     import_external = subcommands.add_parser("import-external", help="Import Notion or Google Drive exports as inbox drafts.")
     import_external.add_argument("archive_root", help="Target archive root.")

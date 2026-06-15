@@ -19695,6 +19695,123 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(code, 1, output)
             self.assertIn("--reviewed-by", output)
 
+    def test_derive_text_coverage_gate_finds_uncovered_textual_objets_without_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-coverage")
+            covered_pdf = self._derived_text_source_object(archive_root, b"covered pdf bytes")
+            docx_digest = hashlib.sha256(b"missing docx bytes").hexdigest()
+            encrypted_digest = hashlib.sha256(b"encrypted pdf bytes").hexdigest()
+            manifest = archive_root / "objects" / "manifests" / "files.jsonl"
+            with manifest.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            "object_id": f"sha256:{docx_digest}",
+                            "sha256": docx_digest,
+                            "logical_key": "objects/sample/private-client-contract.docx",
+                            "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            "size_bytes": 12345,
+                            "locations": [],
+                        },
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+                handle.write(
+                    json.dumps(
+                        {
+                            "object_id": f"sha256:{encrypted_digest}",
+                            "sha256": encrypted_digest,
+                            "logical_key": "objects/sample/password-needed.pdf",
+                            "mime": "application/pdf",
+                            "size_bytes": 54321,
+                            "locations": [],
+                            "metadata": {"password_required": True},
+                        },
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+            derived_manifest = archive_root / archive_services.DERIVED_TEXT_MANIFEST_RELATIVE_PATH
+            derived_manifest.parent.mkdir(parents=True, exist_ok=True)
+            derived_manifest.write_text(
+                json.dumps(
+                    {
+                        "derived_text_id": "derived-text:sha256:" + "1" * 64,
+                        "source_object_id": covered_pdf,
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            before = self._inventory(archive_root)
+
+            code, output = self.run_cli(
+                ["derive-text-coverage", str(archive_root), "--max-items", "10", "--dry-run", "--format", "json"]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "derived_text_coverage_gate")
+            self.assertEqual(result["coverage_gate"]["textual_candidate_count"], 3)
+            self.assertEqual(result["coverage_gate"]["covered_textual_count"], 1)
+            self.assertEqual(result["coverage_gate"]["missing_derived_text_count"], 1)
+            self.assertEqual(result["coverage_gate"]["needs_password_or_encrypted_count"], 1)
+            self.assertEqual(result["missing_items"][0]["object_id"], f"sha256:{docx_digest}")
+            self.assertEqual(result["missing_items"][0]["toolchain_family"], "office_open_xml_word")
+            self.assertFalse(result["missing_items"][0]["source_name_echoed"])
+            self.assertFalse(result["privacy_guards"]["object_filenames_echoed"])
+            self.assertFalse(result["closed_actions"]["source_file_body_read"])
+            self.assertFalse(result["closed_actions"]["ocr_run"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("private-client-contract", output)
+            self.assertNotIn("password-needed", output)
+            self.assertEqual(self._inventory(archive_root), before)
+
+            code, output = self.run_cli(["derive-text", "coverage", str(archive_root), "--dry-run", "--format", "json"])
+            self.assertEqual(code, 1, output)
+            nested = json.loads(output)
+            self.assertEqual(nested["coverage_gate"]["missing_derived_text_count"], 1)
+
+    def test_derive_text_toolchain_and_agent_contract_are_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-toolchain")
+            before = self._inventory(archive_root)
+
+            code, output = self.run_cli(
+                ["derive-text-toolchain", str(archive_root), "--extension", ".ppt", "--dry-run", "--format", "json"]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "derived_text_toolchain_recommendation")
+            self.assertEqual(result["toolchain"]["format_family"], "legacy_office_binary")
+            self.assertIn("LibreOffice headless conversion", result["toolchain"]["primary_tools"])
+            self.assertFalse(result["closed_actions"]["parser_run"])
+            self.assertFalse(result["privacy_guards"]["local_absolute_paths_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self._inventory(archive_root), before)
+
+            code, output = self.run_cli(
+                ["derive-text", "toolchain", str(archive_root), "--extension", ".hwp", "--dry-run", "--format", "json"]
+            )
+            hwp = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(hwp["toolchain"]["format_family"], "hwp_or_hwpx")
+            self.assertIn("pyhwp hwp5txt", hwp["toolchain"]["primary_tools"])
+
+            code, output = self.run_cli(
+                ["derive-text-agent-contract", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            contract = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(contract["lifecycle_action"], "derived_text_agent_contract")
+            self.assertEqual(contract["agent_operating_contract"]["default_posture"], "maximum_textual_objet_coverage")
+            self.assertIn("derive-text coverage --dry-run", contract["agent_operating_contract"]["required_preflight_order"])
+            self.assertFalse(contract["closed_actions"]["derived_text_written"])
+            self.assertEqual(self._inventory(archive_root), before)
+
     def test_doctor_flags_malformed_derived_text_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self._sandbox(tmp, "archive:personal:derived-doctor")

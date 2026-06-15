@@ -42,6 +42,7 @@ Supporting philosophy and model docs:
 - [Source Object Storage Policy](source-object-storage-policy.md)
 - [Text Provenance Hierarchy](text-provenance-hierarchy.md)
 - [Derived Text Capture](derived-text.md)
+- [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md)
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)
 - [Objet Ref Resolution](objet-ref-resolution.md)
 - [Zettel Objet Links](zettel-objet-links.md)
@@ -174,6 +175,7 @@ Onboarding and setup plans:
 - [New User Flow](new-user-flow.md)
 - [External Imports](external-imports.md)
 - [Derived Text Capture](derived-text.md)
+- [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md)
 
 The current implementation priority is:
 
