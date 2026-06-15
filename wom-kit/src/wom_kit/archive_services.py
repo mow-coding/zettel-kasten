@@ -1229,6 +1229,7 @@ IMAP_MAILBOX_SELECTION_RULES = {
 }
 IMAP_MAILBOX_ADAPTER_MANIFEST_SCHEMA = "wom-kit/imap-mailbox-adapter-manifest/v0.1"
 IMAP_MAILBOX_ADAPTER_MANIFESTS_DIR = "config/imap-adapters"
+IMAP_MAILBOX_ADAPTER_MANIFEST_WRITE_RECEIPTS_DIR = "receipts/imap/adapter-manifests"
 IMAP_MAILBOX_ADAPTER_AUDIT_RECEIPTS_DIR = "receipts/imap/adapter-audits"
 IMAP_MAILBOX_ADAPTER_AUDIT_RESULT_STATUSES = {"not_run", "succeeded", "failed", "denied"}
 IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT = 100
@@ -12151,6 +12152,254 @@ def imap_mailbox_adapter_manifest_plan(
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }
+
+
+def imap_mailbox_adapter_manifest_write(
+    archive_root: Path | str,
+    *,
+    adapter_id: str,
+    providers: list[str] | None = None,
+    operations: list[str] | None = None,
+    selection_rules: list[str] | None = None,
+    consumer: str = "wom:adapter:imap-mailbox",
+    platform: str = "windows",
+    reviewed_by: str | None = None,
+    dry_run: bool = True,
+    approve: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+
+    manifest_plan = imap_mailbox_adapter_manifest_plan(
+        root,
+        adapter_id=adapter_id,
+        providers=providers,
+        operations=operations,
+        selection_rules=selection_rules,
+        consumer=consumer,
+        platform=platform,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in manifest_plan.get("blockers") or [])
+    warnings.extend(str(item) for item in manifest_plan.get("warnings") or [])
+
+    resolved_reviewer = (reviewed_by or ("human:pending-review" if dry_run else "")).strip()
+    if approve and not resolved_reviewer:
+        blockers.append("reviewed_by is required when --approve writes an IMAP adapter manifest.")
+        resolved_reviewer = "human:required"
+    if not safe_source_intake_plan_scalar(resolved_reviewer):
+        blockers.append("reviewed_by must be a safe non-secret reviewer label.")
+        resolved_reviewer = "human:pending-review"
+
+    manifest_preview = (
+        manifest_plan.get("manifest_preview")
+        if isinstance(manifest_plan.get("manifest_preview"), dict)
+        else {}
+    )
+    manifest_relative = str(manifest_plan.get("proposed_manifest_path") or "")
+    manifest_path = archive_internal_path(root, manifest_relative)
+    receipt_case_id = imap_mailbox_adapter_manifest_write_case_id(
+        archive_id=archive_id,
+        adapter_id=str(manifest_preview.get("adapter_id") or adapter_id),
+        manifest_sha256=sha256_json_value(manifest_preview),
+    )
+    receipt_relative = (
+        f"{IMAP_MAILBOX_ADAPTER_MANIFEST_WRITE_RECEIPTS_DIR}/"
+        f"{receipt_case_id}.imap-mailbox-adapter-manifest-write.json"
+    )
+    receipt_path = archive_internal_path(root, receipt_relative)
+
+    manifest_exists = manifest_path.is_file()
+    receipt_exists = receipt_path.is_file()
+    if manifest_exists:
+        blockers.append(f"IMAP adapter manifest already exists: {manifest_relative}.")
+    if receipt_exists:
+        blockers.append(f"IMAP adapter manifest write receipt already exists: {receipt_relative}.")
+
+    reviewed_at = (
+        datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        if approve and not blockers
+        else None
+    )
+    manifest_sha256 = sha256_json_value(manifest_preview)
+    receipt_preview = {
+        "schema_version": "wom-imap-mailbox-adapter-manifest-write/v0.1",
+        "receipt_kind": "imap_mailbox_adapter_manifest_write",
+        "lifecycle_action": "imap_mailbox_adapter_manifest_write",
+        "archive_id": archive_id,
+        "receipt_id": receipt_case_id,
+        "receipt_path": receipt_relative,
+        "manifest_path": manifest_relative,
+        "manifest_sha256": manifest_sha256,
+        "manifest_schema": manifest_preview.get("schema"),
+        "adapter": {
+            "adapter_id": manifest_preview.get("adapter_id"),
+            "adapter_kind": manifest_preview.get("adapter_kind"),
+            "adapter_family": manifest_preview.get("adapter_family"),
+            "platform": manifest_preview.get("platform"),
+            "consumer": manifest_preview.get("consumer"),
+            "supported_providers": list(manifest_preview.get("supported_providers") or []),
+            "supported_operations": list(manifest_preview.get("supported_operations") or []),
+            "supported_selection_rules": list(manifest_preview.get("supported_selection_rules") or []),
+        },
+        "review": {
+            "reviewed_by": resolved_reviewer,
+            "reviewed_at": reviewed_at,
+        },
+        "schema_validation": {
+            "schema_name": (manifest_plan.get("schema_validation") or {}).get("schema_name")
+            if isinstance(manifest_plan.get("schema_validation"), dict)
+            else None,
+            "ok": bool((manifest_plan.get("schema_validation") or {}).get("ok"))
+            if isinstance(manifest_plan.get("schema_validation"), dict)
+            else False,
+        },
+        "closed_actions": {
+            "manifest_written": approve and not blockers,
+            "receipt_written": approve and not blockers,
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "mailbox_selected": False,
+            "mailbox_searched": False,
+            "candidate_messages_listed": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "provider_api_called": False,
+            "oauth_started": False,
+        },
+        "secret_material": {
+            "email_address_included": False,
+            "username_included": False,
+            "exact_account_ref_included": False,
+            "exact_credential_ref_included": False,
+            "exact_mailbox_ref_included": False,
+            "imap_host_included": False,
+            "provider_url_included": False,
+            "message_id_included": False,
+            "subject_included": False,
+            "sender_or_recipient_included": False,
+            "message_header_included": False,
+            "message_body_included": False,
+            "attachment_name_included": False,
+            "local_path_included": False,
+            "token_included": False,
+            "secret_value_included": False,
+        },
+        "files_written": [manifest_relative, receipt_relative] if approve and not blockers else [],
+    }
+
+    files_written: list[str] = []
+    if approve and not blockers:
+        created_paths: list[Path] = []
+        created_dirs = missing_parent_dirs_before_write(root, [manifest_path, receipt_path])
+        try:
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_new_file(manifest_path, manifest_preview)
+            created_paths.append(manifest_path)
+            write_json_new_file(receipt_path, receipt_preview)
+            created_paths.append(receipt_path)
+            files_written = [manifest_relative, receipt_relative]
+        except OSError as exc:
+            for path in reversed(created_paths):
+                path.unlink(missing_ok=True)
+            cleanup_empty_archive_dirs(root, created_dirs)
+            raise ArchiveServiceError(f"Could not write IMAP adapter manifest: {exc}") from exc
+
+    manifest_written = approve and not blockers and bool(files_written)
+    would_change = [manifest_relative, receipt_relative] if dry_run and not blockers else []
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "approved": manifest_written,
+        "lifecycle_action": "imap_mailbox_adapter_manifest_write_plan" if dry_run else "imap_mailbox_adapter_manifest_write",
+        "archive_id": archive_id,
+        "manifest_path": manifest_relative if manifest_written else None,
+        "proposed_manifest_path": manifest_relative,
+        "manifest_exists": manifest_exists or manifest_written,
+        "manifest_sha256": manifest_sha256,
+        "receipt_path": receipt_relative if manifest_written else None,
+        "proposed_receipt_path": receipt_relative,
+        "receipt_exists": receipt_exists or manifest_written,
+        "manifest_preview": json_safe(manifest_preview),
+        "receipt_preview": json_safe(receipt_preview),
+        "schema_validation": manifest_plan.get("schema_validation"),
+        "current_capability": {
+            "imap_adapter_manifest_preview_available": True,
+            "imap_adapter_manifest_schema_validation_available": True,
+            "imap_adapter_manifest_write_implemented": True,
+            "manifest_write_receipt_implemented": True,
+            "mcp_live_write_tool_exposed": False,
+            "live_imap_adapter_implemented": False,
+            "credential_secret_retrieval_implemented": False,
+        },
+        "closed_actions": {
+            "manifest_written": manifest_written,
+            "receipt_written": manifest_written,
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "mailbox_selected": False,
+            "mailbox_searched": False,
+            "candidate_messages_listed": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "provider_api_called": False,
+            "oauth_started": False,
+            "files_written": bool(files_written),
+        },
+        "privacy_guards": {
+            "email_addresses_echoed": False,
+            "username_values_echoed": False,
+            "exact_account_refs_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "exact_mailbox_refs_echoed": False,
+            "imap_host_values_echoed": False,
+            "provider_urls_echoed": False,
+            "message_ids_echoed": False,
+            "message_headers_echoed": False,
+            "message_bodies_echoed": False,
+            "attachment_names_echoed": False,
+            "secret_values_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "writes": bool(files_written),
+        },
+        "next_safe_actions": [
+            "Review the non-secret manifest and write receipt locally.",
+            "Use the manifest only as a declaration for a future adapter; it is not permission to read mail.",
+            "Keep credential refs, mailbox refs, message ids, subjects, and private mail details out of adapter manifests.",
+            "A future live adapter must still verify credential policy, approval receipt, and selection/audit boundaries.",
+        ],
+        "would_change": would_change,
+        "files_written": files_written,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def imap_mailbox_adapter_manifest_write_case_id(
+    *,
+    archive_id: str,
+    adapter_id: str,
+    manifest_sha256: str,
+) -> str:
+    payload = {
+        "archive_id": archive_id,
+        "adapter_id": adapter_id,
+        "manifest_sha256": manifest_sha256,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
+    return f"imap-mailbox-adapter-manifest-write-{digest}"
 
 
 def imap_mailbox_adapter_audit_plan(

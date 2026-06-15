@@ -95,6 +95,7 @@ docs/object-storage-operation-request-plan.md
 docs/imap-mailbox-source.md
 docs/imap-mailbox-operation-request-plan.md
 docs/imap-mailbox-adapter-manifest-plan.md
+docs/imap-mailbox-adapter-manifest-write.md
 docs/imap-mailbox-adapter-readiness-plan.md
 docs/imap-mailbox-selection-plan.md
 docs/imap-mailbox-adapter-audit-plan.md
@@ -172,6 +173,9 @@ imap-mailbox-selection-plan
 
 imap-mailbox-adapter-manifest-plan
   Preview and schema-check a non-secret future IMAP adapter manifest. Dry-run only; writes no manifests and does not connect, log in, select/search a mailbox, list message ids, read headers/bodies/attachments, retrieve secrets, start OAuth, or call providers.
+
+imap-mailbox-adapter-manifest-write
+  Preview or approve writing a schema-checked, non-secret IMAP adapter manifest plus a write receipt. CLI-only; MCP exposes no live write tool. Does not connect, log in, select/search a mailbox, list message ids, read headers/bodies/attachments, retrieve secrets, start OAuth, or call providers.
 
 imap-mailbox-adapter-audit-plan
   Preview a non-secret future IMAP adapter audit receipt. Dry-run only; combines the mailbox selection plan with safe receipt metadata without connecting, logging in, selecting/searching a mailbox, listing message ids, reading headers/bodies/attachments, retrieving secrets, starting OAuth, or writing files.
