@@ -85,6 +85,7 @@ docs/phase-2-quickstart.md
 docs/security-hardening.md
 docs/security-audit-2026-05-21.md
 docs/new-user-flow.md
+docs/ai-response-concept-guide.md
 docs/project-intake-session.md
 docs/project-intake-cookbook.md
 docs/derived-text-coverage-and-toolchain.md

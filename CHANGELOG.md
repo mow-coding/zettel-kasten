@@ -6,6 +6,16 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.75 - 2026-06-16
+
+- Added `wom-kit/docs/ai-response-concept-guide.md`, a beginner-facing guide
+  for AI runtimes explaining sha256 object identity vs location, object
+  manifests vs zets, and the `objet -> derived text -> zet` layer split.
+- Linked the guide from the English and Korean public documentation maps.
+- Updated the capability matrix and README status to mark the guide as
+  documented-only, with no new command, MCP tool, provider call, upload, source
+  read, derived-text capture, draft, mint, transport, or write behavior.
+
 ## v0.3.74 - 2026-06-16
 
 - Extended Cloudflare R2 setup guidance with English/Korean dashboard label
