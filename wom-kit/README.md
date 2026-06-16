@@ -241,7 +241,7 @@ zet-surface-prototype
   Preview a user-selected ZET surface prototype for WordPress, Joplin, Notion, or Obsidian. Dry-run only; writes nothing, calls no providers, requests no tokens, creates no notes, publishes no posts, writes no vault files, mints no zets, and runs no ZET transport.
 
 prehashed-objet-ledger
-  Preview or approve-register one or more already-hashed external content-addressed object/objet ledgers. Dry-run counts sha256/byte-size rows, skipped null-sha rows, cross-ledger duplicates, and planned manifest writes without reading blob bytes. Approved mode appends external manifest records and writes a receipt. MCP exposes only the read-only preview as prehashed_objet_ledger_preview.
+  Preview or approve-register one or more already-hashed external content-addressed object/objet ledgers. Dry-run counts sha256/byte-size rows, optional safe MIME values through --mime-field, skipped null-sha rows, cross-ledger duplicates, and planned manifest writes without reading blob bytes. Approved mode appends external manifest records and writes a receipt. MCP exposes only the read-only preview as prehashed_objet_ledger_preview.
 
 resolve-objet-ref
   Resolve one sha256 objet reference to safe local archive-relative candidates and external store labels. Dry-run only; reads the object manifest, writes nothing, echoes no absolute local paths or provider URLs, calls no providers, creates no presigned URLs, downloads nothing, and hashes no object bytes.
@@ -262,7 +262,7 @@ credential-semantic-extraction-recipe
   Print a read-only semantic recipe for splitting complex credential notes before plaintext migration. Dry-run only; reads no plaintext file, detects no secret values, opens no password manager/keyring/browser store, writes nothing, calls no providers, and returns no secret values to AI.
 
 derive-text-coverage
-  Check derived-text coverage for textual or plausibly textual objets without reading source bodies. Dry-run only; compares files.jsonl to derived-text.jsonl, classifies missing/encrypted items, echoes no source filenames or local paths, and writes nothing.
+  Check derived-text coverage for textual or plausibly textual objets without reading source bodies. Dry-run only; compares files.jsonl to derived-text.jsonl, classifies missing/encrypted items, can use existing derived-text records as a fallback textual signal for older prehashed manifests, echoes no source filenames or local paths, and writes nothing.
 
 derive-text-toolchain
   Recommend a derived-text extraction route for one extension or MIME hint. Dry-run only; suggests parser/OCR/ASR/vision routing for PDF, Office, HWP/HWPX, images, audio, and text formats without running tools or calling providers.
@@ -283,7 +283,7 @@ objet-capture-selection
   Build a reviewed selection manifest for one staged file after source-intake recording. Dry-run hashes the staged file and previews the manifest; approved mode writes only the selection JSON for a later, separate objet-capture dry-run/approve step.
 
 derive-text capture
-  Register an already extracted UTF-8 text file as a provenance-aware derived text record for one existing object_id. Dry-run previews first; approved mode stores the text body, appends objects/manifests/derived-text.jsonl, and writes a receipt. It does not run OCR, ASR, parser, LLM vision, provider APIs, drafting, or minting.
+  Register an already extracted UTF-8 text file as a provenance-aware derived text record for one existing object_id. Dry-run previews first; approved mode stores the text body, appends objects/manifests/derived-text.jsonl, and writes a receipt. Batch manifest rows require source_object_id, text_file, derivation_kind, tool_name, tool_version, and review_status; the item schema lives at schemas/derived-text-capture-manifest-item.schema.json. It does not run OCR, ASR, parser, LLM vision, provider APIs, drafting, or minting.
 
 project-intake-plan
   Plan one staged project folder intake session. Dry-run only; reports top-level counts, next session questions, staging-convention status, and would_change: [] without reading file bodies, exposing child names, hashing, copying, uploading, drafting, minting, or deleting.
@@ -597,6 +597,14 @@ This file is a rebuildable map, not the archive itself. The durable archive stil
 
 `archive derive-text capture` is the safe registration step after an external parser, OCR tool, ASR tool, or vision model has already produced a UTF-8 text file. The source object must already exist in `objects/manifests/files.jsonl`. Dry-run writes nothing; approved mode stores the text body under `objects/derived-text/sha256/`, appends `objects/manifests/derived-text.jsonl`, and writes `receipts/derived-text-capture/*.json`.
 
+For `derive-text capture --from-manifest`, each JSONL row must include
+`source_object_id`, `text_file`, `derivation_kind`, `tool_name`,
+`tool_version`, and `review_status`. See
+`schemas/derived-text-capture-manifest-item.schema.json` for the row shape.
+`tool_version` is the extractor/parser/OCR/ASR/model/script version that made
+the text; for a reviewed one-off script, use a stable local script label rather
+than leaving it blank.
+
 ```powershell
 python wom-kit\cli\archive.py derive-text capture .\tmp-my-archive `
   --text-file .\workbench\example-extracted.txt `
@@ -640,7 +648,7 @@ MCP exposes the same read-only preview as `human_artifact_store_plan`.
 
 `archive zet-surface-prototype --surface-kind <kind> --surface-ref <safe-ref> --dry-run` previews a ZET surface prototype for `wordpress`, `joplin`, `notion`, or `obsidian`. It reports the surface role, integration family, safe settings schema preview, risks, receipt requirements, and next future adapter steps. It is still only a planning surface: it writes nothing, calls no provider, starts no OAuth, asks for no token, creates no note, publishes no post, writes no vault file, creates no projection receipt, mints no zet, and runs no ZET transport. MCP exposes the same read-only preview as `zet_surface_prototype_plan`.
 
-`archive prehashed-objet-ledger --ledger <jsonl> --dry-run` previews one or more already-hashed external content-addressed store ledgers, including Notion source-export ledgers. `--ledger` may be repeated so retrieval, deep, and workspace download ledgers can be deduped in one run. By default it expects `sha256` and `bytes` fields, counts valid, skipped, invalid, duplicate, and total declared bytes, and echoes no row values, filenames, URLs, or local paths. Rows with null or empty `sha256` are skipped for aid-dedup style ledgers; malformed sha strings remain invalid. `--approve --reviewed-by <actor> --store-ref <safe-label>` appends external manifest records to `objects/manifests/files.jsonl` and writes a receipt under `receipts/prehashed-objet-ledger/` without reading blob bytes, copying objects, uploading, drafting, minting, or cleaning. MCP exposes only the read-only preview as `prehashed_objet_ledger_preview`. `objet-capture` still verifies bytes itself from staged files; this is a separate manifest-registration path for externally verified stores.
+`archive prehashed-objet-ledger --ledger <jsonl> --dry-run` previews one or more already-hashed external content-addressed store ledgers, including Notion source-export ledgers. `--ledger` may be repeated so retrieval, deep, and workspace download ledgers can be deduped in one run. By default it expects `sha256`, `bytes`, and optional `mime` fields; use `--mime-field <field>` if the ledger uses another safe MIME field name. It counts valid, skipped, invalid, duplicate, MIME-present, and total declared bytes, and echoes no row values, filenames, URLs, or local paths. Rows with null or empty `sha256` are skipped for aid-dedup style ledgers; malformed sha strings remain invalid. `--approve --reviewed-by <actor> --store-ref <safe-label>` appends external manifest records to `objects/manifests/files.jsonl` and writes a receipt under `receipts/prehashed-objet-ledger/` without reading blob bytes, copying objects, uploading, drafting, minting, or cleaning. MCP exposes only the read-only preview as `prehashed_objet_ledger_preview`. `objet-capture` still verifies bytes itself from staged files; this is a separate manifest-registration path for externally verified stores.
 
 For Notion page/block exports, `recordMap` or `blocks` JSON is treated as a provider page snapshot source objet. Extracted readable block text is a derived text record, and a human conclusion is a later draft or minted zet. See `docs/notion-page-snapshot-model.md`. In prehashed ledgers, `object_id` identifies the bytes, `store_kind` names the storage family, and `store_ref` is only a reviewed safe external-store label. It is not a raw path, URL, token, or proof of byte availability.
 

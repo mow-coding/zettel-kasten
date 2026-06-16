@@ -78,6 +78,12 @@ Each non-empty JSONL line is one capture item:
 {"source_object_id":"sha256:<64-hex>","text_file":"derived/example.txt","derivation_kind":"parser","tool_name":"python-docx","tool_version":"1.0.0","review_status":"unreviewed","language":"ko","born_digital":true}
 ```
 
+The JSON shape is also documented as a schema:
+
+```text
+wom-kit/schemas/derived-text-capture-manifest-item.schema.json
+```
+
 Required fields:
 
 - `source_object_id`
@@ -95,6 +101,12 @@ Optional fields:
 - `confidence`
 - `language`
 - `born_digital`
+
+For beginner operators, `tool_version` means the extractor version, parser
+version, OCR engine version, ASR model version, or local script version that
+created the text. If the extractor is a one-off local script, record a reviewed
+script label such as `2026-06-16-local-script-v1` instead of leaving the field
+blank.
 
 Relative `text_file` paths are resolved from the JSONL manifest location. The
 archive manifest and derived-text records do not store the local source text

@@ -101,6 +101,7 @@ archive prehashed-objet-ledger <archive-root> \
   --ledger deep-ledger.jsonl \
   --ledger workspace-dl-ledger.jsonl \
   --store-kind notion_source_export \
+  --mime-field mime \
   --dry-run \
   --format json
 ```
@@ -110,6 +111,10 @@ ledgers in one run. Rows whose sha256 field is null or empty, such as
 `via: aid-dedup` rows that point to an object already represented elsewhere, are
 counted as skipped rows rather than invalid rows. Malformed non-empty sha values
 still count as invalid.
+
+If the ledger includes a safe MIME field, keep it with `--mime-field mime`.
+That lets later `derive-text coverage` classify textual candidates without
+falling back to `application/octet-stream`.
 
 If the dry-run is reviewed and the external store should be declared as a WOM
 objet source, approve the manifest registration with a safe store label:
@@ -121,6 +126,7 @@ archive prehashed-objet-ledger <archive-root> \
   --ledger workspace-dl-ledger.jsonl \
   --store-kind notion_source_export \
   --store-ref notion-export-20260613 \
+  --mime-field mime \
   --approve \
   --reviewed-by person:me \
   --format json
