@@ -49,6 +49,8 @@ Commands:
           Plan a future message-material capture request from a selection receipt without reading mail.
   imap-mailbox-material-capture-approval-plan
           Preview or approve a non-secret IMAP material capture approval receipt.
+  imap-mailbox-material-capture-approval-audit
+          Audit one material capture approval receipt without reading mail.
   prehashed-objet-ledger
           Preview or approve-register an already-hashed external objet ledger without reading blob bytes.
   resolve-objet-ref
@@ -6204,6 +6206,61 @@ def command_imap_mailbox_material_capture_approval_plan(args: argparse.Namespace
     return 0 if result.get("ok", True) else 1
 
 
+def command_imap_mailbox_material_capture_approval_audit(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("imap-mailbox-material-capture-approval-audit is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.imap_mailbox_material_capture_approval_audit(
+            Path(args.archive_root),
+            material_selection_receipt=args.material_selection_receipt,
+            approval_receipt=args.approval_receipt,
+            capture_action=args.capture_action,
+            expected_decision=args.expected_decision,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        approval = (
+            result.get("approval_receipt_summary")
+            if isinstance(result.get("approval_receipt_summary"), dict)
+            else {}
+        )
+        validation = (
+            result.get("validation_summary")
+            if isinstance(result.get("validation_summary"), dict)
+            else {}
+        )
+        print(f"IMAP mailbox material capture approval audit {result.get('audit_state') or '-'}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Capture action: {result.get('capture_action') or '-'}")
+        print(f"Decision: {approval.get('decision') or '-'}")
+        print(f"Expected decision: {result.get('expected_decision') or '-'}")
+        print(f"Future capture authorized: {'yes' if result.get('future_capture_authorized') else 'no'}")
+        print(f"Selection SHA matches: {'yes' if validation.get('material_selection_sha256_matches') else 'no'}")
+        print(f"Selected indexes match: {'yes' if validation.get('selected_indexes_match') else 'no'}")
+        print("Approval receipt path echoed: no")
+        print("Material selection receipt path echoed: no")
+        print("Execution receipt path echoed: no")
+        print("Candidate refs echoed: no")
+        print("Message material read now: no")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_imap_mailbox_adapter_manifest_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("imap-mailbox-adapter-manifest-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -11305,6 +11362,42 @@ def build_parser() -> argparse.ArgumentParser:
     )
     imap_mailbox_material_capture_approval_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     imap_mailbox_material_capture_approval_plan.set_defaults(func=command_imap_mailbox_material_capture_approval_plan)
+
+    imap_mailbox_material_capture_approval_audit = subcommands.add_parser(
+        "imap-mailbox-material-capture-approval-audit",
+        aliases=["imap-material-capture-approval-audit", "mailbox-material-capture-approval-audit"],
+        help="Audit one IMAP material capture approval receipt without reading mail.",
+    )
+    imap_mailbox_material_capture_approval_audit.add_argument("archive_root", help="Archive root to inspect.")
+    imap_mailbox_material_capture_approval_audit.add_argument(
+        "--material-selection-receipt",
+        required=True,
+        help="Archive-relative receipts/imap/material-selections/*.json path. The exact path is not echoed in JSON output.",
+    )
+    imap_mailbox_material_capture_approval_audit.add_argument(
+        "--approval-receipt",
+        required=True,
+        help="Archive-relative receipts/imap/material-capture-approvals/*.json path. The exact path is not echoed in JSON output.",
+    )
+    imap_mailbox_material_capture_approval_audit.add_argument(
+        "--capture-action",
+        choices=sorted(archive_services.IMAP_MAILBOX_MATERIAL_CAPTURE_ACTIONS),
+        default="message_body_capture",
+        help="Future capture action expected by the approval receipt. The command still reads no bodies or attachments.",
+    )
+    imap_mailbox_material_capture_approval_audit.add_argument(
+        "--expected-decision",
+        choices=sorted(archive_services.IMAP_MAILBOX_MATERIAL_CAPTURE_APPROVAL_DECISIONS),
+        default="approve_once",
+        help="Human decision expected in the approval receipt.",
+    )
+    imap_mailbox_material_capture_approval_audit.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Audit only; never connects to IMAP, reads secrets, reads bodies, reads attachments, or writes files.",
+    )
+    imap_mailbox_material_capture_approval_audit.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    imap_mailbox_material_capture_approval_audit.set_defaults(func=command_imap_mailbox_material_capture_approval_audit)
 
     sources = subcommands.add_parser("sources", help="Inspect source bindings and source map status.")
     sources.add_argument("archive_root", help="Archive root to inspect.")
