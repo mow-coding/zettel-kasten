@@ -88,6 +88,7 @@ docs/new-user-flow.md
 docs/ai-response-concept-guide.md
 docs/connection-import-plan.md
 docs/connection-evidence-parser-contract.md
+docs/connection-evidence-fixture-parser.md
 docs/project-intake-session.md
 docs/project-intake-cookbook.md
 docs/derived-text-coverage-and-toolchain.md
@@ -192,6 +193,9 @@ connection-import-plan
 
 connection-evidence-parser-contract
   Preview the future Notion connection evidence parser contract. Dry-run only; defines accepted input lanes, candidate edge record fields, static snapshot requirements, parser stages, and redaction rules without calling Notion, reading exports, reading comments, downloading media, executing a parser, writing candidate records, writing zets, writing edges, writing receipts, updating manifests, or echoing provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
+
+connection-evidence-parse-fixture
+  Parse a sanitized archive-internal Notion connection evidence fixture into candidate edge previews. Dry-run only; reads only an archive-relative fixture JSON such as workbench/connection-evidence.sample.json, emits not-written candidate previews, and never reads real exports, calls Notion, reads comments, downloads media, writes candidate records, writes zets, writes edges, writes receipts, updates manifests, or echoes provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
 
 imap-mailbox-plan
   Plan a Gmail, Naver, or generic IMAP mailbox source with safe account, username, mailbox, and credential refs. Dry-run only; opens no connection, logs into nothing, reads no headers/bodies/attachments, sends no mail, changes no flags, stores no secrets, and writes no files.

@@ -1582,6 +1582,26 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "connection_evidence_parse_fixture",
+        "description": "Parse a sanitized archive-internal Notion connection evidence fixture into candidate edge previews. Dry-run only; never reads real exports or writes candidates/edges.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "evidence": {"type": "string"},
+                "source": {"type": "string", "enum": sorted(archive_services.CONNECTION_IMPORT_SOURCES)},
+                "connection_kind": {
+                    "type": "string",
+                    "enum": ["all"] + sorted(archive_services.CONNECTION_IMPORT_KINDS),
+                    "default": "all",
+                },
+                "max_items": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "evidence", "source"],
+        },
+    },
+    {
         "name": "list_sources",
         "description": "List registered source bindings and current source map status.",
         "inputSchema": {
@@ -2481,6 +2501,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_connection_import_plan(arguments)
     if name == "connection_evidence_parser_contract":
         return tool_connection_evidence_parser_contract(arguments)
+    if name == "connection_evidence_parse_fixture":
+        return tool_connection_evidence_parse_fixture(arguments)
     if name == "list_sources":
         return tool_list_sources(arguments)
     if name == "source_scan_plan":
@@ -3851,6 +3873,23 @@ def tool_connection_evidence_parser_contract(arguments: dict[str, Any]) -> dict[
     )
     state = result.get("contract_state") or ("passed" if result["ok"] else "blocked")
     return tool_success_result(f"connection_evidence_parser_contract: {state}.", result)
+
+
+def tool_connection_evidence_parse_fixture(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("connection_evidence_parse_fixture is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.connection_evidence_parse_fixture,
+        archive_root,
+        evidence_path=require_string_arg(arguments, "evidence"),
+        source=require_string_arg(arguments, "source"),
+        connection_kind=optional_string_arg(arguments, "connection_kind") or "all",
+        max_items=int(arguments.get("max_items", 100)),
+        dry_run=True,
+    )
+    state = result.get("parse_state") or ("passed" if result["ok"] else "blocked")
+    return tool_success_result(f"connection_evidence_parse_fixture: {state}.", result)
 
 
 def tool_list_sources(arguments: dict[str, Any]) -> dict[str, Any]:
