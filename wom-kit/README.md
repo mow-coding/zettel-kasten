@@ -187,7 +187,7 @@ external-export-plan
   Plan a text-first Notion, Google Drive, or generic workspace export before large media downloads. Dry-run only; detects the broad workspace/database export trap, returns safe text-only and targeted first-pass command shapes, starts no export, calls no providers, reads no files, downloads no attachments, writes nothing, and echoes no provider URLs or local paths.
 
 connection-import-plan
-  Plan Notion connection evidence import into WOM typed-edge candidates. Dry-run only; maps relation properties, synced block references, database view/filter snapshots, internal links, page mentions, comment context, and objet embeds to candidate edge types without calling Notion, reading exports, writing zets, writing edges, writing receipts, or echoing provider URLs or local paths.
+  Plan Notion connection evidence import into WOM typed-edge candidates. Dry-run only; maps relation properties, synced block references, database view/filter snapshots, internal links, page mentions, comment context, and objet embeds to the base connection edge vocabulary without calling Notion, reading exports, writing zets, writing edges, writing receipts, or echoing provider URLs or local paths.
 
 imap-mailbox-plan
   Plan a Gmail, Naver, or generic IMAP mailbox source with safe account, username, mailbox, and credential refs. Dry-run only; opens no connection, logs into nothing, reads no headers/bodies/attachments, sends no mail, changes no flags, stores no secrets, and writes no files.

@@ -1903,7 +1903,13 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(view["snapshot_required"])
             self.assertEqual(view["candidate_edge_types"], ["view_query"])
             self.assertIn("result_refs", result["dynamic_snapshot_standard"]["required_fields"])
-            self.assertIn("material", result["archive_link_type_status"]["missing_recommended_edge_types"])
+            self.assertEqual(result["archive_link_type_status"]["missing_recommended_edge_types"], [])
+            self.assertTrue(
+                {"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"}
+                <= set(result["archive_link_type_status"]["present_recommended_edge_types"])
+            )
+            for mapping in result["connection_mappings"]:
+                self.assertEqual(mapping["archive_edge_type_status"]["missing"], [])
             self.assertIn("notion_data_source_properties", result["official_source_ids"])
             self.assertIn("notion_connection_capabilities", result["official_source_ids"])
             self.assertFalse(result["closed_actions"]["provider_api_called"])

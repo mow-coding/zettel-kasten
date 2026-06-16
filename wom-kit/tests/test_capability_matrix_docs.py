@@ -7,6 +7,8 @@ from pathlib import Path
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
+BASE_TYPES_PATH = KIT_ROOT / "zettel-kasten" / "types.yml"
+FAKE_ARCHIVE_TYPES_PATH = KIT_ROOT / "examples" / "fake-life-archive" / "zettel-kasten" / "types.yml"
 FREEZE_DOC_PATH = KIT_ROOT / "docs" / "v02x-freeze-v03-entry-boundary.md"
 PROJECT_INTAKE_COOKBOOK_PATH = KIT_ROOT / "docs" / "project-intake-cookbook.md"
 CREDENTIAL_STORE_CONTRACT_PATH = KIT_ROOT / "docs" / "credential-store-contract.md"
@@ -182,7 +184,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, version_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "WOM-kit version truth source",
             "archive --version",
             "archive version [root] --format json",
@@ -193,7 +195,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "read-only WOM-kit version truth-source checks",
             "parent project installed-version pin discovery",
@@ -245,7 +247,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, entrypoints_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "Runtime canonical entrypoints",
             "Runtime-context field `canonical_entrypoints`",
             "`archive.yml` as the start-here file",
@@ -256,7 +258,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Runtime Canonical Entry Points](wom-kit/docs/runtime-canonical-entrypoints.md)",
             "runtime-context canonical entrypoint metadata",
         ):
@@ -379,7 +381,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "External export plan",
             "archive external-export-plan --source notion|google_drive|generic_workspace --dry-run",
             "large_media_export_trap",
@@ -390,7 +392,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[External Export Plan](wom-kit/docs/external-export-plan.md)",
             "explicit large-media trap detection",
         ):
@@ -427,8 +429,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.77.md").read_text(encoding="utf-8")
+        latest_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.79.md").read_text(encoding="utf-8")
+        base_types_text = BASE_TYPES_PATH.read_text(encoding="utf-8")
+        fake_types_text = FAKE_ARCHIVE_TYPES_PATH.read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.77 read-only Notion connection import planning checkpoint",
+            "Status: v0.3.79 read-only connection edge vocabulary checkpoint",
             "archive connection-import-plan <archive-root>",
             "relation_property",
             "synced_block_reference",
@@ -439,7 +444,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "objet_embed",
             "`material`, `derived`",
             "`view_query`",
-            "recommended edge types are not yet allowed link types",
+            "recommended edge types are allowed link types",
+            "The WOM-kit base and fake archive",
             "Dynamic Snapshot Rule",
             "call Notion",
             "write edges",
@@ -448,20 +454,21 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "Connection import plan",
             "archive connection-import-plan --source notion --connection-kind all --dry-run",
             "MCP `connection_import_plan`",
             "`material`, `derived`, `semantic`, `embed`, `mention`, `view_query`, `comment_context`",
+            "The base `zettel-kasten/types.yml` now defines the recommended connection edge vocabulary",
             "write no edges",
             "comment bodies",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Connection Import Plan](wom-kit/docs/connection-import-plan.md)",
-            "read-only Notion connection import planning for typed-edge candidates",
+            "read-only Notion connection import planning for typed-edge candidates with base connection edge vocabulary",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
@@ -476,9 +483,19 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "[Connection Import Plan](connection-import-plan.md)",
             "v0.3.77 - Connection Import Plan",
             "connection_import_plan",
+            "v0.3.79 - Connection Edge Vocabulary",
         ):
             with self.subTest(phrase=phrase):
-                self.assertTrue(phrase in public_map_text or phrase in public_map_ko_text or phrase in release_text)
+                self.assertTrue(
+                    phrase in public_map_text
+                    or phrase in public_map_ko_text
+                    or phrase in release_text
+                    or phrase in latest_release_text
+                )
+        for edge_type in ("material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"):
+            with self.subTest(edge_type=edge_type):
+                self.assertIn(f"- id: {edge_type}", base_types_text)
+                self.assertIn(f"- id: {edge_type}", fake_types_text)
 
     def test_zet_surface_prototypes_point_to_shared_human_artifact_contract(self) -> None:
         text = ZET_SURFACE_PROTOTYPES_PATH.read_text(encoding="utf-8")
@@ -655,7 +672,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, resolver_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "Objet ref resolver",
             "archive resolve-objet-ref --object-id sha256:<hex> --dry-run",
             "MCP `resolve_objet_ref`",
@@ -664,7 +681,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)",
             "read-only objet reference resolution",
         ):
@@ -699,7 +716,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, plan_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "Presigned URL plan",
             "archive presigned-url-plan --object-id sha256:<hex> --dry-run",
             "MCP `presigned_url_plan`",
@@ -710,7 +727,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Presigned URL Plan](wom-kit/docs/presigned-url-plan.md)",
             "presigned URL planning",
         ):
@@ -818,7 +835,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Derived Text Coverage And Toolchain](wom-kit/docs/derived-text-coverage-and-toolchain.md)",
             "derived-text coverage/toolchain/doctor/agent-contract",
             "existing derived-text records as a fallback textual signal",
@@ -867,7 +884,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, coverage_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "Derived text completeness signal",
             "`derive-text coverage` now returns `completeness_signal`",
             "manifest-scoped derived-text coverage",
@@ -877,7 +894,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Derived Text Completeness Signal](wom-kit/docs/derived-text-completeness-signal.md)",
             "manifest-scoped completeness signals",
         ):
@@ -937,7 +954,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)",
             "read-only IMAP mailbox source planning",
         ):
@@ -985,7 +1002,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, imap_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP mailbox operation request plan",
             "archive imap-mailbox-operation-request-plan --dry-run",
             "MCP `imap_mailbox_operation_request_plan`",
@@ -997,7 +1014,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Operation Request Plan](wom-kit/docs/imap-mailbox-operation-request-plan.md)",
             "operation request packaging",
         ):
@@ -1063,7 +1080,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, request_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP mailbox adapter readiness plan",
             "archive imap-mailbox-adapter-readiness-plan --adapter-id <id> --dry-run",
             "MCP `imap_mailbox_adapter_readiness_plan`",
@@ -1077,7 +1094,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Adapter Readiness Plan](wom-kit/docs/imap-mailbox-adapter-readiness-plan.md)",
             "adapter readiness checks",
         ):
@@ -1147,7 +1164,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readiness_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP mailbox selection plan",
             "archive imap-mailbox-selection-plan --dry-run",
             "MCP `imap_mailbox_selection_plan`",
@@ -1159,7 +1176,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Selection Plan](wom-kit/docs/imap-mailbox-selection-plan.md)",
             "mailbox selection planning",
         ):
@@ -1231,7 +1248,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, readiness_text)
                 self.assertIn(phrase, selection_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP mailbox adapter audit plan",
             "archive imap-mailbox-adapter-audit-plan --adapter-id <id>",
             "MCP `imap_mailbox_adapter_audit_plan`",
@@ -1246,7 +1263,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Adapter Audit Plan](wom-kit/docs/imap-mailbox-adapter-audit-plan.md)",
             "adapter audit receipt previews",
         ):
@@ -1292,7 +1309,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, imap_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP mailbox adapter audit write",
             "archive imap-mailbox-adapter-audit-write --adapter-id <id>",
             "alias `archive mailbox-adapter-audit-write`",
@@ -1306,7 +1323,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Adapter Audit Write](wom-kit/docs/imap-mailbox-adapter-audit-write.md)",
             "adapter audit receipt writes",
         ):
@@ -1404,7 +1421,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, selection_text)
                 self.assertIn(phrase, audit_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP mailbox adapter manifest plan",
             "IMAP mailbox adapter manifest write",
             "archive imap-mailbox-adapter-manifest-plan --adapter-id <id>",
@@ -1424,7 +1441,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Adapter Manifest Plan](wom-kit/docs/imap-mailbox-adapter-manifest-plan.md)",
             "[IMAP Mailbox Adapter Manifest Write](wom-kit/docs/imap-mailbox-adapter-manifest-write.md)",
             "adapter manifest previews",
@@ -1468,7 +1485,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, preflight_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP mailbox adapter preflight plan",
             "archive imap-mailbox-adapter-preflight-plan --adapter-id <id> --dry-run",
             "MCP `imap_mailbox_adapter_preflight_plan`",
@@ -1481,7 +1498,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Adapter Preflight Plan](wom-kit/docs/imap-mailbox-adapter-preflight-plan.md)",
             "adapter preflight checks",
         ):
@@ -1521,7 +1538,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, contract_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP mailbox adapter execution contract",
             "archive imap-mailbox-adapter-execution-contract --adapter-id <id> --dry-run",
             "contract_ready_for_future_implementation",
@@ -1533,7 +1550,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Adapter Execution Contract](wom-kit/docs/imap-mailbox-adapter-execution-contract.md)",
             "adapter execution-contract planning",
         ):
@@ -1579,7 +1596,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, scan_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP mailbox header metadata scan",
             "archive imap-mailbox-header-metadata-scan --dry-run|--approve",
             "first narrow live IMAP adapter path",
@@ -1593,7 +1610,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Header Metadata Scan](wom-kit/docs/imap-mailbox-header-metadata-scan.md)",
             "first approval-gated local IMAP header metadata scan",
             "broad IMAP ingestion beyond the first approval-gated header metadata scan",
@@ -1636,7 +1653,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, audit_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP header scan receipt audit",
             "archive imap-mailbox-header-scan-receipt-audit --execution-receipt <path> --dry-run|--approve",
             "receipts/imap/adapter-execution-audits/*.json",
@@ -1649,7 +1666,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Header Scan Receipt Audit](wom-kit/docs/imap-mailbox-header-scan-receipt-audit.md)",
             "offline audit checkpoint for those header scan execution receipts",
         ):
@@ -1693,7 +1710,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, plan_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP material selection plan",
             "archive imap-mailbox-material-selection-plan --execution-receipt <path>",
             "body_candidates|attachment_candidates|derived_text_candidates",
@@ -1707,7 +1724,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Material Selection Plan](wom-kit/docs/imap-mailbox-material-selection-plan.md)",
             "read-only material selection, capture request, capture execution-contract planning, and material capture approval audits",
         ):
@@ -1750,7 +1767,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, record_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP material selection record",
             "archive imap-mailbox-material-selection-record --execution-receipt <path>",
             "receipts/imap/material-selections/*.json",
@@ -1764,7 +1781,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Material Selection Record](wom-kit/docs/imap-mailbox-material-selection-record.md)",
             "approval-gated non-secret material selection records",
         ):
@@ -1809,7 +1826,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, request_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP material capture request plan",
             "archive imap-mailbox-material-capture-request-plan --material-selection-receipt <path>",
             "ready_for_future_material_capture_after_approval",
@@ -1823,7 +1840,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Material Capture Request Plan](wom-kit/docs/imap-mailbox-material-capture-request-plan.md)",
             "read-only material selection, capture request, capture execution-contract planning, and material capture approval audits",
         ):
@@ -1870,7 +1887,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, contract_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP material capture execution contract",
             "archive imap-mailbox-material-capture-execution-contract --material-selection-receipt <path>",
             "contract_ready_for_future_material_capture_implementation",
@@ -1885,7 +1902,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Material Capture Execution Contract](wom-kit/docs/imap-mailbox-material-capture-execution-contract.md)",
             "read-only material selection, capture request, capture execution-contract planning, and material capture approval audits",
         ):
@@ -1931,7 +1948,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, approval_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP material capture approval plan",
             "archive imap-mailbox-material-capture-approval-plan --material-selection-receipt <path>",
             "approval-gated write",
@@ -1946,7 +1963,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Material Capture Approval Plan](wom-kit/docs/imap-mailbox-material-capture-approval-plan.md)",
             "approval-gated material capture approval receipts",
         ):
@@ -1989,7 +2006,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, audit_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "IMAP material capture approval audit",
             "archive imap-mailbox-material-capture-approval-audit --material-selection-receipt <path>",
             "approval_receipt_verified_for_future_material_capture",
@@ -2003,7 +2020,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[IMAP Mailbox Material Capture Approval Audit](wom-kit/docs/imap-mailbox-material-capture-approval-audit.md)",
             "material capture approval audits",
         ):
@@ -2062,7 +2079,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Credential Store Contract](wom-kit/docs/credential-store-contract.md)",
             "read-only credential reference planning",
         ):
@@ -2119,7 +2136,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Credential Ref Inventory And Onboarding](wom-kit/docs/credential-ref-inventory-and-onboarding.md)",
             "read-only credential reference planning, inventory",
         ):
@@ -2174,7 +2191,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Credential Store Recommendations](wom-kit/docs/credential-store-recommendations.md)",
             "external store recommendation",
         ):
@@ -2222,7 +2239,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Credential Vault Onboarding Plan](wom-kit/docs/credential-vault-onboarding-plan.md)",
             "vault onboarding planning",
         ):
@@ -2403,7 +2420,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readiness_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "Object storage adapter readiness plan",
             "archive object-storage-adapter-readiness-plan --operation presigned_download --dry-run",
             "MCP `object_storage_adapter_readiness_plan`",
@@ -2416,7 +2433,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Object Storage Adapter Readiness Plan](wom-kit/docs/object-storage-adapter-readiness-plan.md)",
             "adapter readiness planning",
         ):
@@ -2474,7 +2491,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Object Storage Operation Request Plan](wom-kit/docs/object-storage-operation-request-plan.md)",
             "operation request packaging",
         ):
@@ -2518,7 +2535,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("object-storage-adapter-execution-contract", readiness_text)
         self.assertIn("object-storage-adapter-execution-contract", request_text)
         for phrase in (
-            "Status: v0.3.78 object-storage upload execution-contract checkpoint",
+            "Status: v0.3.79 connection edge vocabulary checkpoint",
             "Object storage adapter execution contract",
             "archive object-storage-adapter-execution-contract --operation upload_object --dry-run",
             "archive object-storage-upload-execution-contract",
@@ -2536,7 +2553,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Object Storage Adapter Execution Contract](wom-kit/docs/object-storage-adapter-execution-contract.md)",
             "upload execution-contract planning",
         ):
@@ -2597,7 +2614,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Credential Plaintext Migration Plan](wom-kit/docs/credential-plaintext-migration-plan.md)",
             "plaintext migration planning",
         ):
@@ -2642,7 +2659,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Credential Semantic Extraction Recipe](wom-kit/docs/credential-semantic-extraction-recipe.md)",
             "credential semantic extraction recipe",
         ):
@@ -2708,7 +2725,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Credential Access Broker Plan](wom-kit/docs/credential-access-broker-plan.md)",
             "future access broker planning",
         ):
@@ -2763,7 +2780,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Credential Access Approval Plan](wom-kit/docs/credential-access-approval-plan.md)",
             "local approval receipt preview/write",
         ):
@@ -2808,7 +2825,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Credential Policy Check](wom-kit/docs/credential-policy-check.md)",
             "credential policy checking",
         ):
@@ -2864,7 +2881,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Credential KeePassXC Command Plan](wom-kit/docs/credential-keepassxc-command-plan.md)",
             "KeePassXC command preflight",
         ):
@@ -2915,7 +2932,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Credential KeePassXC Write](wom-kit/docs/credential-keepassxc-write.md)",
             "CLI-only KeePassXC write execution",
         ):
@@ -2969,7 +2986,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Credential Adapter Readiness Plan](wom-kit/docs/credential-adapter-readiness-plan.md)",
             "adapter readiness planning",
         ):
@@ -3023,7 +3040,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Credential Adapter Manifest Plan](wom-kit/docs/credential-adapter-manifest-plan.md)",
             "adapter manifest preview",
         ):
@@ -3066,7 +3083,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.78 pre-release",
+            "v0.3.79 pre-release",
             "[Credential Adapter Audit Plan](wom-kit/docs/credential-adapter-audit-plan.md)",
             "adapter audit receipt preview",
         ):
