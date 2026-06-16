@@ -1546,8 +1546,16 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["proposed_visibility"], "private")
             self.assertEqual(result["provider"], "cloudflare-r2")
             self.assertEqual(result["provider_setup_guidance"]["provider"], "cloudflare-r2")
+            self.assertEqual(result["provider_setup_guidance"]["locale_guidance"]["observed_locale"], "ko-KR")
             self.assertEqual(result["provider_setup_guidance"]["bucket_creation"]["fields"][0]["recommended_value"], "zettel-kasten-username-objets")
             self.assertEqual(result["provider_setup_guidance"]["api_token"]["fields"][1]["recommended_value"], "Object Read & Write")
+            self.assertEqual(result["provider_setup_guidance"]["api_token"]["fields"][1]["ko_recommended_value"], "개체 읽기 및 쓰기")
+            self.assertIn("not from one bucket", result["provider_setup_guidance"]["api_token"]["dashboard_area_note"])
+            self.assertIn("Token value", result["provider_setup_guidance"]["api_token"]["fields"][5]["post_creation_screen_fields"])
+            self.assertEqual(
+                result["provider_setup_guidance"]["api_token"]["fields"][5]["s3_client_credential_pair"],
+                ["Access Key ID", "Secret Access Key"],
+            )
             self.assertFalse(result["provider_setup_receipt_preview"]["external_actions"]["provider_api_called"])
             self.assertFalse(result["provider_setup_receipt_preview"]["external_actions"]["files_uploaded"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
@@ -1594,7 +1602,9 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["setup_bridge"]["proposed_bucket_name"], "zettel-kasten-username-objets")
             self.assertTrue(result["setup_bridge"]["do_not_invent_bucket_names"])
             self.assertEqual(result["setup_bridge"]["provider_setup_guidance"]["provider"], "cloudflare-r2")
+            self.assertEqual(result["setup_bridge"]["provider_setup_guidance"]["status"], "v0.3.74_locale_and_s3_credential_walkthrough")
             self.assertEqual(result["setup_bridge"]["provider_setup_guidance"]["bucket_creation"]["fields"][0]["recommended_value"], "zettel-kasten-username-objets")
+            self.assertIn("스토리지 및 데이터베이스", result["setup_bridge"]["provider_setup_guidance"]["bucket_creation"]["dashboard_area_locale_hints"][0])
             self.assertEqual(
                 result["setup_bridge"]["provider_setup_guidance"]["bucket_creation"]["fields"][3]["recommended_value"],
                 "Standard",
@@ -1604,6 +1614,14 @@ class ArchiveCliTests(unittest.TestCase):
                 "Object Read & Write",
             )
             self.assertIn("Apply to specific buckets only", result["setup_bridge"]["provider_setup_guidance"]["api_token"]["fields"][2]["recommended_value"])
+            self.assertEqual(
+                result["setup_bridge"]["provider_setup_guidance"]["api_token"]["fields"][2]["ko_recommended_value"],
+                "특정 버킷에만 적용",
+            )
+            self.assertIn(
+                "Access Key ID and Secret Access Key pair",
+                result["setup_bridge"]["provider_setup_guidance"]["api_token"]["fields"][5]["token_value_note"],
+            )
             self.assertFalse(result["setup_bridge"]["bucket_availability_checked"])
             self.assertTrue(result["current_capability"]["bucket_name_surface_available"])
             self.assertTrue(result["current_capability"]["provider_setup_screen_guidance_available"])
@@ -5028,17 +5046,27 @@ class ArchiveCliTests(unittest.TestCase):
             walkthrough = section["field_walkthrough"]
             self.assertEqual(walkthrough["provider"], "cloudflare-r2")
             self.assertTrue(walkthrough["guidance_available"])
+            self.assertEqual(walkthrough["status"], "v0.3.74_locale_and_s3_credential_walkthrough")
+            self.assertIn("개요", walkthrough["api_token"]["dashboard_area_locale_hints"][2])
             bucket_fields = {field["field"]: field for field in walkthrough["bucket_creation"]["fields"]}
             self.assertEqual(bucket_fields["Bucket name"]["recommended_value"], "zettel-kasten-profile-slug-objets")
+            self.assertEqual(bucket_fields["Bucket name"]["ko_label"], "버킷 이름")
             self.assertEqual(bucket_fields["Location"]["recommended_value"], "None / automatic selection")
             self.assertEqual(bucket_fields["Jurisdiction"]["recommended_value"], "Do not specify by default")
             self.assertEqual(bucket_fields["Default storage class"]["recommended_value"], "Standard")
             self.assertEqual(bucket_fields["Public access"]["recommended_value"], "Disabled / private")
             token_fields = {field["field"]: field for field in walkthrough["api_token"]["fields"]}
             self.assertEqual(token_fields["Permissions"]["recommended_value"], "Object Read & Write")
+            self.assertEqual(token_fields["Permissions"]["ko_label"], "권한")
+            self.assertEqual(token_fields["Permissions"]["ko_recommended_value"], "개체 읽기 및 쓰기")
             self.assertIn("specific buckets", token_fields["Bucket scope"]["recommended_value"])
+            self.assertEqual(token_fields["Bucket scope"]["ko_recommended_value"], "특정 버킷에만 적용")
             self.assertIn("expiration", token_fields["TTL / expiration"]["recommended_value"])
+            self.assertEqual(token_fields["TTL / expiration"]["ko_screen_default"], "계속")
             self.assertIn("stable known IP/CIDR", token_fields["Client IP filtering"]["recommended_value"])
+            self.assertEqual(token_fields["Client IP filtering"]["ko_option_labels"], ["포함", "제외"])
+            self.assertEqual(token_fields["Secret handling after creation"]["s3_client_credential_pair"], ["Access Key ID", "Secret Access Key"])
+            self.assertIn("separate Token value", token_fields["Secret handling after creation"]["token_value_note"])
             self.assertEqual(walkthrough["wom_ref_bridge"]["credential_kind"], "object_storage_token")
             self.assertFalse(walkthrough["closed_actions"]["provider_api_called"])
             self.assertFalse(walkthrough["closed_actions"]["bucket_created"])
