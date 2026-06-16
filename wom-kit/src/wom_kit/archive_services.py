@@ -7,6 +7,7 @@ import copy
 import hashlib
 import fnmatch
 import importlib.util
+import imaplib
 import mimetypes
 import os
 import re
@@ -16,7 +17,7 @@ import sqlite3
 import stat
 import subprocess
 import unicodedata
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
@@ -13802,6 +13803,452 @@ def imap_mailbox_adapter_execution_contract(
         ],
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
+    }
+
+
+def imap_mailbox_header_metadata_scan(
+    archive_root: Path | str,
+    *,
+    adapter_id: str,
+    source_id: str,
+    provider: str | None = None,
+    imap_host: str | None = None,
+    imap_port: int | None = None,
+    account_ref: str | None = None,
+    username_ref: str | None = None,
+    auth_mode: str | None = None,
+    app_password_ref: str | None = None,
+    oauth_token_ref: str | None = None,
+    mailbox_ref: str | None = None,
+    operation: str = "header_metadata_scan",
+    selection_rule: str = "newest_first",
+    selector_id: str = "mail-selection:recent-inbox",
+    max_messages: int = IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT,
+    since_days: int | None = None,
+    credential_id: str = "cred:mail-source-access",
+    credential_ref: str | None = None,
+    credential_kind: str | None = None,
+    credential_provider: str | None = None,
+    store_kind: str = "environment",
+    adapter_kind: str | None = "environment_injection",
+    approval_decision: str = "needs_review",
+    approval_receipt: str | None = None,
+    consumer: str = "wom:adapter:imap-mailbox",
+    reviewed_by: str | None = None,
+    platform: str = "windows",
+    timeout_seconds: int = 30,
+    dry_run: bool = True,
+    approve: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    now = datetime.now(timezone.utc)
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+
+    if operation != "header_metadata_scan":
+        blockers.append("imap-mailbox-header-metadata-scan currently supports only header_metadata_scan.")
+    if (auth_mode or "app_password_ref").strip().lower().replace("-", "_") != "app_password_ref":
+        blockers.append("imap-mailbox-header-metadata-scan v0.3.62 supports only app_password_ref auth.")
+    if not username_ref or not imap_env_ref_name(username_ref):
+        blockers.append("username_ref must be an env: reference for the first live IMAP header scan.")
+    if not app_password_ref or not imap_env_ref_name(app_password_ref):
+        blockers.append("app_password_ref must be an env: reference for the first live IMAP header scan.")
+    if oauth_token_ref:
+        blockers.append("oauth_token_ref is not supported by the first live IMAP header scan.")
+    if (mailbox_ref or "imap:mailbox:inbox").strip().lower() not in {"imap:mailbox:inbox", "mail:mailbox:inbox"}:
+        blockers.append("imap-mailbox-header-metadata-scan v0.3.62 supports only the safe inbox mailbox ref.")
+    if timeout_seconds < 1 or timeout_seconds > 120:
+        blockers.append("timeout_seconds must be between 1 and 120.")
+
+    execution_contract = imap_mailbox_adapter_execution_contract(
+        root,
+        adapter_id=adapter_id,
+        source_id=source_id,
+        provider=provider,
+        imap_host=imap_host,
+        imap_port=imap_port,
+        account_ref=account_ref,
+        username_ref=username_ref,
+        auth_mode=auth_mode,
+        app_password_ref=app_password_ref,
+        oauth_token_ref=oauth_token_ref,
+        mailbox_ref=mailbox_ref,
+        operation=operation,
+        selection_rule=selection_rule,
+        selector_id=selector_id,
+        max_messages=max_messages,
+        since_days=since_days,
+        credential_id=credential_id,
+        credential_ref=credential_ref,
+        credential_kind=credential_kind,
+        credential_provider=credential_provider,
+        store_kind=store_kind,
+        adapter_kind=adapter_kind,
+        approval_decision=approval_decision,
+        approval_receipt=approval_receipt,
+        consumer=consumer,
+        reviewed_by=reviewed_by,
+        platform=platform,
+        execution_mode="future_local_cli",
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in execution_contract.get("blockers") or [])
+    warnings.extend(str(item) for item in execution_contract.get("warnings") or [])
+
+    contract_state = str(execution_contract.get("contract_state") or "blocked")
+    if contract_state != "contract_ready_for_future_implementation":
+        blockers.append(f"imap_header_scan_requires_ready_execution_contract:{contract_state}")
+
+    resolved_provider = str(execution_contract.get("provider") or normalize_imap_mailbox_provider(provider))
+    provider_profile = IMAP_MAILBOX_DEFAULTS.get(resolved_provider, IMAP_MAILBOX_DEFAULTS["generic_imap"])
+    resolved_host = str(provider_profile.get("host") or (imap_host or "")).strip().lower()
+    resolved_port = int(imap_port or provider_profile.get("port") or 993)
+    receipt_id = imap_mailbox_header_metadata_scan_receipt_id(
+        adapter_id=adapter_id,
+        source_id=source_id,
+        operation=operation,
+        selection_rule=selection_rule,
+        selector_id=selector_id,
+        created_at=now,
+    )
+    proposed_receipt_path = f"{IMAP_MAILBOX_ADAPTER_EXECUTION_RECEIPTS_DIR}/{receipt_id}.json"
+    receipt_path = archive_internal_path(root, proposed_receipt_path)
+    would_change = [proposed_receipt_path] if dry_run and not blockers else []
+    files_written: list[str] = []
+    candidate_refs: list[str] = []
+    candidate_count = 0
+    headers_fetched_count = 0
+    execution_status = "not_run"
+    environment_read = False
+    connection_opened = False
+    login_attempted = False
+    mailbox_selected = False
+    mailbox_searched = False
+    headers_read = False
+
+    if not blockers and approve:
+        username_env = imap_env_ref_name(username_ref or "")
+        password_env = imap_env_ref_name(app_password_ref or "")
+        environment_read = True
+        username = os.environ.get(username_env or "")
+        password = os.environ.get(password_env or "")
+        if not username:
+            blockers.append("username environment variable was not available.")
+        if not password:
+            blockers.append("app password environment variable was not available.")
+        if not blockers:
+            client = None
+            try:
+                client = imaplib.IMAP4_SSL(resolved_host, resolved_port, timeout=timeout_seconds)
+                connection_opened = True
+                login_attempted = True
+                login_status, _login_data = client.login(username, password)
+                if str(login_status).upper() != "OK":
+                    raise ArchiveServiceError("imap login failed")
+                select_status, _select_data = client.select("INBOX", readonly=True)
+                if str(select_status).upper() != "OK":
+                    raise ArchiveServiceError("imap mailbox select failed")
+                mailbox_selected = True
+                search_criterion = imap_header_scan_search_criterion(selection_rule, since_days)
+                search_status, search_data = client.uid("search", None, search_criterion)
+                if str(search_status).upper() != "OK":
+                    raise ArchiveServiceError("imap mailbox search failed")
+                mailbox_searched = True
+                uid_values = imap_header_scan_uid_values(search_data)
+                selected_uids = imap_header_scan_selected_uids(uid_values, selection_rule, max_messages)
+                candidate_count = len(selected_uids)
+                for index, uid_value in enumerate(selected_uids, start=1):
+                    fetch_status, _fetch_data = client.uid(
+                        "fetch",
+                        uid_value,
+                        "(BODY.PEEK[HEADER.FIELDS (DATE FROM TO CC SUBJECT MESSAGE-ID)] RFC822.SIZE)",
+                    )
+                    if str(fetch_status).upper() == "OK":
+                        headers_fetched_count += 1
+                        headers_read = True
+                        candidate_refs.append(
+                            "imap-candidate:"
+                            + hashlib.sha256(
+                                f"{archive_id}|{adapter_id}|{source_id}|{index}|{uid_value.decode('ascii', 'ignore')}".encode(
+                                    "utf-8"
+                                )
+                            ).hexdigest()
+                        )
+                execution_status = "succeeded"
+            except Exception:
+                execution_status = "failed"
+                blockers.append("imap header metadata scan failed; raw server error is not echoed.")
+            finally:
+                if client is not None:
+                    try:
+                        client.logout()
+                    except Exception:
+                        warnings.append("imap logout failed; raw server error is not echoed.")
+
+        if environment_read:
+            username = None
+            password = None
+
+        receipt_payload = imap_mailbox_header_metadata_scan_receipt_payload(
+            archive_id=archive_id,
+            receipt_id=receipt_id,
+            created_at=now,
+            adapter_id=adapter_id,
+            source_id=source_id,
+            provider=resolved_provider,
+            operation=operation,
+            selection_rule=selection_rule,
+            selector_id=selector_id,
+            max_messages=max_messages,
+            since_days=since_days,
+            execution_status=execution_status,
+            candidate_count=candidate_count,
+            headers_fetched_count=headers_fetched_count,
+            candidate_refs=candidate_refs,
+        )
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_new_file(receipt_path, receipt_payload)
+        files_written.append(proposed_receipt_path)
+        would_change = []
+
+    ok = not blockers
+    if approve and execution_status == "failed":
+        ok = False
+
+    return {
+        "ok": ok,
+        "dry_run": dry_run,
+        "approved": approve,
+        "lifecycle_action": "imap_mailbox_header_metadata_scan",
+        "archive_id": archive_id,
+        "execution_status": execution_status,
+        "source_id": execution_contract.get("source_id"),
+        "provider": resolved_provider,
+        "operation": "header_metadata_scan",
+        "execution_contract_summary": {
+            "contract_state": contract_state,
+            "approval_receipt_verified": (
+                execution_contract.get("preflight_summary", {}).get("approval_receipt_verified")
+                if isinstance(execution_contract.get("preflight_summary"), dict)
+                else None
+            ),
+            "approval_receipt_path_echoed": False,
+            "live_execution_allowed_by_contract": contract_state == "contract_ready_for_future_implementation",
+        },
+        "credential_resolution": {
+            "supported_ref_store": "env",
+            "username_ref_store": "env" if imap_env_ref_name(username_ref or "") else None,
+            "password_ref_store": "env" if imap_env_ref_name(app_password_ref or "") else None,
+            "keyring_ref_store_supported_now": False,
+            "secret_manager_ref_store_supported_now": False,
+            "credential_values_echoed": False,
+        },
+        "scan_summary": {
+            "selection_rule": selection_rule,
+            "selector_id": selector_id if safe_source_intake_plan_scalar(selector_id) else None,
+            "max_messages": max_messages,
+            "since_days": since_days,
+            "candidate_count": candidate_count,
+            "headers_fetched_count": headers_fetched_count,
+            "candidate_refs": candidate_refs,
+            "candidate_refs_are_opaque_hashes": True,
+            "raw_uid_values_returned": False,
+            "raw_header_values_returned": False,
+        },
+        "receipt": {
+            "receipt_kind": "imap_mailbox_header_metadata_scan",
+            "proposed_receipt_path": proposed_receipt_path if not files_written else None,
+            "receipt_path": files_written[0] if files_written else None,
+            "receipt_path_kind": "archive_relative",
+            "records_counts_only": True,
+            "records_secret_values": False,
+            "records_message_bodies": False,
+            "records_attachment_bytes": False,
+        },
+        "current_capability": {
+            "live_imap_header_metadata_scan_implemented": True,
+            "env_credential_ref_read_implemented": True,
+            "keyring_credential_ref_read_implemented": False,
+            "oauth_flow_implemented": False,
+            "message_body_capture_implemented": False,
+            "attachment_capture_implemented": False,
+            "derived_text_capture_implemented": False,
+        },
+        "closed_actions": {
+            "live_adapter_executed": bool(approve and connection_opened),
+            "imap_connection_opened": connection_opened,
+            "imap_login_attempted": login_attempted,
+            "mailbox_selected": mailbox_selected,
+            "mailbox_searched": mailbox_searched,
+            "candidate_messages_listed": False,
+            "message_uids_read": mailbox_searched,
+            "message_ids_read": False,
+            "message_headers_read": headers_read,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "credential_value_read": environment_read,
+            "secret_value_read": environment_read,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": environment_read,
+            "provider_api_called": False,
+            "execution_receipt_written": bool(files_written),
+            "files_written": bool(files_written),
+        },
+        "privacy_guards": {
+            "email_addresses_echoed": False,
+            "username_values_echoed": False,
+            "exact_account_refs_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "exact_mailbox_refs_echoed": False,
+            "env_var_names_echoed": False,
+            "imap_host_values_echoed": False,
+            "provider_urls_echoed": False,
+            "message_uid_values_echoed": False,
+            "message_id_values_echoed": False,
+            "message_headers_echoed": False,
+            "message_bodies_echoed": False,
+            "subject_values_echoed": False,
+            "sender_values_echoed": False,
+            "recipient_values_echoed": False,
+            "attachment_names_echoed": False,
+            "secret_values_echoed": False,
+            "approval_receipt_path_echoed": False,
+            "local_absolute_paths_echoed": False,
+        },
+        "would_change": would_change,
+        "files_written": files_written,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def imap_env_ref_name(ref: str) -> str | None:
+    text = (ref or "").strip()
+    if not text.lower().startswith("env:"):
+        return None
+    env_name = text.split(":", 1)[1].strip()
+    return env_name if safe_environment_ref_name(env_name) else None
+
+
+def imap_header_scan_search_criterion(selection_rule: str, since_days: int | None) -> str:
+    if selection_rule == "unread_first":
+        return "UNSEEN"
+    if selection_rule == "since_days_window" and since_days:
+        since_date = datetime.now(timezone.utc) - timedelta(days=since_days)
+        return "SINCE " + since_date.strftime("%d-%b-%Y")
+    return "ALL"
+
+
+def imap_header_scan_uid_values(search_data: Any) -> list[bytes]:
+    values: list[bytes] = []
+    for item in search_data or []:
+        if isinstance(item, bytes):
+            values.extend(part for part in item.split() if part)
+        elif isinstance(item, str):
+            values.extend(part.encode("ascii", "ignore") for part in item.split() if part)
+    return values
+
+
+def imap_header_scan_selected_uids(uid_values: list[bytes], selection_rule: str, max_messages: int) -> list[bytes]:
+    limit = max(1, min(max_messages, IMAP_MAILBOX_OPERATION_MAX_MESSAGES_LIMIT))
+    values = list(uid_values)
+    if selection_rule in {"newest_first", "since_days_window"}:
+        values.reverse()
+    return values[:limit]
+
+
+def imap_mailbox_header_metadata_scan_receipt_id(
+    *,
+    adapter_id: str,
+    source_id: str,
+    operation: str,
+    selection_rule: str,
+    selector_id: str,
+    created_at: datetime,
+) -> str:
+    digest = hashlib.sha256(
+        json.dumps(
+            {
+                "adapter_id": adapter_id,
+                "source_id": source_id,
+                "operation": operation,
+                "selection_rule": selection_rule,
+                "selector_id": selector_id,
+                "created_at": created_at.isoformat(),
+                "nonce": secrets.token_hex(8),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"imap-header-metadata-scan-{created_at.strftime('%Y%m%dT%H%M%SZ')}-{digest}"
+
+
+def imap_mailbox_header_metadata_scan_receipt_payload(
+    *,
+    archive_id: str,
+    receipt_id: str,
+    created_at: datetime,
+    adapter_id: str,
+    source_id: str,
+    provider: str,
+    operation: str,
+    selection_rule: str,
+    selector_id: str,
+    max_messages: int,
+    since_days: int | None,
+    execution_status: str,
+    candidate_count: int,
+    headers_fetched_count: int,
+    candidate_refs: list[str],
+) -> dict[str, Any]:
+    return {
+        "schema_version": "wom-imap-mailbox-header-metadata-scan/v0.1",
+        "receipt_kind": "imap_mailbox_header_metadata_scan",
+        "lifecycle_action": "imap_mailbox_header_metadata_scan",
+        "receipt_id": receipt_id,
+        "created_at": created_at.isoformat(),
+        "archive_id": archive_id,
+        "adapter": {
+            "adapter_id": adapter_id,
+            "provider": provider,
+            "operation": operation,
+            "source_id": source_id,
+        },
+        "selection": {
+            "selection_rule": selection_rule,
+            "selector_id": selector_id,
+            "max_messages": max_messages,
+            "since_days": since_days,
+            "mailbox_ref_included": False,
+        },
+        "result": {
+            "status": execution_status,
+            "candidate_count": candidate_count,
+            "headers_fetched_count": headers_fetched_count,
+            "candidate_refs": list(candidate_refs),
+            "candidate_refs_are_opaque_hashes": True,
+        },
+        "redaction": {
+            "credential_values_included": False,
+            "credential_refs_included": False,
+            "env_var_names_included": False,
+            "imap_host_included": False,
+            "mailbox_ref_included": False,
+            "message_uid_values_included": False,
+            "message_id_values_included": False,
+            "headers_included": False,
+            "bodies_included": False,
+            "attachment_names_included": False,
+            "attachment_bytes_included": False,
+            "local_absolute_paths_included": False,
+        },
     }
 
 

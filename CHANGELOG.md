@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.62 - 2026-06-16
+
+- Added `archive imap-mailbox-header-metadata-scan <archive-root>
+  --dry-run|--approve --format json`.
+- Added aliases `archive imap-header-metadata-scan` and
+  `archive mailbox-header-metadata-scan`.
+- Opened the first narrow, approval-gated live IMAP path: app-password auth via
+  `env:` refs, IMAP TLS connection, login, read-only inbox select, UID search,
+  limited header fetch, opaque candidate refs, and non-secret execution receipt
+  writing.
+- Kept broad mail ingestion closed: the command returns no username/password
+  values, environment variable names, exact credential refs, exact mailbox refs,
+  IMAP host values, raw UIDs, Message-ID values, subjects, senders/recipients,
+  raw headers, bodies, attachments, provider URLs, or local absolute paths.
+
 ## v0.3.61 - 2026-06-16
 
 - Added `archive imap-mailbox-adapter-execution-contract <archive-root>

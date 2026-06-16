@@ -103,6 +103,7 @@ docs/imap-mailbox-adapter-audit-plan.md
 docs/imap-mailbox-adapter-audit-write.md
 docs/imap-mailbox-adapter-preflight-plan.md
 docs/imap-mailbox-adapter-execution-contract.md
+docs/imap-mailbox-header-metadata-scan.md
 docs/version-truth-source.md
 docs/runtime-canonical-entrypoints.md
 docs/connected-accounts.md
@@ -198,6 +199,9 @@ imap-mailbox-adapter-preflight-plan
 
 imap-mailbox-adapter-execution-contract
   Print the read-only future execution contract for a local IMAP adapter. Dry-run only; wraps preflight, defines future inputs/output/receipt rules, writes nothing, connects to no mailbox, reads no mail, retrieves no secrets, starts no OAuth, and calls no providers.
+
+imap-mailbox-header-metadata-scan
+  Run the first approval-gated local IMAP header metadata scan. Dry-run previews without reading secrets; approved mode requires the manifest, approval receipt, execution contract, env username/app-password refs, and writes only a non-secret execution receipt. It reads no bodies or attachments and echoes no usernames, passwords, env var names, raw UIDs, subjects, senders, headers, local paths, or IMAP host values.
 
 human-artifact-store
   Plan a user-facing note/workspace/publication surface such as WordPress, Joplin, Notion, Obsidian, Evernote, or generic Markdown. Dry-run only; writes nothing, calls no providers, creates no notes, publishes no posts, and keeps system/AI artifacts separate from human-readable artifacts.
