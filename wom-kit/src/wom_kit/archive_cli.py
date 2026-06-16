@@ -5160,12 +5160,14 @@ def command_derive_text_coverage(args: argparse.Namespace) -> int:
     else:
         gate = result.get("coverage_gate") if isinstance(result.get("coverage_gate"), dict) else {}
         counts = result.get("manifest_counts") if isinstance(result.get("manifest_counts"), dict) else {}
+        quality = result.get("manifest_quality") if isinstance(result.get("manifest_quality"), dict) else {}
         print(f"Derived text coverage {gate.get('status') or ('passed' if result.get('ok') else 'blocked')}.")
         print(f"Archive: {result.get('archive_id') or '-'}")
         print(f"Textual candidates: {gate.get('textual_candidate_count', 0)}")
         print(f"Covered: {gate.get('covered_textual_count', 0)}")
         print(f"Missing: {gate.get('missing_derived_text_count', 0)}")
         print(f"Encrypted/password required: {gate.get('needs_password_or_encrypted_count', 0)}")
+        print(f"Manifest quality: {quality.get('status') or '-'} ({quality.get('records_with_issues_count', 0)} issue record(s))")
         print(f"By family: {counts.get('by_toolchain_family') or {}}")
         for item in result.get("missing_items", []):
             print(

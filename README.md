@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.82 pre-release
+v0.3.83 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -38,7 +38,7 @@ What exists today:
 - runtime-context canonical entrypoint metadata so AI runtimes can see which archive-relative files/directories to treat as start-here and authoritative sources,
 - private archive lifecycle tools for doctor checks, draft creation, minting, delegation, receipts, search, and metadata review,
 - read-only preview layers for runtime context, profiles, source/objet intake, block headers, prompt boundaries, foreign block review, projection, shared update review/index, shared update route pointers, and ZET would-transport planning,
-- read-only derived-text coverage/toolchain/doctor/agent-contract gates, manifest-scoped completeness signals, including existing derived-text records as a fallback textual signal for older prehashed manifests, non-echoed tool-hint paths for PATH-missing local extractors, plus approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
+- read-only derived-text coverage/toolchain/doctor/agent-contract gates, manifest-scoped completeness signals, manifest-quality checks that block false complete claims when `tool_version` or required extraction metadata is missing, including existing derived-text records as a fallback textual signal for older prehashed manifests, non-echoed tool-hint paths for PATH-missing local extractors, plus approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
 - beginner-facing AI response concept guide for explaining sha256 object identity vs location, manifests vs zets, and the objet -> derived text -> zet layer split without overclaiming upload or availability,
 - approval-gated `.gitignore` repair for missing WOM-kit safe defaults,
 - human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
@@ -277,6 +277,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.83
 v0.3.82
 v0.3.81
 v0.3.80

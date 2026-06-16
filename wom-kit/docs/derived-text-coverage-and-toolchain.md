@@ -1,7 +1,7 @@
 # Derived Text Coverage And Toolchain
 
-Status: v0.3.36 read-only coverage, toolchain doctor hints, and agent contract
-Date: 2026-06-15
+Status: v0.3.83 read-only coverage, manifest quality, toolchain doctor hints, and agent contract
+Date: 2026-06-17
 
 This document defines the read-only layer that helps an AI agent act on the
 derived-text philosophy instead of merely quoting it.
@@ -77,6 +77,29 @@ Status values:
 The command returns `ok: false` when `missing_derived_text_count` is not zero.
 This makes it useful as a gate before an agent claims the extraction pass is
 complete.
+
+v0.3.83 also returns `manifest_quality`. This checks the existing
+`objects/manifests/derived-text.jsonl` records for required provenance metadata:
+
+```text
+source_object_id
+derivation_kind
+tool_name
+tool_version
+review_status
+```
+
+`tool_version` must name the extractor/parser/OCR/ASR/model/script version that
+created the derived text. Values such as `unknown`, `n/a`, `none`, `todo`, or a
+blank value are treated as quality issues. This means a manifest can no longer
+look complete merely because every textual object has a derived-text row; the
+rows also need enough tool provenance for a future human or AI runtime to audit
+how that text was produced.
+
+`manifest_quality.status` is `needs_review` when any derived-text record is
+missing or weakening required provenance. The coverage gate returns `ok: false`
+and includes blocker `derived_text_manifest_quality_issues` until those records
+are fixed or recaptured.
 
 v0.3.59 also returns `completeness_signal`. This is deliberately
 manifest-scoped: it can say whether manifested textual objets have derived text,
@@ -195,5 +218,5 @@ These commands do not:
 - draft zets,
 - mint zets.
 
-They are coverage and routing gates. Actual extracted UTF-8 text is still
-registered through [Derived Text Capture](derived-text.md).
+They are coverage, manifest-quality, and routing gates. Actual extracted UTF-8
+text is still registered through [Derived Text Capture](derived-text.md).

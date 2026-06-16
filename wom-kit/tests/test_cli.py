@@ -24061,6 +24061,18 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(result["coverage_gate"]["covered_textual_count"], 2)
             self.assertEqual(result["coverage_gate"]["missing_derived_text_count"], 1)
             self.assertEqual(result["coverage_gate"]["needs_password_or_encrypted_count"], 1)
+            self.assertEqual(result["coverage_gate"]["manifest_quality_issue_count"], 2)
+            self.assertEqual(result["manifest_quality"]["status"], "needs_review")
+            self.assertEqual(result["manifest_quality"]["records_with_issues_count"], 2)
+            self.assertEqual(result["manifest_quality"]["missing_tool_version_count"], 2)
+            self.assertEqual(result["manifest_quality"]["missing_tool_name_count"], 2)
+            self.assertEqual(result["manifest_quality"]["invalid_derivation_kind_count"], 2)
+            self.assertEqual(result["manifest_quality"]["invalid_review_status_count"], 2)
+            self.assertIn("tool_version_missing", result["manifest_quality"]["issue_sample"][0]["issues"])
+            self.assertFalse(result["manifest_quality"]["closed_actions"]["derived_text_body_read"])
+            self.assertFalse(result["manifest_quality"]["privacy_guards"]["local_absolute_paths_echoed"])
+            self.assertIn("derived_text_manifest_quality_issues", result["blockers"])
+            self.assertIn("derived_text_manifest_quality_needs_review", result["warnings"])
             self.assertEqual(result["completeness_signal"]["lifecycle_action"], "derived_text_completeness_signal")
             self.assertEqual(result["completeness_signal"]["state"], "manifest_scoped_incomplete")
             self.assertEqual(result["completeness_signal"]["scope_kind"], "manifest_scoped")
@@ -24090,6 +24102,52 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(code, 1, output)
             nested = json.loads(output)
             self.assertEqual(nested["coverage_gate"]["missing_derived_text_count"], 1)
+
+    def test_derive_text_coverage_requires_tool_version_even_when_textual_coverage_is_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-quality")
+            source_object_id = self._derived_text_source_object(archive_root)
+            derived_manifest = archive_root / archive_services.DERIVED_TEXT_MANIFEST_RELATIVE_PATH
+            derived_manifest.parent.mkdir(parents=True, exist_ok=True)
+            derived_manifest.write_text(
+                json.dumps(
+                    {
+                        "derived_text_id": "derived-text:sha256:" + "3" * 64,
+                        "source_object_id": source_object_id,
+                        "derivation_kind": "parser",
+                        "tool_name": "fake-parser",
+                        "review_status": "unreviewed",
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            before = self._inventory(archive_root)
+
+            code, output = self.run_cli(
+                ["derive-text-coverage", str(archive_root), "--max-items", "10", "--dry-run", "--format", "json"]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["coverage_gate"]["textual_candidate_count"], 1)
+            self.assertEqual(result["coverage_gate"]["covered_textual_count"], 1)
+            self.assertEqual(result["coverage_gate"]["missing_derived_text_count"], 0)
+            self.assertEqual(result["coverage_gate"]["manifest_quality_issue_count"], 1)
+            self.assertEqual(result["manifest_quality"]["status"], "needs_review")
+            self.assertEqual(result["manifest_quality"]["missing_tool_version_count"], 1)
+            self.assertIn("tool_version_missing", result["manifest_quality"]["issue_sample"][0]["issues"])
+            self.assertIn("tool_version", result["manifest_quality"]["required_fields"])
+            self.assertIn("derived_text_manifest_quality_issues", result["blockers"])
+            self.assertFalse(result["manifest_quality"]["closed_actions"]["source_file_body_read"])
+            self.assertFalse(result["manifest_quality"]["privacy_guards"]["tool_paths_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn("objects/sha256", serialized)
+            self.assertEqual(self._inventory(archive_root), before)
 
     def test_derive_text_toolchain_and_agent_contract_are_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

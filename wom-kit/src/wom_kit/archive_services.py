@@ -46,6 +46,7 @@ DERIVED_TEXT_STORE_PREFIX = "objects/derived-text/sha256"
 DERIVED_TEXT_CAPTURE_RECEIPTS_DIR = "receipts/derived-text-capture"
 DERIVED_TEXT_DERIVATION_KINDS = {"parser", "ocr", "asr", "llm_vision"}
 DERIVED_TEXT_REVIEW_STATUSES = {"unreviewed", "human_corrected"}
+DERIVED_TEXT_UNKNOWN_VERSION_LABELS = {"unknown", "n/a", "na", "none", "unspecified", "todo", "tbd"}
 DERIVED_TEXT_CAPTURE_RECEIPT_SCHEMA = "wom-kit/derived-text-capture-receipt/v0.1"
 DERIVED_TEXT_RECORD_SCHEMA = "wom-kit/derived-text-record/v0.1"
 DERIVED_TEXT_CAPTURE_MANIFEST_REQUIRED_FIELDS = (
@@ -38763,6 +38764,111 @@ def derived_text_size_bucket(size_value: Any) -> str:
     return "large"
 
 
+def derived_text_manifest_quality(records: list[dict[str, Any]], *, max_items: int) -> dict[str, Any]:
+    issue_sample: list[dict[str, Any]] = []
+    records_with_issues = 0
+    missing_tool_version_count = 0
+    unknown_tool_version_count = 0
+    invalid_tool_version_count = 0
+    missing_tool_name_count = 0
+    invalid_derivation_kind_count = 0
+    invalid_review_status_count = 0
+    required_fields = [
+        "source_object_id",
+        "derivation_kind",
+        "tool_name",
+        "tool_version",
+        "review_status",
+    ]
+
+    def safe_manifest_scalar(value: Any) -> bool:
+        if not isinstance(value, str) or not value.strip():
+            return False
+        text = value.strip()
+        if "\n" in text or "\r" in text or "\x00" in text:
+            return False
+        if contains_forbidden_location_reference(text) or source_intake_has_provider_url(text) or source_intake_secret_like(text):
+            return False
+        return True
+
+    for index, record in enumerate(records, start=1):
+        issues: list[str] = []
+        source_object_id = str(record.get("source_object_id") or "").strip().lower()
+        if not OBJECT_ID_RE.match(source_object_id):
+            issues.append("source_object_id_invalid")
+
+        derivation_kind = str(record.get("derivation_kind") or "").strip()
+        if derivation_kind not in DERIVED_TEXT_DERIVATION_KINDS:
+            issues.append("derivation_kind_invalid")
+            invalid_derivation_kind_count += 1
+
+        if not safe_manifest_scalar(record.get("tool_name")):
+            issues.append("tool_name_missing_or_invalid")
+            missing_tool_name_count += 1
+
+        tool_version = record.get("tool_version")
+        tool_version_text = str(tool_version or "").strip()
+        if not tool_version_text:
+            issues.append("tool_version_missing")
+            missing_tool_version_count += 1
+        elif not safe_manifest_scalar(tool_version):
+            issues.append("tool_version_invalid")
+            invalid_tool_version_count += 1
+        elif tool_version_text.lower() in DERIVED_TEXT_UNKNOWN_VERSION_LABELS:
+            issues.append("tool_version_unknown")
+            unknown_tool_version_count += 1
+
+        review_status = str(record.get("review_status") or "").strip()
+        if review_status not in DERIVED_TEXT_REVIEW_STATUSES:
+            issues.append("review_status_invalid")
+            invalid_review_status_count += 1
+
+        if not issues:
+            continue
+        records_with_issues += 1
+        if len(issue_sample) < max_items:
+            issue_sample.append(
+                {
+                    "record_index": index,
+                    "source_object_id": source_object_id if OBJECT_ID_RE.match(source_object_id) else None,
+                    "issues": unique_preserve_order(issues),
+                    "body_text_echoed": False,
+                    "local_path_echoed": False,
+                    "tool_path_echoed": False,
+                }
+            )
+
+    return {
+        "status": "passed" if records_with_issues == 0 else "needs_review",
+        "required_fields": required_fields,
+        "derived_text_record_count": len(records),
+        "records_with_required_metadata_count": len(records) - records_with_issues,
+        "records_with_issues_count": records_with_issues,
+        "missing_tool_version_count": missing_tool_version_count,
+        "unknown_tool_version_count": unknown_tool_version_count,
+        "invalid_tool_version_count": invalid_tool_version_count,
+        "missing_tool_name_count": missing_tool_name_count,
+        "invalid_derivation_kind_count": invalid_derivation_kind_count,
+        "invalid_review_status_count": invalid_review_status_count,
+        "issues_truncated": records_with_issues > len(issue_sample),
+        "issue_sample": issue_sample,
+        "closed_actions": {
+            "source_file_body_read": False,
+            "derived_text_body_read": False,
+            "tool_executed": False,
+            "provider_api_called": False,
+            "writes": False,
+        },
+        "privacy_guards": {
+            "body_text_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "tool_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "secret_values_echoed": False,
+        },
+    }
+
+
 def derived_text_coverage(
     archive_root: Path | str,
     *,
@@ -38848,12 +38954,16 @@ def derived_text_coverage(
 
     missing_count = by_status.get("missing_derived_text", 0)
     blocked_count = by_status.get("needs_password_or_encrypted", 0)
+    manifest_quality = derived_text_manifest_quality(derived_records, max_items=max_items)
+    manifest_quality_issue_count = int(manifest_quality.get("records_with_issues_count") or 0)
     coverage_ratio = None
     if textual_candidate_count:
         coverage_ratio = covered_textual_count / textual_candidate_count
-    gate_passed = missing_count == 0
+    gate_passed = missing_count == 0 and manifest_quality_issue_count == 0
     if blocked_count:
         warnings.append("encrypted_or_password_required_textual_objets_need_human_resolution")
+    if manifest_quality_issue_count:
+        warnings.append("derived_text_manifest_quality_needs_review")
     return {
         "ok": not blockers and gate_passed,
         "dry_run": True,
@@ -38866,6 +38976,7 @@ def derived_text_coverage(
             "covered_textual_count": covered_textual_count,
             "missing_derived_text_count": missing_count,
             "needs_password_or_encrypted_count": blocked_count,
+            "manifest_quality_issue_count": manifest_quality_issue_count,
             "coverage_ratio": coverage_ratio,
             "missing_items_truncated": missing_count > len(missing_items),
             "blocked_items_truncated": blocked_count > len(blocked_items),
@@ -38885,6 +38996,7 @@ def derived_text_coverage(
             "by_extension": by_extension,
             "by_toolchain_family": by_toolchain_family,
         },
+        "manifest_quality": manifest_quality,
         "missing_items": missing_items,
         "blocked_items": blocked_items,
         "covered_sample": covered_items,
@@ -38895,9 +39007,14 @@ def derived_text_coverage(
         "next_safe_actions": [
             "Run derive-text toolchain for the missing families before extraction.",
             "Produce derived text outside this read-only gate, then capture it with derive-text capture --dry-run and --approve.",
+            "Fix derived-text manifest quality issues such as missing tool_version before claiming extraction provenance is complete.",
             "Re-run derive-text coverage until missing_derived_text_count is zero or every exception has a blocker.",
         ],
-        "blockers": unique_preserve_order(blockers + (["missing_derived_text"] if missing_count else [])),
+        "blockers": unique_preserve_order(
+            blockers
+            + (["missing_derived_text"] if missing_count else [])
+            + (["derived_text_manifest_quality_issues"] if manifest_quality_issue_count else [])
+        ),
         "warnings": unique_preserve_order(warnings),
     }
 
