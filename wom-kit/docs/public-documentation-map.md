@@ -192,6 +192,7 @@ Onboarding and setup plans:
 - [External Imports](external-imports.md)
 - [Derived Text Capture](derived-text.md)
 - [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md)
+- [Derived Text Completeness Signal](derived-text-completeness-signal.md)
 
 The current implementation priority is:
 

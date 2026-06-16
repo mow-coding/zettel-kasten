@@ -88,6 +88,7 @@ docs/new-user-flow.md
 docs/project-intake-session.md
 docs/project-intake-cookbook.md
 docs/derived-text-coverage-and-toolchain.md
+docs/derived-text-completeness-signal.md
 docs/human-artifact-store-contract.md
 docs/object-storage-recommendations.md
 docs/object-storage-adapter-readiness-plan.md

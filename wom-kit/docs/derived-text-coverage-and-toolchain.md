@@ -71,6 +71,12 @@ The command returns `ok: false` when `missing_derived_text_count` is not zero.
 This makes it useful as a gate before an agent claims the extraction pass is
 complete.
 
+v0.3.59 also returns `completeness_signal`. This is deliberately
+manifest-scoped: it can say whether manifested textual objets have derived text,
+but it is not proof that a Notion workspace, mailbox, cloud drive, or local
+folder was fully mirrored. A full external mirror needs a separate
+human-reviewed source/export mirror receipt.
+
 ## What It Does Not Expose
 
 Coverage output does not echo:

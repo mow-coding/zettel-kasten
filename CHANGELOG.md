@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.59 - 2026-06-16
+
+- Added a derived-text completeness signal to
+  `archive derive-text coverage <archive-root> --dry-run --format json` and
+  alias `archive derive-text-coverage`.
+- The new `completeness_signal` block distinguishes manifest-scoped derived
+  text coverage from full external workspace/mailbox/cloud-drive mirror
+  completion.
+- Added `wom-kit/docs/derived-text-completeness-signal.md`, release notes,
+  capability matrix coverage, README/documentation map links, and CLI tests.
+- Kept the signal read-only and non-secret: it reads no source file bodies,
+  scans no external workspaces, calls no providers, reads no secrets, writes no
+  files, and echoes no local absolute paths.
+
 ## v0.3.58 - 2026-06-16
 
 - Added runtime canonical entrypoint metadata to

@@ -182,6 +182,7 @@
 - [External Imports](external-imports.md)
 - [Derived Text Capture](derived-text.md)
 - [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md)
+- [Derived Text Completeness Signal](derived-text-completeness-signal.md)
 
 현재 구현 우선순위:
 
