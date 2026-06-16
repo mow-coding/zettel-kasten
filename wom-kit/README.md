@@ -179,7 +179,7 @@ object-storage-operation-request-plan
   Compose a future object-storage operation approval request package. Dry-run only; combines provider readiness, object target validation, presigned URL planning or objet-ref resolution, and credential policy checks without calling providers, reading secrets, creating presigned URLs, uploading, downloading, or writing files.
 
 external-export-plan
-  Plan a text-first Notion, Google Drive, or generic workspace export before large media downloads. Dry-run only; starts no export, calls no providers, reads no files, downloads no attachments, writes nothing, and echoes no provider URLs or local paths.
+  Plan a text-first Notion, Google Drive, or generic workspace export before large media downloads. Dry-run only; detects the broad workspace/database export trap, returns safe text-only and targeted first-pass command shapes, starts no export, calls no providers, reads no files, downloads no attachments, writes nothing, and echoes no provider URLs or local paths.
 
 imap-mailbox-plan
   Plan a Gmail, Naver, or generic IMAP mailbox source with safe account, username, mailbox, and credential refs. Dry-run only; opens no connection, logs into nothing, reads no headers/bodies/attachments, sends no mail, changes no flags, stores no secrets, and writes no files.

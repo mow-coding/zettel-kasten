@@ -1,6 +1,6 @@
 # External Export Plan
 
-Status: v0.3.66 read-only text-first external export planning checkpoint
+Status: v0.3.76 read-only large-media export trap checkpoint
 
 `archive external-export-plan` is a pre-export safety label. It is meant to run
 before a human or AI helper starts a broad Notion, Google Drive, or generic
@@ -63,11 +63,53 @@ For example, a high estimated media size with `full_media_requested` returns
 bulk media export. The human should first decide what text is needed and handle
 selected media as separate objets or object-storage work.
 
+## Large Media Export Trap
+
+v0.3.76 makes the trap explicit in CLI JSON as `large_media_export_trap`.
+
+The common failure shape is:
+
+```text
+The human wants text/database review.
+The helper starts a broad workspace or database export.
+The export also pulls uploaded files, attachments, images, audio, or video.
+The download becomes huge or stalls before WOM has a reviewed source plan.
+```
+
+When the trap is detected, the planner returns:
+
+```text
+detected: true
+trap_kind: workspace_or_database_export_can_pull_bulk_media
+stop_before_first_export: true
+requires_text_only_or_targeted_first: true
+```
+
+The safe first passes are:
+
+```text
+text_only_review
+  -> export only page/database text needed for review
+
+targeted_page_or_database_review
+  -> export one top-level page, database, folder, or bounded slice
+
+selected_media_after_review
+  -> handle only human-selected media as source objets after text scope is known
+```
+
+Do not treat a provider export zip as already registered WOM objets. After the
+text pass, run `scan-source`, use source-intake or project-intake receipts to
+decide what matters, and route selected media to object-storage recommendation
+or objet-capture planning.
+
 ## Provider Notes
 
 The Notion guidance is based on official Notion export documentation: pages and
 databases can be exported as Markdown & CSV, while broad workspace export can
 include uploaded files and can take a long time depending on workspace size.
+Notion's backup guidance also recommends smaller batches from important
+top-level pages when full workspace export is too large or fails.
 
 The Google guidance is based on official Google Takeout documentation: users can
 choose which data to include, archives may be split by size, and smaller product
@@ -94,7 +136,7 @@ In short, it reads no files and writes no archive receipts.
 
 ## Not Implemented
 
-v0.3.66 does not implement provider export automation, Notion API sync, Google
+v0.3.76 does not implement provider export automation, Notion API sync, Google
 Drive API sync, Takeout automation, attachment download, object upload, media
 deduplication, or automatic import. It only gives a safe pre-export planning
 signal.
