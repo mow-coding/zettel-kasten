@@ -970,6 +970,34 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["wom_kit_version"]["project_pin"]["status"], "missing")
             self.assertTrue(result["wom_kit_version"]["redaction"]["local_paths_redacted"])
             self.assertNotIn("local_paths", result["wom_kit_version"])
+            entrypoints = result["canonical_entrypoints"]
+            self.assertEqual(entrypoints["lifecycle_action"], "runtime_canonical_entrypoints")
+            self.assertEqual(entrypoints["start_here"], "archive.yml")
+            self.assertEqual(entrypoints["source_truths"]["archive_identity_and_policy"], "archive.yml")
+            self.assertEqual(entrypoints["source_truths"]["canonical_zets"], "zettels/")
+            self.assertEqual(entrypoints["source_truths"]["draft_inbox"], "inbox/")
+            self.assertEqual(entrypoints["source_truths"]["objet_manifest"], "objects/manifests/files.jsonl")
+            self.assertFalse(entrypoints["closed_actions"]["file_bodies_read"])
+            self.assertFalse(entrypoints["closed_actions"]["files_written"])
+            self.assertFalse(entrypoints["closed_actions"]["provider_api_called"])
+            self.assertFalse(entrypoints["closed_actions"]["secrets_read"])
+            entrypoint_statuses = {item["path"]: item for item in entrypoints["read_order"]}
+            for relative in (
+                "archive.yml",
+                "AGENTS.md",
+                "archive-identity.yml",
+                "source-bindings.yml",
+                "provider-bindings.yml",
+                "zettels/",
+                "inbox/",
+                "objects/manifests/files.jsonl",
+                "objects/manifests/derived-text.jsonl",
+                "views/",
+                "db/schema.sql",
+            ):
+                with self.subTest(relative=relative):
+                    self.assertEqual(entrypoint_statuses[relative]["status"], "present")
+                    self.assertTrue(entrypoint_statuses[relative]["exists"])
             self.assertIn("create draft in inbox", result["available_safe_actions"])
             self.assertIn("mint only through CLI approve path", result["available_safe_actions"])
 

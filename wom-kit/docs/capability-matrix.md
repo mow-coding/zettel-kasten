@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.57 version truth-source checkpoint
+Status: v0.3.58 runtime canonical entrypoint checkpoint
 Date: 2026-06-16
-Version: v0.3.57, release candidate
+Version: v0.3.58, release candidate
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -40,6 +40,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Block header preview | `read-only preview` | none | Derives a header preview for an existing draft or canonical zet. It does not modify the zet. |
 | Runtime context | `read-only preview` | none | AI runtimes can confirm archive id, type, paths, policy, and safe next actions. |
 | WOM-kit version truth source | `read-only preview` | none | CLI `archive --version` prints the running CLI version. CLI `archive version [root] --format json` and runtime-context field `wom_kit_version` report `wom_kit.__version__`, source-checkout consistency, and an optional project installed-version pin without writing files, calling providers, reading secrets, or echoing local absolute paths by default. |
+| Runtime canonical entrypoints | `read-only preview` | none | Runtime-context field `canonical_entrypoints` names `archive.yml` as the start-here file and lists archive-relative authoritative files/directories such as `AGENTS.md`, `source-bindings.yml`, `provider-bindings.yml`, `zettels/`, `inbox/`, object and derived-text manifests, views, and schema context. It reads no file bodies, writes nothing, calls no providers, reads no secrets, and echoes no local absolute paths by default. |
 | Profile registry list/resolve | `read-only preview` | none | Resolves the intended WOM profile before runtime-context or draft work. |
 | Profile wallet preview | `read-only preview` | none | Wallet-ready identity model only. No keys, signing, or blockchain calls. |
 | GitHub repository setup plan | `approval-gated write` | CLI approve writes local provider metadata/receipt only | Does not create a repository, configure remotes, push, call GitHub APIs, or run OAuth. |
