@@ -2057,6 +2057,50 @@ def command_external_export_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_connection_import_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("connection-import-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.connection_import_plan(
+            Path(args.archive_root),
+            source=args.source,
+            connection_kind=args.connection_kind,
+            dry_run=args.dry_run,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result["ok"] else "blocked"
+        print(f"Connection import plan {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source: {result.get('source') or '-'}")
+        print(f"Connection kind: {result.get('connection_kind') or '-'}")
+        print("Mappings:")
+        for item in result.get("connection_mappings", []):
+            edge_types = ", ".join(item.get("candidate_edge_types") or [])
+            print(f"- {item.get('connection_kind')}: {edge_types}")
+        missing = result.get("archive_link_type_status", {}).get("missing_recommended_edge_types") or []
+        if missing:
+            print("Missing recommended edge types:")
+            for edge_type in missing:
+                print(f"- {edge_type}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
     if args.dry_run == args.approve:
         print("prehashed-objet-ledger requires exactly one of --dry-run or --approve.", file=sys.stderr)
@@ -10087,6 +10131,27 @@ def build_parser() -> argparse.ArgumentParser:
     external_export_plan.add_argument("--dry-run", action="store_true", help="Required; read-only export preflight.")
     external_export_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     external_export_plan.set_defaults(func=command_external_export_plan)
+
+    connection_import_plan = subcommands.add_parser(
+        "connection-import-plan",
+        help="Plan Notion connection evidence import into WOM typed-edge candidates.",
+    )
+    connection_import_plan.add_argument("archive_root", help="Archive root to inspect.")
+    connection_import_plan.add_argument(
+        "--source",
+        required=True,
+        choices=sorted(archive_services.CONNECTION_IMPORT_SOURCES),
+        help="External connection evidence source.",
+    )
+    connection_import_plan.add_argument(
+        "--connection-kind",
+        default="all",
+        choices=["all"] + sorted(archive_services.CONNECTION_IMPORT_KINDS),
+        help="Specific connection evidence kind to plan.",
+    )
+    connection_import_plan.add_argument("--dry-run", action="store_true", help="Required; read-only connection import plan.")
+    connection_import_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    connection_import_plan.set_defaults(func=command_connection_import_plan)
 
     import_external = subcommands.add_parser("import-external", help="Import Notion or Google Drive exports as inbox drafts.")
     import_external.add_argument("archive_root", help="Target archive root.")

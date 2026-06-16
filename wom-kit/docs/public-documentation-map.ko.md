@@ -130,6 +130,7 @@
 - [Credential Adapter Audit Plan](credential-adapter-audit-plan.md)
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
 - [External Export Plan](external-export-plan.md)
+- [Connection Import Plan](connection-import-plan.md)
 - [Object Storage Recommendations](object-storage-recommendations.md)
 - [IMAP Mailbox Source](imap-mailbox-source.md)
 - [IMAP Mailbox Operation Request Plan](imap-mailbox-operation-request-plan.md)

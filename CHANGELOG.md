@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.77 - 2026-06-16
+
+- Added read-only `archive connection-import-plan --source notion --dry-run`
+  and MCP `connection_import_plan` for Notion connection evidence.
+- The planner maps relation properties, synced block references, database
+  view/filter snapshots, internal links, page mentions, comment context, and
+  objet embeds to typed-edge candidates.
+- Added a recommended edge vocabulary for this feedback slice:
+  `material`, `derived`, `semantic`, `embed`, `mention`, `view_query`, and
+  `comment_context`.
+- The planner checks the archive's allowed link types and reports which
+  recommended edge types are missing before any write command exists.
+- Kept the workflow read-only: no Notion call, OAuth, export read, comment
+  read, media download, zet write, edge write, receipt write, object manifest
+  update, provider URL, local path, page title, comment body, account id,
+  email, token, or secret value is produced.
+
 ## v0.3.76 - 2026-06-16
 
 - Added explicit `large_media_export_trap` output to
