@@ -110,6 +110,7 @@ docs/imap-mailbox-material-selection-record.md
 docs/imap-mailbox-material-capture-request-plan.md
 docs/imap-mailbox-material-capture-execution-contract.md
 docs/imap-mailbox-material-capture-approval-plan.md
+docs/imap-mailbox-material-capture-approval-audit.md
 docs/version-truth-source.md
 docs/runtime-canonical-entrypoints.md
 docs/connected-accounts.md
@@ -229,6 +230,9 @@ imap-mailbox-material-capture-execution-contract
 
 imap-mailbox-material-capture-approval-plan
   Preview or approve writing one non-secret material capture approval receipt. CLI-only; writes under receipts/imap/material-capture-approvals/ on approve, records no material selection receipt path, candidate refs, execution receipt path, or message material, opens no IMAP connection, reads no environment variables, opens no keyring/password manager, reads no headers/bodies/attachments, and creates no derived text.
+
+imap-mailbox-material-capture-approval-audit
+  Audit one non-secret material capture approval receipt against its material selection receipt. Dry-run only; writes nothing, reads no original execution receipt, opens no IMAP connection, reads no environment variables, opens no keyring/password manager, reads no headers/bodies/attachments, creates no derived text, and echoes no approval receipt path, material selection receipt path, execution receipt path, or candidate refs.
 
 human-artifact-store
   Plan a user-facing note/workspace/publication surface such as WordPress, Joplin, Notion, Obsidian, Evernote, or generic Markdown. Dry-run only; writes nothing, calls no providers, creates no notes, publishes no posts, and keeps system/AI artifacts separate from human-readable artifacts.

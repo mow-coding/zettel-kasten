@@ -16187,6 +16187,353 @@ def imap_mailbox_material_capture_approval_payload(
     }
 
 
+def imap_mailbox_material_capture_approval_audit(
+    archive_root: Path | str,
+    *,
+    material_selection_receipt: str,
+    approval_receipt: str,
+    capture_action: str = "message_body_capture",
+    expected_decision: str = "approve_once",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("imap-mailbox-material-capture-approval-audit is read-only and requires --dry-run.")
+
+    normalized_expected_decision = (expected_decision or "approve_once").strip().lower().replace("-", "_")
+    if normalized_expected_decision not in IMAP_MAILBOX_MATERIAL_CAPTURE_APPROVAL_DECISIONS:
+        blockers.append(
+            "expected_decision must be one of: "
+            + ", ".join(sorted(IMAP_MAILBOX_MATERIAL_CAPTURE_APPROVAL_DECISIONS))
+            + "."
+        )
+        normalized_expected_decision = "approve_once"
+
+    contract = imap_mailbox_material_capture_execution_contract(
+        root,
+        material_selection_receipt=material_selection_receipt,
+        capture_action=capture_action,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in contract.get("blockers") or [])
+    warnings.extend(str(item) for item in contract.get("warnings") or [])
+    normalized_action = str(contract.get("capture_action") or "message_body_capture")
+    material_summary = (
+        contract.get("material_selection_summary")
+        if isinstance(contract.get("material_selection_summary"), dict)
+        else {}
+    )
+    future_contract = (
+        contract.get("future_adapter_contract")
+        if isinstance(contract.get("future_adapter_contract"), dict)
+        else {}
+    )
+    allowed = (
+        future_contract.get("allowed_actions_after_implementation_and_approval")
+        if isinstance(future_contract.get("allowed_actions_after_implementation_and_approval"), dict)
+        else {}
+    )
+
+    receipt_relative = (approval_receipt or "").strip().replace("\\", "/")
+    if not receipt_relative:
+        blockers.append("approval_receipt is required.")
+    elif (
+        receipt_relative.startswith("/")
+        or ":" in receipt_relative
+        or "\x00" in receipt_relative
+        or ".." in receipt_relative.split("/")
+        or not receipt_relative.startswith(f"{IMAP_MAILBOX_MATERIAL_CAPTURE_APPROVAL_RECEIPTS_DIR}/")
+        or not receipt_relative.endswith(".json")
+    ):
+        blockers.append("approval_receipt must be an archive-relative IMAP material capture approval receipt JSON path.")
+
+    approval_payload: dict[str, Any] = {}
+    if not blockers:
+        receipt_path = archive_internal_path(root, receipt_relative)
+        if not receipt_path.is_file():
+            blockers.append("approval_receipt file is missing.")
+        else:
+            try:
+                loaded = json.loads(receipt_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    approval_payload = loaded
+                else:
+                    blockers.append("approval_receipt must contain a JSON object.")
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                blockers.append("approval_receipt could not be read as UTF-8 JSON.")
+
+    serialized_approval = json.dumps(json_safe(approval_payload), ensure_ascii=False, sort_keys=True, default=str)
+    if approval_payload and (contains_forbidden_location_reference(serialized_approval) or DRAFT_SECRET_VALUE_RE.search(serialized_approval)):
+        blockers.append("approval_receipt contains private locator or secret-like material and cannot be used.")
+
+    decision = approval_payload.get("decision") if isinstance(approval_payload.get("decision"), dict) else {}
+    approval_material = (
+        approval_payload.get("material_selection")
+        if isinstance(approval_payload.get("material_selection"), dict)
+        else {}
+    )
+    capture_request = (
+        approval_payload.get("capture_request")
+        if isinstance(approval_payload.get("capture_request"), dict)
+        else {}
+    )
+    approval_future_contract = (
+        approval_payload.get("future_adapter_contract")
+        if isinstance(approval_payload.get("future_adapter_contract"), dict)
+        else {}
+    )
+    approval_closed_actions = (
+        approval_payload.get("closed_actions")
+        if isinstance(approval_payload.get("closed_actions"), dict)
+        else {}
+    )
+    approval_redaction = approval_payload.get("redaction") if isinstance(approval_payload.get("redaction"), dict) else {}
+
+    receipt_kind_valid = approval_payload.get("receipt_kind") == "imap_mailbox_material_capture_approval"
+    lifecycle_valid = approval_payload.get("lifecycle_action") == "imap_mailbox_material_capture_approval_record"
+    schema_valid = approval_payload.get("schema_version") == "wom-imap-mailbox-material-capture-approval/v0.1"
+    archive_id_valid = approval_payload.get("archive_id") == archive_id
+    if approval_payload:
+        if not receipt_kind_valid:
+            blockers.append("approval_receipt is not an IMAP material capture approval receipt.")
+        if not lifecycle_valid:
+            blockers.append("approval_receipt lifecycle action is not imap_mailbox_material_capture_approval_record.")
+        if not schema_valid:
+            blockers.append("approval_receipt schema_version is not supported.")
+        if not archive_id_valid:
+            blockers.append("approval_receipt archive_id does not match this archive.")
+
+    receipt_decision = decision.get("decision") if isinstance(decision.get("decision"), str) else None
+    if approval_payload and receipt_decision not in IMAP_MAILBOX_MATERIAL_CAPTURE_APPROVAL_DECISIONS:
+        blockers.append("approval_receipt decision is not valid.")
+        receipt_decision = None
+    if approval_payload and receipt_decision != normalized_expected_decision:
+        blockers.append("approval_receipt decision does not match expected_decision.")
+    if approval_payload and receipt_decision == "needs_review":
+        blockers.append("approval_receipt must record approve_once or deny, not needs_review.")
+
+    expected_sha = material_summary.get("material_selection_receipt_sha256")
+    sha_matches = bool(expected_sha and approval_material.get("sha256") == expected_sha)
+    if approval_payload and not sha_matches:
+        blockers.append("approval_receipt material selection sha256 does not match the selected receipt.")
+
+    expected_indexes = material_summary.get("selected_indexes") if isinstance(material_summary.get("selected_indexes"), list) else []
+    receipt_indexes = approval_material.get("selected_indexes") if isinstance(approval_material.get("selected_indexes"), list) else []
+    indexes_match = list(receipt_indexes) == list(expected_indexes)
+    if approval_payload and not indexes_match:
+        blockers.append("approval_receipt selected_indexes do not match the selected receipt.")
+
+    expected_selected_count = material_summary.get("selected_count")
+    selected_count_matches = approval_material.get("selected_count") == expected_selected_count
+    if approval_payload and not selected_count_matches:
+        blockers.append("approval_receipt selected_count does not match the selected receipt.")
+
+    candidate_pool_matches = approval_material.get("candidate_pool_count") == material_summary.get("candidate_pool_count")
+    if approval_payload and not candidate_pool_matches:
+        blockers.append("approval_receipt candidate_pool_count does not match the selected receipt.")
+
+    selection_mode_matches = approval_material.get("selection_mode") == material_summary.get("selection_mode")
+    if approval_payload and not selection_mode_matches:
+        blockers.append("approval_receipt selection_mode does not match the selected receipt.")
+
+    action_matches = capture_request.get("capture_action") == normalized_action
+    if approval_payload and not action_matches:
+        blockers.append("approval_receipt capture_action does not match the requested action.")
+
+    if approval_payload and approval_material.get("path_included") is not False:
+        blockers.append("approval_receipt must not include the material selection receipt path.")
+    if approval_payload and approval_material.get("candidate_refs_included") is not False:
+        blockers.append("approval_receipt must not include candidate refs.")
+    if approval_payload and approval_material.get("execution_receipt_path_included") is not False:
+        blockers.append("approval_receipt must not include the execution receipt path.")
+
+    body_allowed_matches = approval_future_contract.get("read_selected_message_bodies_after_approval") is (
+        allowed.get("read_selected_message_bodies") is True
+    )
+    attachment_allowed_matches = approval_future_contract.get("read_selected_attachments_after_approval") is (
+        allowed.get("read_selected_attachments") is True
+    )
+    derived_text_allowed_matches = approval_future_contract.get("create_mail_derived_text_after_approval") is (
+        allowed.get("create_mail_derived_text") is True
+    )
+    if approval_payload and not (body_allowed_matches and attachment_allowed_matches and derived_text_allowed_matches):
+        blockers.append("approval_receipt future adapter action flags do not match the capture action.")
+
+    required_false_redaction_flags = (
+        "credential_values_included",
+        "credential_refs_included",
+        "env_var_names_included",
+        "imap_host_included",
+        "mailbox_ref_included",
+        "material_selection_receipt_path_included",
+        "execution_receipt_path_included",
+        "candidate_refs_included",
+        "message_uid_values_included",
+        "message_id_values_included",
+        "headers_included",
+        "bodies_included",
+        "attachment_names_included",
+        "attachment_bytes_included",
+        "local_absolute_paths_included",
+        "secret_values_included",
+    )
+    failed_redaction_flags: list[str] = []
+    if approval_payload:
+        for flag in required_false_redaction_flags:
+            if approval_redaction.get(flag) is not False:
+                failed_redaction_flags.append(flag)
+        if failed_redaction_flags:
+            blockers.append("approval_receipt redaction flags do not prove a non-secret approval receipt.")
+
+    required_false_closed_actions = (
+        "live_adapter_executed",
+        "imap_connection_opened",
+        "imap_login_attempted",
+        "mailbox_selected",
+        "mailbox_searched",
+        "message_uids_read",
+        "message_ids_read",
+        "message_headers_read",
+        "message_bodies_read",
+        "attachments_read",
+        "derived_text_created",
+        "credential_value_read",
+        "secret_value_read",
+        "password_manager_opened",
+        "os_keyring_opened",
+        "environment_read",
+        "oauth_started",
+        "provider_api_called",
+    )
+    failed_closed_actions: list[str] = []
+    if approval_payload:
+        for action in required_false_closed_actions:
+            if approval_closed_actions.get(action) is not False:
+                failed_closed_actions.append(action)
+        if failed_closed_actions:
+            blockers.append("approval_receipt closed-action flags do not prove material capture stayed closed.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "imap_mailbox_material_capture_approval_audit",
+        "archive_id": archive_id,
+        "audit_state": "approval_receipt_verified_for_future_material_capture"
+        if not blockers
+        else "blocked",
+        "capture_action": normalized_action,
+        "expected_decision": normalized_expected_decision,
+        "future_capture_authorized": receipt_decision == "approve_once" and not blockers,
+        "approval_receipt_summary": {
+            "receipt_loaded": bool(approval_payload),
+            "approval_receipt_path_echoed": False,
+            "receipt_kind_valid": receipt_kind_valid,
+            "lifecycle_action_valid": lifecycle_valid,
+            "schema_valid": schema_valid,
+            "archive_id_valid": archive_id_valid,
+            "decision": receipt_decision,
+            "expected_decision": normalized_expected_decision,
+            "single_action_only": decision.get("single_action_only") is True,
+            "replay_requires_new_approval": decision.get("replay_requires_new_approval") is True,
+            "background_use_allowed": decision.get("background_use_allowed") is True,
+        },
+        "material_selection_summary": {
+            **material_summary,
+            "material_selection_receipt_path_echoed": False,
+            "execution_receipt_path_echoed": False,
+            "candidate_refs_echoed": False,
+        },
+        "validation_summary": {
+            "material_selection_sha256_matches": sha_matches,
+            "selected_indexes_match": indexes_match,
+            "selected_count_matches": selected_count_matches,
+            "candidate_pool_count_matches": candidate_pool_matches,
+            "selection_mode_matches": selection_mode_matches,
+            "capture_action_matches": action_matches,
+            "future_adapter_action_flags_match": (
+                body_allowed_matches and attachment_allowed_matches and derived_text_allowed_matches
+            ),
+            "redaction_ok": not failed_redaction_flags,
+            "failed_redaction_flags": failed_redaction_flags,
+            "closed_actions_ok": not failed_closed_actions,
+            "failed_closed_actions": failed_closed_actions,
+            "approval_receipt_path_echoed": False,
+            "material_selection_receipt_path_echoed": False,
+            "execution_receipt_path_echoed": False,
+            "candidate_refs_echoed": False,
+        },
+        "current_capability": {
+            "material_capture_approval_audit_implemented": True,
+            "material_capture_approval_receipt_read_implemented": True,
+            "material_capture_approval_receipt_write_implemented": True,
+            "message_body_capture_implemented": False,
+            "attachment_capture_implemented": False,
+            "derived_text_capture_implemented": False,
+            "future_live_adapter_implemented": False,
+        },
+        "closed_actions": {
+            "material_selection_receipt_read": contract.get("closed_actions", {}).get("material_selection_receipt_read") is True
+            if isinstance(contract.get("closed_actions"), dict)
+            else False,
+            "material_capture_approval_receipt_read": bool(approval_payload),
+            "execution_receipt_read": False,
+            "live_adapter_executed": False,
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "mailbox_selected": False,
+            "mailbox_searched": False,
+            "message_uids_read": False,
+            "message_ids_read": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "derived_text_created": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "oauth_started": False,
+            "provider_api_called": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "email_addresses_echoed": False,
+            "username_values_echoed": False,
+            "exact_account_refs_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "exact_mailbox_refs_echoed": False,
+            "env_var_names_echoed": False,
+            "imap_host_values_echoed": False,
+            "provider_urls_echoed": False,
+            "message_uid_values_echoed": False,
+            "message_id_values_echoed": False,
+            "message_headers_echoed": False,
+            "message_bodies_echoed": False,
+            "subject_values_echoed": False,
+            "sender_values_echoed": False,
+            "recipient_values_echoed": False,
+            "attachment_names_echoed": False,
+            "attachment_bytes_echoed": False,
+            "secret_values_echoed": False,
+            "approval_receipt_path_echoed": False,
+            "material_selection_receipt_path_echoed": False,
+            "execution_receipt_path_echoed": False,
+            "candidate_refs_echoed": False,
+            "candidate_refs_recorded": False,
+            "local_absolute_paths_echoed": False,
+        },
+        "would_change": [],
+        "files_written": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
 def credential_ref_plan(
     archive_root: Path | str,
     *,
