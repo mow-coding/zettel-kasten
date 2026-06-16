@@ -260,6 +260,13 @@ providers, or prove that the external bytes are still available. Use
 `objet-capture` when WOM-kit should verify staged bytes and keep a local
 content-addressed copy.
 
+When an external ledger includes safe MIME values, pass `--mime-field mime` so
+those values are copied into the manifest. This is especially important before
+running `derive-text coverage`, because MIME and extension hints help WOM-kit
+decide which objects are textual candidates. Older external records lack MIME values in some real migrations; when they already have matching derived-text
+records, coverage treats the derived-text record itself as a textual signal
+rather than reporting a misleading `0/0` extraction pass.
+
 ## 8. Provider Page Snapshots
 
 Provider exports can include structured page snapshots as well as attachments.

@@ -75,6 +75,7 @@ archive prehashed-objet-ledger <archive-root> \
   --ledger notion-page-snapshots.jsonl \
   --store-kind notion_source_export \
   --store-ref notion-export-20260614 \
+  --mime-field mime \
   --dry-run \
   --format json
 ```
@@ -86,6 +87,7 @@ archive prehashed-objet-ledger <archive-root> \
   --ledger notion-page-snapshots.jsonl \
   --store-kind notion_source_export \
   --store-ref notion-export-20260614 \
+  --mime-field mime \
   --approve \
   --reviewed-by person:me \
   --format json
@@ -93,6 +95,8 @@ archive prehashed-objet-ledger <archive-root> \
 
 This appends manifest records for externally verified object ids. It does not
 read the JSON bytes, copy files, call Notion, upload, draft, mint, or clean.
+If the ledger has MIME values, `--mime-field mime` keeps page snapshots and
+textual export rows classifiable for later derived-text coverage.
 
 ### WOM-Verified Staged File
 

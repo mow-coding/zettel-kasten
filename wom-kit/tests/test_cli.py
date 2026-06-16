@@ -6327,6 +6327,7 @@ class ArchiveCliTests(unittest.TestCase):
                             {
                                 "sha256": sha_a,
                                 "bytes": 12,
+                                "mime": "text/plain",
                                 "filename": "private-notion-export-name.pdf",
                                 "url": "https://example.com/private",
                             }
@@ -6362,6 +6363,8 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["ledger"]["ledger_file_count"], 1)
             self.assertEqual(result["ledger"]["row_count"], 4)
             self.assertEqual(result["ledger"]["valid_object_count"], 3)
+            self.assertEqual(result["ledger"]["mime_field"], "mime")
+            self.assertEqual(result["ledger"]["valid_mime_count"], 1)
             self.assertEqual(result["ledger"]["unique_sha256_count"], 2)
             self.assertEqual(result["ledger"]["duplicate_sha256_count"], 1)
             self.assertEqual(result["ledger"]["skipped_row_count"], 0)
@@ -6492,8 +6495,8 @@ class ArchiveCliTests(unittest.TestCase):
             ledger.write_text(
                 "\n".join(
                     [
-                        json.dumps({"sha256": sha_a, "bytes": 12, "filename": "private-notion-export-name.pdf"}),
-                        json.dumps({"sha256": "sha256:" + sha_b, "bytes": "5", "url": "https://example.com/private"}),
+                        json.dumps({"sha256": sha_a, "bytes": 12, "mime": "text/plain", "filename": "private-notion-export-name.pdf"}),
+                        json.dumps({"sha256": "sha256:" + sha_b, "bytes": "5", "mime": "application/pdf", "url": "https://example.com/private"}),
                         json.dumps({"sha256": sha_a, "bytes": 12}),
                     ]
                 ),
@@ -6535,6 +6538,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(set(added), {f"sha256:{sha_a}", f"sha256:{sha_b}"})
             record = added[f"sha256:{sha_a}"]
             self.assertEqual(record["logical_key"], f"objects/external/prehashed/notion_source_export/{sha_a[:2]}/{sha_a}")
+            self.assertEqual(record["mime"], "text/plain")
             self.assertFalse((archive_root / record["logical_key"]).exists())
             self.assertEqual(record["locations"][0]["provider"], "external_prehashed")
             self.assertEqual(record["locations"][0]["store_ref"], "notion-export-20260613")
@@ -6546,6 +6550,7 @@ class ArchiveCliTests(unittest.TestCase):
             receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
             self.assertEqual(receipt["schema"], archive_services.PREHASHED_OBJET_LEDGER_RECEIPT_SCHEMA)
             self.assertEqual(receipt["summary"]["appended_manifest_records"], 2)
+            self.assertEqual(receipt["summary"]["valid_mime_count"], 2)
             self.assertFalse(receipt["ledger_path_included"])
             self.assertFalse(receipt["privacy_guards"]["row_values_echoed"])
 
@@ -23378,6 +23383,7 @@ class ObjetCaptureTests(unittest.TestCase):
             covered_pdf = self._derived_text_source_object(archive_root, b"covered pdf bytes")
             docx_digest = hashlib.sha256(b"missing docx bytes").hexdigest()
             encrypted_digest = hashlib.sha256(b"encrypted pdf bytes").hexdigest()
+            prehashed_text_digest = hashlib.sha256(b"prehashed unknown text bytes").hexdigest()
             manifest = archive_root / "objects" / "manifests" / "files.jsonl"
             with manifest.open("a", encoding="utf-8", newline="\n") as handle:
                 handle.write(
@@ -23409,15 +23415,40 @@ class ObjetCaptureTests(unittest.TestCase):
                     )
                     + "\n"
                 )
+                handle.write(
+                    json.dumps(
+                        {
+                            "object_id": f"sha256:{prehashed_text_digest}",
+                            "sha256": prehashed_text_digest,
+                            "logical_key": f"objects/external/prehashed/notion_source_export/{prehashed_text_digest[:2]}/{prehashed_text_digest}",
+                            "mime": "application/octet-stream",
+                            "size_bytes": 222,
+                            "locations": [{"provider": "external_prehashed", "store_ref": "notion-export-20260616"}],
+                        },
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
             derived_manifest = archive_root / archive_services.DERIVED_TEXT_MANIFEST_RELATIVE_PATH
             derived_manifest.parent.mkdir(parents=True, exist_ok=True)
             derived_manifest.write_text(
-                json.dumps(
-                    {
-                        "derived_text_id": "derived-text:sha256:" + "1" * 64,
-                        "source_object_id": covered_pdf,
-                    },
-                    separators=(",", ":"),
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "derived_text_id": "derived-text:sha256:" + "1" * 64,
+                                "source_object_id": covered_pdf,
+                            },
+                            separators=(",", ":"),
+                        ),
+                        json.dumps(
+                            {
+                                "derived_text_id": "derived-text:sha256:" + "2" * 64,
+                                "source_object_id": f"sha256:{prehashed_text_digest}",
+                            },
+                            separators=(",", ":"),
+                        ),
+                    ]
                 )
                 + "\n",
                 encoding="utf-8",
@@ -23431,8 +23462,8 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(code, 1, output)
             self.assertFalse(result["ok"])
             self.assertEqual(result["lifecycle_action"], "derived_text_coverage_gate")
-            self.assertEqual(result["coverage_gate"]["textual_candidate_count"], 3)
-            self.assertEqual(result["coverage_gate"]["covered_textual_count"], 1)
+            self.assertEqual(result["coverage_gate"]["textual_candidate_count"], 4)
+            self.assertEqual(result["coverage_gate"]["covered_textual_count"], 2)
             self.assertEqual(result["coverage_gate"]["missing_derived_text_count"], 1)
             self.assertEqual(result["coverage_gate"]["needs_password_or_encrypted_count"], 1)
             self.assertEqual(result["completeness_signal"]["lifecycle_action"], "derived_text_completeness_signal")
@@ -23446,6 +23477,11 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertFalse(result["completeness_signal"]["closed_actions"]["provider_api_called"])
             self.assertEqual(result["missing_items"][0]["object_id"], f"sha256:{docx_digest}")
             self.assertEqual(result["missing_items"][0]["toolchain_family"], "office_open_xml_word")
+            covered_by_derived_signal = [
+                item for item in result["covered_sample"] if item["object_id"] == f"sha256:{prehashed_text_digest}"
+            ][0]
+            self.assertEqual(covered_by_derived_signal["textual_signal"], "derived_text_record_present")
+            self.assertEqual(covered_by_derived_signal["toolchain_family"], "derived_text_present_unknown_source")
             self.assertFalse(result["missing_items"][0]["source_name_echoed"])
             self.assertFalse(result["privacy_guards"]["object_filenames_echoed"])
             self.assertFalse(result["closed_actions"]["source_file_body_read"])

@@ -59,6 +59,13 @@ It classifies each manifest object by extension and MIME hint, then checks
 whether textual candidates have at least one derived-text record whose
 `source_object_id` matches the object id.
 
+If an older or external manifest record has no useful extension/MIME signal but
+already has a matching derived-text record, coverage treats that derived-text
+record as a conservative textual signal. In output this appears as
+`textual_signal: derived_text_record_present`. This prevents prehashed external
+ledgers that were originally registered as `application/octet-stream` from
+collapsing a real extraction pass into a misleading `0/0` coverage reading.
+
 Status values:
 
 - `covered`: textual candidate has derived text.

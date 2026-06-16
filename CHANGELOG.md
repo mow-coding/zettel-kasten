@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.73 - 2026-06-16
+
+- Extended `archive prehashed-objet-ledger` with `--mime-field <json-field>`
+  so externally verified ledgers can carry safe MIME values into
+  `objects/manifests/files.jsonl` without echoing row values or reading blob
+  bytes.
+- Updated `derive-text coverage` so existing derived-text records count as a
+  conservative textual signal when older external manifest rows lack useful
+  extension/MIME metadata, preventing misleading `0/0` coverage reads after a
+  real extraction pass has already been linked.
+- Added `wom-kit/schemas/derived-text-capture-manifest-item.schema.json` and
+  documented the required `derive-text capture --from-manifest` fields,
+  including `tool_version`.
+- Kept the workflow closed: no source bytes are read, no providers are called,
+  no uploads or downloads are performed, and public/debug output still avoids
+  row values, source filenames, local paths, provider URLs, tokens, and secret
+  values.
+
 ## v0.3.72 - 2026-06-16
 
 - Added `archive imap-mailbox-material-capture-approval-audit <archive-root>

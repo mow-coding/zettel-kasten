@@ -2073,6 +2073,7 @@ def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
             store_ref=args.store_ref,
             sha256_field=args.sha256_field,
             size_field=args.size_field,
+            mime_field=args.mime_field,
             dry_run=args.dry_run,
             approve=args.approve,
             reviewed_by=args.reviewed_by,
@@ -8268,6 +8269,7 @@ def build_parser() -> argparse.ArgumentParser:
     prehashed_objet_ledger.add_argument("--store-ref", help="Safe external store label/ref required when --approve is used.")
     prehashed_objet_ledger.add_argument("--sha256-field", default="sha256", help="JSONL field containing sha256 or sha256:<hex>.")
     prehashed_objet_ledger.add_argument("--size-field", default="bytes", help="JSONL field containing byte size.")
+    prehashed_objet_ledger.add_argument("--mime-field", default="mime", help="Optional JSONL field containing a safe MIME type.")
     prehashed_objet_ledger.add_argument("--max-rows", type=int, default=100000, help="Maximum rows to inspect.")
     prehashed_objet_ledger.add_argument("--dry-run", action="store_true", help="Preview ledger registration without writing.")
     prehashed_objet_ledger.add_argument("--approve", action="store_true", help="Append reviewed external manifest records and write a receipt.")

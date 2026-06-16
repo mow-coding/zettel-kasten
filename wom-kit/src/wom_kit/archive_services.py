@@ -21845,6 +21845,7 @@ def prehashed_objet_ledger_preview(
     store_kind: str = "generic_content_addressed_store",
     sha256_field: str = "sha256",
     size_field: str = "bytes",
+    mime_field: str = "mime",
     dry_run: bool = True,
     max_rows: int = 100000,
 ) -> dict[str, Any]:
@@ -21855,6 +21856,7 @@ def prehashed_objet_ledger_preview(
         store_ref=None,
         sha256_field=sha256_field,
         size_field=size_field,
+        mime_field=mime_field,
         dry_run=True,
         approve=False,
         reviewed_by=None,
@@ -21870,6 +21872,7 @@ def prehashed_objet_ledger_register(
     store_ref: str | None = None,
     sha256_field: str = "sha256",
     size_field: str = "bytes",
+    mime_field: str = "mime",
     dry_run: bool = False,
     approve: bool = False,
     reviewed_by: str | None = None,
@@ -21902,6 +21905,7 @@ def prehashed_objet_ledger_register(
         blockers.append("Prehashed objet ledger registration requires --store-ref with a safe external store label.")
     safe_sha_field = prehashed_ledger_safe_field_name(sha256_field, "sha256_field", blockers) or "sha256"
     safe_size_field = prehashed_ledger_safe_field_name(size_field, "size_field", blockers) or "bytes"
+    safe_mime_field = prehashed_ledger_safe_field_name(mime_field, "mime_field", blockers) or "mime"
     try:
         capped_max_rows = max(1, min(int(max_rows), 100000))
     except (TypeError, ValueError):
@@ -21913,6 +21917,7 @@ def prehashed_objet_ledger_register(
         ledger_paths,
         sha256_field=safe_sha_field,
         size_field=safe_size_field,
+        mime_field=safe_mime_field,
         max_rows=capped_max_rows,
     )
     blockers.extend(ledger_summary["blockers"])
@@ -21920,6 +21925,8 @@ def prehashed_objet_ledger_register(
 
     if ledger_summary["row_count"] == 0 and not blockers:
         blockers.append("ledger must contain at least one JSON object row.")
+    if ledger_summary["invalid_mime_count"]:
+        warnings.append("Some ledger MIME values were invalid and were ignored without echoing row values.")
     if ledger_summary["invalid_row_count"]:
         warnings.append("Some ledger rows are invalid and were counted without echoing row values.")
         if approve:
@@ -21960,8 +21967,12 @@ def prehashed_objet_ledger_register(
             "ledger_file_sha256es": ledger_summary["ledger_file_sha256es"],
             "sha256_field": safe_sha_field,
             "size_field": safe_size_field,
+            "mime_field": safe_mime_field,
             "row_count": ledger_summary["row_count"],
             "valid_object_count": ledger_summary["valid_object_count"],
+            "valid_mime_count": ledger_summary["valid_mime_count"],
+            "invalid_mime_count": ledger_summary["invalid_mime_count"],
+            "duplicate_mime_conflict_count": ledger_summary["duplicate_mime_conflict_count"],
             "skipped_row_count": ledger_summary["skipped_row_count"],
             "invalid_row_count": ledger_summary["invalid_row_count"],
             "duplicate_sha256_count": ledger_summary["duplicate_sha256_count"],
@@ -22032,6 +22043,7 @@ def prehashed_objet_ledger_register(
             ledger_sha256=ledger_summary["ledger_file_sha256"],
             sha256_field=safe_sha_field,
             size_field=safe_size_field,
+            mime_field=safe_mime_field,
         )
         for item in candidates
     ]
@@ -22076,9 +22088,13 @@ def prehashed_objet_ledger_register(
         "ledger_path_included": False,
         "sha256_field": safe_sha_field,
         "size_field": safe_size_field,
+        "mime_field": safe_mime_field,
         "summary": {
             "row_count": ledger_summary["row_count"],
             "valid_object_count": ledger_summary["valid_object_count"],
+            "valid_mime_count": ledger_summary["valid_mime_count"],
+            "invalid_mime_count": ledger_summary["invalid_mime_count"],
+            "duplicate_mime_conflict_count": ledger_summary["duplicate_mime_conflict_count"],
             "unique_sha256_count": len(unique_objects),
             "duplicate_sha256_count": ledger_summary["duplicate_sha256_count"],
             "skipped_row_count": ledger_summary["skipped_row_count"],
@@ -22139,6 +22155,7 @@ def read_prehashed_objet_ledgers(
     *,
     sha256_field: str,
     size_field: str,
+    mime_field: str,
     max_rows: int,
 ) -> dict[str, Any]:
     blockers: list[str] = []
@@ -22151,6 +22168,9 @@ def read_prehashed_objet_ledgers(
             "ledger_file_count": 0,
             "row_count": 0,
             "valid_object_count": 0,
+            "valid_mime_count": 0,
+            "invalid_mime_count": 0,
+            "duplicate_mime_conflict_count": 0,
             "skipped_row_count": 0,
             "invalid_row_count": 0,
             "duplicate_sha256_count": 0,
@@ -22167,10 +22187,14 @@ def read_prehashed_objet_ledgers(
     valid_count = 0
     skipped_count = 0
     invalid_count = 0
+    valid_mime_count = 0
+    invalid_mime_count = 0
+    duplicate_mime_conflict_count = 0
     duplicate_count = 0
     total_bytes = 0
     truncated = False
     seen_sizes: dict[str, int] = {}
+    seen_mimes: dict[str, str | None] = {}
     ledger_hashes: list[str] = []
     skipped_reasons: dict[str, int] = {}
     invalid_reasons: dict[str, int] = {}
@@ -22215,14 +22239,27 @@ def read_prehashed_objet_ledgers(
                         invalid_count += 1
                         invalid_reasons["size_missing_or_invalid"] = invalid_reasons.get("size_missing_or_invalid", 0) + 1
                         continue
+                    row_mime = normalize_prehashed_ledger_mime(row.get(mime_field))
+                    if row.get(mime_field) is not None:
+                        if row_mime:
+                            valid_mime_count += 1
+                        else:
+                            invalid_mime_count += 1
                     if row_sha in seen_sizes:
                         duplicate_count += 1
                         if seen_sizes[row_sha] != row_size:
                             invalid_count += 1
                             invalid_reasons["duplicate_size_mismatch"] = invalid_reasons.get("duplicate_size_mismatch", 0) + 1
                             continue
+                        existing_mime = seen_mimes.get(row_sha)
+                        if row_mime and existing_mime and row_mime != existing_mime:
+                            duplicate_mime_conflict_count += 1
+                            warnings.append("prehashed objet ledger duplicate MIME conflicts were ignored.")
+                        elif row_mime and not existing_mime:
+                            seen_mimes[row_sha] = row_mime
                     else:
                         seen_sizes[row_sha] = row_size
+                        seen_mimes[row_sha] = row_mime
                     valid_count += 1
                     total_bytes += row_size
             if truncated:
@@ -22249,13 +22286,19 @@ def read_prehashed_objet_ledgers(
         "ledger_file_count": len(ledger_hashes),
         "row_count": row_count,
         "valid_object_count": valid_count,
+        "valid_mime_count": valid_mime_count,
+        "invalid_mime_count": invalid_mime_count,
+        "duplicate_mime_conflict_count": duplicate_mime_conflict_count,
         "skipped_row_count": skipped_count,
         "invalid_row_count": invalid_count,
         "duplicate_sha256_count": duplicate_count,
         "total_declared_bytes": total_bytes,
         "skipped_reasons": skipped_reasons,
         "invalid_reasons": invalid_reasons,
-        "unique_objects": [{"sha256": digest, "size_bytes": size} for digest, size in seen_sizes.items()],
+        "unique_objects": [
+            {"sha256": digest, "size_bytes": size, "mime": seen_mimes.get(digest)}
+            for digest, size in seen_sizes.items()
+        ],
         "truncated": truncated,
         "blockers": blockers,
         "warnings": warnings,
@@ -22273,14 +22316,16 @@ def prehashed_objet_manifest_record(
     ledger_sha256: str | None,
     sha256_field: str,
     size_field: str,
+    mime_field: str,
 ) -> dict[str, Any]:
     digest = str(item["sha256"])
     logical_key = f"objects/external/prehashed/{store_kind}/{digest[:2]}/{digest}"
+    mime = safe_mime(str(item.get("mime") or "")) or "application/octet-stream"
     return {
         "object_id": f"sha256:{digest}",
         "sha256": digest,
         "logical_key": logical_key,
-        "mime": "application/octet-stream",
+        "mime": mime,
         "size_bytes": int(item["size_bytes"]),
         "locations": [
             {
@@ -22303,6 +22348,7 @@ def prehashed_objet_manifest_record(
             "ledger_path_included": False,
             "sha256_field": sha256_field,
             "size_field": size_field,
+            "mime_field": mime_field,
             "row_values_ingested": False,
             "byte_verification_by_wom_kit": False,
         },
@@ -22347,6 +22393,14 @@ def normalize_prehashed_ledger_sha256(value: Any) -> str | None:
     if SHA256_RE.match(text):
         return text
     return None
+
+
+def normalize_prehashed_ledger_mime(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    return safe_mime(value)
 
 
 def normalize_prehashed_ledger_size(value: Any) -> int | None:
@@ -37102,9 +37156,16 @@ def derived_text_coverage(
         mime = str(record.get("mime") or "").strip().lower()
         toolchain = derived_text_toolchain_profile(extension, mime)
         family = str(toolchain.get("format_family") or "unknown_or_non_textual")
-        textual_candidate = bool(toolchain.get("textual_candidate"))
         encrypted = derived_text_record_has_encryption_hint(record)
         derived_count = source_counts.get(object_id, 0)
+        manifest_textual_signal = bool(toolchain.get("textual_candidate"))
+        derived_text_signal = derived_count > 0
+        textual_candidate = manifest_textual_signal or derived_text_signal
+        textual_signal = "manifest_extension_or_mime" if manifest_textual_signal else None
+        if derived_text_signal and not manifest_textual_signal:
+            textual_signal = "derived_text_record_present"
+            family = "derived_text_present_unknown_source"
+            warnings.append("derived_text_records_used_as_textual_signal_for_unknown_manifest_mime")
         if textual_candidate:
             textual_candidate_count += 1
         if not textual_candidate:
@@ -37125,6 +37186,7 @@ def derived_text_coverage(
             "mime": mime or None,
             "coverage_status": status,
             "derived_text_record_count": derived_count,
+            "textual_signal": textual_signal,
             "toolchain_family": family,
             "recommended_derivation_kind": toolchain.get("recommended_derivation_kind"),
             "suggested_route": toolchain.get("extraction_route"),
