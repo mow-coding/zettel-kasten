@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.68 - 2026-06-16
+
+- Added `archive imap-mailbox-material-selection-record <archive-root>
+  --execution-receipt <archive-relative-json> --selection-mode
+  human_review_queue|body_candidates|attachment_candidates|derived_text_candidates
+  --selected-index <n> --dry-run|--approve --format json`.
+- Added aliases `archive imap-material-selection-record` and
+  `archive mailbox-material-selection-record`.
+- The new approval-gated write records one-based candidate indexes from a
+  validated IMAP header metadata scan receipt, creating a non-secret material
+  selection receipt under `receipts/imap/material-selections/`.
+- Kept message material closed: the command writes no candidate refs, echoes no
+  execution receipt path, opens no IMAP connection, reads no environment
+  variables, opens no keyring/password manager, reads no message headers,
+  bodies, or attachments, creates no derived text, starts no OAuth, and calls no
+  providers.
+
 ## v0.3.67 - 2026-06-16
 
 - Added `archive imap-mailbox-material-selection-plan <archive-root>

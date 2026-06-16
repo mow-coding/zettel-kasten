@@ -43,6 +43,8 @@ Commands:
           Audit a non-secret IMAP header metadata scan execution receipt.
   imap-mailbox-material-selection-plan
           Plan a human review queue from an IMAP header scan receipt without reading message material.
+  imap-mailbox-material-selection-record
+          Preview or approve a non-secret IMAP material selection record by candidate index.
   prehashed-objet-ledger
           Preview or approve-register an already-hashed external objet ledger without reading blob bytes.
   resolve-objet-ref
@@ -5976,6 +5978,65 @@ def command_imap_mailbox_material_selection_plan(args: argparse.Namespace) -> in
     return 0 if result.get("ok", True) else 1
 
 
+def command_imap_mailbox_material_selection_record(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.imap_mailbox_material_selection_record(
+            Path(args.archive_root),
+            execution_receipt=args.execution_receipt,
+            selection_mode=args.selection_mode,
+            selected_indexes=args.selected_index,
+            reviewed_by=args.reviewed_by,
+            dry_run=args.dry_run,
+            approve=args.approve,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("selection_summary") if isinstance(result.get("selection_summary"), dict) else {}
+        material_record = (
+            result.get("material_selection_record")
+            if isinstance(result.get("material_selection_record"), dict)
+            else {}
+        )
+        scope = result.get("future_material_scope") if isinstance(result.get("future_material_scope"), dict) else {}
+        print(f"IMAP mailbox material selection record {result.get('record_state') or '-'}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Selection mode: {result.get('selection_mode') or '-'}")
+        print(f"Selected count: {summary.get('selected_count') or 0}")
+        print(f"Candidate pool: {summary.get('candidate_pool_count') or 0}")
+        print(f"Receipt: {material_record.get('receipt_path') or material_record.get('proposed_receipt_path') or '-'}")
+        print("Execution receipt path echoed: no")
+        print("Candidate refs echoed: no")
+        print(f"Future body capture requested: {'yes' if scope.get('body_capture_requested') else 'no'}")
+        print(f"Future attachment capture requested: {'yes' if scope.get('attachment_capture_requested') else 'no'}")
+        print(f"Future derived text requested: {'yes' if scope.get('derived_text_capture_requested') else 'no'}")
+        print("Message bodies read now: no")
+        print("Attachments read now: no")
+        writes = result.get("files_written") or []
+        if writes:
+            print("Files written:")
+            for path in writes:
+                print(f"- {path}")
+        else:
+            print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_imap_mailbox_adapter_manifest_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("imap-mailbox-adapter-manifest-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -10944,6 +11005,48 @@ def build_parser() -> argparse.ArgumentParser:
     )
     imap_mailbox_material_selection_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     imap_mailbox_material_selection_plan.set_defaults(func=command_imap_mailbox_material_selection_plan)
+
+    imap_mailbox_material_selection_record = subcommands.add_parser(
+        "imap-mailbox-material-selection-record",
+        aliases=["imap-material-selection-record", "mailbox-material-selection-record"],
+        help="Preview or approve a non-secret IMAP material selection record by candidate index.",
+    )
+    imap_mailbox_material_selection_record.add_argument("archive_root", help="Archive root to inspect.")
+    imap_mailbox_material_selection_record.add_argument(
+        "--execution-receipt",
+        required=True,
+        help="Archive-relative receipts/imap/adapter-executions/*.json path. The exact path is not echoed in JSON output.",
+    )
+    imap_mailbox_material_selection_record.add_argument(
+        "--selection-mode",
+        choices=sorted(archive_services.IMAP_MAILBOX_MATERIAL_SELECTION_MODES),
+        default="human_review_queue",
+        help="Future message material review lane to record. The command still reads no bodies or attachments.",
+    )
+    imap_mailbox_material_selection_record.add_argument(
+        "--selected-index",
+        type=int,
+        action="append",
+        default=[],
+        help="One-based candidate position from the execution receipt. Repeat for multiple candidates.",
+    )
+    imap_mailbox_material_selection_record.add_argument(
+        "--reviewed-by",
+        default="human:pending-review",
+        help="Safe non-secret reviewer label. Required to be non-empty with --approve.",
+    )
+    imap_mailbox_material_selection_record.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate and preview the material selection receipt without writing files.",
+    )
+    imap_mailbox_material_selection_record.add_argument(
+        "--approve",
+        action="store_true",
+        help="Write a non-secret material selection receipt after validation passes.",
+    )
+    imap_mailbox_material_selection_record.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    imap_mailbox_material_selection_record.set_defaults(func=command_imap_mailbox_material_selection_record)
 
     sources = subcommands.add_parser("sources", help="Inspect source bindings and source map status.")
     sources.add_argument("archive_root", help="Archive root to inspect.")
