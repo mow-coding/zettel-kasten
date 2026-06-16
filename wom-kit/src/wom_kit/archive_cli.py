@@ -2101,6 +2101,52 @@ def command_connection_import_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_connection_evidence_parser_contract(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("connection-evidence-parser-contract is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.connection_evidence_parser_contract(
+            Path(args.archive_root),
+            source=args.source,
+            connection_kind=args.connection_kind,
+            dry_run=args.dry_run,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("contract_state") or ("passed" if result.get("ok") else "blocked")
+        output = result.get("output_contract") if isinstance(result.get("output_contract"), dict) else {}
+        print(f"Connection evidence parser contract: {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source: {result.get('source') or '-'}")
+        print(f"Connection kind: {result.get('connection_kind') or '-'}")
+        print("Parser executed now: no")
+        print("Writes: none")
+        if output.get("candidate_record_required_fields"):
+            print("Candidate fields:")
+            for field in output["candidate_record_required_fields"]:
+                print(f"- {field}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
     if args.dry_run == args.approve:
         print("prehashed-objet-ledger requires exactly one of --dry-run or --approve.", file=sys.stderr)
@@ -10233,6 +10279,32 @@ def build_parser() -> argparse.ArgumentParser:
     connection_import_plan.add_argument("--dry-run", action="store_true", help="Required; read-only connection import plan.")
     connection_import_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     connection_import_plan.set_defaults(func=command_connection_import_plan)
+
+    connection_evidence_parser_contract = subcommands.add_parser(
+        "connection-evidence-parser-contract",
+        aliases=["connection-parser-contract", "notion-connection-parser-contract"],
+        help="Preview the read-only contract a future Notion connection evidence parser must satisfy.",
+    )
+    connection_evidence_parser_contract.add_argument("archive_root", help="Archive root to inspect.")
+    connection_evidence_parser_contract.add_argument(
+        "--source",
+        required=True,
+        choices=sorted(archive_services.CONNECTION_IMPORT_SOURCES),
+        help="External connection evidence source.",
+    )
+    connection_evidence_parser_contract.add_argument(
+        "--connection-kind",
+        default="all",
+        choices=["all"] + sorted(archive_services.CONNECTION_IMPORT_KINDS),
+        help="Specific connection evidence kind to contract.",
+    )
+    connection_evidence_parser_contract.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Contract only; never reads exports, parses files, writes candidates, or writes edges.",
+    )
+    connection_evidence_parser_contract.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    connection_evidence_parser_contract.set_defaults(func=command_connection_evidence_parser_contract)
 
     import_external = subcommands.add_parser("import-external", help="Import Notion or Google Drive exports as inbox drafts.")
     import_external.add_argument("archive_root", help="Target archive root.")

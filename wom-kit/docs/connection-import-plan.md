@@ -62,6 +62,9 @@ comment_context
 This still does not write edges. It only means WOM can now name the connection
 types before a future evidence parser or approval-gated edge writer exists.
 
+For the next pre-parser safety gate, see
+[Connection Evidence Parser Contract](connection-evidence-parser-contract.md).
+
 ## Dynamic Snapshot Rule
 
 Database views and filters are dynamic. A view result can change after export,

@@ -1921,6 +1921,83 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn(str(archive_root.resolve()), serialized)
             self.assertNotIn("https://", serialized)
 
+    def test_connection_evidence_parser_contract_describes_future_parser_without_reads_or_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "connection-evidence-parser-contract",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--connection-kind",
+                    "all",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "connection_evidence_parser_contract")
+            self.assertEqual(result["contract_state"], "contract_ready_for_future_parser")
+            self.assertEqual(result["source"], "notion")
+            self.assertEqual(result["connection_kind"], "all")
+            lanes = {item["connection_kind"]: item for item in result["input_contract"]["accepted_input_lanes"]}
+            self.assertEqual(
+                set(lanes),
+                {
+                    "relation_property",
+                    "synced_block_reference",
+                    "database_view_filter",
+                    "internal_url_hyperlink",
+                    "mention_page",
+                    "comment_context",
+                    "objet_embed",
+                },
+            )
+            self.assertIn("relation_source_ref", lanes["relation_property"]["required_fields"])
+            self.assertIn("object_id", lanes["objet_embed"]["required_fields"])
+            self.assertTrue(lanes["database_view_filter"]["dynamic_snapshot_required"])
+            self.assertTrue(lanes["comment_context"]["dynamic_snapshot_required"])
+            self.assertEqual(result["archive_link_type_status"]["missing_recommended_edge_types"], [])
+            self.assertTrue(result["output_contract"]["emits_candidate_edge_records_only"])
+            self.assertIn("candidate_id", result["output_contract"]["candidate_record_required_fields"])
+            self.assertIn("review_status", result["output_contract"]["candidate_record_required_fields"])
+            self.assertFalse(result["current_capability"]["evidence_parser_implemented"])
+            self.assertFalse(result["current_capability"]["edge_write_implemented"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["source_export_files_read"])
+            self.assertFalse(result["closed_actions"]["parser_executed"])
+            self.assertFalse(result["closed_actions"]["candidate_records_written"])
+            self.assertFalse(result["closed_actions"]["edges_written"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["local_absolute_paths_echoed"])
+            self.assertFalse(result["privacy_guards"]["page_titles_echoed"])
+            self.assertFalse(result["privacy_guards"]["comment_bodies_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn("https://", serialized)
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "connection-evidence-parser-contract",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_imap_mailbox_plan_is_read_only_and_blocks_secret_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

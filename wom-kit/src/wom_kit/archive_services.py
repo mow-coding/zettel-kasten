@@ -11399,6 +11399,250 @@ def connection_import_plan(
     }
 
 
+def connection_evidence_parser_contract(
+    archive_root: Path | str,
+    *,
+    source: str = "notion",
+    connection_kind: str = "all",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    plan = connection_import_plan(
+        archive_root,
+        source=source,
+        connection_kind=connection_kind,
+        dry_run=dry_run,
+    )
+    normalized_kind = str(plan.get("connection_kind") or "all")
+    input_lanes = connection_evidence_parser_input_lanes()
+    if normalized_kind != "all":
+        input_lanes = [item for item in input_lanes if item["connection_kind"] == normalized_kind]
+
+    blockers = [str(item) for item in plan.get("blockers") or []]
+    warnings = [str(item) for item in plan.get("warnings") or []]
+    contract_state = "blocked" if blockers else "contract_ready_for_future_parser"
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "connection_evidence_parser_contract",
+        "archive_id": plan.get("archive_id"),
+        "contract_state": contract_state,
+        "source": plan.get("source"),
+        "connection_kind": normalized_kind,
+        "supported_connection_kinds": plan.get("supported_connection_kinds"),
+        "input_contract": {
+            "accepted_input_lanes": input_lanes,
+            "source_export_ref_must_be_safe_label": True,
+            "raw_export_file_paths_allowed_in_output": False,
+            "raw_provider_urls_allowed_in_output": False,
+            "page_titles_allowed_in_output": False,
+            "comment_bodies_allowed_in_output": False,
+            "parser_reads_source_exports_now": False,
+        },
+        "output_contract": {
+            "emits_candidate_edge_records_only": True,
+            "candidate_record_required_fields": [
+                "candidate_id",
+                "connection_kind",
+                "edge_type",
+                "source_ref",
+                "target_ref",
+                "confidence",
+                "snapshot_ref",
+                "review_status",
+                "evidence_ref",
+            ],
+            "candidate_id_strategy": "opaque_hash_of_safe_refs_and_connection_kind",
+            "allowed_edge_types": plan.get("edge_vocabulary"),
+            "candidate_records_written_now": False,
+            "edge_write_implemented_now": False,
+        },
+        "parser_stages": [
+            {
+                "stage": "locate_evidence",
+                "rule": "Accept only explicit, human-scoped export snapshots or safe mirror records.",
+            },
+            {
+                "stage": "normalize_refs",
+                "rule": "Convert provider ids and object ids into safe archive refs without echoing raw URLs, local paths, titles, or bodies.",
+            },
+            {
+                "stage": "map_to_edge_type",
+                "rule": "Use the connection-import-plan mapping and base WOM edge vocabulary.",
+            },
+            {
+                "stage": "require_snapshot_when_dynamic",
+                "rule": "Database view/filter and comment-context evidence must include a reviewed static snapshot before candidate edges are trusted.",
+            },
+            {
+                "stage": "emit_candidates",
+                "rule": "Emit candidate records only; do not write zets, canonical edges, receipts, or object manifests.",
+            },
+            {
+                "stage": "await_human_approval_writer",
+                "rule": "A later approval-gated writer must review candidates before durable WOM edges exist.",
+            },
+        ],
+        "redaction_contract": {
+            "must_not_emit": [
+                "provider_urls",
+                "local_absolute_paths",
+                "page_titles",
+                "comment_bodies",
+                "account_ids",
+                "emails",
+                "tokens",
+                "secret_values",
+                "raw_adapter_output",
+            ],
+            "safe_to_emit": [
+                "archive_id",
+                "connection_kind",
+                "edge_type",
+                "safe_source_export_ref",
+                "safe_snapshot_ref",
+                "safe_evidence_ref",
+                "sha256_object_id",
+                "review_status",
+            ],
+        },
+        "archive_link_type_status": plan.get("archive_link_type_status"),
+        "connection_mappings": plan.get("connection_mappings"),
+        "dynamic_snapshot_standard": plan.get("dynamic_snapshot_standard"),
+        "official_source_ids": plan.get("official_source_ids"),
+        "current_capability": {
+            "parser_contract_available": True,
+            "connection_import_planning_available": True,
+            "evidence_parser_implemented": False,
+            "candidate_record_writer_implemented": False,
+            "edge_write_implemented": False,
+            "provider_api_call_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "source_export_files_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "parser_executed": False,
+            "candidate_records_written": False,
+            "zettels_written": False,
+            "edges_written": False,
+            "receipts_written": False,
+            "object_manifest_updated": False,
+        },
+        "privacy_guards": {
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "raw_export_paths_echoed": False,
+            "page_titles_echoed": False,
+            "comment_bodies_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "secret_values_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": [
+            "Build the read-only parser against sanitized fake fixtures before any client export is used.",
+            "Keep parser output to candidate edge records with safe refs and review status.",
+            "Add fixture tests for every accepted input lane before enabling real export-file parsing.",
+            "Only after parser review, add an approval-gated writer that turns candidates into durable WOM edges and receipts.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def connection_evidence_parser_input_lanes() -> list[dict[str, Any]]:
+    return [
+        {
+            "connection_kind": "relation_property",
+            "accepted_evidence": "relation CSV rows or property snapshots",
+            "required_fields": [
+                "source_export_ref",
+                "relation_source_ref",
+                "target_ref",
+                "relation_role",
+                "review_status",
+            ],
+            "dynamic_snapshot_required": False,
+        },
+        {
+            "connection_kind": "synced_block_reference",
+            "accepted_evidence": "synced block reference metadata or block snapshot refs",
+            "required_fields": [
+                "source_export_ref",
+                "source_block_ref",
+                "synced_block_ref",
+                "direction_review_status",
+            ],
+            "dynamic_snapshot_required": False,
+        },
+        {
+            "connection_kind": "database_view_filter",
+            "accepted_evidence": "static data-source view/filter/query snapshot",
+            "required_fields": [
+                "snapshot_id",
+                "source_export_ref",
+                "query_or_context_summary",
+                "result_refs",
+                "review_status",
+            ],
+            "dynamic_snapshot_required": True,
+        },
+        {
+            "connection_kind": "internal_url_hyperlink",
+            "accepted_evidence": "markdown or rich-text internal page-link metadata",
+            "required_fields": [
+                "source_export_ref",
+                "source_page_ref",
+                "target_page_ref",
+                "link_context_ref",
+                "review_status",
+            ],
+            "dynamic_snapshot_required": False,
+        },
+        {
+            "connection_kind": "mention_page",
+            "accepted_evidence": "page mention metadata from rich-text or export markers",
+            "required_fields": [
+                "source_export_ref",
+                "source_page_ref",
+                "mentioned_page_ref",
+                "mention_context_ref",
+                "review_status",
+            ],
+            "dynamic_snapshot_required": False,
+        },
+        {
+            "connection_kind": "comment_context",
+            "accepted_evidence": "comment mirror metadata without comment bodies",
+            "required_fields": [
+                "snapshot_id",
+                "comment_context_ref",
+                "page_or_block_ref",
+                "result_refs",
+                "privacy_redactions",
+                "review_status",
+            ],
+            "dynamic_snapshot_required": True,
+        },
+        {
+            "connection_kind": "objet_embed",
+            "accepted_evidence": "object/embed refs from file blocks or resolved sha256 object refs",
+            "required_fields": [
+                "source_export_ref",
+                "source_page_ref",
+                "object_id",
+                "review_status",
+            ],
+            "optional_fields": ["store_ref"],
+            "dynamic_snapshot_required": False,
+        },
+    ]
+
+
 def notion_connection_import_mappings() -> list[dict[str, Any]]:
     return [
         {
