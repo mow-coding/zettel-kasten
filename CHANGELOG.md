@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.66 - 2026-06-16
+
+- Added `archive external-export-plan <archive-root> --source
+  notion|google_drive|generic_workspace --dry-run --format json`.
+- The new read-only planner helps users and AI helpers stop before broad
+  provider exports that might pull large uploaded files, attachments, images,
+  audio, or video into a first local download.
+- The planner classifies media risk, recommends text-first, targeted, or
+  stop-and-split-media export modes, and links the later `scan-source`,
+  `import-external`, and object-storage recommendation commands.
+- Kept the export planner closed: it starts no provider export, calls no
+  providers, starts no OAuth, reads no files or media bytes, downloads no
+  attachments, writes no archive files, and echoes no provider URLs, local
+  paths, filenames, account ids, emails, tokens, or secret values.
+
 ## v0.3.65 - 2026-06-16
 
 - Extended `archive version <root> --format json` and runtime-context

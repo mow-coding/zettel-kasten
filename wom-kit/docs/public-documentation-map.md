@@ -133,6 +133,7 @@ Onboarding and setup plans:
 - [Credential Adapter Manifest Plan](credential-adapter-manifest-plan.md)
 - [Credential Adapter Audit Plan](credential-adapter-audit-plan.md)
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
+- [External Export Plan](external-export-plan.md)
 - [Object Storage Recommendations](object-storage-recommendations.md)
 - [Object Storage Adapter Readiness Plan](object-storage-adapter-readiness-plan.md)
 - [Object Storage Operation Request Plan](object-storage-operation-request-plan.md)

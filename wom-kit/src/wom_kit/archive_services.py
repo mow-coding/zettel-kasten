@@ -249,6 +249,9 @@ OWNER_KINDS = {
 SENSITIVE_SHARE_CATEGORIES = {"medical", "psychological", "journal", "relationship-private"}
 SENSITIVE_CATEGORY_ALIASES = {"diary": "journal", "therapy": "psychological", "mental-health": "psychological"}
 EXTERNAL_IMPORT_SOURCES = {"notion", "google_drive"}
+EXTERNAL_EXPORT_PLAN_SOURCES = {"notion", "google_drive", "generic_workspace"}
+EXTERNAL_EXPORT_GOALS = {"text_only", "targeted_pages", "full_workspace_review"}
+EXTERNAL_EXPORT_MEDIA_POLICIES = {"avoid_bulk_media", "selected_media_only", "full_media_requested"}
 EXTERNAL_IMPORT_EXTENSIONS = {".md", ".markdown", ".txt"}
 SOURCE_TYPES = {"local_folder", "external_ssd", "notion_export", "google_drive_export", "object_manifest", "imap_mailbox"}
 IMAP_MAILBOX_SOURCE_TYPE = "imap_mailbox"
@@ -10985,6 +10988,193 @@ def human_artifact_store_plan(
         "would_change": [],
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
+    }
+
+
+def external_export_plan(
+    archive_root: Path | str,
+    *,
+    source: str,
+    export_goal: str = "text_only",
+    media_policy: str = "avoid_bulk_media",
+    estimated_media_gb: float | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("external-export-plan is dry-run only; pass --dry-run.")
+
+    normalized_source = str(source or "").strip().lower().replace("-", "_")
+    if normalized_source not in EXTERNAL_EXPORT_PLAN_SOURCES:
+        blockers.append("source must be one of: " + ", ".join(sorted(EXTERNAL_EXPORT_PLAN_SOURCES)) + ".")
+        normalized_source = "generic_workspace"
+
+    normalized_goal = str(export_goal or "text_only").strip().lower().replace("-", "_")
+    if normalized_goal not in EXTERNAL_EXPORT_GOALS:
+        blockers.append("export_goal must be one of: " + ", ".join(sorted(EXTERNAL_EXPORT_GOALS)) + ".")
+        normalized_goal = "text_only"
+
+    normalized_media = str(media_policy or "avoid_bulk_media").strip().lower().replace("-", "_")
+    if normalized_media not in EXTERNAL_EXPORT_MEDIA_POLICIES:
+        blockers.append("media_policy must be one of: " + ", ".join(sorted(EXTERNAL_EXPORT_MEDIA_POLICIES)) + ".")
+        normalized_media = "avoid_bulk_media"
+
+    media_estimate = None
+    if estimated_media_gb is not None:
+        try:
+            media_estimate = float(estimated_media_gb)
+        except (TypeError, ValueError):
+            blockers.append("estimated_media_gb must be a non-negative number when provided.")
+        else:
+            if media_estimate < 0:
+                blockers.append("estimated_media_gb must be a non-negative number when provided.")
+
+    risk_reasons: list[str] = []
+    if normalized_media == "full_media_requested":
+        risk_reasons.append("Full media export can pull large uploaded files, attachments, images, audio, or video into the local download.")
+    if media_estimate is not None and media_estimate >= 20:
+        risk_reasons.append("Estimated media size is large enough to split into a separate object-storage or targeted-export step.")
+    if normalized_goal == "full_workspace_review":
+        risk_reasons.append("Full workspace review can include pages or files outside the immediate text-first scope.")
+
+    if risk_reasons:
+        warnings.extend(risk_reasons)
+
+    if normalized_media == "full_media_requested" or (media_estimate is not None and media_estimate >= 100):
+        risk_level = "high"
+    elif risk_reasons or normalized_media == "selected_media_only":
+        risk_level = "medium"
+    else:
+        risk_level = "low"
+
+    provider_guidance = external_export_provider_guidance(normalized_source)
+    recommended_mode = external_export_recommended_mode(normalized_source, normalized_goal, normalized_media)
+
+    import_after_review = None
+    if normalized_source in {"notion", "google_drive"}:
+        import_after_review = (
+            "archive import-external <archive-root> --source "
+            + normalized_source
+            + " --export <local-export-root> --dry-run --format json"
+        )
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "external_export_plan",
+        "archive_id": archive_id,
+        "source": normalized_source,
+        "export_goal": normalized_goal,
+        "media_policy": normalized_media,
+        "estimated_media_gb": media_estimate,
+        "risk_level": risk_level,
+        "risk_reasons": unique_preserve_order(risk_reasons),
+        "recommended_export_mode": recommended_mode,
+        "provider_guidance": provider_guidance,
+        "stop_rules": [
+            "Do not start a full workspace export before deciding whether uploaded files and media are in scope.",
+            "Prefer a text-first export or a small targeted page/folder export before a whole-account archive.",
+            "If media is needed, handle it as separate objets or object-storage work rather than mixing it into a first text import.",
+            "Do not paste provider download links, local export paths, filenames, account ids, emails, or secret values into chat.",
+        ],
+        "next_exact_commands": {
+            "scan_after_manual_export": (
+                "archive scan-source <archive-root> --source <source-id> --source-root <local-export-root> "
+                "--dry-run --format json"
+            ),
+            "import_after_review": import_after_review,
+            "object_storage_recommendation_for_media": (
+                "archive object-storage-recommendation <archive-root> --scenario media_heavy_archive "
+                "--profile-id <safe-profile-id> --profile-slug <safe-profile-slug> --dry-run --format json"
+            ),
+        },
+        "official_source_ids": provider_guidance["official_source_ids"],
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "provider_dashboard_opened": False,
+            "export_started": False,
+            "download_started": False,
+            "files_read": False,
+            "file_bodies_read": False,
+            "media_bytes_read": False,
+            "attachments_downloaded": False,
+            "archive_written": False,
+            "source_map_written": False,
+            "drafts_written": False,
+            "secrets_read": False,
+        },
+        "privacy_guards": {
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "filenames_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "secret_values_echoed": False,
+        },
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+        "would_change": [],
+    }
+
+
+def external_export_provider_guidance(source: str) -> dict[str, Any]:
+    if source == "notion":
+        return {
+            "source": "notion",
+            "official_source_ids": ["notion_export_content_help"],
+            "text_first_path": "Use Markdown & CSV for page/database text where it fits the review goal.",
+            "targeted_export_path": "Export the smallest page, database, or workspace slice that answers the current WOM intake question.",
+            "media_warning": "Notion workspace exports can include uploaded files, images, and other assets; keep bulk media out of the first text-first pass.",
+            "review_notes": [
+                "Include subpages only when nested pages are part of the current review scope.",
+                "Treat whole-workspace export as a later reviewed action, not the default first move.",
+            ],
+        }
+    if source == "google_drive":
+        return {
+            "source": "google_drive",
+            "official_source_ids": ["google_takeout_download_data_help"],
+            "text_first_path": "Select only the product, folder, or file group needed for the current review when Takeout or Drive export offers that choice.",
+            "targeted_export_path": "Use smaller product/folder selections or smaller archive chunks before broad account export.",
+            "media_warning": "Drive/Takeout archives can be large, split into multiple archives, or include files outside the immediate text-first scope.",
+            "review_notes": [
+                "Prefer one-time targeted exports over scheduled or full-account exports for first WOM intake.",
+                "Review archive size and delivery method before creating the export.",
+            ],
+        }
+    return {
+        "source": "generic_workspace",
+        "official_source_ids": [],
+        "text_first_path": "Create a small text-first export or manifest before copying large folders.",
+        "targeted_export_path": "Choose one project, folder, database, or time-bounded slice for the first pass.",
+        "media_warning": "Large media should be separated into object storage or a reviewed objet capture flow.",
+        "review_notes": [
+            "Do not treat every file in the workspace as in-scope by default.",
+            "Use source-intake and object-storage planning after the human chooses the target slice.",
+        ],
+    }
+
+
+def external_export_recommended_mode(source: str, export_goal: str, media_policy: str) -> dict[str, Any]:
+    mode = "text_first_targeted_export"
+    if export_goal == "targeted_pages":
+        mode = "targeted_page_or_folder_export"
+    if media_policy == "selected_media_only":
+        mode = "text_first_with_reviewed_selected_media"
+    if media_policy == "full_media_requested":
+        mode = "stop_and_split_media_before_export"
+    return {
+        "mode": mode,
+        "source": source,
+        "text_first": media_policy != "full_media_requested",
+        "bulk_media_allowed_now": False,
+        "requires_human_scope_review": True,
+        "requires_separate_media_plan": media_policy != "avoid_bulk_media",
     }
 
 

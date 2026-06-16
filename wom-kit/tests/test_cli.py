@@ -1771,6 +1771,58 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertTrue(any("surface_ref" in blocker for blocker in result["blockers"]))
 
+    def test_external_export_plan_warns_before_large_media_export_without_reading_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "external-export-plan",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export-goal",
+                    "full_workspace_review",
+                    "--media-policy",
+                    "full_media_requested",
+                    "--estimated-media-gb",
+                    "164",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "external_export_plan")
+            self.assertEqual(result["source"], "notion")
+            self.assertEqual(result["risk_level"], "high")
+            self.assertEqual(result["recommended_export_mode"]["mode"], "stop_and_split_media_before_export")
+            self.assertFalse(result["recommended_export_mode"]["bulk_media_allowed_now"])
+            self.assertTrue(result["recommended_export_mode"]["requires_separate_media_plan"])
+            self.assertIn("notion_export_content_help", result["official_source_ids"])
+            self.assertIn("Markdown & CSV", result["provider_guidance"]["text_first_path"])
+            self.assertTrue(any("full workspace export" in rule for rule in result["stop_rules"]))
+            self.assertIn("scan_after_manual_export", result["next_exact_commands"])
+            self.assertIn("object_storage_recommendation_for_media", result["next_exact_commands"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["export_started"])
+            self.assertFalse(result["closed_actions"]["download_started"])
+            self.assertFalse(result["closed_actions"]["files_read"])
+            self.assertFalse(result["closed_actions"]["media_bytes_read"])
+            self.assertFalse(result["closed_actions"]["archive_written"])
+            self.assertFalse(result["privacy_guards"]["local_absolute_paths_echoed"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn("https://", serialized)
+            self.assertNotIn("private-notion-export-name", serialized)
+
     def test_imap_mailbox_plan_is_read_only_and_blocks_secret_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
