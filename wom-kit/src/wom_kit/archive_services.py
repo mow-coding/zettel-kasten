@@ -1280,6 +1280,11 @@ IMAP_MAILBOX_MATERIAL_SELECTION_MODES = {
     "attachment_candidates",
     "derived_text_candidates",
 }
+IMAP_MAILBOX_MATERIAL_CAPTURE_ACTIONS = {
+    "message_body_capture",
+    "attachment_capture",
+    "derived_text_capture",
+}
 IMAP_MAILBOX_ADAPTER_MANIFEST_SCHEMA = "wom-kit/imap-mailbox-adapter-manifest/v0.1"
 IMAP_MAILBOX_ADAPTER_MANIFESTS_DIR = "config/imap-adapters"
 IMAP_MAILBOX_ADAPTER_MANIFEST_WRITE_RECEIPTS_DIR = "receipts/imap/adapter-manifests"
@@ -15373,6 +15378,254 @@ def imap_mailbox_material_selection_record_payload(
             "candidate_refs_included": False,
             "execution_receipt_path_included": False,
         },
+    }
+
+
+def imap_mailbox_material_capture_request_plan(
+    archive_root: Path | str,
+    *,
+    material_selection_receipt: str,
+    capture_action: str = "message_body_capture",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("imap-mailbox-material-capture-request-plan is read-only and requires --dry-run.")
+
+    normalized_action = (capture_action or "message_body_capture").strip().lower().replace("-", "_")
+    if normalized_action not in IMAP_MAILBOX_MATERIAL_CAPTURE_ACTIONS:
+        blockers.append(
+            "capture_action must be one of: "
+            + ", ".join(sorted(IMAP_MAILBOX_MATERIAL_CAPTURE_ACTIONS))
+            + "."
+        )
+        normalized_action = "message_body_capture"
+
+    receipt_relative = (material_selection_receipt or "").strip().replace("\\", "/")
+    if not receipt_relative:
+        blockers.append("material_selection_receipt is required.")
+    elif (
+        receipt_relative.startswith("/")
+        or ":" in receipt_relative
+        or "\x00" in receipt_relative
+        or ".." in receipt_relative.split("/")
+        or not receipt_relative.startswith(f"{IMAP_MAILBOX_MATERIAL_SELECTION_RECEIPTS_DIR}/")
+        or not receipt_relative.endswith(".json")
+    ):
+        blockers.append("material_selection_receipt must be an archive-relative IMAP material selection receipt JSON path.")
+
+    receipt_payload: dict[str, Any] = {}
+    receipt_sha256: str | None = None
+    if not blockers:
+        receipt_path = archive_internal_path(root, receipt_relative)
+        if not receipt_path.is_file():
+            blockers.append("material_selection_receipt file is missing.")
+        else:
+            try:
+                receipt_text = receipt_path.read_text(encoding="utf-8")
+                receipt_sha256 = hashlib.sha256(receipt_text.encode("utf-8")).hexdigest()
+                loaded = json.loads(receipt_text)
+                if isinstance(loaded, dict):
+                    receipt_payload = loaded
+                else:
+                    blockers.append("material_selection_receipt must contain a JSON object.")
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                blockers.append("material_selection_receipt could not be read as UTF-8 JSON.")
+
+    selection = receipt_payload.get("selection") if isinstance(receipt_payload.get("selection"), dict) else {}
+    future_scope = (
+        receipt_payload.get("future_material_scope")
+        if isinstance(receipt_payload.get("future_material_scope"), dict)
+        else {}
+    )
+    redaction = receipt_payload.get("redaction") if isinstance(receipt_payload.get("redaction"), dict) else {}
+    execution_receipt = (
+        receipt_payload.get("execution_receipt")
+        if isinstance(receipt_payload.get("execution_receipt"), dict)
+        else {}
+    )
+    receipt_kind_valid = receipt_payload.get("receipt_kind") == "imap_mailbox_material_selection"
+    lifecycle_valid = receipt_payload.get("lifecycle_action") == "imap_mailbox_material_selection_record"
+    if receipt_payload:
+        if not receipt_kind_valid:
+            blockers.append("material_selection_receipt is not an IMAP mailbox material selection receipt.")
+        if not lifecycle_valid:
+            blockers.append("material_selection_receipt lifecycle action is not imap_mailbox_material_selection_record.")
+
+    selection_mode = selection.get("selection_mode") if isinstance(selection.get("selection_mode"), str) else None
+    if receipt_payload and selection_mode not in IMAP_MAILBOX_MATERIAL_SELECTION_MODES:
+        blockers.append("material_selection_receipt selection_mode is not valid.")
+        selection_mode = None
+
+    selected_indexes = selection.get("selected_indexes")
+    selected_indexes_valid = isinstance(selected_indexes, list)
+    normalized_indexes: list[int] = []
+    if receipt_payload and not selected_indexes_valid:
+        blockers.append("material_selection_receipt selected_indexes must be a list.")
+    elif isinstance(selected_indexes, list):
+        seen_indexes: set[int] = set()
+        for index in selected_indexes:
+            if isinstance(index, bool) or not isinstance(index, int) or index < 1:
+                blockers.append("material_selection_receipt selected_indexes must contain one-based positive integers.")
+                break
+            if index in seen_indexes:
+                blockers.append("material_selection_receipt selected_indexes must not contain duplicates.")
+                break
+            seen_indexes.add(index)
+            normalized_indexes.append(index)
+
+    selected_count = selection.get("selected_count")
+    candidate_pool_count = selection.get("candidate_pool_count")
+    if receipt_payload and (not isinstance(selected_count, int) or selected_count < 1):
+        blockers.append("material_selection_receipt selected_count must be a positive integer.")
+        selected_count = None
+    if receipt_payload and (not isinstance(candidate_pool_count, int) or candidate_pool_count < 1):
+        blockers.append("material_selection_receipt candidate_pool_count must be a positive integer.")
+        candidate_pool_count = None
+    if isinstance(selected_count, int) and selected_count != len(normalized_indexes):
+        blockers.append("material_selection_receipt selected_count must match selected_indexes length.")
+    if isinstance(candidate_pool_count, int):
+        for index in normalized_indexes:
+            if index > candidate_pool_count:
+                blockers.append("material_selection_receipt selected_indexes must be within candidate_pool_count.")
+                break
+
+    if receipt_payload and selection.get("candidate_refs_included") is not False:
+        blockers.append("material_selection_receipt must not include candidate refs.")
+    if receipt_payload and execution_receipt.get("path_included") is not False:
+        blockers.append("material_selection_receipt must not include the execution receipt path.")
+
+    action_scope_key = {
+        "message_body_capture": "body_capture_requested",
+        "attachment_capture": "attachment_capture_requested",
+        "derived_text_capture": "derived_text_capture_requested",
+    }[normalized_action]
+    if receipt_payload and future_scope.get(action_scope_key) is not True:
+        blockers.append("capture_action is not authorized by the material selection receipt scope.")
+
+    required_false_redaction_flags = (
+        "credential_values_included",
+        "credential_refs_included",
+        "env_var_names_included",
+        "imap_host_included",
+        "mailbox_ref_included",
+        "message_uid_values_included",
+        "message_id_values_included",
+        "headers_included",
+        "bodies_included",
+        "attachment_names_included",
+        "attachment_bytes_included",
+        "local_absolute_paths_included",
+        "candidate_refs_included",
+        "execution_receipt_path_included",
+    )
+    failed_redaction_flags: list[str] = []
+    if receipt_payload:
+        for flag in required_false_redaction_flags:
+            if redaction.get(flag) is not False:
+                failed_redaction_flags.append(flag)
+        if failed_redaction_flags:
+            blockers.append("material_selection_receipt redaction flags do not prove a non-secret selection receipt.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "imap_mailbox_material_capture_request_plan",
+        "archive_id": archive_id,
+        "request_state": "ready_for_future_material_capture_after_approval" if not blockers else "blocked",
+        "capture_action": normalized_action,
+        "material_selection_summary": {
+            "receipt_loaded": bool(receipt_payload),
+            "material_selection_receipt_path_echoed": False,
+            "material_selection_receipt_sha256": receipt_sha256 if not blockers else None,
+            "receipt_kind_valid": receipt_kind_valid,
+            "lifecycle_action_valid": lifecycle_valid,
+            "selection_mode": selection_mode,
+            "selected_indexes": list(normalized_indexes),
+            "selected_count": selected_count if isinstance(selected_count, int) else None,
+            "candidate_pool_count": candidate_pool_count if isinstance(candidate_pool_count, int) else None,
+            "candidate_refs_echoed": False,
+            "candidate_refs_recorded": False,
+            "execution_receipt_path_echoed": False,
+        },
+        "capture_request": {
+            "requested_action": normalized_action,
+            "selected_index_basis": "one_based_candidate_position",
+            "selected_count": len(normalized_indexes),
+            "requires_separate_execution_approval": True,
+            "requires_credential_policy_check": True,
+            "requires_future_live_adapter": True,
+            "future_execution_command_implemented": False,
+            "message_material_read_now": False,
+        },
+        "redaction_check": {
+            "ok": not failed_redaction_flags,
+            "required_false_flags": list(required_false_redaction_flags),
+            "failed_flags": failed_redaction_flags,
+        },
+        "current_capability": {
+            "material_capture_request_plan_implemented": True,
+            "material_selection_receipt_read_implemented": True,
+            "message_body_capture_implemented": False,
+            "attachment_capture_implemented": False,
+            "derived_text_capture_implemented": False,
+        },
+        "closed_actions": {
+            "material_selection_receipt_read": bool(receipt_payload),
+            "execution_receipt_read": False,
+            "live_adapter_executed": False,
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "mailbox_selected": False,
+            "mailbox_searched": False,
+            "message_uids_read": False,
+            "message_ids_read": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "derived_text_created": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "oauth_started": False,
+            "provider_api_called": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "email_addresses_echoed": False,
+            "username_values_echoed": False,
+            "exact_account_refs_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "exact_mailbox_refs_echoed": False,
+            "env_var_names_echoed": False,
+            "imap_host_values_echoed": False,
+            "provider_urls_echoed": False,
+            "message_uid_values_echoed": False,
+            "message_id_values_echoed": False,
+            "message_headers_echoed": False,
+            "message_bodies_echoed": False,
+            "subject_values_echoed": False,
+            "sender_values_echoed": False,
+            "recipient_values_echoed": False,
+            "attachment_names_echoed": False,
+            "attachment_bytes_echoed": False,
+            "secret_values_echoed": False,
+            "execution_receipt_path_echoed": False,
+            "material_selection_receipt_path_echoed": False,
+            "candidate_refs_echoed": False,
+            "candidate_refs_recorded": False,
+            "local_absolute_paths_echoed": False,
+        },
+        "would_change": [],
+        "files_written": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
     }
 
 

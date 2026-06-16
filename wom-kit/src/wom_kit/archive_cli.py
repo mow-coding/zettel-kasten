@@ -45,6 +45,8 @@ Commands:
           Plan a human review queue from an IMAP header scan receipt without reading message material.
   imap-mailbox-material-selection-record
           Preview or approve a non-secret IMAP material selection record by candidate index.
+  imap-mailbox-material-capture-request-plan
+          Plan a future message-material capture request from a selection receipt without reading mail.
   prehashed-objet-ledger
           Preview or approve-register an already-hashed external objet ledger without reading blob bytes.
   resolve-objet-ref
@@ -6037,6 +6039,53 @@ def command_imap_mailbox_material_selection_record(args: argparse.Namespace) -> 
     return 0 if result.get("ok", True) else 1
 
 
+def command_imap_mailbox_material_capture_request_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("imap-mailbox-material-capture-request-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.imap_mailbox_material_capture_request_plan(
+            Path(args.archive_root),
+            material_selection_receipt=args.material_selection_receipt,
+            capture_action=args.capture_action,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = (
+            result.get("material_selection_summary")
+            if isinstance(result.get("material_selection_summary"), dict)
+            else {}
+        )
+        request = result.get("capture_request") if isinstance(result.get("capture_request"), dict) else {}
+        print(f"IMAP mailbox material capture request plan {result.get('request_state') or '-'}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Capture action: {result.get('capture_action') or '-'}")
+        print(f"Selection mode: {summary.get('selection_mode') or '-'}")
+        print(f"Selected count: {summary.get('selected_count') or 0}")
+        print(f"Candidate pool: {summary.get('candidate_pool_count') or 0}")
+        print("Material selection receipt path echoed: no")
+        print("Execution receipt path echoed: no")
+        print("Candidate refs echoed: no")
+        print(f"Requires future approval: {'yes' if request.get('requires_separate_execution_approval') else 'no'}")
+        print("Message material read now: no")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_imap_mailbox_adapter_manifest_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("imap-mailbox-adapter-manifest-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -11047,6 +11096,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     imap_mailbox_material_selection_record.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     imap_mailbox_material_selection_record.set_defaults(func=command_imap_mailbox_material_selection_record)
+
+    imap_mailbox_material_capture_request_plan = subcommands.add_parser(
+        "imap-mailbox-material-capture-request-plan",
+        aliases=["imap-material-capture-request-plan", "mailbox-material-capture-request-plan"],
+        help="Plan a future message-material capture request from a selection receipt without reading mail.",
+    )
+    imap_mailbox_material_capture_request_plan.add_argument("archive_root", help="Archive root to inspect.")
+    imap_mailbox_material_capture_request_plan.add_argument(
+        "--material-selection-receipt",
+        required=True,
+        help="Archive-relative receipts/imap/material-selections/*.json path. The exact path is not echoed in JSON output.",
+    )
+    imap_mailbox_material_capture_request_plan.add_argument(
+        "--capture-action",
+        choices=sorted(archive_services.IMAP_MAILBOX_MATERIAL_CAPTURE_ACTIONS),
+        default="message_body_capture",
+        help="Future capture action to request. The command still reads no bodies or attachments.",
+    )
+    imap_mailbox_material_capture_request_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Plan only; never connects to IMAP, reads secrets, reads bodies, reads attachments, or writes files.",
+    )
+    imap_mailbox_material_capture_request_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    imap_mailbox_material_capture_request_plan.set_defaults(func=command_imap_mailbox_material_capture_request_plan)
 
     sources = subcommands.add_parser("sources", help="Inspect source bindings and source map status.")
     sources.add_argument("archive_root", help="Archive root to inspect.")
