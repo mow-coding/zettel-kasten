@@ -2,6 +2,8 @@
 """Minimal WOM-kit CLI.
 
 Commands:
+  version
+          Print the running WOM-kit version and optional project pin status.
   doctor  Inspect an archive for structural and policy issues.
   profile-list
           List read-only WOM profile registry entries.
@@ -1582,6 +1584,28 @@ def command_doctor(args: argparse.Namespace) -> int:
     if errors or (args.strict and warnings):
         return 1
     return 0
+
+
+def command_version(args: argparse.Namespace) -> int:
+    result = archive_services.wom_kit_version_info(
+        Path(args.inspection_root) if args.inspection_root else None,
+        redact_local_paths=args.redact_local_paths,
+    )
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"WOM-kit {result['version_label']}")
+        print(f"CLI: {result['cli_entrypoint']}")
+        print(f"Consistency: {result['consistency_state']}")
+        project_pin = result.get("project_pin") if isinstance(result.get("project_pin"), dict) else {}
+        if project_pin.get("checked"):
+            installed = project_pin.get("installed_version") or "-"
+            print(f"Project pin: {project_pin.get('status') or '-'} ({installed})")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
 
 
 def command_validate(args: argparse.Namespace) -> int:
@@ -7326,7 +7350,24 @@ def build_parser() -> argparse.ArgumentParser:
         prog="archive",
         description="Minimal CLI for WOM archive nodes.",
     )
+    parser.add_argument("--version", action="version", version=f"archive {__version__}")
     subcommands = parser.add_subparsers(dest="command", required=True)
+
+    version = subcommands.add_parser("version", help="Print the running WOM-kit version and optional project pin status.")
+    version.add_argument(
+        "inspection_root",
+        nargs="?",
+        help="Optional project/archive root to inspect for .zettel-kasten/source/installed-version.txt.",
+    )
+    version.add_argument(
+        "--no-redact-local-paths",
+        dest="redact_local_paths",
+        action="store_false",
+        default=True,
+        help="Include local module and inspection paths in JSON output.",
+    )
+    version.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    version.set_defaults(func=command_version)
 
     doctor = subcommands.add_parser("doctor", help="Inspect an archive for structural and policy issues.")
     doctor.add_argument("archive_root", nargs="?", default=".", help="Archive root to inspect.")
@@ -10522,7 +10563,10 @@ def _harden_std_streams() -> None:
 def main(argv: list[str] | None = None) -> int:
     _harden_std_streams()
     parser = build_parser()
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return int(exc.code or 0)
     return int(args.func(args))
 
 

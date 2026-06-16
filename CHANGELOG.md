@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.57 - 2026-06-16
+
+- Added a read-only WOM-kit version truth-source checkpoint:
+  `archive --version`, `archive version [inspection-root] --format text|json`,
+  and `runtime-context` JSON field `wom_kit_version`.
+- The version report names `wom_kit.__version__` as the package source of truth,
+  compares it with `wom-kit/pyproject.toml` when running from a source checkout,
+  and can compare an optional project pin such as
+  `.zettel-kasten/source/installed-version.txt`.
+- Added `wom-kit/docs/version-truth-source.md`, release notes, capability
+  matrix coverage, README/documentation map links, and CLI tests.
+- Kept the check local and non-secret: it writes no files, calls no providers,
+  reads no secrets, and redacts local paths by default.
+
 ## v0.3.56 - 2026-06-16
 
 - Added approval-gated local IMAP adapter audit receipt writing:

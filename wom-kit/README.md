@@ -101,6 +101,7 @@ docs/imap-mailbox-selection-plan.md
 docs/imap-mailbox-adapter-audit-plan.md
 docs/imap-mailbox-adapter-audit-write.md
 docs/imap-mailbox-adapter-preflight-plan.md
+docs/version-truth-source.md
 docs/connected-accounts.md
 docs/credential-keepassxc-command-plan.md
 docs/credential-keepassxc-write.md
@@ -128,6 +129,9 @@ cli/archive.py
 Current commands:
 
 ```text
+version
+  Print the running WOM-kit CLI version and optional project pin status. JSON output is available for AI/runtime checks and redacts local paths by default.
+
 onboard
   Plan or apply first archive setup. Dry-run writes nothing; --approve creates the archive, provider-bindings.yml, and runs strict doctor.
 

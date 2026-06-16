@@ -160,6 +160,7 @@ Onboarding and setup plans:
 - [Release Readiness Gate](release-readiness-gate.md)
 - [Main Branch Protection Readiness](main-branch-protection-readiness.md)
 - [WOM-kit Capability Matrix](capability-matrix.md)
+- [Version Truth Source](version-truth-source.md)
 - [ZET Publication Surface Baseline](zet-publication-surface-baseline.md)
 - [ZET Projection Plan Preview](zet-projection-plan-preview.md)
 - [ZET Surface Prototypes](zet-surface-prototypes.md)
