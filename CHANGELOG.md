@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.74 - 2026-06-16
+
+- Extended Cloudflare R2 setup guidance with English/Korean dashboard label
+  hints and location-based navigation for bucket creation and R2 API token
+  creation.
+- Clarified that R2 API token creation is reached from the R2 account/overview
+  area, not from one bucket's settings page.
+- Clarified the post-creation credential split: S3-compatible object access
+  uses the Access Key ID plus Secret Access Key pair; the separate Token value
+  should not be pasted into chat or stored in WOM unless a future non-S3
+  API-token flow explicitly asks for it.
+- Configured the MCP stdio entrypoint to use UTF-8 so localized guidance labels
+  remain readable on Windows pipes.
+- Kept the workflow read-only: no Cloudflare dashboard is opened, no provider
+  API is called, no bucket or API token is created, no upload/download occurs,
+  and no provider URLs, local paths, tokens, or secret values are echoed.
+
 ## v0.3.73 - 2026-06-16
 
 - Extended `archive prehashed-objet-ledger` with `--mime-field <json-field>`

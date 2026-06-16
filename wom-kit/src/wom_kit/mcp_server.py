@@ -30,6 +30,16 @@ JSONRPC_INVALID_PARAMS = -32602
 JSONRPC_INTERNAL_ERROR = -32603
 
 
+def configure_stdio_utf8() -> None:
+    for stream in (sys.stdin, sys.stdout):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8")
+            except (TypeError, ValueError):
+                pass
+
+
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "wom_profile_list",
@@ -2212,6 +2222,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
 
 
 def main() -> int:
+    configure_stdio_utf8()
     server = JsonRpcMcpServer()
     return server.serve(sys.stdin, sys.stdout)
 

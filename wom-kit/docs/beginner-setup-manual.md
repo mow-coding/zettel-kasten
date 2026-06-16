@@ -243,6 +243,47 @@ Client IP filtering: use only when the human has a stable known IP/CIDR
 Secret handling: store Access Key ID and Secret Access Key in a vault/keyring/env flow, never in chat
 ```
 
+The v0.3.74 walkthrough adds Korean-label and location-based guidance for the
+same Cloudflare screens. This matters because translated dashboards may not
+match English docs exactly.
+
+Bucket creation location hints:
+
+```text
+Storage and databases / 스토리지 및 데이터베이스
+-> R2 object storage / R2 객체 스토리지
+-> Overview / 개요
+-> Create bucket / 버킷 만들기
+```
+
+R2 API token location hints:
+
+```text
+Storage and databases / 스토리지 및 데이터베이스
+-> R2 object storage / R2 객체 스토리지
+-> Overview / 개요
+-> Account details / 계정 세부 정보
+-> Manage API tokens / API 토큰 관리
+-> Create Account API token / Account API 토큰 생성
+```
+
+Important beginner trap:
+
+- The R2 token screen is reached from the R2 account/overview area, not from one
+  bucket's settings page.
+- The permission label may appear as `Permissions` or `권한`; choose
+  `Object Read & Write` / `개체 읽기 및 쓰기` for a reviewed first private objet
+  bucket that needs upload/read access.
+- The bucket-scope label may appear as `Bucket scope` or `버킷 지정`; choose the
+  specific-bucket option, not all buckets.
+- The TTL field may show a default like `계속`; if you leave it long-lived, mark
+  it as something to review later.
+- After creation, Cloudflare may show `Token value`, `Access Key ID`, and
+  `Secret Access Key`. For S3-compatible objet access, configure the Access Key
+  ID and Secret Access Key pair. Do not paste the separate Token value into chat
+  or store it in WOM unless a future non-S3 API-token flow explicitly asks for
+  it.
+
 The Cloudflare-specific recommendations are based on official docs checked for
 this release:
 
@@ -251,6 +292,7 @@ this release:
 - [R2 storage classes](https://developers.cloudflare.com/r2/buckets/storage-classes/)
 - [R2 pricing](https://developers.cloudflare.com/r2/pricing/)
 - [R2 public buckets](https://developers.cloudflare.com/r2/buckets/public-buckets/)
+- [R2 authentication](https://developers.cloudflare.com/r2/api/tokens/)
 - [Cloudflare token restrictions](https://developers.cloudflare.com/fundamentals/api/how-to/restrict-tokens/)
 
 Interpretation notes:
