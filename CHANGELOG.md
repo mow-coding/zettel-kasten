@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.71 - 2026-06-16
+
+- Added `archive imap-mailbox-material-capture-approval-plan <archive-root>
+  --material-selection-receipt <archive-relative-json> --capture-action
+  message_body_capture|attachment_capture|derived_text_capture --decision
+  needs_review|approve_once|deny --dry-run|--approve --format json`.
+- Added aliases `archive imap-material-capture-approval-plan`,
+  `archive mailbox-material-capture-approval-plan`, and
+  `archive imap-mailbox-material-capture-approval`.
+- The new approval-gated write reuses the material capture execution contract
+  and writes one non-secret human decision receipt under
+  `receipts/imap/material-capture-approvals/`.
+- Kept material capture closed: the command reads no original execution
+  receipt, opens no IMAP connection, reads no environment variables, opens no
+  keyring/password manager, reads no message headers, bodies, or attachments,
+  creates no derived text, writes no message material, and echoes no
+  material-selection receipt path, execution receipt path, candidate refs,
+  local paths, tokens, or secret values.
+
 ## v0.3.70 - 2026-06-16
 
 - Added `archive imap-mailbox-material-capture-execution-contract <archive-root>
