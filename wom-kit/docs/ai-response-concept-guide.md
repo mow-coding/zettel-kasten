@@ -1,7 +1,7 @@
 # AI Response Concept Guide
 
-Status: v0.3.75 beginner explanation baseline
-Date: 2026-06-16
+Status: v0.3.84 read-only concept guide CLI checkpoint
+Date: 2026-06-17
 
 This guide tells an AI runtime how to explain three WOM ideas when a beginner
 gets stuck during intake or object-storage setup:
@@ -12,8 +12,34 @@ manifest vs zet
 objet -> derived text -> zet
 ```
 
-It is not a new adapter, importer, uploader, or proof system. It is a language
-guide for safer human-facing answers.
+It is not a new adapter, importer, uploader, or proof system. It is a read-only
+language guide for safer human-facing answers.
+
+## Command
+
+```bash
+archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json
+```
+
+Aliases:
+
+```text
+ai-concept-guide
+wom-concept-guide
+```
+
+Topics:
+
+```text
+all
+sha256_identity
+manifest_vs_zet
+three_layers
+```
+
+The command writes nothing and reads no source bodies. It returns structured
+explanation cards, safe routing hints, and overclaim guardrails an AI runtime
+can use while helping a beginner.
 
 ## 1. First Answer Pattern
 
@@ -158,6 +184,9 @@ Then route safely:
 - Draft/mint zets: only after the source/derived evidence and human intent are
   clear.
 
+The CLI returns the same routing in `safe_routing` so a terminal-capable AI can
+pick the next safe command without inventing a live upload or provider action.
+
 ## 5. Overclaim Guardrails
 
 The AI must not say:
@@ -188,3 +217,20 @@ This guide rephrases existing model documents for AI-human conversation:
 - [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md)
 
 It does not change those underlying implementation boundaries.
+
+## Closed Actions
+
+`ai-response-concept-guide` does not:
+
+- read source bytes,
+- read derived-text bodies,
+- write object manifests,
+- write derived-text records,
+- write receipts,
+- draft zets,
+- mint zets,
+- upload objects,
+- call providers,
+- read secrets,
+- echo source filenames, local absolute paths, provider URLs, account ids,
+  emails, tokens, or secret values.

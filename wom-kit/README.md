@@ -276,6 +276,9 @@ credential-keepassxc-write
 beginner-setup-manual
   Print beginner-friendly secret vault, KeePassXC CSV bulk migration, Cloudflare R2 object-storage setup, and derived-text tool setup steps. Dry-run only; explains what to do in external UIs, including R2 Korean/English label hints and the Access Key ID plus Secret Access Key pair used by S3-compatible clients, shows safe non-secret labels and dry-run commands, writes nothing, opens no vault/provider dashboard, reads no CSV, imports or merges no database, creates no bucket/API token, installs no tools, runs no extraction, deletes no temporary files, and echoes no secret values or local paths.
 
+ai-response-concept-guide
+  Print beginner-facing AI explanation cards for sha256 object identity vs location, manifests vs zets, and the objet -> derived text -> zet layer split. Dry-run only; returns safe scripts, analogies, routing hints, and overclaim guardrails without reading source bytes or derived-text bodies, writing manifests or receipts, drafting or minting zets, uploading objects, calling providers, or echoing source filenames, local paths, provider URLs, account ids, emails, tokens, or secret values.
+
 connected-accounts
   Summarize provider/source account metadata and credential store types. Dry-run only; reads metadata from provider bindings, source bindings, and ignored local credential inventory, writes nothing, opens no vault/keyring/browser store, calls no providers, opens no IMAP connection, and echoes no exact credential refs or secret values.
 
