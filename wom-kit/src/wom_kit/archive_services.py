@@ -568,6 +568,43 @@ RUNTIME_CONTEXT_SAFE_ACTIONS = [
     "run doctor",
     "mint only through CLI approve path",
 ]
+RUNTIME_CONTEXT_FIXED_ENTRYPOINTS = (
+    {
+        "path": "archive.yml",
+        "role": "archive_identity_and_policy",
+        "kind": "file",
+        "required": True,
+        "source": "root_contract",
+    },
+    {
+        "path": "AGENTS.md",
+        "role": "local_agent_instructions",
+        "kind": "file",
+        "required": False,
+        "source": "root_contract",
+    },
+    {
+        "path": "archive-identity.yml",
+        "role": "owner_and_principal_identity",
+        "kind": "file",
+        "required": False,
+        "source": "root_contract",
+    },
+    {
+        "path": "source-bindings.yml",
+        "role": "source_catalog",
+        "kind": "file",
+        "required": False,
+        "source": "root_contract",
+    },
+    {
+        "path": "provider-bindings.yml",
+        "role": "provider_setup_metadata",
+        "kind": "file",
+        "required": False,
+        "source": "root_contract",
+    },
+)
 SOURCE_MAPS_DIR = "source-maps"
 SOURCE_SCAN_RECEIPTS_DIR = "receipts/sources"
 RESTORE_DRILL_RECEIPTS_DIR = "receipts/recovery"
@@ -29590,6 +29627,7 @@ def runtime_context(
         "ai_write_policy": runtime_context_ai_write_policy_summary(archive_config),
         "paths": paths,
         "wom_kit_version": wom_kit_version_info(root, redact_local_paths=redact_local_paths),
+        "canonical_entrypoints": runtime_context_canonical_entrypoints(root, archive_config, paths),
         "available_safe_actions": list(RUNTIME_CONTEXT_SAFE_ACTIONS),
         "doctor_summary": doctor_summary,
         "blockers": unique_preserve_order(blockers),
@@ -29667,6 +29705,116 @@ def runtime_context_paths(root: Path, archive_config: dict[str, Any], warnings: 
             directory=False,
             only_if_exists=True,
         ),
+    }
+
+
+def runtime_context_canonical_entrypoints(
+    root: Path,
+    archive_config: dict[str, Any],
+    paths: dict[str, str | None],
+) -> dict[str, Any]:
+    root_policy = archive_config.get("root_policy") if isinstance(archive_config.get("root_policy"), dict) else {}
+    configured_entrypoints = [
+        {
+            "path": paths.get("zettels"),
+            "role": "canonical_zets",
+            "kind": "directory",
+            "required": True,
+            "source": "archive.yml root_policy.canonical_zettels",
+        },
+        {
+            "path": paths.get("inbox"),
+            "role": "draft_inbox",
+            "kind": "directory",
+            "required": True,
+            "source": "archive.yml root_policy.ai_inbox",
+        },
+        {
+            "path": paths.get("object_manifest"),
+            "role": "objet_manifest",
+            "kind": "file",
+            "required": False,
+            "source": "archive.yml root_policy.object_manifest",
+        },
+        {
+            "path": root_policy.get("derived_text_manifest") if isinstance(root_policy.get("derived_text_manifest"), str) else None,
+            "role": "derived_text_manifest",
+            "kind": "file",
+            "required": False,
+            "source": "archive.yml root_policy.derived_text_manifest",
+        },
+        {
+            "path": root_policy.get("views") if isinstance(root_policy.get("views"), str) else "views/",
+            "role": "saved_views",
+            "kind": "directory",
+            "required": False,
+            "source": "archive.yml root_policy.views",
+        },
+        {
+            "path": root_policy.get("sqlite_schema") if isinstance(root_policy.get("sqlite_schema"), str) else "db/schema.sql",
+            "role": "sqlite_schema",
+            "kind": "file",
+            "required": False,
+            "source": "archive.yml root_policy.sqlite_schema",
+        },
+    ]
+    read_order = [
+        runtime_context_entrypoint_status(root, entry)
+        for entry in [*RUNTIME_CONTEXT_FIXED_ENTRYPOINTS, *configured_entrypoints]
+    ]
+    return {
+        "lifecycle_action": "runtime_canonical_entrypoints",
+        "start_here": "archive.yml",
+        "read_order": read_order,
+        "source_truths": {
+            "archive_identity_and_policy": "archive.yml",
+            "local_agent_instructions": "AGENTS.md",
+            "owner_and_principal_identity": "archive-identity.yml",
+            "source_catalog": "source-bindings.yml",
+            "provider_setup_metadata": "provider-bindings.yml",
+            "canonical_zets": paths.get("zettels"),
+            "draft_inbox": paths.get("inbox"),
+            "objet_manifest": paths.get("object_manifest"),
+            "derived_text_manifest": (
+                root_policy.get("derived_text_manifest")
+                if isinstance(root_policy.get("derived_text_manifest"), str)
+                else None
+            ),
+        },
+        "closed_actions": {
+            "file_bodies_read": False,
+            "files_written": False,
+            "provider_api_called": False,
+            "secrets_read": False,
+        },
+    }
+
+
+def runtime_context_entrypoint_status(root: Path, entry: dict[str, Any]) -> dict[str, Any]:
+    relative = entry.get("path") if isinstance(entry.get("path"), str) else None
+    kind = entry.get("kind") if entry.get("kind") in {"file", "directory"} else "file"
+    required = bool(entry.get("required"))
+    status = "not_configured"
+    exists = False
+    if relative:
+        try:
+            path = resolve_archive_relative_path(root, relative.rstrip("/"))
+        except ArchivePathError:
+            status = "unsafe_path"
+        else:
+            exists = path.is_dir() if kind == "directory" else path.is_file()
+            if exists:
+                status = "present"
+            else:
+                status = "missing_required" if required else "missing_optional"
+    return {
+        "path": relative,
+        "role": entry.get("role"),
+        "kind": kind,
+        "required": required,
+        "status": status,
+        "exists": exists,
+        "source": entry.get("source"),
     }
 
 

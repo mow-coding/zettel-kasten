@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.57 pre-release
+v0.3.58 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -35,6 +35,7 @@ What exists today:
 - a public WOM/zet/ZET design baseline with specs, schemas, fake archives, release notes, and work logs,
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
 - read-only WOM-kit version truth-source checks through `archive --version`, `archive version --format json`, and runtime-context version metadata,
+- runtime-context canonical entrypoint metadata so AI runtimes can see which archive-relative files/directories to treat as start-here and authoritative sources,
 - private archive lifecycle tools for doctor checks, draft creation, minting, delegation, receipts, search, and metadata review,
 - read-only preview layers for runtime context, profiles, source/objet intake, block headers, prompt boundaries, foreign block review, projection, shared update review/index, shared update route pointers, and ZET would-transport planning,
 - read-only derived-text coverage/toolchain/doctor/agent-contract gates, including non-echoed tool-hint paths for PATH-missing local extractors, plus approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
@@ -92,6 +93,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Korean Product Language Hygiene](wom-kit/docs/korean-product-language-hygiene.md)
 - [WOM-kit Capability Matrix](wom-kit/docs/capability-matrix.md)
 - [Version Truth Source](wom-kit/docs/version-truth-source.md)
+- [Runtime Canonical Entry Points](wom-kit/docs/runtime-canonical-entrypoints.md)
 - [ZET Radio-Frequency Recommendation Model](wom-kit/docs/zet-radio-frequency-recommendation-model.md)
 - [ZET Shared Update Record Baseline](wom-kit/docs/zet-shared-update-record-baseline.md)
 - [ZET Shared Update Record Review Preview](wom-kit/docs/zet-shared-update-record-review-preview.md)
@@ -257,6 +259,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.58
 v0.3.57
 v0.3.56
 v0.3.55

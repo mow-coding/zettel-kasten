@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.58 - 2026-06-16
+
+- Added runtime canonical entrypoint metadata to
+  `archive runtime-context <archive-root> --format json`.
+- The new `canonical_entrypoints` block names `archive.yml` as the start-here
+  file and lists the archive-relative files/directories an AI should treat as
+  authoritative for identity, local agent instructions, source bindings,
+  provider setup metadata, canonical zets, draft inbox, objets, derived text,
+  saved views, and schema context.
+- Added `wom-kit/docs/runtime-canonical-entrypoints.md`, release notes,
+  capability matrix coverage, README/documentation map links, and CLI tests.
+- Kept the check read-only and non-secret: it reads no file bodies, writes no
+  files, calls no providers, reads no secrets, and echoes no local absolute
+  paths by default.
+
 ## v0.3.57 - 2026-06-16
 
 - Added a read-only WOM-kit version truth-source checkpoint:

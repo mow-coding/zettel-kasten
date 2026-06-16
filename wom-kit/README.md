@@ -102,6 +102,7 @@ docs/imap-mailbox-adapter-audit-plan.md
 docs/imap-mailbox-adapter-audit-write.md
 docs/imap-mailbox-adapter-preflight-plan.md
 docs/version-truth-source.md
+docs/runtime-canonical-entrypoints.md
 docs/connected-accounts.md
 docs/credential-keepassxc-command-plan.md
 docs/credential-keepassxc-write.md
@@ -148,7 +149,7 @@ profile-wallet
   Preview wallet-ready WOM profile/node identity metadata. Dry-run only; never generates keys, signs data, stores secrets, or calls blockchain/provider APIs.
 
 runtime-context
-  Print read-only JSON context for terminal-capable AI runtimes. It confirms archive id, archive type/scope, principal/owner summary, AI write policy, safe archive-relative paths, safe actions, and doctor summary. Local absolute paths are redacted by default.
+  Print read-only JSON context for terminal-capable AI runtimes. It confirms archive id, archive type/scope, principal/owner summary, AI write policy, safe archive-relative paths, canonical entrypoint metadata, safe actions, WOM-kit version, and doctor summary. Local absolute paths are redacted by default.
 
 prompt-boundary
   Check untrusted text for obvious prompt-injection and unsafe-agent strings. Dry-run only; never calls LLMs, executes inspected text, approves, mints, or writes files.

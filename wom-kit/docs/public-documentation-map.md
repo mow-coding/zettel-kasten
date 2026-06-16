@@ -161,6 +161,7 @@ Onboarding and setup plans:
 - [Main Branch Protection Readiness](main-branch-protection-readiness.md)
 - [WOM-kit Capability Matrix](capability-matrix.md)
 - [Version Truth Source](version-truth-source.md)
+- [Runtime Canonical Entry Points](runtime-canonical-entrypoints.md)
 - [ZET Publication Surface Baseline](zet-publication-surface-baseline.md)
 - [ZET Projection Plan Preview](zet-projection-plan-preview.md)
 - [ZET Surface Prototypes](zet-surface-prototypes.md)
