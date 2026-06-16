@@ -37,6 +37,8 @@ Commands:
           Preview or approve writing a non-secret IMAP adapter audit receipt locally.
   imap-mailbox-adapter-execution-contract
           Print the read-only future execution contract before any live IMAP adapter exists.
+  imap-mailbox-header-metadata-scan
+          Run the first approval-gated local IMAP header metadata scan.
   prehashed-objet-ledger
           Preview or approve-register an already-hashed external objet ledger without reading blob bytes.
   resolve-objet-ref
@@ -5758,6 +5760,80 @@ def command_imap_mailbox_adapter_execution_contract(args: argparse.Namespace) ->
     return 0 if result.get("ok", True) else 1
 
 
+def command_imap_mailbox_header_metadata_scan(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.imap_mailbox_header_metadata_scan(
+            Path(args.archive_root),
+            adapter_id=args.adapter_id,
+            source_id=args.source_id,
+            provider=args.provider,
+            imap_host=args.imap_host,
+            imap_port=args.imap_port,
+            account_ref=args.account_ref,
+            username_ref=args.username_ref,
+            auth_mode=args.auth_mode,
+            app_password_ref=args.app_password_ref,
+            oauth_token_ref=args.oauth_token_ref,
+            mailbox_ref=args.mailbox_ref,
+            operation=args.operation,
+            selection_rule=args.selection_rule,
+            selector_id=args.selector_id,
+            max_messages=args.max_messages,
+            since_days=args.since_days,
+            credential_id=args.credential_id,
+            credential_ref=args.credential_ref,
+            credential_kind=args.credential_kind,
+            credential_provider=args.credential_provider,
+            store_kind=args.store_kind,
+            adapter_kind=args.adapter_kind,
+            approval_decision=args.approval_decision,
+            approval_receipt=args.approval_receipt,
+            consumer=args.consumer,
+            reviewed_by=args.reviewed_by,
+            platform=args.platform,
+            timeout_seconds=args.timeout_seconds,
+            dry_run=args.dry_run,
+            approve=args.approve,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        scan = result.get("scan_summary") if isinstance(result.get("scan_summary"), dict) else {}
+        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
+        print(f"IMAP mailbox header metadata scan {result.get('execution_status') or '-'}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source: {result.get('source_id') or '-'}")
+        print(f"Provider: {result.get('provider') or '-'}")
+        print(f"Candidates: {scan.get('candidate_count') or 0}")
+        print(f"Headers fetched: {scan.get('headers_fetched_count') or 0}")
+        print(f"Receipt: {receipt.get('receipt_path') or receipt.get('proposed_receipt_path') or '-'}")
+        print("Message bodies read: no")
+        print("Attachments read: no")
+        writes = result.get("files_written") or []
+        if writes:
+            print("Files written:")
+            for path in writes:
+                print(f"- {path}")
+        else:
+            print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_imap_mailbox_adapter_manifest_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("imap-mailbox-adapter-manifest-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -10504,6 +10580,142 @@ def build_parser() -> argparse.ArgumentParser:
     imap_mailbox_adapter_execution_contract.add_argument("--dry-run", action="store_true", help="Required. Contract only; never connects, selects, searches, lists, reads mail, or writes files.")
     imap_mailbox_adapter_execution_contract.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     imap_mailbox_adapter_execution_contract.set_defaults(func=command_imap_mailbox_adapter_execution_contract)
+
+    imap_mailbox_header_metadata_scan = subcommands.add_parser(
+        "imap-mailbox-header-metadata-scan",
+        aliases=["imap-header-metadata-scan", "mailbox-header-metadata-scan"],
+        help="Run the first approval-gated local IMAP header metadata scan.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument("archive_root", help="Archive root to inspect.")
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--adapter-id",
+        required=True,
+        help="Safe local adapter id, e.g. local-imap. Do not pass paths, URLs, emails, or secrets.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument("--source-id", required=True, help="Stable source id, e.g. imap:gmail-personal.")
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--provider",
+        choices=sorted(archive_services.IMAP_MAILBOX_ALLOWED_PROVIDERS),
+        default="generic_imap",
+        help="Provider preset. generic_imap requires --imap-host.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument("--imap-host", help="Safe IMAP host label. Required for generic_imap.")
+    imap_mailbox_header_metadata_scan.add_argument("--imap-port", type=int, default=993, help="IMAP SSL port. Defaults to 993.")
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--account-ref",
+        required=True,
+        help="Safe account reference, e.g. imap:account:personal-mail. Do not pass an email address.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--username-ref",
+        required=True,
+        help="env: reference for the username. Do not pass the username value.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--auth-mode",
+        choices=["app_password_ref"],
+        default="app_password_ref",
+        help="Credential reference kind. v0.3.62 supports app_password_ref only.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--app-password-ref",
+        required=True,
+        help="env: reference for an app password. Do not pass the password value.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--oauth-token-ref",
+        help="Reserved for future OAuth support; v0.3.62 blocks this value.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--mailbox-ref",
+        default="imap:mailbox:inbox",
+        help="Safe mailbox reference. v0.3.62 supports only imap:mailbox:inbox.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--operation",
+        choices=["header_metadata_scan"],
+        default="header_metadata_scan",
+        help="Only header_metadata_scan is executable in this release.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--selection-rule",
+        choices=sorted(archive_services.IMAP_MAILBOX_SELECTION_RULES),
+        default="newest_first",
+        help="Non-secret mailbox selection rule.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--selector-id",
+        default="mail-selection:recent-inbox",
+        help="Safe non-secret selector label. Do not pass subjects, senders, emails, mailbox names, URLs, or paths.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--max-messages",
+        type=int,
+        default=archive_services.IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT,
+        help="Message candidate limit to request. Must be between 1 and 2000.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--since-days",
+        type=int,
+        help="Optional future recency window. Must be between 1 and 3650 days.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--credential-id",
+        default="cred:mail-source-access",
+        help="Safe credential label for the mail credential.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument("--credential-ref", help="Optional env: ref; exact value is not echoed.")
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--credential-kind",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
+        default="mail_app_password",
+        help="Credential kind. v0.3.62 supports mail_app_password for app-password auth.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--credential-provider",
+        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
+        help="Credential provider label. Defaults from IMAP provider.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--store-kind",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+        default="environment",
+        help="Credential store class. v0.3.62 live scan supports environment refs only.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--adapter-kind",
+        choices=sorted(archive_services.CREDENTIAL_ADAPTER_KINDS),
+        default="environment_injection",
+        help="Credential adapter kind. v0.3.62 live scan supports environment_injection only.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--approval-decision",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_APPROVAL_DECISIONS),
+        default="needs_review",
+        help="Human decision state to evaluate.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--approval-receipt",
+        help="Archive-relative approval receipt path to verify. The path is not echoed in output.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument("--consumer", default="wom:adapter:imap-mailbox", help="Safe label for the adapter.")
+    imap_mailbox_header_metadata_scan.add_argument("--reviewed-by", default="human:pending-review", help="Safe non-secret reviewer label.")
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Local platform for default credential adapter selection.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=30,
+        help="IMAP connection timeout for approved mode. Must be between 1 and 120.",
+    )
+    imap_mailbox_header_metadata_scan.add_argument("--dry-run", action="store_true", help="Preview the scan without reading environment variables or opening IMAP.")
+    imap_mailbox_header_metadata_scan.add_argument("--approve", action="store_true", help="Run the local header metadata scan and write a non-secret receipt.")
+    imap_mailbox_header_metadata_scan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    imap_mailbox_header_metadata_scan.set_defaults(func=command_imap_mailbox_header_metadata_scan)
 
     sources = subcommands.add_parser("sources", help="Inspect source bindings and source map status.")
     sources.add_argument("archive_root", help="Archive root to inspect.")
