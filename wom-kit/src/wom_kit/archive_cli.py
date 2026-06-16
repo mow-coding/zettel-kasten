@@ -6086,6 +6086,65 @@ def command_imap_mailbox_material_capture_request_plan(args: argparse.Namespace)
     return 0 if result.get("ok", True) else 1
 
 
+def command_imap_mailbox_material_capture_execution_contract(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("imap-mailbox-material-capture-execution-contract is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.imap_mailbox_material_capture_execution_contract(
+            Path(args.archive_root),
+            material_selection_receipt=args.material_selection_receipt,
+            capture_action=args.capture_action,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = (
+            result.get("material_selection_summary")
+            if isinstance(result.get("material_selection_summary"), dict)
+            else {}
+        )
+        request = result.get("request_summary") if isinstance(result.get("request_summary"), dict) else {}
+        contract = (
+            result.get("future_adapter_contract")
+            if isinstance(result.get("future_adapter_contract"), dict)
+            else {}
+        )
+        allowed = (
+            contract.get("allowed_actions_after_implementation_and_approval")
+            if isinstance(contract.get("allowed_actions_after_implementation_and_approval"), dict)
+            else {}
+        )
+        print(f"IMAP mailbox material capture execution contract {result.get('contract_state') or '-'}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Capture action: {result.get('capture_action') or '-'}")
+        print(f"Selection mode: {summary.get('selection_mode') or '-'}")
+        print(f"Selected count: {request.get('selected_count') or 0}")
+        print(f"Future execution mode: {contract.get('execution_mode') or '-'}")
+        print("Material selection receipt path echoed: no")
+        print("Execution receipt path echoed: no")
+        print("Candidate refs echoed: no")
+        print(f"Future body read allowed after approval: {'yes' if allowed.get('read_selected_message_bodies') else 'no'}")
+        print(f"Future attachment read allowed after approval: {'yes' if allowed.get('read_selected_attachments') else 'no'}")
+        print(f"Future derived text allowed after approval: {'yes' if allowed.get('create_mail_derived_text') else 'no'}")
+        print("Message material read now: no")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_imap_mailbox_adapter_manifest_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("imap-mailbox-adapter-manifest-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -11121,6 +11180,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     imap_mailbox_material_capture_request_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     imap_mailbox_material_capture_request_plan.set_defaults(func=command_imap_mailbox_material_capture_request_plan)
+
+    imap_mailbox_material_capture_execution_contract = subcommands.add_parser(
+        "imap-mailbox-material-capture-execution-contract",
+        aliases=["imap-material-capture-execution-contract", "mailbox-material-capture-execution-contract"],
+        help="Print the future IMAP material capture execution contract without reading mail.",
+    )
+    imap_mailbox_material_capture_execution_contract.add_argument("archive_root", help="Archive root to inspect.")
+    imap_mailbox_material_capture_execution_contract.add_argument(
+        "--material-selection-receipt",
+        required=True,
+        help="Archive-relative receipts/imap/material-selections/*.json path. The exact path is not echoed in JSON output.",
+    )
+    imap_mailbox_material_capture_execution_contract.add_argument(
+        "--capture-action",
+        choices=sorted(archive_services.IMAP_MAILBOX_MATERIAL_CAPTURE_ACTIONS),
+        default="message_body_capture",
+        help="Future capture action to describe. The command still reads no bodies or attachments.",
+    )
+    imap_mailbox_material_capture_execution_contract.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Contract only; never connects to IMAP, reads secrets, reads bodies, reads attachments, or writes files.",
+    )
+    imap_mailbox_material_capture_execution_contract.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    imap_mailbox_material_capture_execution_contract.set_defaults(func=command_imap_mailbox_material_capture_execution_contract)
 
     sources = subcommands.add_parser("sources", help="Inspect source bindings and source map status.")
     sources.add_argument("archive_root", help="Archive root to inspect.")

@@ -145,6 +145,7 @@
 - [IMAP Mailbox Material Selection Plan](imap-mailbox-material-selection-plan.md)
 - [IMAP Mailbox Material Selection Record](imap-mailbox-material-selection-record.md)
 - [IMAP Mailbox Material Capture Request Plan](imap-mailbox-material-capture-request-plan.md)
+- [IMAP Mailbox Material Capture Execution Contract](imap-mailbox-material-capture-execution-contract.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
 - [WOM Profile Registry](wom-profile-registry.md)
 - [WOM Profile Wallet Model](wom-profile-wallet-model.md)
