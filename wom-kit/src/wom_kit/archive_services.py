@@ -645,6 +645,7 @@ PROJECT_INTAKE_ITEM_REF_RE = re.compile(r"^item-\d{4}$")
 PROJECT_INTAKE_MAX_STRING_LENGTH = 4000
 MINT_RECEIPTS_DIR = "receipts/mint"
 MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
+ZETTEL_EDGE_RECEIPTS_DIR = "receipts/edges"
 DELEGATE_RECEIPTS_DIR = "receipts/delegate"
 ATTESTATION_RECEIPTS_DIR = "receipts/attest"
 FOREIGN_BLOCK_QUARANTINE_RECEIPTS_DIR = "receipts/quarantine"
@@ -662,6 +663,8 @@ SOURCE_SCAN_MODE = "metadata_only"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 OBJECT_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 OBJET_REF_TOKEN_RE = re.compile(r"\b(?P<prefix>objet:)?sha256:(?P<digest>[0-9a-fA-F]{64})\b")
+ZETTEL_EDGE_ZETTEL_ID_RE = re.compile(r"^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$")
+ZETTEL_EDGE_FILENAME_SEGMENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
 DRAFT_CREATION_MODES = {"human_written", "ai_assisted", "ai_generated", "imported", "derived"}
 SOURCE_INTAKE_ROLES = {"primary_source", "context", "attachment", "derived_context"}
 SOURCE_INTAKE_DEFAULT_ROLE = "primary_source"
@@ -12034,6 +12037,392 @@ def safe_connection_evidence_list(
             continue
         refs.append(text)
     return refs
+
+
+def zettel_edge_filename_segment(value: str) -> str:
+    text = ZETTEL_EDGE_FILENAME_SEGMENT_RE.sub("-", value.strip()).strip(".-")
+    return (text or "edge")[:96]
+
+
+def zettel_edge_target_summary(root: Path, target_ref: str, blockers: list[str]) -> dict[str, Any]:
+    text = str(target_ref or "").strip()
+    if not safe_source_intake_plan_scalar(text):
+        blockers.append("target_ref must be a safe non-secret scalar.")
+        return {"ref": text, "kind": "unknown", "verified": False}
+
+    if ZETTEL_EDGE_ZETTEL_ID_RE.match(text):
+        try:
+            target_path = resolve_zettel_path(root, zettel_id=text, relative_path=None)
+        except ArchiveServiceError:
+            blockers.append("target zettel id was not found.")
+            return {"ref": text, "kind": "zettel", "verified": False}
+        target_frontmatter, _target_body = split_zettel_text(target_path.read_text(encoding="utf-8"))
+        if target_frontmatter.get("status") == "redacted":
+            blockers.append("target zettel is redacted.")
+        return {
+            "ref": text,
+            "kind": "zettel",
+            "verified": target_frontmatter.get("status") != "redacted",
+        }
+
+    object_blockers: list[str] = []
+    normalized_object_id = ""
+    if text.startswith("objet:sha256:"):
+        normalized_object_id = object_id_from_objet_ref(text, object_blockers)
+    elif text.startswith("sha256:") or SHA256_RE.match(text.lower()):
+        normalized_object_id = normalize_object_id(text, object_blockers)
+
+    if object_blockers:
+        blockers.extend(object_blockers)
+        return {"ref": text, "kind": "objet", "verified": False}
+
+    if normalized_object_id:
+        record = find_manifest_record(root, normalized_object_id)
+        if record is None:
+            blockers.append("target object_id was not found in objects/manifests/files.jsonl.")
+        return {
+            "ref": normalized_object_id,
+            "kind": "objet",
+            "verified": record is not None,
+            "manifest_path": "objects/manifests/files.jsonl",
+        }
+
+    blockers.append("target_ref must be an existing zet_<id>, sha256:<64hex>, or objet:sha256:<64hex> ref.")
+    return {"ref": text, "kind": "unknown", "verified": False}
+
+
+def zettel_edge_receipt_relative_path(source_zettel_id: str, edge_type: str, target_ref: str, visibility: str) -> str:
+    seed = {
+        "source_zettel_id": source_zettel_id,
+        "edge_type": edge_type,
+        "target_ref": target_ref,
+        "visibility": visibility,
+    }
+    digest = sha256_json_hex(seed)
+    return (
+        f"{ZETTEL_EDGE_RECEIPTS_DIR}/"
+        f"{zettel_edge_filename_segment(source_zettel_id)}."
+        f"{zettel_edge_filename_segment(edge_type)}."
+        f"{digest[:16]}.zettel-edge.json"
+    )
+
+
+def zettel_edge_result(
+    *,
+    archive_id: str,
+    dry_run: bool,
+    source_summary: dict[str, Any] | None,
+    target_summary: dict[str, Any],
+    edge_type: str,
+    visibility: str,
+    proposed_edge: dict[str, Any] | None,
+    edge_id: str | None,
+    receipt_path: str | None,
+    reviewed_by: str | None,
+    would_change: list[str],
+    files_written: list[str],
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    return {
+        "ok": not blockers,
+        "dry_run": dry_run,
+        "lifecycle_action": "zettel_edge_plan" if dry_run else "zettel_edge_write",
+        "archive_id": archive_id,
+        "write_status": "blocked" if blockers else "would_write" if dry_run else "written",
+        "source": source_summary or {},
+        "target": target_summary,
+        "edge_type": edge_type,
+        "visibility": visibility,
+        "edge_id": edge_id,
+        "proposed_edge": proposed_edge,
+        "receipt_path": receipt_path,
+        "reviewed_by": reviewed_by if not dry_run else None,
+        "current_capability": {
+            "approval_gated_edge_write_implemented": True,
+            "candidate_record_writer_implemented": False,
+            "real_export_parser_implemented": False,
+            "mcp_write_tool_implemented": False,
+            "provider_api_call_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "real_source_export_files_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "candidate_records_written": False,
+            "object_manifest_updated": False,
+            "zettel_frontmatter_written": bool(files_written and source_summary),
+            "receipt_written": bool(receipt_path and receipt_path in files_written),
+        },
+        "privacy_guards": {
+            "body_text_echoed": False,
+            "zettel_title_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "page_titles_echoed": False,
+            "comment_bodies_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "secret_values_echoed": False,
+        },
+        "would_change": would_change,
+        "files_written": files_written,
+        "next_safe_actions": [
+            "Run archive index before relying on related-zets backlinks." if not blockers else "Fix blockers before writing an edge.",
+            "Keep bulk candidate import separate until reviewed candidate records exist.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def zettel_edge_write(
+    archive_root: Path | str,
+    *,
+    from_zettel: str | None = None,
+    from_path: str | None = None,
+    target_ref: str,
+    edge_type: str,
+    visibility: str = "private",
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run and approve:
+        blockers.append("Use either --dry-run or --approve, not both.")
+    if not dry_run and not approve:
+        blockers.append("zettel-edge requires --dry-run or --approve.")
+    if bool(from_zettel) == bool(from_path):
+        blockers.append("Provide exactly one of --from-zettel or --from-path.")
+    if approve and not reviewed_by:
+        blockers.append("zettel-edge --approve requires --reviewed-by.")
+    if reviewed_by and not safe_source_intake_plan_scalar(str(reviewed_by)):
+        blockers.append("reviewed_by must be a safe non-secret scalar.")
+
+    normalized_edge_type = str(edge_type or "").strip().lower().replace("-", "_")
+    allowed_link_types = load_allowed_link_types(root)
+    if not normalized_edge_type:
+        blockers.append("edge_type is required.")
+    elif normalized_edge_type not in allowed_link_types:
+        blockers.append("edge_type must be defined in zettel-kasten/types.yml.")
+
+    normalized_visibility = str(visibility or "private").strip().lower().replace("-", "_")
+    if not safe_source_intake_plan_scalar(normalized_visibility):
+        blockers.append("visibility must be a safe non-secret scalar.")
+
+    source_summary: dict[str, Any] | None = None
+    source_path: Path | None = None
+    source_frontmatter: dict[str, Any] = {}
+    source_body = ""
+    source_zettel_id = str(from_zettel or "").strip()
+
+    if bool(from_zettel) != bool(from_path):
+        try:
+            source_path = resolve_zettel_path(root, zettel_id=from_zettel, relative_path=from_path)
+            source_frontmatter, source_body = split_zettel_text(source_path.read_text(encoding="utf-8"))
+            source_zettel_id = str(source_frontmatter.get("id") or source_zettel_id).strip()
+            source_relative = archive_relative_path(source_path, root)
+            source_summary = {
+                "zettel_id": source_zettel_id,
+                "path": source_relative,
+                "status": source_frontmatter.get("status") if isinstance(source_frontmatter.get("status"), str) else None,
+            }
+            if not ZETTEL_EDGE_ZETTEL_ID_RE.match(source_zettel_id):
+                blockers.append("source zettel id must be a safe zet_<id> value.")
+            if source_frontmatter.get("status") == "redacted":
+                blockers.append("source zettel is redacted.")
+        except ArchiveServiceError as exc:
+            blockers.append(str(exc))
+
+    target_summary = zettel_edge_target_summary(root, target_ref, blockers)
+    normalized_target_ref = str(target_summary.get("ref") or target_ref or "").strip()
+    if source_zettel_id and normalized_target_ref == source_zettel_id:
+        blockers.append("source and target must be different.")
+
+    existing_edges = source_frontmatter.get("edges")
+    if source_path is not None and not isinstance(existing_edges, list):
+        if existing_edges is None:
+            existing_edges = []
+        else:
+            blockers.append("source zettel frontmatter edges must be a list.")
+
+    duplicate = False
+    if isinstance(existing_edges, list):
+        duplicate = any(
+            isinstance(item, dict)
+            and str(item.get("type") or "").strip() == normalized_edge_type
+            and str(item.get("target") or item.get("target_id") or item.get("zettel_id") or "").strip() == normalized_target_ref
+            for item in existing_edges
+        )
+        if duplicate:
+            blockers.append("edge already exists on the source zettel.")
+
+    receipt_relative = (
+        zettel_edge_receipt_relative_path(source_zettel_id, normalized_edge_type, normalized_target_ref, normalized_visibility)
+        if source_zettel_id and normalized_edge_type and normalized_target_ref
+        else None
+    )
+    receipt_path = archive_internal_path(root, receipt_relative) if receipt_relative else None
+    if receipt_path is not None and receipt_path.exists():
+        blockers.append("edge receipt already exists.")
+
+    edge_seed = {
+        "archive_id": archive_id,
+        "source_zettel_id": source_zettel_id,
+        "edge_type": normalized_edge_type,
+        "target_ref": normalized_target_ref,
+        "visibility": normalized_visibility,
+    }
+    edge_id = "edge:" + sha256_json_hex(edge_seed)
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    proposed_edge = drop_none_values(
+        {
+            "type": normalized_edge_type or None,
+            "target": normalized_target_ref or None,
+            "visibility": normalized_visibility or None,
+            "edge_id": edge_id,
+            "receipt": receipt_relative,
+            "provenance": drop_none_values(
+                {
+                    "source": "manual_cli_review",
+                    "reviewed_by": reviewed_by if approve else None,
+                    "reviewed_at": now if approve else None,
+                }
+            ),
+        }
+    )
+    if proposed_edge.get("provenance") == {"source": "manual_cli_review"}:
+        proposed_edge.pop("provenance", None)
+
+    would_change = []
+    if source_summary and receipt_relative:
+        would_change = [
+            f"{source_summary['path']} frontmatter.edges +1",
+            f"{source_summary['path']} frontmatter.updated_at",
+            receipt_relative,
+        ]
+
+    if blockers:
+        return zettel_edge_result(
+            archive_id=archive_id,
+            dry_run=bool(dry_run),
+            source_summary=source_summary,
+            target_summary=target_summary,
+            edge_type=normalized_edge_type,
+            visibility=normalized_visibility,
+            proposed_edge=proposed_edge if proposed_edge else None,
+            edge_id=edge_id,
+            receipt_path=receipt_relative,
+            reviewed_by=reviewed_by,
+            would_change=would_change,
+            files_written=[],
+            blockers=blockers,
+            warnings=warnings,
+        )
+
+    if dry_run:
+        return zettel_edge_result(
+            archive_id=archive_id,
+            dry_run=True,
+            source_summary=source_summary,
+            target_summary=target_summary,
+            edge_type=normalized_edge_type,
+            visibility=normalized_visibility,
+            proposed_edge=proposed_edge,
+            edge_id=edge_id,
+            receipt_path=receipt_relative,
+            reviewed_by=None,
+            would_change=would_change,
+            files_written=[],
+            blockers=[],
+            warnings=warnings,
+        )
+
+    assert source_path is not None
+    assert source_summary is not None
+    assert isinstance(existing_edges, list)
+    assert receipt_relative is not None
+    assert receipt_path is not None
+    assert reviewed_by is not None
+
+    original_text = source_path.read_text(encoding="utf-8")
+    updated_frontmatter = copy.deepcopy(source_frontmatter)
+    updated_edges = list(existing_edges)
+    updated_edges.append(proposed_edge)
+    updated_frontmatter["edges"] = updated_edges
+    updated_frontmatter["updated_at"] = now
+    updated_text = "---\n" + dump_yaml(updated_frontmatter) + "---\n" + source_body
+    receipt = {
+        "schema_version": "wom-kit/zettel-edge-receipt/v0.1",
+        "lifecycle_action": "zettel_edge_write",
+        "receipt_kind": "zettel_edge_write",
+        "created_at": now,
+        "archive_id": archive_id,
+        "edge_id": edge_id,
+        "edge_type": normalized_edge_type,
+        "source_zettel_id": source_zettel_id,
+        "source_zettel_path": source_summary["path"],
+        "target_ref": normalized_target_ref,
+        "target_kind": target_summary.get("kind"),
+        "visibility": normalized_visibility,
+        "reviewed_by": reviewed_by,
+        "result": {
+            "edge_written": True,
+            "zettel_frontmatter_updated": True,
+            "receipt_written": True,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "real_source_export_files_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "candidate_records_written": False,
+            "object_manifest_updated": False,
+        },
+    }
+
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    zettel_written = False
+    try:
+        source_path.write_text(updated_text, encoding="utf-8")
+        zettel_written = True
+        write_json_new_file(receipt_path, receipt)
+    except OSError:
+        if zettel_written:
+            source_path.write_text(original_text, encoding="utf-8")
+        if receipt_path.exists():
+            try:
+                receipt_path.unlink()
+            except OSError:
+                pass
+        raise
+
+    return zettel_edge_result(
+        archive_id=archive_id,
+        dry_run=False,
+        source_summary=source_summary,
+        target_summary=target_summary,
+        edge_type=normalized_edge_type,
+        visibility=normalized_visibility,
+        proposed_edge=proposed_edge,
+        edge_id=edge_id,
+        receipt_path=receipt_relative,
+        reviewed_by=reviewed_by,
+        would_change=would_change,
+        files_written=[source_summary["path"], receipt_relative],
+        blockers=[],
+        warnings=warnings,
+    )
 
 
 def notion_connection_import_mappings() -> list[dict[str, Any]]:

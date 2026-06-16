@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.82 - 2026-06-17
+
+- Added approval-gated CLI `archive zettel-edge --from-zettel <zet>
+  --target <zet-or-objet> --edge-type <type> --dry-run|--approve`, with
+  aliases `link-zettel-edge` and `write-zettel-edge`.
+- The command writes exactly one reviewed edge to source zettel frontmatter and
+  one non-secret receipt under `receipts/edges/*.zettel-edge.json`.
+- Target validation is local and narrow: `zet_<id>` targets must resolve to an
+  existing zettel, and `sha256:<64hex>` / `objet:sha256:<64hex>` targets must
+  resolve through `objects/manifests/files.jsonl`.
+- Duplicate `type + target` edges are blocked, `edge_type` must already be
+  defined in `zettel-kasten/types.yml`, and MCP still exposes no write tool for
+  this surface.
+- Kept the workflow local and approval-gated: no Notion call, OAuth, real
+  export read, comment read, media download, candidate record write, object
+  manifest update, provider URL, local path, raw export path, page title,
+  comment body, account id, email, token, or secret value is produced. The
+  command does not echo zettel body text or zettel titles.
+
 ## v0.3.81 - 2026-06-16
 
 - Added read-only `archive connection-evidence-parse-fixture --evidence

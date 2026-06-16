@@ -2105,6 +2105,173 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_zettel_edge_preview_and_approval_write_frontmatter_edge_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+            source_id = "zet_20240504_fake_lunch_thought"
+            target_id = "zet_20240505_fake_company_onboarding_insight"
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "zettel-edge",
+                    str(archive_root),
+                    "--from-zettel",
+                    source_id,
+                    "--target",
+                    target_id,
+                    "--edge-type",
+                    "semantic",
+                    "--visibility",
+                    "private",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            dry_result = json.loads(dry_output)
+            serialized_dry = json.dumps(dry_result, ensure_ascii=False)
+
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertTrue(dry_result["ok"])
+            self.assertEqual(dry_result["lifecycle_action"], "zettel_edge_plan")
+            self.assertEqual(dry_result["write_status"], "would_write")
+            self.assertEqual(dry_result["source"]["zettel_id"], source_id)
+            self.assertEqual(dry_result["target"]["ref"], target_id)
+            self.assertEqual(dry_result["target"]["kind"], "zettel")
+            self.assertTrue(dry_result["target"]["verified"])
+            self.assertEqual(dry_result["edge_type"], "semantic")
+            self.assertEqual(dry_result["proposed_edge"]["target"], target_id)
+            self.assertTrue(dry_result["receipt_path"].startswith("receipts/edges/"))
+            self.assertEqual(dry_result["files_written"], [])
+            self.assertFalse(dry_result["closed_actions"]["zettel_frontmatter_written"])
+            self.assertFalse(dry_result["closed_actions"]["receipt_written"])
+            self.assertFalse(dry_result["privacy_guards"]["body_text_echoed"])
+            self.assertFalse(dry_result["privacy_guards"]["zettel_title_echoed"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), serialized_dry)
+            self.assertNotIn("https://", serialized_dry)
+
+            missing_review_code, missing_review_output = self.run_cli(
+                [
+                    "zettel-edge",
+                    str(archive_root),
+                    "--from-zettel",
+                    source_id,
+                    "--target",
+                    target_id,
+                    "--edge-type",
+                    "semantic",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            missing_review = json.loads(missing_review_output)
+            self.assertEqual(missing_review_code, 1)
+            self.assertIn("requires --reviewed-by", "\n".join(missing_review["blockers"]))
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "zettel-edge",
+                    str(archive_root),
+                    "--from-zettel",
+                    source_id,
+                    "--target",
+                    target_id,
+                    "--edge-type",
+                    "semantic",
+                    "--visibility",
+                    "private",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:fixture-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            approve_result = json.loads(approve_output)
+            serialized_approve = json.dumps(approve_result, ensure_ascii=False)
+
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"])
+            self.assertEqual(approve_result["lifecycle_action"], "zettel_edge_write")
+            self.assertEqual(approve_result["write_status"], "written")
+            self.assertTrue(approve_result["closed_actions"]["zettel_frontmatter_written"])
+            self.assertTrue(approve_result["closed_actions"]["receipt_written"])
+            self.assertEqual(approve_result["reviewed_by"], "person:fixture-reviewer")
+            self.assertIn("zettels/zet_20240504_fake_lunch_thought.md", approve_result["files_written"])
+            self.assertIn(approve_result["receipt_path"], approve_result["files_written"])
+            self.assertNotIn(str(archive_root.resolve()), serialized_approve)
+            self.assertNotIn("https://", serialized_approve)
+
+            source_path = archive_root / "zettels" / "zet_20240504_fake_lunch_thought.md"
+            source_frontmatter, _source_body = archive_services.split_zettel_text(source_path.read_text(encoding="utf-8"))
+            matching_edges = [
+                item
+                for item in source_frontmatter["edges"]
+                if isinstance(item, dict) and item.get("type") == "semantic" and item.get("target") == target_id
+            ]
+            self.assertEqual(len(matching_edges), 1)
+            self.assertEqual(matching_edges[0]["visibility"], "private")
+            self.assertEqual(matching_edges[0]["receipt"], approve_result["receipt_path"])
+            self.assertEqual(matching_edges[0]["provenance"]["reviewed_by"], "person:fixture-reviewer")
+
+            receipt_path = archive_root / approve_result["receipt_path"]
+            self.assertTrue(receipt_path.is_file())
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["lifecycle_action"], "zettel_edge_write")
+            self.assertEqual(receipt["source_zettel_id"], source_id)
+            self.assertEqual(receipt["target_ref"], target_id)
+            self.assertEqual(receipt["target_kind"], "zettel")
+            self.assertTrue(receipt["result"]["edge_written"])
+            self.assertFalse(receipt["closed_actions"]["provider_api_called"])
+            self.assertNotIn("Fake thought while eating alone", receipt_path.read_text(encoding="utf-8"))
+
+            duplicate_code, duplicate_output = self.run_cli(
+                [
+                    "zettel-edge",
+                    str(archive_root),
+                    "--from-zettel",
+                    source_id,
+                    "--target",
+                    target_id,
+                    "--edge-type",
+                    "semantic",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:fixture-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            duplicate = json.loads(duplicate_output)
+            self.assertEqual(duplicate_code, 1)
+            self.assertIn("edge already exists", "\n".join(duplicate["blockers"]))
+
+            object_id = "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            object_code, object_output = self.run_cli(
+                [
+                    "zettel-edge",
+                    str(archive_root),
+                    "--from-zettel",
+                    source_id,
+                    "--target",
+                    object_id,
+                    "--edge-type",
+                    "embed",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            object_result = json.loads(object_output)
+            self.assertEqual(object_code, 0, object_output)
+            self.assertEqual(object_result["target"]["kind"], "objet")
+            self.assertEqual(object_result["target"]["ref"], object_id)
+            self.assertTrue(object_result["target"]["verified"])
+            self.assertEqual(object_result["target"]["manifest_path"], "objects/manifests/files.jsonl")
+
     def test_imap_mailbox_plan_is_read_only_and_blocks_secret_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
