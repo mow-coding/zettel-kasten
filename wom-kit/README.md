@@ -95,6 +95,7 @@ docs/human-artifact-store-contract.md
 docs/object-storage-recommendations.md
 docs/object-storage-adapter-readiness-plan.md
 docs/object-storage-operation-request-plan.md
+docs/object-storage-adapter-execution-contract.md
 docs/imap-mailbox-source.md
 docs/imap-mailbox-operation-request-plan.md
 docs/imap-mailbox-adapter-manifest-plan.md
@@ -178,6 +179,9 @@ object-storage-recommendation
 
 object-storage-operation-request-plan
   Compose a future object-storage operation approval request package. Dry-run only; combines provider readiness, object target validation, presigned URL planning or objet-ref resolution, and credential policy checks without calling providers, reading secrets, creating presigned URLs, uploading, downloading, or writing files.
+
+object-storage-adapter-execution-contract
+  Preview the future object-storage upload adapter execution contract. Dry-run only; defines sha256 content-addressed keys, approval re-verification, local SHA-256 verification, provider HEAD/idempotency checks, bounded retry/resume ledger, non-secret receipts, and manifest update rules without calling providers, reading object bytes, uploading, writing ledgers or receipts, or updating manifests.
 
 external-export-plan
   Plan a text-first Notion, Google Drive, or generic workspace export before large media downloads. Dry-run only; detects the broad workspace/database export trap, returns safe text-only and targeted first-pass command shapes, starts no export, calls no providers, reads no files, downloads no attachments, writes nothing, and echoes no provider URLs or local paths.

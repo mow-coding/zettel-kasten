@@ -43,6 +43,13 @@ MCP:
 object_storage_operation_request_plan
 ```
 
+Related upload execution contract:
+
+```text
+archive object-storage-adapter-execution-contract <archive-root> --operation upload_object --dry-run
+MCP: object_storage_adapter_execution_contract
+```
+
 ## What It Composes
 
 The request package reuses existing read-only gates:

@@ -258,6 +258,26 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "object_storage_adapter_execution_contract",
+        "description": "Preview the read-only execution contract a future object-storage upload adapter must satisfy. Never calls providers, retrieves secrets, reads object bytes, uploads, writes receipts, or updates manifests.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "operation": {
+                    "type": "string",
+                    "enum": sorted(archive_services.OBJECT_STORAGE_ADAPTER_EXECUTION_CONTRACT_OPERATIONS),
+                    "default": "upload_object",
+                },
+                "object_id": {"type": "string"},
+                "store_ref": {"type": "string"},
+                "provider_ref": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "human_artifact_store_plan",
         "description": "Plan a user-facing human artifact surface. Read-only; never creates notes, publishes posts, uploads files, starts OAuth, calls providers, mints, or runs ZET transport.",
         "inputSchema": {
@@ -2355,6 +2375,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_object_storage_adapter_readiness_plan(arguments)
     if name == "object_storage_operation_request_plan":
         return tool_object_storage_operation_request_plan(arguments)
+    if name == "object_storage_adapter_execution_contract":
+        return tool_object_storage_adapter_execution_contract(arguments)
     if name == "human_artifact_store_plan":
         return tool_human_artifact_store_plan(arguments)
     if name == "imap_mailbox_plan":
@@ -2725,6 +2747,23 @@ def tool_object_storage_operation_request_plan(arguments: dict[str, Any]) -> dic
     )
     state = str(result.get("request_state") or ("passed" if result["ok"] else "blocked"))
     return tool_success_result(f"object_storage_operation_request_plan: {state}.", result)
+
+
+def tool_object_storage_adapter_execution_contract(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("object_storage_adapter_execution_contract is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.object_storage_adapter_execution_contract,
+        archive_root,
+        operation=optional_string_arg(arguments, "operation") or "upload_object",
+        object_id=optional_string_arg(arguments, "object_id"),
+        store_ref=optional_string_arg(arguments, "store_ref"),
+        provider_ref=optional_string_arg(arguments, "provider_ref"),
+        dry_run=True,
+    )
+    state = str(result.get("contract_state") or ("passed" if result["ok"] else "blocked"))
+    return tool_success_result(f"object_storage_adapter_execution_contract: {state}.", result)
 
 
 def tool_human_artifact_store_plan(arguments: dict[str, Any]) -> dict[str, Any]:

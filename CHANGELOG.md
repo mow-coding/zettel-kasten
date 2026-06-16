@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.78 - 2026-06-16
+
+- Added read-only `archive object-storage-adapter-execution-contract
+  --operation upload_object --dry-run`, aliases
+  `object-storage-upload-execution-contract` and
+  `objet-storage-adapter-execution-contract`, and MCP
+  `object_storage_adapter_execution_contract`.
+- The contract fixes the future upload adapter rules before live execution:
+  sha256 content-addressed remote keys, approval receipt re-verification, local
+  SHA-256 verification before upload, provider HEAD/idempotency checks, bounded
+  retry/resume ledger, non-secret execution receipt, and manifest update only
+  after provider confirmation.
+- Clarified S3-compatible integrity handling: provider SHA-256 checksums are
+  preferred when supported, and ETag is not treated as WOM SHA-256 unless a
+  provider-specific policy verifies that equivalence for the exact upload mode.
+- Kept the workflow read-only: no provider call, secret retrieval, object byte
+  read, local hash computation, upload, remote availability check, resume ledger
+  write, receipt write, manifest update, bucket name, prefix, provider URL,
+  local absolute path, exact credential ref, token, or secret value is produced.
+
 ## v0.3.77 - 2026-06-16
 
 - Added read-only `archive connection-import-plan --source notion --dry-run`
