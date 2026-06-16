@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.76 large-media export trap checkpoint
+Status: v0.3.77 Notion connection import planning checkpoint
 Date: 2026-06-16
-Version: v0.3.76, release candidate
+Version: v0.3.77, release candidate
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -34,6 +34,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Derived text capture | `approval-gated write` | dry-run previews first; CLI approve stores text, appends one derived text manifest record, and writes a receipt | `archive derive-text capture` registers already extracted UTF-8 text for an existing `object_id` in `objects/manifests/files.jsonl`. It supports single-file input and JSONL batch input with `--from-manifest`; batch output includes itemized status, action, blockers, and warnings. It writes `objects/manifests/derived-text.jsonl`, stores text bodies under `objects/derived-text/sha256/`, and indexes them for search. It does not run OCR, ASR, parsers, LLM vision, provider APIs, drafting, or minting. |
 | Staged cleanup verifier | `read-only preview` | none | `archive staged-cleanup-check` reports per staged file whether it is preserved, deferred, or not preserved before any manual cleanup. Fails closed on unenumerable trees, exits 0 only when `safe_to_cleanup` is true, and never deletes. |
 | Related zets (typed-edge backlinks) | `implemented local command` | read-only | `archive related-zets` traverses typed edges in both directions over the generated index, so backlinks are answerable. Redacted zettels are never returned. |
+| Connection import plan | `read-only preview` | none | CLI `archive connection-import-plan --source notion --connection-kind all --dry-run` and MCP `connection_import_plan` map Notion relation properties, synced block references, database view/filter snapshots, internal hyperlinks, page mentions, comment context, and objet embeds to WOM typed-edge candidates. They report recommended edge vocabulary (`material`, `derived`, `semantic`, `embed`, `mention`, `view_query`, `comment_context`) and which recommended types are missing from the archive's allowed link types before any write command exists. They call no providers, start no OAuth, open no Notion connection, read no exports, read no comments, download no media, write no zets, write no edges, write no receipts, update no object manifests, and echo no provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values. |
 | Facet view execution | `implemented local command` | read-only | `archive view-zets` executes `views/*.yml` facet filters or ad-hoc facet queries against the generated index. List-valued facets index as repeated scalar rows; unsupported filter keys or list-valued filter inputs block instead of silently broadening results. |
 | Mint lifecycle | `approval-gated write` | CLI approve writes canonical zet, receipt, and draft snapshot | Dry-run previews first. Minting is private archive memory, not public posting. |
 | Delegate lifecycle | `approval-gated write` | CLI approve writes delegate receipt only | MCP delegate checks remain dry-run. Real external transport is not implemented. |

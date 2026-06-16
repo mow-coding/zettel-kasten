@@ -252,6 +252,25 @@ EXTERNAL_IMPORT_SOURCES = {"notion", "google_drive"}
 EXTERNAL_EXPORT_PLAN_SOURCES = {"notion", "google_drive", "generic_workspace"}
 EXTERNAL_EXPORT_GOALS = {"text_only", "targeted_pages", "full_workspace_review"}
 EXTERNAL_EXPORT_MEDIA_POLICIES = {"avoid_bulk_media", "selected_media_only", "full_media_requested"}
+CONNECTION_IMPORT_SOURCES = {"notion"}
+CONNECTION_IMPORT_KINDS = {
+    "relation_property",
+    "synced_block_reference",
+    "database_view_filter",
+    "internal_url_hyperlink",
+    "mention_page",
+    "comment_context",
+    "objet_embed",
+}
+CONNECTION_IMPORT_RECOMMENDED_EDGE_TYPES = {
+    "material",
+    "derived",
+    "semantic",
+    "embed",
+    "mention",
+    "view_query",
+    "comment_context",
+}
 EXTERNAL_IMPORT_EXTENSIONS = {".md", ".markdown", ".txt"}
 SOURCE_TYPES = {"local_folder", "external_ssd", "notion_export", "google_drive_export", "object_manifest", "imap_mailbox"}
 IMAP_MAILBOX_SOURCE_TYPE = "imap_mailbox"
@@ -11269,6 +11288,245 @@ def external_export_large_media_trap(
             "use source-intake or project-intake receipts to decide what matters",
             "route selected media to object-storage recommendation or objet-capture planning",
         ],
+    }
+
+
+def connection_import_plan(
+    archive_root: Path | str,
+    *,
+    source: str = "notion",
+    connection_kind: str = "all",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("connection-import-plan is dry-run only; pass --dry-run.")
+
+    normalized_source = str(source or "").strip().lower().replace("-", "_")
+    if normalized_source not in CONNECTION_IMPORT_SOURCES:
+        blockers.append("source must be one of: " + ", ".join(sorted(CONNECTION_IMPORT_SOURCES)) + ".")
+        normalized_source = "notion"
+
+    normalized_kind = str(connection_kind or "all").strip().lower().replace("-", "_")
+    if normalized_kind != "all" and normalized_kind not in CONNECTION_IMPORT_KINDS:
+        blockers.append("connection_kind must be all or one of: " + ", ".join(sorted(CONNECTION_IMPORT_KINDS)) + ".")
+        normalized_kind = "all"
+
+    allowed_link_types = load_allowed_link_types(root)
+    recommended_types = sorted(CONNECTION_IMPORT_RECOMMENDED_EDGE_TYPES)
+    missing_types = sorted(edge_type for edge_type in recommended_types if edge_type not in allowed_link_types)
+    present_types = sorted(edge_type for edge_type in recommended_types if edge_type in allowed_link_types)
+    if missing_types:
+        warnings.append(
+            "Recommended connection edge types are not all defined in zettel-kasten/types.yml: "
+            + ", ".join(missing_types)
+            + "."
+        )
+
+    mappings = notion_connection_import_mappings()
+    if normalized_kind != "all":
+        mappings = [item for item in mappings if item["connection_kind"] == normalized_kind]
+    for item in mappings:
+        candidate_types = item.get("candidate_edge_types") if isinstance(item.get("candidate_edge_types"), list) else []
+        item["archive_edge_type_status"] = {
+            "present": sorted(edge_type for edge_type in candidate_types if edge_type in allowed_link_types),
+            "missing": sorted(edge_type for edge_type in candidate_types if edge_type not in allowed_link_types),
+        }
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "connection_import_plan",
+        "archive_id": archive_id,
+        "source": normalized_source,
+        "connection_kind": normalized_kind,
+        "supported_connection_kinds": sorted(CONNECTION_IMPORT_KINDS),
+        "edge_vocabulary": connection_import_edge_vocabulary(),
+        "connection_mappings": mappings,
+        "archive_link_type_status": {
+            "checked": True,
+            "source": "zettel-kasten/types.yml",
+            "recommended_edge_types": recommended_types,
+            "present_recommended_edge_types": present_types,
+            "missing_recommended_edge_types": missing_types,
+        },
+        "dynamic_snapshot_standard": connection_import_dynamic_snapshot_standard(),
+        "official_source_ids": [
+            "notion_data_source_properties",
+            "notion_block_object",
+            "notion_list_comments",
+            "notion_connection_capabilities",
+            "notion_data_source_views_api_limit",
+        ],
+        "next_safe_steps": [
+            "Decide which recommended edge types should become allowed link_types before writing edges.",
+            "Build a read-only evidence parser for exported relation CSV, markdown links, mentions, comments, and objet embeds.",
+            "Review dynamic database view/filter results as static edge snapshots before treating them as canonical edges.",
+            "Only after review, add an approval-gated edge write command with receipts.",
+        ],
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "source_export_files_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "zettels_written": False,
+            "edges_written": False,
+            "receipts_written": False,
+            "object_manifest_updated": False,
+        },
+        "privacy_guards": {
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "page_titles_echoed": False,
+            "comment_bodies_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "secret_values_echoed": False,
+        },
+        "would_change": [],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def notion_connection_import_mappings() -> list[dict[str, Any]]:
+    return [
+        {
+            "connection_kind": "relation_property",
+            "notion_evidence": "relation property rows, pre/post block properties, or relations.csv",
+            "candidate_edge_types": ["material", "derived"],
+            "target_shape": "zet_to_zet",
+            "import_rule": "Map pre/input relations to material and post/output relations to derived; ambiguous relations need human review.",
+            "confidence": "high_when_relation_ids_resolve_to_known_zets",
+            "snapshot_required": False,
+            "official_source_ids": ["notion_data_source_properties"],
+        },
+        {
+            "connection_kind": "synced_block_reference",
+            "notion_evidence": "<synced_block_reference> or synced block reference metadata",
+            "candidate_edge_types": ["semantic"],
+            "target_shape": "zet_to_zet",
+            "import_rule": "Treat synced-block references as semantic candidate links until the human confirms direction and meaning.",
+            "confidence": "medium",
+            "snapshot_required": False,
+            "official_source_ids": ["notion_block_object"],
+        },
+        {
+            "connection_kind": "database_view_filter",
+            "notion_evidence": "database/data-source view, filter, or collection query result",
+            "candidate_edge_types": ["view_query"],
+            "target_shape": "view_snapshot_to_zet_candidates",
+            "import_rule": "Capture the filter/query and result set as a static snapshot before proposing edges.",
+            "confidence": "snapshot_required",
+            "snapshot_required": True,
+            "official_source_ids": ["notion_data_source_views_api_limit"],
+        },
+        {
+            "connection_kind": "internal_url_hyperlink",
+            "notion_evidence": "Markdown link or rich-text link whose target is another Notion page",
+            "candidate_edge_types": ["semantic"],
+            "target_shape": "zet_to_zet",
+            "import_rule": "Resolve only internal page ids that match known imported pages; do not echo raw private URLs.",
+            "confidence": "medium_when_page_id_resolves",
+            "snapshot_required": False,
+            "official_source_ids": ["notion_block_object"],
+        },
+        {
+            "connection_kind": "mention_page",
+            "notion_evidence": "rich-text page mention or exported <mention-page> marker",
+            "candidate_edge_types": ["mention"],
+            "target_shape": "zet_to_zet",
+            "import_rule": "Preserve explicit @mention intent separately from broader semantic links.",
+            "confidence": "high_when_page_id_resolves",
+            "snapshot_required": False,
+            "official_source_ids": ["notion_block_object"],
+        },
+        {
+            "connection_kind": "comment_context",
+            "notion_evidence": "comment mirror record, page/block comment, or discussion context",
+            "candidate_edge_types": ["comment_context"],
+            "target_shape": "comment_context_to_zet_candidates",
+            "import_rule": "Keep comments as a separate context layer; never import comment bodies into edges.",
+            "confidence": "medium",
+            "snapshot_required": True,
+            "official_source_ids": ["notion_list_comments", "notion_connection_capabilities"],
+        },
+        {
+            "connection_kind": "objet_embed",
+            "notion_evidence": "file block, file:// reference, embedded media, or resolved sha256 object ref",
+            "candidate_edge_types": ["embed"],
+            "target_shape": "zet_to_objet",
+            "import_rule": "Create only candidate zet-to-objet edges; object storage upload proof remains a separate receipt.",
+            "confidence": "high_when_object_id_resolves",
+            "snapshot_required": False,
+            "official_source_ids": ["notion_block_object"],
+        },
+    ]
+
+
+def connection_import_edge_vocabulary() -> list[dict[str, Any]]:
+    return [
+        {
+            "edge_type": "material",
+            "meaning": "The target zet or objet is source material used by the current zet.",
+            "typical_source": "pre/input relation",
+        },
+        {
+            "edge_type": "derived",
+            "meaning": "The target zet is a later product, follow-up, or derived output of the current zet.",
+            "typical_source": "post/output relation",
+        },
+        {
+            "edge_type": "semantic",
+            "meaning": "The target zet is meaningfully related, but the relation needs human wording before it becomes more specific.",
+            "typical_source": "internal link or synced block reference",
+        },
+        {
+            "edge_type": "embed",
+            "meaning": "The current zet explicitly embeds or uses an objet.",
+            "typical_source": "file block, embedded media, or sha256 object ref",
+        },
+        {
+            "edge_type": "mention",
+            "meaning": "The current zet explicitly mentions another page/zet.",
+            "typical_source": "Notion @mention page reference",
+        },
+        {
+            "edge_type": "view_query",
+            "meaning": "The relation comes from a captured database view/filter result, not from a hand-authored link.",
+            "typical_source": "database view or filter snapshot",
+        },
+        {
+            "edge_type": "comment_context",
+            "meaning": "The relation came from comment/discussion context and should stay separate from the zet body.",
+            "typical_source": "Notion comment mirror",
+        },
+    ]
+
+
+def connection_import_dynamic_snapshot_standard() -> dict[str, Any]:
+    return {
+        "applies_to": ["database_view_filter", "comment_context"],
+        "why": "Dynamic views and comments can change after export; WOM needs a reviewed static snapshot before proposing durable edges.",
+        "required_fields": [
+            "snapshot_id",
+            "source_system",
+            "source_export_ref",
+            "captured_at",
+            "captured_by",
+            "view_or_comment_ref",
+            "query_or_context_summary",
+            "result_refs",
+            "privacy_redactions",
+            "review_status",
+        ],
+        "privacy_rule": "Store ids, hashes, and safe labels; do not store raw private URLs, account ids, emails, comment bodies, or local absolute paths.",
     }
 
 

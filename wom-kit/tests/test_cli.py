@@ -1856,6 +1856,65 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn("https://", serialized)
             self.assertNotIn("private-notion-export-name", serialized)
 
+    def test_connection_import_plan_maps_notion_evidence_to_edge_candidates_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "connection-import-plan",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--connection-kind",
+                    "all",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "connection_import_plan")
+            self.assertEqual(result["source"], "notion")
+            self.assertEqual(result["connection_kind"], "all")
+            kinds = {item["connection_kind"] for item in result["connection_mappings"]}
+            self.assertEqual(
+                kinds,
+                {
+                    "relation_property",
+                    "synced_block_reference",
+                    "database_view_filter",
+                    "internal_url_hyperlink",
+                    "mention_page",
+                    "comment_context",
+                    "objet_embed",
+                },
+            )
+            edge_types = {item["edge_type"] for item in result["edge_vocabulary"]}
+            self.assertTrue({"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"} <= edge_types)
+            relation = next(item for item in result["connection_mappings"] if item["connection_kind"] == "relation_property")
+            self.assertEqual(relation["candidate_edge_types"], ["material", "derived"])
+            view = next(item for item in result["connection_mappings"] if item["connection_kind"] == "database_view_filter")
+            self.assertTrue(view["snapshot_required"])
+            self.assertEqual(view["candidate_edge_types"], ["view_query"])
+            self.assertIn("result_refs", result["dynamic_snapshot_standard"]["required_fields"])
+            self.assertIn("material", result["archive_link_type_status"]["missing_recommended_edge_types"])
+            self.assertIn("notion_data_source_properties", result["official_source_ids"])
+            self.assertIn("notion_connection_capabilities", result["official_source_ids"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["source_export_files_read"])
+            self.assertFalse(result["closed_actions"]["edges_written"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn("https://", serialized)
+
     def test_imap_mailbox_plan_is_read_only_and_blocks_secret_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
