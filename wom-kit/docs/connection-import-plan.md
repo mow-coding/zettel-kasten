@@ -1,6 +1,6 @@
 # Connection Import Plan
 
-Status: v0.3.77 read-only Notion connection import planning checkpoint
+Status: v0.3.79 read-only connection edge vocabulary checkpoint
 
 `archive connection-import-plan` is a pre-import safety label for connection
 evidence. It is meant to run before WOM writes any new `edges` to canonical
@@ -46,8 +46,21 @@ candidates:
 | file/embed/object reference | `embed` |
 
 It also checks the current archive's `zettel-kasten/types.yml` and reports which
-recommended edge types are not yet allowed link types. That makes the next safe
-step visible before any write command exists.
+recommended edge types are allowed link types. The WOM-kit base and fake archive
+types now define this connection vocabulary:
+
+```text
+material
+derived
+semantic
+embed
+mention
+view_query
+comment_context
+```
+
+This still does not write edges. It only means WOM can now name the connection
+types before a future evidence parser or approval-gated edge writer exists.
 
 ## Dynamic Snapshot Rule
 

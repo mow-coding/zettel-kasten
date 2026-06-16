@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.79 - 2026-06-16
+
+- Added the recommended Notion connection edge vocabulary to the base
+  `zettel-kasten/types.yml` and fake archive types:
+  `material`, `derived`, `semantic`, `embed`, `mention`, `view_query`, and
+  `comment_context`.
+- Updated `connection-import-plan` so the current fake archive reports those
+  recommended edge types as present instead of missing.
+- Clarified that this is still a vocabulary/schema checkpoint before evidence
+  parsing or edge writes: no Notion call, OAuth, export read, comment read,
+  media download, zet write, edge write, receipt write, object manifest update,
+  provider URL, local path, page title, comment body, account id, email, token,
+  or secret value is produced.
+
 ## v0.3.78 - 2026-06-16
 
 - Added read-only `archive object-storage-adapter-execution-contract

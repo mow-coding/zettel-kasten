@@ -452,6 +452,65 @@ link_types:
     policy_notes:
       - Private sources must not be revealed unless policy allows it.
 
+  - id: material
+    description: The target zet or object is source material used by the current zet.
+    from:
+      - Zettel
+    to:
+      - Zettel
+      - OriginalObject
+    policy_notes:
+      - Private sources must not be revealed unless policy allows it.
+
+  - id: derived
+    description: The target zet is a later product, follow-up, or derived output of the current zet.
+    from:
+      - Zettel
+    to:
+      - Zettel
+    policy_notes:
+      - Direction matters; use material for inputs and derived for outputs.
+
+  - id: semantic
+    description: The target zet is meaningfully related, but the relation needs human wording before it becomes more specific.
+    from:
+      - Zettel
+    to:
+      - Zettel
+
+  - id: embed
+    description: The current zet explicitly embeds or uses an object.
+    from:
+      - Zettel
+    to:
+      - OriginalObject
+
+  - id: mention
+    description: The current zet explicitly mentions another zet or imported page.
+    from:
+      - Zettel
+    to:
+      - Zettel
+
+  - id: view_query
+    description: A relation comes from a reviewed static snapshot of a database view or filter result.
+    from:
+      - View
+      - Zettel
+    to:
+      - Zettel
+    policy_notes:
+      - Dynamic views and filters must be reviewed as static snapshots before durable edges are written.
+
+  - id: comment_context
+    description: A relation came from comment or discussion context and should stay separate from the zet body.
+    from:
+      - Zettel
+    to:
+      - Zettel
+    policy_notes:
+      - Do not store raw comment bodies in edge metadata.
+
   - id: shared_with
     description: A record or object is explicitly shared with another archive or principal.
     from:

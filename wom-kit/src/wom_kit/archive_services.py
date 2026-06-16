@@ -11367,7 +11367,7 @@ def connection_import_plan(
             "notion_data_source_views_api_limit",
         ],
         "next_safe_steps": [
-            "Decide which recommended edge types should become allowed link_types before writing edges.",
+            "Use the defined connection edge vocabulary before writing any future imported edges.",
             "Build a read-only evidence parser for exported relation CSV, markdown links, mentions, comments, and objet embeds.",
             "Review dynamic database view/filter results as static edge snapshots before treating them as canonical edges.",
             "Only after review, add an approval-gated edge write command with receipts.",
