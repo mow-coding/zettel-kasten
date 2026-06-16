@@ -1243,6 +1243,10 @@ OBJECT_STORAGE_ADAPTER_OPERATIONS = {
     "presigned_head",
     "list_metadata_only",
 }
+OBJECT_STORAGE_ADAPTER_EXECUTION_CONTRACT_OPERATIONS = {
+    "upload_object",
+}
+OBJECT_STORAGE_UPLOAD_KEY_STRATEGY = "sha256_content_addressed"
 OBJECT_STORAGE_PROVIDER_TOKEN_ENVS = {
     "cloudflare-r2": "R2_TOKEN",
     "aws-s3": "AWS_OBJECT_STORAGE_TOKEN",
@@ -26470,6 +26474,239 @@ def object_storage_operation_request_plan(
         },
         "would_change": [],
         "next_safe_actions": unique_preserve_order(next_safe_actions),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def object_storage_adapter_execution_contract(
+    archive_root: Path | str,
+    *,
+    operation: str = "upload_object",
+    object_id: str | None = None,
+    store_ref: str | None = None,
+    provider_ref: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("object-storage-adapter-execution-contract is read-only and requires --dry-run.")
+
+    normalized_operation = str(operation or "").strip().lower().replace("-", "_")
+    if normalized_operation not in OBJECT_STORAGE_ADAPTER_EXECUTION_CONTRACT_OPERATIONS:
+        blockers.append(
+            "operation must be one of: "
+            + ", ".join(sorted(OBJECT_STORAGE_ADAPTER_EXECUTION_CONTRACT_OPERATIONS))
+            + "."
+        )
+        normalized_operation = "upload_object"
+
+    normalized_object_id = ""
+    if object_id:
+        normalized_object_id = normalize_object_id(str(object_id), blockers)
+
+    normalized_store_ref = str(store_ref or "").strip()
+    if normalized_store_ref and not safe_source_intake_ref(normalized_store_ref):
+        blockers.append("store_ref must be a safe label/ref, not a URL, email, token, secret, or path.")
+        normalized_store_ref = ""
+
+    normalized_provider_ref = str(provider_ref or "").strip()
+    if normalized_provider_ref and not safe_source_intake_ref(normalized_provider_ref):
+        blockers.append("provider_ref must be a safe label/ref, not a URL, email, token, secret, or path.")
+        normalized_provider_ref = ""
+
+    readiness_preview = object_storage_adapter_readiness_plan(
+        root,
+        operation=normalized_operation,
+        provider_ref=normalized_provider_ref or None,
+        dry_run=True,
+    )
+    warnings.extend(str(item) for item in readiness_preview.get("warnings") or [])
+
+    object_resolution_summary: dict[str, Any] = {
+        "object_id": normalized_object_id or None,
+        "object_id_supplied": bool(normalized_object_id),
+        "object_id_required_for_live_upload": True,
+        "manifest_record_count": 0,
+        "resolution_state": "not_checked_without_object_id",
+        "local_candidate_count": 0,
+        "external_candidate_count": 0,
+        "local_openable": False,
+        "external_declared": False,
+        "object_file_bytes_read": False,
+        "sha256_verified_now": False,
+    }
+    if normalized_object_id:
+        resolution_preview = resolve_objet_ref(root, object_id=normalized_object_id, dry_run=True)
+        warnings.extend(str(item) for item in resolution_preview.get("warnings") or [])
+        object_resolution_summary = {
+            "object_id": normalized_object_id,
+            "object_id_supplied": True,
+            "object_id_required_for_live_upload": True,
+            "manifest_record_count": resolution_preview.get("manifest_record_count", 0),
+            "resolution_state": resolution_preview.get("resolution_state"),
+            "local_candidate_count": len(resolution_preview.get("local_candidates") or []),
+            "external_candidate_count": len(resolution_preview.get("external_candidates") or []),
+            "local_openable": bool(resolution_preview.get("local_openable")),
+            "external_declared": bool(resolution_preview.get("external_declared")),
+            "object_file_bytes_read": False,
+            "sha256_verified_now": False,
+            "provider_api_called": False,
+            "provider_url_echoed": False,
+        }
+
+    readiness_blockers = [str(item) for item in readiness_preview.get("blockers") or []]
+    contract_state = "blocked" if blockers else "contract_preview_ready"
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "object_storage_adapter_execution_contract",
+        "archive_id": archive_id,
+        "contract_state": contract_state,
+        "operation": normalized_operation,
+        "object_id": normalized_object_id or None,
+        "store_ref": normalized_store_ref or None,
+        "provider_ref_supplied": bool(normalized_provider_ref),
+        "prerequisite_gate_summary": {
+            "readiness_plan": "object-storage-adapter-readiness-plan",
+            "operation_request_plan": "object-storage-operation-request-plan",
+            "credential_policy_check": "credential-policy-check",
+            "approval_receipt": "credential-access-approval",
+            "readiness_state": readiness_preview.get("readiness_state"),
+            "provider_summary": readiness_preview.get("provider_summary"),
+            "readiness_blockers": unique_preserve_order(readiness_blockers),
+            "live_execution_allowed_now": False,
+        },
+        "object_resolution_summary": json_safe(object_resolution_summary),
+        "execution_contract": {
+            "adapter_mode": "future_local_cli_adapter",
+            "live_execution_allowed_now": False,
+            "future_live_adapter_implemented": False,
+            "operation_request_must_be_ready_after_approval": True,
+            "approval_receipt_must_be_verified_again": True,
+            "object_bytes_may_be_read_after_approval_only": True,
+            "local_object_sha256_must_match_object_id_before_upload": True,
+            "provider_head_before_upload_for_idempotency": True,
+            "provider_head_after_upload_required": True,
+        },
+        "key_contract": {
+            "strategy": OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+            "content_address_source": "sha256 object id",
+            "remote_key_shape": "{provider_prefix}/sha256/<first2>/<sha256>",
+            "remote_prefix_value_echoed": False,
+            "bucket_name_echoed": False,
+            "object_id_required": True,
+            "object_key_must_not_include_original_filename": True,
+        },
+        "integrity_contract": {
+            "sha256_required": True,
+            "content_sha256_must_match_object_id": True,
+            "provider_checksum_preference": "sha256_when_provider_supports_it",
+            "etag_is_not_treated_as_sha256_unless_provider_policy_is_verified": True,
+            "multipart_or_large_object_checksum_policy_required": True,
+            "remote_head_must_compare_non_secret_size_and_checksum_metadata": True,
+        },
+        "transfer_contract": {
+            "resume_ledger_required": True,
+            "resume_ledger_path_shape": "receipts/providers/object-storage-executions/<case-id>.resume-ledger.jsonl",
+            "resume_ledger_contains_secret_values": False,
+            "large_media_safe_mode": True,
+            "default_concurrency": "low",
+            "retry_policy": "bounded_exponential_backoff_with_resume",
+            "partial_upload_cleanup_policy_required": True,
+        },
+        "receipt_contract": {
+            "non_secret_execution_receipt_required_after_execution": True,
+            "receipt_path_shape": "receipts/providers/object-storage-executions/<case-id>.object-storage-upload.json",
+            "required_fields": [
+                "operation",
+                "object_id",
+                "provider_kind",
+                "store_ref",
+                "key_strategy",
+                "result_status",
+                "bytes_uploaded",
+                "checksum_algorithm",
+                "retry_summary",
+                "manifest_update_preview",
+            ],
+            "must_not_include": [
+                "secret_values",
+                "exact_credential_refs",
+                "bucket_names",
+                "provider_urls",
+                "local_absolute_paths",
+                "raw_adapter_output",
+            ],
+        },
+        "manifest_update_contract": {
+            "update_allowed_only_after_provider_confirmation": True,
+            "target_manifest": "objects/manifests/files.jsonl",
+            "location_fields_to_add_or_update": [
+                "provider",
+                "store_kind",
+                "store_ref",
+                "availability",
+                "content_addressed",
+                "byte_verification_by_wom_kit",
+                "uploaded_at",
+                "execution_receipt_ref",
+            ],
+            "provider_url_must_not_be_recorded_publicly": True,
+            "manifest_write_implemented_now": False,
+        },
+        "current_capability": {
+            "execution_contract_available": True,
+            "readiness_planning_available": True,
+            "operation_request_planning_available": True,
+            "live_object_storage_adapter_implemented": False,
+            "provider_api_call_implemented": False,
+            "credential_secret_retrieval_implemented": False,
+            "upload_implemented": False,
+            "remote_head_implemented": False,
+            "resume_ledger_write_implemented": False,
+            "manifest_update_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "object_file_bytes_read": False,
+            "local_sha256_computed": False,
+            "remote_head_checked": False,
+            "object_uploaded": False,
+            "resume_ledger_written": False,
+            "adapter_audit_receipt_written": False,
+            "manifest_updated": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "provider_resource_values_echoed": False,
+            "bucket_names_echoed": False,
+            "prefixes_echoed": False,
+            "provider_urls_echoed": False,
+            "generated_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "secret_values_echoed": False,
+            "object_file_bytes_read": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": [
+            "Resolve readiness blockers with archive object-storage-adapter-readiness-plan --operation upload_object --dry-run.",
+            "Package a scoped request with archive object-storage-operation-request-plan --operation upload_object --dry-run.",
+            "Require a verified human approval receipt before any future adapter reads object bytes or calls a provider.",
+            "Implement resume ledger, remote head idempotency, checksum comparison, non-secret receipt, and manifest update as one gated live adapter slice.",
+            "Keep bucket names, prefixes, provider URLs, credential refs, and local absolute paths out of public records.",
+        ],
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }

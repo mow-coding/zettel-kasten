@@ -7102,6 +7102,142 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
 
+    def test_object_storage_adapter_execution_contract_keeps_upload_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            bucket_name = "zettel-kasten-execution-contract-objets"
+            setup = archive_services.approve_object_storage_setup_plan(
+                archive_root,
+                reviewed_by="person:tester",
+                provider="cloudflare-r2",
+                profile_id="profile:personal:username",
+                profile_slug="execution-contract",
+                storage_account_ref="storage:account:execution-contract",
+                bucket_name=bucket_name,
+            )
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            digest = "f" * 64
+            unsafe_url = "https://" + "redacted.example/private-upload-target"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "object_id": f"sha256:{digest}",
+                        "sha256": digest,
+                        "logical_key": f"objects/sha256/{digest[:2]}/{digest}",
+                        "mime": "application/octet-stream",
+                        "size_bytes": 1024,
+                        "locations": [
+                            {
+                                "provider": "cloudflare_r2",
+                                "store_kind": "object_storage",
+                                "store_ref": "object-store-execution-contract",
+                                "availability": "declared_external",
+                                "content_addressed": True,
+                                "byte_verification_by_wom_kit": False,
+                                "provider_url": unsafe_url,
+                            }
+                        ],
+                        "provenance": {"source": "prehashed_external_objet_ledger"},
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "object-storage-adapter-execution-contract",
+                    str(archive_root),
+                    "--operation",
+                    "upload_object",
+                    "--object-id",
+                    f"sha256:{digest}",
+                    "--store-ref",
+                    "object-store-execution-contract",
+                    "--provider-ref",
+                    "cloudflare-r2",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "object_storage_adapter_execution_contract")
+            self.assertEqual(result["contract_state"], "contract_preview_ready")
+            self.assertEqual(result["operation"], "upload_object")
+            self.assertEqual(result["object_id"], f"sha256:{digest}")
+            self.assertEqual(result["store_ref"], "object-store-execution-contract")
+            self.assertEqual(result["key_contract"]["strategy"], "sha256_content_addressed")
+            self.assertTrue(result["integrity_contract"]["sha256_required"])
+            self.assertTrue(result["integrity_contract"]["etag_is_not_treated_as_sha256_unless_provider_policy_is_verified"])
+            self.assertTrue(result["transfer_contract"]["resume_ledger_required"])
+            self.assertTrue(result["receipt_contract"]["non_secret_execution_receipt_required_after_execution"])
+            self.assertTrue(result["manifest_update_contract"]["update_allowed_only_after_provider_confirmation"])
+            self.assertFalse(result["execution_contract"]["live_execution_allowed_now"])
+            self.assertFalse(result["current_capability"]["live_object_storage_adapter_implemented"])
+            self.assertFalse(result["current_capability"]["upload_implemented"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["credential_value_read"])
+            self.assertFalse(result["closed_actions"]["object_file_bytes_read"])
+            self.assertFalse(result["closed_actions"]["local_sha256_computed"])
+            self.assertFalse(result["closed_actions"]["remote_head_checked"])
+            self.assertFalse(result["closed_actions"]["object_uploaded"])
+            self.assertFalse(result["closed_actions"]["resume_ledger_written"])
+            self.assertFalse(result["closed_actions"]["adapter_audit_receipt_written"])
+            self.assertFalse(result["closed_actions"]["manifest_updated"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertFalse(result["privacy_guards"]["bucket_names_echoed"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["local_absolute_paths_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn(unsafe_url, output)
+            self.assertNotIn(bucket_name, output)
+            self.assertNotIn(setup["receipt_path"], output)
+            self.assertNotIn(str(archive_root), output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            no_dry_code, no_dry_output = self.run_cli(
+                [
+                    "object-storage-adapter-execution-contract",
+                    str(archive_root),
+                    "--operation",
+                    "upload_object",
+                    "--object-id",
+                    f"sha256:{digest}",
+                ]
+            )
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+
+            unsafe_code, unsafe_output = self.run_cli(
+                [
+                    "object-storage-adapter-execution-contract",
+                    str(archive_root),
+                    "--operation",
+                    "upload_object",
+                    "--object-id",
+                    f"sha256:{digest}",
+                    "--store-ref",
+                    "https://storage.example/private",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            unsafe_result = json.loads(unsafe_output)
+            self.assertEqual(unsafe_code, 1, unsafe_output)
+            self.assertFalse(unsafe_result["ok"])
+            self.assertIn("store_ref must be a safe label/ref", " ".join(unsafe_result["blockers"]))
+            self.assertNotIn("https://storage.example/private", unsafe_output)
+
     def test_zettel_objet_links_preview_resolves_refs_without_echoing_body_or_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

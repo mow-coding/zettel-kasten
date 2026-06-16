@@ -2203,6 +2203,27 @@ def command_object_storage_operation_request_plan(args: argparse.Namespace) -> i
     return 0 if result.get("ok", True) else 1
 
 
+def command_object_storage_adapter_execution_contract(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("object-storage-adapter-execution-contract is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.object_storage_adapter_execution_contract(
+            Path(args.archive_root),
+            operation=args.operation,
+            object_id=args.object_id,
+            store_ref=args.store_ref,
+            provider_ref=args.provider_ref,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_object_storage_adapter_execution_contract_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
 def command_imap_mailbox_operation_request_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("imap-mailbox-operation-request-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -3255,6 +3276,40 @@ def print_object_storage_operation_request_plan_result(result: dict[str, Any], o
     print(f"Target: {target.get('target_kind') or '-'}")
     print(f"Credential policy: {policy.get('policy_result') or '-'}")
     print(f"Approval receipt verified: {policy.get('approval_receipt_verified')}")
+    print("Live execution allowed now: no")
+    print("Provider API called: no")
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
+
+
+def print_object_storage_adapter_execution_contract_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    gates = result.get("prerequisite_gate_summary") if isinstance(result.get("prerequisite_gate_summary"), dict) else {}
+    key_contract = result.get("key_contract") if isinstance(result.get("key_contract"), dict) else {}
+    integrity = result.get("integrity_contract") if isinstance(result.get("integrity_contract"), dict) else {}
+    transfer = result.get("transfer_contract") if isinstance(result.get("transfer_contract"), dict) else {}
+    print(f"Object storage adapter execution contract: {result.get('contract_state') or '-'}")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Operation: {result.get('operation') or '-'}")
+    print(f"Object id: {result.get('object_id') or '-'}")
+    print(f"Store ref: {result.get('store_ref') or '-'}")
+    print(f"Readiness: {gates.get('readiness_state') or '-'}")
+    print(f"Key strategy: {key_contract.get('strategy') or '-'}")
+    print(f"SHA-256 required: {integrity.get('sha256_required')}")
+    print(f"Resume ledger required: {transfer.get('resume_ledger_required')}")
     print("Live execution allowed now: no")
     print("Provider API called: no")
     print("Writes: none")
@@ -8427,6 +8482,32 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_operation_request.add_argument("--dry-run", action="store_true", help="Required. Plan only; never calls providers or reads secrets.")
     object_storage_operation_request.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_operation_request.set_defaults(func=command_object_storage_operation_request_plan)
+
+    object_storage_adapter_execution_contract = subcommands.add_parser(
+        "object-storage-adapter-execution-contract",
+        aliases=["object-storage-upload-execution-contract", "objet-storage-adapter-execution-contract"],
+        help="Preview the read-only execution contract a future object-storage upload adapter must satisfy.",
+    )
+    object_storage_adapter_execution_contract.add_argument("archive_root", help="Archive root to inspect.")
+    object_storage_adapter_execution_contract.add_argument(
+        "--operation",
+        choices=sorted(archive_services.OBJECT_STORAGE_ADAPTER_EXECUTION_CONTRACT_OPERATIONS),
+        default="upload_object",
+        help="Future object-storage adapter operation to contract. v0.3.78 covers upload_object.",
+    )
+    object_storage_adapter_execution_contract.add_argument("--object-id", help="Optional object id formatted as sha256:<64 hex> or bare 64 hex.")
+    object_storage_adapter_execution_contract.add_argument("--store-ref", help="Optional safe external store label/ref. Do not pass a URL, path, token, or secret.")
+    object_storage_adapter_execution_contract.add_argument(
+        "--provider-ref",
+        help="Optional safe provider binding label/ref. Do not pass a URL, path, token, or secret.",
+    )
+    object_storage_adapter_execution_contract.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Contract only; never uploads, reads object bytes, calls providers, retrieves secrets, or writes files.",
+    )
+    object_storage_adapter_execution_contract.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    object_storage_adapter_execution_contract.set_defaults(func=command_object_storage_adapter_execution_contract)
 
     imap_mailbox_operation_request = subcommands.add_parser(
         "imap-mailbox-operation-request-plan",

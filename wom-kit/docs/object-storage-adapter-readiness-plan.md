@@ -37,6 +37,13 @@ archive object-storage-operation-request-plan <archive-root> --dry-run
 MCP: object_storage_operation_request_plan
 ```
 
+Related upload execution contract:
+
+```text
+archive object-storage-adapter-execution-contract <archive-root> --operation upload_object --dry-run
+MCP: object_storage_adapter_execution_contract
+```
+
 ## What It Checks
 
 The planner reads local provider metadata and setup receipts through
