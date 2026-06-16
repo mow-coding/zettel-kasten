@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.76 - 2026-06-16
+
+- Added explicit `large_media_export_trap` output to
+  `archive external-export-plan` so broad workspace/database exports that can
+  pull uploaded files, attachments, images, audio, or video are visible before
+  anyone starts a provider export.
+- Added safe first-pass command shapes for `text_only` and `targeted_pages`
+  planning before bulk media handling.
+- Extended Notion guidance with a large-workspace fallback: split oversized or
+  failing workspace exports into smaller top-level page or database batches
+  before retrying media-heavy export work.
+- Kept the workflow read-only: no provider export, provider API call, OAuth,
+  file read, media-byte read, attachment download, archive write, provider URL,
+  local path, filename, account id, email, token, or secret value is produced.
+
 ## v0.3.75 - 2026-06-16
 
 - Added `wom-kit/docs/ai-response-concept-guide.md`, a beginner-facing guide

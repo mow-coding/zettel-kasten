@@ -11067,6 +11067,13 @@ def external_export_plan(
 
     provider_guidance = external_export_provider_guidance(normalized_source)
     recommended_mode = external_export_recommended_mode(normalized_source, normalized_goal, normalized_media)
+    large_media_trap = external_export_large_media_trap(
+        normalized_source,
+        normalized_goal,
+        normalized_media,
+        media_estimate,
+        risk_level,
+    )
 
     import_after_review = None
     if normalized_source in {"notion", "google_drive"}:
@@ -11088,14 +11095,26 @@ def external_export_plan(
         "risk_level": risk_level,
         "risk_reasons": unique_preserve_order(risk_reasons),
         "recommended_export_mode": recommended_mode,
+        "large_media_export_trap": large_media_trap,
         "provider_guidance": provider_guidance,
         "stop_rules": [
             "Do not start a full workspace export before deciding whether uploaded files and media are in scope.",
+            "If the export path can include uploaded files, do a text-only or targeted export planning pass before touching bulk media.",
             "Prefer a text-first export or a small targeted page/folder export before a whole-account archive.",
             "If media is needed, handle it as separate objets or object-storage work rather than mixing it into a first text import.",
             "Do not paste provider download links, local export paths, filenames, account ids, emails, or secret values into chat.",
         ],
         "next_exact_commands": {
+            "rerun_text_only_first": (
+                "archive external-export-plan <archive-root> --source "
+                + normalized_source
+                + " --export-goal text_only --media-policy avoid_bulk_media --dry-run --format json"
+            ),
+            "rerun_targeted_pages_first": (
+                "archive external-export-plan <archive-root> --source "
+                + normalized_source
+                + " --export-goal targeted_pages --media-policy avoid_bulk_media --dry-run --format json"
+            ),
             "scan_after_manual_export": (
                 "archive scan-source <archive-root> --source <source-id> --source-root <local-export-root> "
                 "--dry-run --format json"
@@ -11140,12 +11159,14 @@ def external_export_provider_guidance(source: str) -> dict[str, Any]:
     if source == "notion":
         return {
             "source": "notion",
-            "official_source_ids": ["notion_export_content_help"],
+            "official_source_ids": ["notion_export_content_help", "notion_backup_data_help"],
             "text_first_path": "Use Markdown & CSV for page/database text where it fits the review goal.",
             "targeted_export_path": "Export the smallest page, database, or workspace slice that answers the current WOM intake question.",
             "media_warning": "Notion workspace exports can include uploaded files, images, and other assets; keep bulk media out of the first text-first pass.",
+            "large_workspace_fallback": "If a workspace-level export is too large or fails, split the export into smaller top-level page or database batches before retrying bulk media.",
             "review_notes": [
                 "Include subpages only when nested pages are part of the current review scope.",
+                "For database-heavy workspaces, plan a text/database pass before any uploaded-file pass.",
                 "Treat whole-workspace export as a later reviewed action, not the default first move.",
             ],
         }
@@ -11189,6 +11210,65 @@ def external_export_recommended_mode(source: str, export_goal: str, media_policy
         "bulk_media_allowed_now": False,
         "requires_human_scope_review": True,
         "requires_separate_media_plan": media_policy != "avoid_bulk_media",
+    }
+
+
+def external_export_large_media_trap(
+    source: str,
+    export_goal: str,
+    media_policy: str,
+    media_estimate: float | None,
+    risk_level: str,
+) -> dict[str, Any]:
+    trap_detected = (
+        risk_level == "high"
+        or media_policy == "full_media_requested"
+        or export_goal == "full_workspace_review"
+        or (media_estimate is not None and media_estimate >= 20)
+    )
+    stop_before_export = (
+        media_policy == "full_media_requested"
+        or (media_estimate is not None and media_estimate >= 20)
+        or risk_level == "high"
+    )
+    return {
+        "detected": trap_detected,
+        "trap_kind": "workspace_or_database_export_can_pull_bulk_media",
+        "source": source,
+        "estimated_media_gb": media_estimate,
+        "stop_before_first_export": stop_before_export,
+        "requires_text_only_or_targeted_first": True,
+        "first_pass_goal": "Export only the smallest text/database slice needed for review before media handling.",
+        "do_not_do_first": [
+            "do not click full workspace export as the first move",
+            "do not mix all uploaded files into the first text review pass",
+            "do not treat a provider export zip as already registered WOM objets",
+        ],
+        "safe_first_passes": [
+            {
+                "pass_id": "text_only_review",
+                "export_goal": "text_only",
+                "media_policy": "avoid_bulk_media",
+                "purpose": "Get page/database text for review without pulling bulk uploaded files.",
+            },
+            {
+                "pass_id": "targeted_page_or_database_review",
+                "export_goal": "targeted_pages",
+                "media_policy": "avoid_bulk_media",
+                "purpose": "Export one top-level page, database, folder, or bounded slice before broad workspace export.",
+            },
+            {
+                "pass_id": "selected_media_after_review",
+                "export_goal": "targeted_pages",
+                "media_policy": "selected_media_only",
+                "purpose": "Handle only human-selected files as source objets after the text scope is known.",
+            },
+        ],
+        "after_text_pass": [
+            "run scan-source on the manually exported text slice",
+            "use source-intake or project-intake receipts to decide what matters",
+            "route selected media to object-storage recommendation or objet-capture planning",
+        ],
     }
 
 
