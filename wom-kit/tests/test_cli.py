@@ -2951,6 +2951,164 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn(bad_receipt, bad_output)
             self.assertNotIn(str(archive_root), bad_output)
 
+    def test_imap_mailbox_material_selection_record_writes_non_secret_index_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            execution_dir = archive_root / "receipts" / "imap" / "adapter-executions"
+            execution_dir.mkdir(parents=True, exist_ok=True)
+            execution_receipt = "receipts/imap/adapter-executions/imap-header-metadata-scan-record.json"
+            candidate_refs = [
+                f"imap-candidate:{'e' * 64}",
+                f"imap-candidate:{'f' * 64}",
+                f"imap-candidate:{'1' * 64}",
+            ]
+            receipt_payload = {
+                "schema_version": "wom-imap-mailbox-header-metadata-scan/v0.1",
+                "receipt_kind": "imap_mailbox_header_metadata_scan",
+                "lifecycle_action": "imap_mailbox_header_metadata_scan",
+                "receipt_id": "imap-header-metadata-scan-record",
+                "created_at": "2026-06-16T00:00:00Z",
+                "archive_id": "fake-life-archive",
+                "adapter": {
+                    "adapter_id": "local-imap",
+                    "provider": "generic_imap",
+                    "operation": "header_metadata_scan",
+                    "source_id": "imap:generic",
+                },
+                "selection": {
+                    "selection_rule": "newest_first",
+                    "selector_id": "mail-selection:recent-inbox",
+                    "max_messages": 3,
+                    "since_days": None,
+                    "mailbox_ref_included": False,
+                },
+                "result": {
+                    "status": "succeeded",
+                    "candidate_count": 3,
+                    "headers_fetched_count": 3,
+                    "candidate_refs": candidate_refs,
+                    "candidate_refs_are_opaque_hashes": True,
+                },
+                "redaction": {
+                    "credential_values_included": False,
+                    "credential_refs_included": False,
+                    "env_var_names_included": False,
+                    "imap_host_included": False,
+                    "mailbox_ref_included": False,
+                    "message_uid_values_included": False,
+                    "message_id_values_included": False,
+                    "headers_included": False,
+                    "bodies_included": False,
+                    "attachment_names_included": False,
+                    "attachment_bytes_included": False,
+                    "local_absolute_paths_included": False,
+                },
+                "debug_private_markers": {
+                    "subject_marker": "record-private-subject-marker",
+                    "sender_marker": "record-private-sender-marker",
+                },
+            }
+            (archive_root / execution_receipt).write_text(json.dumps(receipt_payload), encoding="utf-8")
+            after_setup = self.snapshot_archive_files(archive_root)
+
+            base_args = [
+                "imap-mailbox-material-selection-record",
+                str(archive_root),
+                "--execution-receipt",
+                execution_receipt,
+                "--selection-mode",
+                "body_candidates",
+                "--selected-index",
+                "1",
+                "--selected-index",
+                "3",
+                "--reviewed-by",
+                "human:tester",
+                "--format",
+                "json",
+            ]
+
+            dry_code, dry_output = self.run_cli([*base_args, "--dry-run"])
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertTrue(dry_result["ok"], dry_result)
+            self.assertEqual(dry_result["record_state"], "record_ready")
+            self.assertEqual(dry_result["lifecycle_action"], "imap_mailbox_material_selection_record_plan")
+            self.assertEqual(dry_result["selection_mode"], "body_candidates")
+            self.assertEqual(dry_result["selection_summary"]["selected_indexes"], [1, 3])
+            self.assertEqual(dry_result["selection_summary"]["selected_count"], 2)
+            self.assertEqual(dry_result["selection_summary"]["candidate_pool_count"], 3)
+            self.assertFalse(dry_result["selection_summary"]["candidate_refs_echoed"])
+            self.assertFalse(dry_result["selection_summary"]["candidate_refs_recorded"])
+            self.assertTrue(dry_result["future_material_scope"]["body_capture_requested"])
+            self.assertFalse(dry_result["future_material_scope"]["message_body_read_now"])
+            self.assertFalse(dry_result["closed_actions"]["imap_connection_opened"])
+            self.assertFalse(dry_result["closed_actions"]["message_headers_read"])
+            self.assertFalse(dry_result["closed_actions"]["message_bodies_read"])
+            self.assertFalse(dry_result["closed_actions"]["attachments_read"])
+            self.assertFalse(dry_result["closed_actions"]["credential_value_read"])
+            self.assertFalse(dry_result["closed_actions"]["environment_read"])
+            self.assertFalse(dry_result["closed_actions"]["files_written"])
+            self.assertEqual(len(dry_result["would_change"]), 1)
+            self.assertTrue(dry_result["would_change"][0].startswith("receipts/imap/material-selections/"))
+            self.assertEqual(self.snapshot_archive_files(archive_root), after_setup)
+            self.assertNotIn(execution_receipt, dry_output)
+            self.assertNotIn(candidate_refs[0], dry_output)
+            self.assertNotIn(candidate_refs[1], dry_output)
+            self.assertNotIn(candidate_refs[2], dry_output)
+            self.assertNotIn("record-private-subject-marker", dry_output)
+            self.assertNotIn("record-private-sender-marker", dry_output)
+            self.assertNotIn(str(archive_root), dry_output)
+
+            approve_code, approve_output = self.run_cli([*base_args, "--approve"])
+            approve_result = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"], approve_result)
+            self.assertEqual(approve_result["record_state"], "written")
+            self.assertEqual(approve_result["lifecycle_action"], "imap_mailbox_material_selection_record")
+            self.assertEqual(len(approve_result["files_written"]), 1)
+            record_path = archive_root / approve_result["files_written"][0]
+            self.assertTrue(record_path.is_file())
+            record_receipt = json.loads(record_path.read_text(encoding="utf-8"))
+            self.assertEqual(record_receipt["receipt_kind"], "imap_mailbox_material_selection")
+            self.assertEqual(record_receipt["execution_receipt"]["path_included"], False)
+            self.assertEqual(record_receipt["selection"]["selection_mode"], "body_candidates")
+            self.assertEqual(record_receipt["selection"]["selected_indexes"], [1, 3])
+            self.assertEqual(record_receipt["selection"]["candidate_pool_count"], 3)
+            self.assertFalse(record_receipt["selection"]["candidate_refs_included"])
+            self.assertFalse(record_receipt["closed_actions"]["imap_connection_opened"])
+            self.assertFalse(record_receipt["closed_actions"]["message_bodies_read"])
+            self.assertFalse(record_receipt["redaction"]["candidate_refs_included"])
+            self.assertFalse(record_receipt["redaction"]["execution_receipt_path_included"])
+            self.assertNotIn(execution_receipt, approve_output)
+            self.assertNotIn(candidate_refs[0], approve_output)
+            self.assertNotIn(candidate_refs[1], approve_output)
+            self.assertNotIn(candidate_refs[2], approve_output)
+            self.assertNotIn(str(archive_root), approve_output)
+            self.assertNotIn(candidate_refs[0], record_path.read_text(encoding="utf-8"))
+
+            bad_code, bad_output = self.run_cli(
+                [
+                    "imap-material-selection-record",
+                    str(archive_root),
+                    "--execution-receipt",
+                    execution_receipt,
+                    "--selected-index",
+                    "4",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            bad_result = json.loads(bad_output)
+            self.assertEqual(bad_code, 1, bad_output)
+            self.assertFalse(bad_result["ok"])
+            self.assertEqual(bad_result["record_state"], "blocked")
+            self.assertFalse(bad_result["closed_actions"]["message_bodies_read"])
+            self.assertNotIn(execution_receipt, bad_output)
+            self.assertNotIn(candidate_refs[0], bad_output)
+            self.assertNotIn(str(archive_root), bad_output)
+
     def test_imap_mailbox_selection_plan_is_read_only_and_does_not_list_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

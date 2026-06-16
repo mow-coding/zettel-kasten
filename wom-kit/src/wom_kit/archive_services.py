@@ -1286,6 +1286,7 @@ IMAP_MAILBOX_ADAPTER_MANIFEST_WRITE_RECEIPTS_DIR = "receipts/imap/adapter-manife
 IMAP_MAILBOX_ADAPTER_AUDIT_RECEIPTS_DIR = "receipts/imap/adapter-audits"
 IMAP_MAILBOX_ADAPTER_EXECUTION_RECEIPTS_DIR = "receipts/imap/adapter-executions"
 IMAP_MAILBOX_ADAPTER_EXECUTION_AUDIT_RECEIPTS_DIR = "receipts/imap/adapter-execution-audits"
+IMAP_MAILBOX_MATERIAL_SELECTION_RECEIPTS_DIR = "receipts/imap/material-selections"
 IMAP_MAILBOX_ADAPTER_AUDIT_RESULT_STATUSES = {"not_run", "succeeded", "failed", "denied"}
 IMAP_MAILBOX_ADAPTER_EXECUTION_MODES = {"future_local_cli", "local_cli_dry_run_contract"}
 IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT = 100
@@ -15049,6 +15050,329 @@ def imap_mailbox_material_selection_plan(
         "next_safe_actions": next_safe_actions,
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
+    }
+
+
+def imap_mailbox_material_selection_record(
+    archive_root: Path | str,
+    *,
+    execution_receipt: str,
+    selection_mode: str = "human_review_queue",
+    selected_indexes: Iterable[int] | None = None,
+    reviewed_by: str | None = None,
+    dry_run: bool = True,
+    approve: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+
+    plan = imap_mailbox_material_selection_plan(
+        root,
+        execution_receipt=execution_receipt,
+        selection_mode=selection_mode,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in plan.get("blockers") or [])
+    warnings.extend(str(item) for item in plan.get("warnings") or [])
+
+    normalized_mode = str(plan.get("selection_mode") or "human_review_queue")
+    receipt_summary = (
+        plan.get("execution_receipt_summary")
+        if isinstance(plan.get("execution_receipt_summary"), dict)
+        else {}
+    )
+    future_scope = (
+        plan.get("future_material_scope")
+        if isinstance(plan.get("future_material_scope"), dict)
+        else {}
+    )
+    candidate_refs_count = receipt_summary.get("candidate_refs_count")
+    candidate_pool_count = candidate_refs_count if isinstance(candidate_refs_count, int) else 0
+
+    resolved_reviewer = (reviewed_by or ("human:pending-review" if dry_run else "")).strip()
+    if approve and not resolved_reviewer:
+        blockers.append("reviewed_by is required when --approve writes an IMAP material selection record.")
+        resolved_reviewer = "human:required"
+    if not safe_source_intake_plan_scalar(resolved_reviewer):
+        blockers.append("reviewed_by must be a safe non-secret reviewer label.")
+        resolved_reviewer = "human:pending-review"
+
+    normalized_indexes: list[int] = []
+    seen_indexes: set[int] = set()
+    for item in selected_indexes or []:
+        if isinstance(item, bool) or not isinstance(item, int):
+            blockers.append("selected_indexes must be one-based positive integers.")
+            continue
+        if item < 1:
+            blockers.append("selected_indexes must be one-based positive integers.")
+            continue
+        if item in seen_indexes:
+            blockers.append("selected_indexes must not contain duplicates.")
+            continue
+        seen_indexes.add(item)
+        normalized_indexes.append(item)
+
+    if not normalized_indexes:
+        blockers.append("At least one --selected-index is required.")
+    if candidate_pool_count < 1:
+        blockers.append("execution_receipt has no candidate refs available for material selection.")
+    else:
+        for index in normalized_indexes:
+            if index > candidate_pool_count:
+                blockers.append("selected_indexes must be within the execution receipt candidate range.")
+                break
+
+    receipt_relative = (execution_receipt or "").strip().replace("\\", "/")
+    receipt_sha256: str | None = None
+    if plan.get("ok"):
+        try:
+            receipt_text = archive_internal_path(root, receipt_relative).read_text(encoding="utf-8")
+            receipt_sha256 = hashlib.sha256(receipt_text.encode("utf-8")).hexdigest()
+        except (OSError, UnicodeDecodeError):
+            blockers.append("execution_receipt could not be re-read for hash binding.")
+
+    record_id = imap_mailbox_material_selection_record_id(
+        archive_id=archive_id,
+        execution_receipt_sha256=receipt_sha256 or "unread",
+        selection_mode=normalized_mode,
+        selected_indexes=normalized_indexes,
+        reviewed_by=resolved_reviewer,
+        created_at=now,
+    )
+    proposed_receipt_path = f"{IMAP_MAILBOX_MATERIAL_SELECTION_RECEIPTS_DIR}/{record_id}.json"
+    receipt_path = archive_internal_path(root, proposed_receipt_path)
+    if not blockers and receipt_path.exists():
+        blockers.append("IMAP material selection record already exists.")
+
+    receipt_written = False
+    files_written: list[str] = []
+    selection_receipt = imap_mailbox_material_selection_record_payload(
+        archive_id=archive_id,
+        record_id=record_id,
+        created_at=now,
+        reviewed_by=resolved_reviewer,
+        execution_receipt_sha256=receipt_sha256,
+        selection_mode=normalized_mode,
+        selected_indexes=normalized_indexes,
+        candidate_pool_count=candidate_pool_count,
+        future_scope=future_scope,
+        record_state="ready" if not blockers else "blocked",
+    )
+
+    if approve and not blockers:
+        created_paths: list[Path] = []
+        created_dirs = missing_parent_dirs_before_write(root, [receipt_path])
+        try:
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_new_file(receipt_path, selection_receipt)
+            created_paths.append(receipt_path)
+            files_written = [proposed_receipt_path]
+            receipt_written = True
+        except OSError as exc:
+            for path in reversed(created_paths):
+                path.unlink(missing_ok=True)
+            cleanup_empty_archive_dirs(root, created_dirs)
+            raise ArchiveServiceError(f"Could not write IMAP material selection record: {exc}") from exc
+
+    would_change = [proposed_receipt_path] if dry_run and not blockers else []
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "approved": receipt_written,
+        "lifecycle_action": "imap_mailbox_material_selection_record_plan"
+        if dry_run
+        else "imap_mailbox_material_selection_record",
+        "archive_id": archive_id,
+        "record_state": "written" if receipt_written else ("record_ready" if not blockers else "blocked"),
+        "selection_mode": normalized_mode,
+        "material_selection_record": {
+            "proposed_receipt_path": proposed_receipt_path,
+            "receipt_path": files_written[0] if files_written else None,
+            "receipt_path_kind": "archive_relative",
+            "records_execution_receipt_path": False,
+            "records_candidate_refs": False,
+            "records_message_material": False,
+        },
+        "execution_receipt_summary": receipt_summary,
+        "selection_summary": {
+            "selected_indexes": list(normalized_indexes),
+            "selected_count": len(normalized_indexes),
+            "selected_index_basis": "one_based_candidate_position",
+            "candidate_pool_count": candidate_pool_count,
+            "candidate_refs_echoed": False,
+            "candidate_refs_recorded": False,
+            "execution_receipt_path_echoed": False,
+        },
+        "future_material_scope": future_scope,
+        "closed_actions": {
+            "execution_receipt_read": bool(receipt_summary.get("receipt_loaded")),
+            "material_selection_record_written": receipt_written,
+            "selection_queue_written": receipt_written,
+            "live_adapter_executed": False,
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "mailbox_selected": False,
+            "mailbox_searched": False,
+            "message_uids_read": False,
+            "message_ids_read": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "oauth_started": False,
+            "provider_api_called": False,
+            "files_written": bool(files_written),
+        },
+        "privacy_guards": {
+            "email_addresses_echoed": False,
+            "username_values_echoed": False,
+            "exact_account_refs_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "exact_mailbox_refs_echoed": False,
+            "env_var_names_echoed": False,
+            "imap_host_values_echoed": False,
+            "provider_urls_echoed": False,
+            "message_uid_values_echoed": False,
+            "message_id_values_echoed": False,
+            "message_headers_echoed": False,
+            "message_bodies_echoed": False,
+            "subject_values_echoed": False,
+            "sender_values_echoed": False,
+            "recipient_values_echoed": False,
+            "attachment_names_echoed": False,
+            "attachment_bytes_echoed": False,
+            "secret_values_echoed": False,
+            "execution_receipt_path_echoed": False,
+            "candidate_refs_echoed": False,
+            "candidate_refs_recorded": False,
+            "local_absolute_paths_echoed": False,
+        },
+        "would_change": would_change,
+        "files_written": files_written,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def imap_mailbox_material_selection_record_id(
+    *,
+    archive_id: str,
+    execution_receipt_sha256: str,
+    selection_mode: str,
+    selected_indexes: list[int],
+    reviewed_by: str,
+    created_at: datetime,
+) -> str:
+    digest = hashlib.sha256(
+        json.dumps(
+            {
+                "archive_id": archive_id,
+                "execution_receipt_sha256": execution_receipt_sha256,
+                "selection_mode": selection_mode,
+                "selected_indexes": selected_indexes,
+                "reviewed_by": reviewed_by,
+                "created_at": created_at.isoformat(),
+                "nonce": secrets.token_hex(8),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"imap-material-selection-{created_at.strftime('%Y%m%dT%H%M%SZ')}-{digest}"
+
+
+def imap_mailbox_material_selection_record_payload(
+    *,
+    archive_id: str,
+    record_id: str,
+    created_at: datetime,
+    reviewed_by: str,
+    execution_receipt_sha256: str | None,
+    selection_mode: str,
+    selected_indexes: list[int],
+    candidate_pool_count: int,
+    future_scope: dict[str, Any],
+    record_state: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "wom-imap-mailbox-material-selection/v0.1",
+        "receipt_kind": "imap_mailbox_material_selection",
+        "lifecycle_action": "imap_mailbox_material_selection_record",
+        "receipt_id": record_id,
+        "created_at": created_at.isoformat().replace("+00:00", "Z"),
+        "archive_id": archive_id,
+        "review": {
+            "reviewed_by": reviewed_by,
+            "reviewed_at": created_at.isoformat().replace("+00:00", "Z"),
+        },
+        "execution_receipt": {
+            "path_included": False,
+            "sha256": execution_receipt_sha256,
+            "receipt_kind": "imap_mailbox_header_metadata_scan",
+        },
+        "selection": {
+            "record_state": record_state,
+            "selection_mode": selection_mode,
+            "selected_indexes": list(selected_indexes),
+            "selected_count": len(selected_indexes),
+            "selected_index_basis": "one_based_candidate_position",
+            "candidate_pool_count": candidate_pool_count,
+            "candidate_refs_included": False,
+        },
+        "future_material_scope": {
+            "body_capture_requested": future_scope.get("body_capture_requested") is True,
+            "attachment_capture_requested": future_scope.get("attachment_capture_requested") is True,
+            "derived_text_capture_requested": future_scope.get("derived_text_capture_requested") is True,
+            "message_body_read_now": False,
+            "attachment_bytes_read_now": False,
+            "derived_text_created_now": False,
+        },
+        "closed_actions": {
+            "live_adapter_executed": False,
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "mailbox_selected": False,
+            "mailbox_searched": False,
+            "message_uids_read": False,
+            "message_ids_read": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "oauth_started": False,
+            "provider_api_called": False,
+        },
+        "redaction": {
+            "credential_values_included": False,
+            "credential_refs_included": False,
+            "env_var_names_included": False,
+            "imap_host_included": False,
+            "mailbox_ref_included": False,
+            "message_uid_values_included": False,
+            "message_id_values_included": False,
+            "headers_included": False,
+            "bodies_included": False,
+            "attachment_names_included": False,
+            "attachment_bytes_included": False,
+            "local_absolute_paths_included": False,
+            "candidate_refs_included": False,
+            "execution_receipt_path_included": False,
+        },
     }
 
 
