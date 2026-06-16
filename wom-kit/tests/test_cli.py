@@ -1998,6 +1998,113 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_connection_evidence_parse_fixture_emits_candidate_previews_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "connection-evidence-parse-fixture",
+                    str(archive_root),
+                    "--evidence",
+                    "workbench/connection-evidence.sample.json",
+                    "--source",
+                    "notion",
+                    "--connection-kind",
+                    "all",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "connection_evidence_parse_fixture")
+            self.assertEqual(result["parse_state"], "fixture_candidates_ready")
+            self.assertEqual(result["evidence_summary"]["evidence_path"], "workbench/connection-evidence.sample.json")
+            self.assertTrue(result["evidence_summary"]["fixture_file_read"])
+            self.assertEqual(result["evidence_summary"]["declared_record_count"], 8)
+            self.assertEqual(result["evidence_summary"]["candidate_count"], 9)
+            edge_types = {item["edge_type"] for item in result["candidate_edges"]}
+            self.assertTrue({"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"} <= edge_types)
+            self.assertTrue(all(item["candidate_id"].startswith("candidate:") for item in result["candidate_edges"]))
+            self.assertTrue(all(item["write_status"] == "not_written" for item in result["candidate_edges"]))
+            self.assertFalse(result["current_capability"]["real_export_parser_implemented"])
+            self.assertFalse(result["current_capability"]["edge_write_implemented"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["real_source_export_files_read"])
+            self.assertTrue(result["closed_actions"]["fixture_file_read"])
+            self.assertTrue(result["closed_actions"]["fixture_parser_executed"])
+            self.assertFalse(result["closed_actions"]["candidate_records_written"])
+            self.assertFalse(result["closed_actions"]["edges_written"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["local_absolute_paths_echoed"])
+            self.assertFalse(result["privacy_guards"]["page_titles_echoed"])
+            self.assertFalse(result["privacy_guards"]["comment_bodies_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn("https://", serialized)
+
+            filter_code, filter_output = self.run_cli(
+                [
+                    "connection-evidence-parse-fixture",
+                    str(archive_root),
+                    "--evidence",
+                    "workbench/connection-evidence.sample.json",
+                    "--source",
+                    "notion",
+                    "--connection-kind",
+                    "mention_page",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            filtered = json.loads(filter_output)
+            self.assertEqual(filter_code, 0, filter_output)
+            self.assertEqual(filtered["connection_kind"], "mention_page")
+            self.assertEqual(filtered["evidence_summary"]["candidate_count"], 1)
+            self.assertEqual(filtered["candidate_edges"][0]["edge_type"], "mention")
+
+            absolute_code, absolute_output = self.run_cli(
+                [
+                    "connection-evidence-parse-fixture",
+                    str(archive_root),
+                    "--evidence",
+                    str((archive_root / "workbench" / "connection-evidence.sample.json").resolve()),
+                    "--source",
+                    "notion",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            absolute_result = json.loads(absolute_output)
+            self.assertEqual(absolute_code, 1)
+            self.assertFalse(absolute_result["ok"])
+            self.assertIn("evidence_path must be a safe archive-relative fixture path", absolute_result["blockers"][0])
+            self.assertNotIn(str(archive_root.resolve()), absolute_output)
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "connection-evidence-parse-fixture",
+                    str(archive_root),
+                    "--evidence",
+                    "workbench/connection-evidence.sample.json",
+                    "--source",
+                    "notion",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_imap_mailbox_plan_is_read_only_and_blocks_secret_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

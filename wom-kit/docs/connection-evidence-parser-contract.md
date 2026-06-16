@@ -126,3 +126,6 @@ This command does not:
   comment bodies, account ids, emails, tokens, or secret values.
 
 It only returns a read-only contract for the next parser implementation step.
+
+For the first sanitized fixture-only parser, see
+[Connection Evidence Fixture Parser](connection-evidence-fixture-parser.md).

@@ -11643,6 +11643,399 @@ def connection_evidence_parser_input_lanes() -> list[dict[str, Any]]:
     ]
 
 
+def connection_evidence_parse_fixture(
+    archive_root: Path | str,
+    *,
+    evidence_path: str,
+    source: str = "notion",
+    connection_kind: str = "all",
+    dry_run: bool = True,
+    max_items: int = 100,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("connection-evidence-parse-fixture is read-only and requires --dry-run.")
+
+    try:
+        max_items_value = int(max_items)
+    except (TypeError, ValueError):
+        max_items_value = 100
+        blockers.append("max_items must be an integer between 1 and 1000.")
+    if max_items_value < 1 or max_items_value > 1000:
+        blockers.append("max_items must be between 1 and 1000.")
+        max_items_value = max(1, min(max_items_value, 1000))
+
+    normalized_evidence_path = ""
+    evidence_file: Path | None = None
+    try:
+        normalized_evidence_path = normalize_archive_relative_path(evidence_path)
+        evidence_file = resolve_archive_relative_path(root, normalized_evidence_path)
+    except ArchivePathError:
+        blockers.append("evidence_path must be a safe archive-relative fixture path.")
+
+    contract = connection_evidence_parser_contract(
+        root,
+        source=source,
+        connection_kind=connection_kind,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in contract.get("blockers") or [])
+    warnings.extend(str(item) for item in contract.get("warnings") or [])
+    normalized_source = str(contract.get("source") or "notion")
+    normalized_kind = str(contract.get("connection_kind") or "all")
+
+    raw_records: list[dict[str, Any]] = []
+    fixture_summary: dict[str, Any] = {
+        "evidence_path": normalized_evidence_path or None,
+        "fixture_file_read": False,
+        "fixture_kind": None,
+        "declared_source": None,
+        "declared_record_count": 0,
+        "processed_record_count": 0,
+        "skipped_by_filter_count": 0,
+        "candidate_count": 0,
+    }
+    if evidence_file is not None and not evidence_file.is_file():
+        blockers.append("connection evidence fixture file is missing.")
+
+    if evidence_file is not None and evidence_file.is_file() and not blockers:
+        try:
+            text = evidence_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            blockers.append(f"connection evidence fixture could not be read as UTF-8 ({exc.__class__.__name__}).")
+            text = ""
+        if text and (contains_forbidden_location_reference(text) or source_intake_secret_like(text)):
+            blockers.append("connection evidence fixture contains a provider URL, local absolute path, token, or secret-like value.")
+        if text and not blockers:
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                blockers.append("connection evidence fixture must be valid JSON.")
+                payload = None
+            if payload is not None:
+                raw_records = connection_evidence_fixture_records(payload, blockers)
+                fixture_summary["fixture_file_read"] = True
+                fixture_summary["fixture_kind"] = payload.get("fixture_kind") if isinstance(payload, dict) else None
+                fixture_summary["declared_source"] = payload.get("source") if isinstance(payload, dict) else None
+                fixture_summary["declared_record_count"] = len(raw_records)
+                if isinstance(payload, dict):
+                    declared_source = str(payload.get("source") or "").strip().lower().replace("-", "_")
+                    if declared_source and declared_source != normalized_source:
+                        blockers.append("connection evidence fixture source does not match the requested source.")
+                    fixture_kind = str(payload.get("fixture_kind") or "").strip()
+                    if fixture_kind != "connection_evidence_fixture":
+                        blockers.append("connection evidence fixture_kind must be connection_evidence_fixture.")
+
+    candidates: list[dict[str, Any]] = []
+    skipped_by_filter = 0
+    processed = 0
+    if raw_records and not blockers:
+        for index, record in enumerate(raw_records[:max_items_value], start=1):
+            record_kind = str(record.get("connection_kind") or "").strip().lower().replace("-", "_")
+            if normalized_kind != "all" and record_kind != normalized_kind:
+                skipped_by_filter += 1
+                continue
+            processed += 1
+            candidates.extend(
+                connection_evidence_candidates_from_record(
+                    record,
+                    index=index,
+                    blockers=blockers,
+                )
+            )
+        if len(raw_records) > max_items_value:
+            warnings.append("connection evidence fixture was truncated by max_items.")
+
+    fixture_summary["processed_record_count"] = processed
+    fixture_summary["skipped_by_filter_count"] = skipped_by_filter
+    fixture_summary["candidate_count"] = len(candidates) if not blockers else 0
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "connection_evidence_parse_fixture",
+        "archive_id": archive_id,
+        "parse_state": "fixture_candidates_ready" if not blockers else "blocked",
+        "source": normalized_source,
+        "connection_kind": normalized_kind,
+        "evidence_summary": fixture_summary,
+        "candidate_edges": [] if blockers else candidates,
+        "contract_summary": {
+            "contract_state": contract.get("contract_state"),
+            "accepted_input_lanes": [
+                item.get("connection_kind")
+                for item in contract.get("input_contract", {}).get("accepted_input_lanes", [])
+                if isinstance(item, dict)
+            ],
+            "candidate_record_required_fields": contract.get("output_contract", {}).get("candidate_record_required_fields"),
+            "real_export_parser_implemented": False,
+            "edge_write_implemented": False,
+        },
+        "current_capability": {
+            "sanitized_fixture_parser_implemented": True,
+            "real_export_parser_implemented": False,
+            "candidate_record_writer_implemented": False,
+            "edge_write_implemented": False,
+            "provider_api_call_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "real_source_export_files_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "fixture_file_read": bool(fixture_summary["fixture_file_read"]),
+            "fixture_parser_executed": bool(raw_records) and not blockers,
+            "candidate_records_written": False,
+            "zettels_written": False,
+            "edges_written": False,
+            "receipts_written": False,
+            "object_manifest_updated": False,
+        },
+        "privacy_guards": {
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "raw_export_paths_echoed": False,
+            "page_titles_echoed": False,
+            "comment_bodies_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "secret_values_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": [
+            "Add more sanitized fixtures before enabling any real export parser.",
+            "Keep candidate review separate from durable edge writing.",
+            "Only after fixture coverage is stable, add a parser for reviewed Notion export slices with the same redaction contract.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def connection_evidence_fixture_records(payload: Any, blockers: list[str]) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        blockers.append("connection evidence fixture must be a JSON object.")
+        return []
+    records = payload.get("evidence")
+    if not isinstance(records, list):
+        blockers.append("connection evidence fixture must contain an evidence list.")
+        return []
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(records, start=1):
+        if not isinstance(item, dict):
+            blockers.append(f"evidence[{index}] must be an object.")
+            continue
+        normalized.append(item)
+    return normalized
+
+
+def connection_evidence_candidates_from_record(
+    record: dict[str, Any],
+    *,
+    index: int,
+    blockers: list[str],
+) -> list[dict[str, Any]]:
+    connection_kind = safe_connection_evidence_field(record, "connection_kind", index, blockers).lower().replace("-", "_")
+    if connection_kind not in CONNECTION_IMPORT_KINDS:
+        blockers.append(f"evidence[{index}].connection_kind must be supported.")
+        return []
+    if connection_kind == "relation_property":
+        role = safe_connection_evidence_field(record, "relation_role", index, blockers).lower().replace("-", "_")
+        edge_type = "derived" if role in {"post", "output", "derived"} else "material"
+        return [
+            build_connection_evidence_candidate(
+                record,
+                index=index,
+                blockers=blockers,
+                connection_kind=connection_kind,
+                edge_type=edge_type,
+                source_ref=safe_connection_evidence_field(record, "relation_source_ref", index, blockers),
+                target_ref=safe_connection_evidence_field(record, "target_ref", index, blockers),
+                confidence="high_when_relation_ids_resolve_to_known_zets",
+                snapshot_ref=None,
+                evidence_ref=safe_connection_evidence_field(record, "source_export_ref", index, blockers),
+            )
+        ]
+    if connection_kind == "synced_block_reference":
+        safe_connection_evidence_field(record, "direction_review_status", index, blockers)
+        return [
+            build_connection_evidence_candidate(
+                record,
+                index=index,
+                blockers=blockers,
+                connection_kind=connection_kind,
+                edge_type="semantic",
+                source_ref=safe_connection_evidence_field(record, "source_block_ref", index, blockers),
+                target_ref=safe_connection_evidence_field(record, "synced_block_ref", index, blockers),
+                confidence="medium",
+                snapshot_ref=None,
+                evidence_ref=safe_connection_evidence_field(record, "source_export_ref", index, blockers),
+            )
+        ]
+    if connection_kind == "database_view_filter":
+        snapshot_ref = safe_connection_evidence_field(record, "snapshot_id", index, blockers)
+        safe_connection_evidence_field(record, "query_or_context_summary", index, blockers)
+        return [
+            build_connection_evidence_candidate(
+                record,
+                index=index,
+                blockers=blockers,
+                connection_kind=connection_kind,
+                edge_type="view_query",
+                source_ref=snapshot_ref,
+                target_ref=target_ref,
+                confidence="snapshot_required",
+                snapshot_ref=snapshot_ref,
+                evidence_ref=safe_connection_evidence_field(record, "source_export_ref", index, blockers),
+            )
+            for target_ref in safe_connection_evidence_list(record, "result_refs", index, blockers)
+        ]
+    if connection_kind == "internal_url_hyperlink":
+        safe_connection_evidence_field(record, "source_export_ref", index, blockers)
+        return [
+            build_connection_evidence_candidate(
+                record,
+                index=index,
+                blockers=blockers,
+                connection_kind=connection_kind,
+                edge_type="semantic",
+                source_ref=safe_connection_evidence_field(record, "source_page_ref", index, blockers),
+                target_ref=safe_connection_evidence_field(record, "target_page_ref", index, blockers),
+                confidence="medium_when_page_id_resolves",
+                snapshot_ref=None,
+                evidence_ref=safe_connection_evidence_field(record, "link_context_ref", index, blockers),
+            )
+        ]
+    if connection_kind == "mention_page":
+        safe_connection_evidence_field(record, "source_export_ref", index, blockers)
+        return [
+            build_connection_evidence_candidate(
+                record,
+                index=index,
+                blockers=blockers,
+                connection_kind=connection_kind,
+                edge_type="mention",
+                source_ref=safe_connection_evidence_field(record, "source_page_ref", index, blockers),
+                target_ref=safe_connection_evidence_field(record, "mentioned_page_ref", index, blockers),
+                confidence="high_when_page_id_resolves",
+                snapshot_ref=None,
+                evidence_ref=safe_connection_evidence_field(record, "mention_context_ref", index, blockers),
+            )
+        ]
+    if connection_kind == "comment_context":
+        snapshot_ref = safe_connection_evidence_field(record, "snapshot_id", index, blockers)
+        safe_connection_evidence_field(record, "page_or_block_ref", index, blockers)
+        safe_connection_evidence_field(record, "privacy_redactions", index, blockers)
+        return [
+            build_connection_evidence_candidate(
+                record,
+                index=index,
+                blockers=blockers,
+                connection_kind=connection_kind,
+                edge_type="comment_context",
+                source_ref=safe_connection_evidence_field(record, "comment_context_ref", index, blockers),
+                target_ref=target_ref,
+                confidence="medium",
+                snapshot_ref=snapshot_ref,
+                evidence_ref=snapshot_ref,
+            )
+            for target_ref in safe_connection_evidence_list(record, "result_refs", index, blockers)
+        ]
+    if connection_kind == "objet_embed":
+        object_id = safe_connection_evidence_field(record, "object_id", index, blockers)
+        return [
+            build_connection_evidence_candidate(
+                record,
+                index=index,
+                blockers=blockers,
+                connection_kind=connection_kind,
+                edge_type="embed",
+                source_ref=safe_connection_evidence_field(record, "source_page_ref", index, blockers),
+                target_ref=object_id,
+                confidence="high_when_object_id_resolves",
+                snapshot_ref=None,
+                evidence_ref=safe_connection_evidence_field(record, "source_export_ref", index, blockers),
+            )
+        ]
+    return []
+
+
+def build_connection_evidence_candidate(
+    record: dict[str, Any],
+    *,
+    index: int,
+    blockers: list[str],
+    connection_kind: str,
+    edge_type: str,
+    source_ref: str,
+    target_ref: str,
+    confidence: str,
+    snapshot_ref: str | None,
+    evidence_ref: str,
+) -> dict[str, Any]:
+    review_status = safe_connection_evidence_field(record, "review_status", index, blockers)
+    seed = {
+        "connection_kind": connection_kind,
+        "edge_type": edge_type,
+        "source_ref": source_ref,
+        "target_ref": target_ref,
+        "snapshot_ref": snapshot_ref,
+        "evidence_ref": evidence_ref,
+    }
+    return {
+        "candidate_id": "candidate:" + sha256_json_value(seed).removeprefix("sha256:"),
+        "connection_kind": connection_kind,
+        "edge_type": edge_type,
+        "source_ref": source_ref,
+        "target_ref": target_ref,
+        "confidence": confidence,
+        "snapshot_ref": snapshot_ref,
+        "review_status": review_status,
+        "evidence_ref": evidence_ref,
+        "write_status": "not_written",
+    }
+
+
+def safe_connection_evidence_field(
+    record: dict[str, Any],
+    key: str,
+    index: int,
+    blockers: list[str],
+) -> str:
+    value = record.get(key)
+    text = str(value or "").strip()
+    if not safe_source_intake_plan_scalar(text):
+        blockers.append(f"evidence[{index}].{key} must be a safe non-secret scalar.")
+        return ""
+    return text
+
+
+def safe_connection_evidence_list(
+    record: dict[str, Any],
+    key: str,
+    index: int,
+    blockers: list[str],
+) -> list[str]:
+    values = record.get(key)
+    if not isinstance(values, list) or not values:
+        blockers.append(f"evidence[{index}].{key} must be a non-empty list of safe refs.")
+        return []
+    refs: list[str] = []
+    for item_index, item in enumerate(values, start=1):
+        text = str(item or "").strip()
+        if not safe_source_intake_plan_scalar(text):
+            blockers.append(f"evidence[{index}].{key}[{item_index}] must be a safe non-secret scalar.")
+            continue
+        refs.append(text)
+    return refs
+
+
 def notion_connection_import_mappings() -> list[dict[str, Any]]:
     return [
         {

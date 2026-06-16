@@ -2147,6 +2147,52 @@ def command_connection_evidence_parser_contract(args: argparse.Namespace) -> int
     return 0 if result.get("ok", True) else 1
 
 
+def command_connection_evidence_parse_fixture(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("connection-evidence-parse-fixture is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.connection_evidence_parse_fixture(
+            Path(args.archive_root),
+            evidence_path=args.evidence,
+            source=args.source,
+            connection_kind=args.connection_kind,
+            dry_run=args.dry_run,
+            max_items=args.max_items,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("parse_state") or ("passed" if result.get("ok") else "blocked")
+        summary = result.get("evidence_summary") if isinstance(result.get("evidence_summary"), dict) else {}
+        print(f"Connection evidence fixture parse: {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source: {result.get('source') or '-'}")
+        print(f"Connection kind: {result.get('connection_kind') or '-'}")
+        print(f"Fixture records: {summary.get('declared_record_count', 0)}")
+        print(f"Candidate edges: {summary.get('candidate_count', 0)}")
+        print("Real export parser: no")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
     if args.dry_run == args.approve:
         print("prehashed-objet-ledger requires exactly one of --dry-run or --approve.", file=sys.stderr)
@@ -10305,6 +10351,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     connection_evidence_parser_contract.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     connection_evidence_parser_contract.set_defaults(func=command_connection_evidence_parser_contract)
+
+    connection_evidence_parse_fixture = subcommands.add_parser(
+        "connection-evidence-parse-fixture",
+        aliases=["connection-evidence-parser-fixture", "notion-connection-evidence-parser-fixture"],
+        help="Parse a sanitized archive-internal connection evidence fixture into read-only candidate edge previews.",
+    )
+    connection_evidence_parse_fixture.add_argument("archive_root", help="Archive root to inspect.")
+    connection_evidence_parse_fixture.add_argument(
+        "--evidence",
+        required=True,
+        help="Archive-relative sanitized fixture JSON path. Absolute paths and provider URLs are rejected.",
+    )
+    connection_evidence_parse_fixture.add_argument(
+        "--source",
+        required=True,
+        choices=sorted(archive_services.CONNECTION_IMPORT_SOURCES),
+        help="External connection evidence source declared by the fixture.",
+    )
+    connection_evidence_parse_fixture.add_argument(
+        "--connection-kind",
+        default="all",
+        choices=["all"] + sorted(archive_services.CONNECTION_IMPORT_KINDS),
+        help="Specific connection evidence kind to parse from the fixture.",
+    )
+    connection_evidence_parse_fixture.add_argument("--max-items", type=int, default=100, help="Maximum fixture records to parse.")
+    connection_evidence_parse_fixture.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Parses sanitized fixture metadata only; never writes candidates, zets, edges, receipts, or manifests.",
+    )
+    connection_evidence_parse_fixture.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    connection_evidence_parse_fixture.set_defaults(func=command_connection_evidence_parse_fixture)
 
     import_external = subcommands.add_parser("import-external", help="Import Notion or Google Drive exports as inbox drafts.")
     import_external.add_argument("archive_root", help="Target archive root.")

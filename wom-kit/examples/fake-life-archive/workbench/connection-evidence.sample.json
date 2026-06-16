@@ -1,0 +1,76 @@
+{
+  "fixture_kind": "connection_evidence_fixture",
+  "source": "notion",
+  "evidence": [
+    {
+      "connection_kind": "relation_property",
+      "source_export_ref": "notion-fixture-slice",
+      "relation_source_ref": "zet:fake:project-brief",
+      "target_ref": "zet:fake:source-note",
+      "relation_role": "pre",
+      "review_status": "fixture_reviewed"
+    },
+    {
+      "connection_kind": "relation_property",
+      "source_export_ref": "notion-fixture-slice",
+      "relation_source_ref": "zet:fake:project-brief",
+      "target_ref": "zet:fake:result-note",
+      "relation_role": "post",
+      "review_status": "fixture_reviewed"
+    },
+    {
+      "connection_kind": "synced_block_reference",
+      "source_export_ref": "notion-fixture-slice",
+      "source_block_ref": "block:fake:source-a",
+      "synced_block_ref": "block:fake:shared-a",
+      "direction_review_status": "needs_human_direction_review",
+      "review_status": "fixture_reviewed"
+    },
+    {
+      "connection_kind": "database_view_filter",
+      "source_export_ref": "notion-fixture-slice",
+      "snapshot_id": "snapshot:fake:view-query-001",
+      "query_or_context_summary": "fixture-query-summary",
+      "result_refs": [
+        "zet:fake:view-result-a",
+        "zet:fake:view-result-b"
+      ],
+      "review_status": "fixture_reviewed"
+    },
+    {
+      "connection_kind": "internal_url_hyperlink",
+      "source_export_ref": "notion-fixture-slice",
+      "source_page_ref": "page:fake:source",
+      "target_page_ref": "page:fake:target",
+      "link_context_ref": "link-context:fake:001",
+      "review_status": "fixture_reviewed"
+    },
+    {
+      "connection_kind": "mention_page",
+      "source_export_ref": "notion-fixture-slice",
+      "source_page_ref": "page:fake:source",
+      "mentioned_page_ref": "page:fake:mentioned",
+      "mention_context_ref": "mention-context:fake:001",
+      "review_status": "fixture_reviewed"
+    },
+    {
+      "connection_kind": "comment_context",
+      "snapshot_id": "snapshot:fake:comment-context-001",
+      "comment_context_ref": "comment-context:fake:thread-001",
+      "page_or_block_ref": "block:fake:commented",
+      "result_refs": [
+        "zet:fake:comment-result"
+      ],
+      "privacy_redactions": "fixture-redacted",
+      "review_status": "fixture_reviewed"
+    },
+    {
+      "connection_kind": "objet_embed",
+      "source_export_ref": "notion-fixture-slice",
+      "source_page_ref": "page:fake:source",
+      "object_id": "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136",
+      "store_ref": "store:fake:local",
+      "review_status": "fixture_reviewed"
+    }
+  ]
+}

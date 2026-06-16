@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.81 - 2026-06-16
+
+- Added read-only `archive connection-evidence-parse-fixture --evidence
+  <archive-relative-json> --source notion --dry-run`, aliases
+  `connection-evidence-parser-fixture` and
+  `notion-connection-evidence-parser-fixture`, and MCP
+  `connection_evidence_parse_fixture`.
+- Added fake archive fixture `workbench/connection-evidence.sample.json` so the
+  parser path can be tested without real client exports.
+- The fixture parser emits candidate edge previews for relation properties,
+  synced block references, database view/filter snapshots, internal hyperlinks,
+  page mentions, comment context, and objet embeds. It writes nothing and keeps
+  real Notion export parsing unimplemented.
+- Kept the workflow read-only: no Notion call, OAuth, real export read, comment
+  read, media download, candidate record write, zet write, edge write, receipt
+  write, object manifest update, provider URL, local path, raw export path, page
+  title, comment body, account id, email, token, or secret value is produced.
+
 ## v0.3.80 - 2026-06-16
 
 - Added read-only `archive connection-evidence-parser-contract --source
