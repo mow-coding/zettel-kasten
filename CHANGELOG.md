@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.83 - 2026-06-17
+
+- Extended read-only `archive derive-text coverage --dry-run` and alias
+  `archive derive-text-coverage --dry-run` with a `manifest_quality` block for
+  existing `objects/manifests/derived-text.jsonl` records.
+- The coverage gate now reports and blocks false complete claims when
+  derived-text records are missing required extraction provenance such as
+  `tool_version`, `tool_name`, `derivation_kind`, or `review_status`.
+- `tool_version` values such as blank, `unknown`, `n/a`, `none`, `todo`, or
+  `tbd` are treated as quality issues.
+- Kept the workflow read-only: no source bytes, derived-text bodies, parser/OCR
+  tools, provider APIs, receipts, derived text writes, zets, local paths, tool
+  paths, provider URLs, tokens, or secret values are produced.
+
 ## v0.3.82 - 2026-06-17
 
 - Added approval-gated CLI `archive zettel-edge --from-zettel <zet>

@@ -283,7 +283,7 @@ credential-semantic-extraction-recipe
   Print a read-only semantic recipe for splitting complex credential notes before plaintext migration. Dry-run only; reads no plaintext file, detects no secret values, opens no password manager/keyring/browser store, writes nothing, calls no providers, and returns no secret values to AI.
 
 derive-text-coverage
-  Check derived-text coverage for textual or plausibly textual objets without reading source bodies. Dry-run only; compares files.jsonl to derived-text.jsonl, classifies missing/encrypted items, can use existing derived-text records as a fallback textual signal for older prehashed manifests, echoes no source filenames or local paths, and writes nothing.
+  Check derived-text coverage for textual or plausibly textual objets without reading source bodies. Dry-run only; compares files.jsonl to derived-text.jsonl, classifies missing/encrypted items, can use existing derived-text records as a fallback textual signal for older prehashed manifests, returns manifest_quality so missing or unknown tool_version/tool metadata blocks false complete claims, echoes no source filenames or local paths, and writes nothing.
 
 derive-text-toolchain
   Recommend a derived-text extraction route for one extension or MIME hint. Dry-run only; suggests parser/OCR/ASR/vision routing for PDF, Office, HWP/HWPX, images, audio, and text formats without running tools or calling providers.
@@ -625,6 +625,12 @@ For `derive-text capture --from-manifest`, each JSONL row must include
 `tool_version` is the extractor/parser/OCR/ASR/model/script version that made
 the text; for a reviewed one-off script, use a stable local script label rather
 than leaving it blank.
+
+`archive derive-text coverage --dry-run` also checks existing
+`objects/manifests/derived-text.jsonl` records through `manifest_quality`.
+Coverage is not considered complete when derived-text rows are missing
+`tool_version`, use weak labels such as `unknown`, or lack required extraction
+metadata.
 
 ```powershell
 python wom-kit\cli\archive.py derive-text capture .\tmp-my-archive `
