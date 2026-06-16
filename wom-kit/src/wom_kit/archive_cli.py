@@ -41,6 +41,8 @@ Commands:
           Run the first approval-gated local IMAP header metadata scan.
   imap-mailbox-header-scan-receipt-audit
           Audit a non-secret IMAP header metadata scan execution receipt.
+  imap-mailbox-material-selection-plan
+          Plan a human review queue from an IMAP header scan receipt without reading message material.
   prehashed-objet-ledger
           Preview or approve-register an already-hashed external objet ledger without reading blob bytes.
   resolve-objet-ref
@@ -5929,6 +5931,51 @@ def command_imap_mailbox_header_scan_receipt_audit(args: argparse.Namespace) -> 
     return 0 if result.get("ok", True) else 1
 
 
+def command_imap_mailbox_material_selection_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("imap-mailbox-material-selection-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.imap_mailbox_material_selection_plan(
+            Path(args.archive_root),
+            execution_receipt=args.execution_receipt,
+            selection_mode=args.selection_mode,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("execution_receipt_summary") if isinstance(result.get("execution_receipt_summary"), dict) else {}
+        queue = result.get("selection_queue") if isinstance(result.get("selection_queue"), dict) else {}
+        scope = result.get("future_material_scope") if isinstance(result.get("future_material_scope"), dict) else {}
+        print(f"IMAP mailbox material selection plan {result.get('plan_state') or '-'}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Selection mode: {result.get('selection_mode') or '-'}")
+        print(f"Execution status: {summary.get('execution_status') or '-'}")
+        print(f"Candidate pool: {queue.get('candidate_pool_count') or 0}")
+        print("Execution receipt path echoed: no")
+        print("Candidate refs echoed: no")
+        print(f"Future body capture requested: {'yes' if scope.get('body_capture_requested') else 'no'}")
+        print(f"Future attachment capture requested: {'yes' if scope.get('attachment_capture_requested') else 'no'}")
+        print(f"Future derived text requested: {'yes' if scope.get('derived_text_capture_requested') else 'no'}")
+        print("Message bodies read now: no")
+        print("Attachments read now: no")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_imap_mailbox_adapter_manifest_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("imap-mailbox-adapter-manifest-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -10872,6 +10919,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     imap_mailbox_header_scan_receipt_audit.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     imap_mailbox_header_scan_receipt_audit.set_defaults(func=command_imap_mailbox_header_scan_receipt_audit)
+
+    imap_mailbox_material_selection_plan = subcommands.add_parser(
+        "imap-mailbox-material-selection-plan",
+        aliases=["imap-material-selection-plan", "mailbox-material-selection-plan"],
+        help="Plan a human review queue from an IMAP header scan receipt without reading message material.",
+    )
+    imap_mailbox_material_selection_plan.add_argument("archive_root", help="Archive root to inspect.")
+    imap_mailbox_material_selection_plan.add_argument(
+        "--execution-receipt",
+        required=True,
+        help="Archive-relative receipts/imap/adapter-executions/*.json path. The exact path is not echoed in JSON output.",
+    )
+    imap_mailbox_material_selection_plan.add_argument(
+        "--selection-mode",
+        choices=sorted(archive_services.IMAP_MAILBOX_MATERIAL_SELECTION_MODES),
+        default="human_review_queue",
+        help="Future message material review lane to plan. The command still reads no bodies or attachments.",
+    )
+    imap_mailbox_material_selection_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Plan only; never connects to IMAP, reads secrets, reads bodies, reads attachments, or writes files.",
+    )
+    imap_mailbox_material_selection_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    imap_mailbox_material_selection_plan.set_defaults(func=command_imap_mailbox_material_selection_plan)
 
     sources = subcommands.add_parser("sources", help="Inspect source bindings and source map status.")
     sources.add_argument("archive_root", help="Archive root to inspect.")

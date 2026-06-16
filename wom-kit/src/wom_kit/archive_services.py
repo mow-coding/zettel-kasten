@@ -1274,6 +1274,12 @@ IMAP_MAILBOX_SELECTION_RULES = {
     "since_days_window",
     "human_review_queue",
 }
+IMAP_MAILBOX_MATERIAL_SELECTION_MODES = {
+    "human_review_queue",
+    "body_candidates",
+    "attachment_candidates",
+    "derived_text_candidates",
+}
 IMAP_MAILBOX_ADAPTER_MANIFEST_SCHEMA = "wom-kit/imap-mailbox-adapter-manifest/v0.1"
 IMAP_MAILBOX_ADAPTER_MANIFESTS_DIR = "config/imap-adapters"
 IMAP_MAILBOX_ADAPTER_MANIFEST_WRITE_RECEIPTS_DIR = "receipts/imap/adapter-manifests"
@@ -14806,6 +14812,243 @@ def imap_mailbox_header_scan_receipt_audit_payload(
             "candidate_refs_included": False,
             "execution_receipt_path_included": False,
         },
+    }
+
+
+def imap_mailbox_material_selection_plan(
+    archive_root: Path | str,
+    *,
+    execution_receipt: str,
+    selection_mode: str = "human_review_queue",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("imap-mailbox-material-selection-plan is read-only and requires --dry-run.")
+
+    normalized_mode = (selection_mode or "human_review_queue").strip().lower().replace("-", "_")
+    if normalized_mode not in IMAP_MAILBOX_MATERIAL_SELECTION_MODES:
+        blockers.append(
+            "selection_mode must be one of: "
+            + ", ".join(sorted(IMAP_MAILBOX_MATERIAL_SELECTION_MODES))
+            + "."
+        )
+        normalized_mode = "human_review_queue"
+
+    receipt_relative = (execution_receipt or "").strip().replace("\\", "/")
+    if not receipt_relative:
+        blockers.append("execution_receipt is required.")
+    elif (
+        receipt_relative.startswith("/")
+        or ":" in receipt_relative
+        or "\x00" in receipt_relative
+        or ".." in receipt_relative.split("/")
+        or not receipt_relative.startswith(f"{IMAP_MAILBOX_ADAPTER_EXECUTION_RECEIPTS_DIR}/")
+        or not receipt_relative.endswith(".json")
+    ):
+        blockers.append("execution_receipt must be an archive-relative IMAP adapter execution receipt JSON path.")
+
+    receipt_payload: dict[str, Any] = {}
+    if not blockers:
+        receipt_path = archive_internal_path(root, receipt_relative)
+        if not receipt_path.is_file():
+            blockers.append("execution_receipt file is missing.")
+        else:
+            try:
+                loaded = json.loads(receipt_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    receipt_payload = loaded
+                else:
+                    blockers.append("execution_receipt must contain a JSON object.")
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                blockers.append("execution_receipt could not be read as UTF-8 JSON.")
+
+    result = receipt_payload.get("result") if isinstance(receipt_payload.get("result"), dict) else {}
+    redaction = receipt_payload.get("redaction") if isinstance(receipt_payload.get("redaction"), dict) else {}
+    receipt_kind_valid = receipt_payload.get("receipt_kind") == "imap_mailbox_header_metadata_scan"
+    lifecycle_valid = receipt_payload.get("lifecycle_action") == "imap_mailbox_header_metadata_scan"
+    if receipt_payload:
+        if not receipt_kind_valid:
+            blockers.append("execution_receipt is not an IMAP mailbox header metadata scan receipt.")
+        if not lifecycle_valid:
+            blockers.append("execution_receipt lifecycle action is not imap_mailbox_header_metadata_scan.")
+
+    execution_status = result.get("status") if isinstance(result.get("status"), str) else None
+    if receipt_payload and execution_status not in {"not_run", "succeeded", "failed"}:
+        blockers.append("execution_receipt result status is not a valid IMAP header scan status.")
+        execution_status = None
+
+    candidate_count = result.get("candidate_count")
+    headers_fetched_count = result.get("headers_fetched_count")
+    if receipt_payload and (not isinstance(candidate_count, int) or candidate_count < 0):
+        blockers.append("execution_receipt candidate_count must be a non-negative integer.")
+        candidate_count = None
+    if receipt_payload and (not isinstance(headers_fetched_count, int) or headers_fetched_count < 0):
+        blockers.append("execution_receipt headers_fetched_count must be a non-negative integer.")
+        headers_fetched_count = None
+    if isinstance(candidate_count, int) and isinstance(headers_fetched_count, int) and headers_fetched_count > candidate_count:
+        blockers.append("execution_receipt headers_fetched_count cannot exceed candidate_count.")
+
+    candidate_refs = result.get("candidate_refs")
+    candidate_refs_valid = isinstance(candidate_refs, list)
+    candidate_refs_count = len(candidate_refs) if isinstance(candidate_refs, list) else 0
+    if receipt_payload and not candidate_refs_valid:
+        blockers.append("execution_receipt candidate_refs must be a list of opaque candidate refs.")
+    elif isinstance(candidate_refs, list):
+        opaque_ref_re = re.compile(r"^imap-candidate:[0-9a-f]{64}$")
+        for candidate_ref in candidate_refs:
+            if not isinstance(candidate_ref, str) or not opaque_ref_re.match(candidate_ref):
+                blockers.append("execution_receipt candidate_refs must all be opaque imap-candidate hashes.")
+                break
+        if isinstance(headers_fetched_count, int) and candidate_refs_count != headers_fetched_count:
+            blockers.append("execution_receipt candidate_refs count must match headers_fetched_count.")
+
+    if receipt_payload and result.get("candidate_refs_are_opaque_hashes") is not True:
+        blockers.append("execution_receipt must mark candidate refs as opaque hashes.")
+
+    required_false_redaction_flags = (
+        "credential_values_included",
+        "credential_refs_included",
+        "env_var_names_included",
+        "imap_host_included",
+        "mailbox_ref_included",
+        "message_uid_values_included",
+        "message_id_values_included",
+        "headers_included",
+        "bodies_included",
+        "attachment_names_included",
+        "attachment_bytes_included",
+        "local_absolute_paths_included",
+    )
+    failed_redaction_flags: list[str] = []
+    if receipt_payload:
+        for flag in required_false_redaction_flags:
+            if redaction.get(flag) is not False:
+                failed_redaction_flags.append(flag)
+        if failed_redaction_flags:
+            blockers.append("execution_receipt redaction flags do not prove a non-secret header scan receipt.")
+
+    candidate_pool_count = headers_fetched_count if isinstance(headers_fetched_count, int) else 0
+    body_requested = normalized_mode in {"body_candidates", "derived_text_candidates"}
+    attachment_requested = normalized_mode == "attachment_candidates"
+    derived_text_requested = normalized_mode == "derived_text_candidates"
+    review_queue_requested = normalized_mode == "human_review_queue"
+
+    next_safe_actions = (
+        [
+            "Open a human review step that names candidate positions without echoing candidate refs.",
+            "Ask the human which candidates may be promoted into a future body, attachment, or derived-text request.",
+            "Require a separate approval receipt before any future command reads message bodies or attachments.",
+        ]
+        if not blockers
+        else ["Resolve blockers before using this receipt to plan any message material review."]
+    )
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "imap_mailbox_material_selection_plan",
+        "archive_id": archive_id,
+        "plan_state": "selection_plan_ready" if not blockers else "blocked",
+        "selection_mode": normalized_mode,
+        "execution_receipt_summary": {
+            "receipt_loaded": bool(receipt_payload),
+            "execution_receipt_path_echoed": False,
+            "receipt_kind_valid": receipt_kind_valid,
+            "lifecycle_action_valid": lifecycle_valid,
+            "execution_status": execution_status,
+            "candidate_count": candidate_count if isinstance(candidate_count, int) else None,
+            "headers_fetched_count": headers_fetched_count if isinstance(headers_fetched_count, int) else None,
+            "candidate_refs_count": candidate_refs_count,
+            "candidate_refs_echoed": False,
+            "candidate_refs_are_opaque_hashes": result.get("candidate_refs_are_opaque_hashes") is True,
+        },
+        "selection_queue": {
+            "queue_kind": "human_material_review_queue",
+            "candidate_pool_count": candidate_pool_count,
+            "candidate_count_basis": "headers_fetched_count",
+            "candidate_refs_available_in_receipt": candidate_refs_valid,
+            "candidate_refs_echoed": False,
+            "candidate_refs_digest_echoed": False,
+            "queue_entries_written": False,
+            "human_review_required_before_material_read": True,
+        },
+        "future_material_scope": {
+            "human_review_queue_requested": review_queue_requested,
+            "body_capture_requested": body_requested,
+            "attachment_capture_requested": attachment_requested,
+            "derived_text_capture_requested": derived_text_requested,
+            "message_body_read_now": False,
+            "attachment_bytes_read_now": False,
+            "derived_text_created_now": False,
+        },
+        "redaction_check": {
+            "ok": not failed_redaction_flags,
+            "required_false_flags": list(required_false_redaction_flags),
+            "failed_flags": failed_redaction_flags,
+        },
+        "current_capability": {
+            "receipt_based_material_selection_plan_implemented": True,
+            "execution_receipt_read_implemented": True,
+            "human_review_queue_write_implemented": False,
+            "body_capture_implemented": False,
+            "attachment_capture_implemented": False,
+            "derived_text_capture_implemented": False,
+        },
+        "closed_actions": {
+            "execution_receipt_read": bool(receipt_payload),
+            "selection_queue_written": False,
+            "live_adapter_executed": False,
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "mailbox_selected": False,
+            "mailbox_searched": False,
+            "message_uids_read": False,
+            "message_ids_read": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "oauth_started": False,
+            "provider_api_called": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "email_addresses_echoed": False,
+            "username_values_echoed": False,
+            "exact_account_refs_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "exact_mailbox_refs_echoed": False,
+            "env_var_names_echoed": False,
+            "imap_host_values_echoed": False,
+            "provider_urls_echoed": False,
+            "message_uid_values_echoed": False,
+            "message_id_values_echoed": False,
+            "message_headers_echoed": False,
+            "message_bodies_echoed": False,
+            "subject_values_echoed": False,
+            "sender_values_echoed": False,
+            "recipient_values_echoed": False,
+            "attachment_names_echoed": False,
+            "attachment_bytes_echoed": False,
+            "secret_values_echoed": False,
+            "execution_receipt_path_echoed": False,
+            "candidate_refs_echoed": False,
+            "local_absolute_paths_echoed": False,
+        },
+        "would_change": [],
+        "files_written": [],
+        "next_safe_actions": next_safe_actions,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
     }
 
 

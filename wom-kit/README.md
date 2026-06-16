@@ -105,6 +105,7 @@ docs/imap-mailbox-adapter-preflight-plan.md
 docs/imap-mailbox-adapter-execution-contract.md
 docs/imap-mailbox-header-metadata-scan.md
 docs/imap-mailbox-header-scan-receipt-audit.md
+docs/imap-mailbox-material-selection-plan.md
 docs/version-truth-source.md
 docs/runtime-canonical-entrypoints.md
 docs/connected-accounts.md
@@ -209,6 +210,9 @@ imap-mailbox-header-metadata-scan
 
 imap-mailbox-header-scan-receipt-audit
   Audit one IMAP header metadata scan execution receipt. Dry-run validates the receipt without writing; approved mode writes a non-secret audit receipt under receipts/imap/adapter-execution-audits/. It opens no IMAP connection, reads no environment variables, opens no keyring/password manager, reads no headers/bodies/attachments, and echoes no execution receipt path or candidate refs.
+
+imap-mailbox-material-selection-plan
+  Plan the next human message-material review lane from one IMAP header metadata scan execution receipt. Dry-run only; writes no queue files, opens no IMAP connection, reads no environment variables, opens no keyring/password manager, reads no headers/bodies/attachments, creates no derived text, and echoes no execution receipt path or candidate refs.
 
 human-artifact-store
   Plan a user-facing note/workspace/publication surface such as WordPress, Joplin, Notion, Obsidian, Evernote, or generic Markdown. Dry-run only; writes nothing, calls no providers, creates no notes, publishes no posts, and keeps system/AI artifacts separate from human-readable artifacts.

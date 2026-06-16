@@ -142,6 +142,7 @@
 - [IMAP Mailbox Adapter Execution Contract](imap-mailbox-adapter-execution-contract.md)
 - [IMAP Mailbox Header Metadata Scan](imap-mailbox-header-metadata-scan.md)
 - [IMAP Mailbox Header Scan Receipt Audit](imap-mailbox-header-scan-receipt-audit.md)
+- [IMAP Mailbox Material Selection Plan](imap-mailbox-material-selection-plan.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
 - [WOM Profile Registry](wom-profile-registry.md)
 - [WOM Profile Wallet Model](wom-profile-wallet-model.md)
