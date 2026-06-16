@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.67 - 2026-06-16
+
+- Added `archive imap-mailbox-material-selection-plan <archive-root>
+  --execution-receipt <archive-relative-json> --selection-mode
+  human_review_queue|body_candidates|attachment_candidates|derived_text_candidates
+  --dry-run --format json`.
+- Added aliases `archive imap-material-selection-plan` and
+  `archive mailbox-material-selection-plan`.
+- The new read-only planner consumes an existing non-secret IMAP header
+  metadata scan execution receipt and plans the next human material review
+  lane before any future body, attachment, or derived-text capture work.
+- Kept the gate closed: it opens no IMAP connection, reads no environment
+  variables, opens no keyring/password manager, reads no message headers,
+  bodies, or attachments, writes no queue files, and echoes no execution receipt
+  path, candidate refs, subjects, senders, recipients, local paths, tokens, or
+  secret values.
+
 ## v0.3.66 - 2026-06-16
 
 - Added `archive external-export-plan <archive-root> --source
