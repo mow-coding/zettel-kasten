@@ -5367,6 +5367,79 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_ai_response_concept_guide_explains_intake_identity_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "ai-response-concept-guide",
+                    str(archive_root),
+                    "--topic",
+                    "all",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "ai_response_concept_guide")
+            self.assertEqual(result["topic"], "all")
+            self.assertTrue(result["guide_contract"]["separate_identity_from_location"])
+            self.assertTrue(result["guide_contract"]["requires_receipt_before_upload_or_availability_claim"])
+            section_ids = [section["section_id"] for section in result["sections"]]
+            self.assertEqual(section_ids, ["sha256_identity", "manifest_vs_zet", "three_layers"])
+            identity_section = result["sections"][0]
+            self.assertIn("sha256:<hex>", " ".join(identity_section["answer_order"]))
+            self.assertIn("지문", identity_section["korean_script"])
+            manifest_section = result["sections"][1]
+            self.assertEqual(manifest_section["analogy"]["object_manifest"], "address book or catalog for known objects")
+            layer_names = [layer["layer"] for layer in result["sections"][2]["layers"]]
+            self.assertEqual(layer_names, ["objet", "derived_text", "zet"])
+            self.assertTrue(any("derive-text-coverage" in route["command"] for route in result["safe_routing"]))
+            self.assertFalse(result["closed_actions"]["source_bytes_read"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["upload_performed"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertFalse(result["privacy_guards"]["local_absolute_paths_echoed"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["secret_values_echoed"])
+            self.assertFalse(result["current_capability"]["object_upload_adapter_implemented"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn("C:\\", serialized)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            alias_code, alias_output = self.run_cli(
+                [
+                    "wom-concept-guide",
+                    str(archive_root),
+                    "--topic",
+                    "sha256_identity",
+                    "--dry-run",
+                    "--format",
+                    "text",
+                ]
+            )
+            self.assertEqual(alias_code, 0, alias_output)
+            self.assertIn("sha256 identity vs location URL", alias_output)
+            self.assertIn("Next safe question", alias_output)
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "ai-response-concept-guide",
+                    str(archive_root),
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_beginner_setup_manual_guides_keepassxc_bulk_migration_without_reading_csv(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

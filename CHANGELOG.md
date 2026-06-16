@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.84 - 2026-06-17
+
+- Added read-only CLI `archive ai-response-concept-guide --topic all
+  --dry-run`, with aliases `ai-concept-guide` and `wom-concept-guide`.
+- The command returns beginner-facing explanation cards for sha256 object
+  identity vs location, object manifests vs zets, and the
+  `objet -> derived text -> zet` layer split.
+- Added structured safe routing hints and overclaim guardrails so an AI runtime
+  does not claim upload, remote availability, provider URLs, or manifest proof
+  without receipts.
+- Kept the guide read-only: no source bytes, derived-text bodies, manifest
+  writes, receipt writes, draft zets, minted zets, object uploads, provider
+  calls, source filenames, local paths, provider URLs, account ids, emails,
+  tokens, or secret values are produced.
+
 ## v0.3.83 - 2026-06-17
 
 - Extended read-only `archive derive-text coverage --dry-run` and alias

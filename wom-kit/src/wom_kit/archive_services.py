@@ -1392,6 +1392,12 @@ BEGINNER_SETUP_MANUAL_TOPICS = {
     "derived_text_tools",
     "object_storage_setup_manual",
 }
+AI_RESPONSE_CONCEPT_GUIDE_TOPICS = {
+    "all",
+    "sha256_identity",
+    "manifest_vs_zet",
+    "three_layers",
+}
 CONNECTED_ACCOUNT_SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 CREDENTIAL_ACCESS_BROKER_ACTIONS = {
     "mail_source_read",
@@ -19433,6 +19439,201 @@ def beginner_setup_manual(
             "tool_hint_paths_echoed": False,
             "provider_urls_echoed": False,
             "bucket_names_invented": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def ai_response_concept_guide(
+    archive_root: Path | str,
+    *,
+    topic: str = "all",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("ai-response-concept-guide is read-only and requires --dry-run.")
+
+    resolved_topic = (topic or "all").strip().lower().replace("-", "_")
+    if resolved_topic not in AI_RESPONSE_CONCEPT_GUIDE_TOPICS:
+        blockers.append("topic must be one of: " + ", ".join(sorted(AI_RESPONSE_CONCEPT_GUIDE_TOPICS)) + ".")
+        resolved_topic = "all"
+
+    include_identity = resolved_topic in {"all", "sha256_identity"}
+    include_manifest = resolved_topic in {"all", "manifest_vs_zet"}
+    include_layers = resolved_topic in {"all", "three_layers"}
+
+    sections: list[dict[str, Any]] = []
+    if include_identity:
+        sections.append(
+            {
+                "section_id": "sha256_identity",
+                "title": "sha256 identity vs location URL",
+                "beginner_explanation": "WOM names original source material by content fingerprint first. A folder path, cloud URL, or store label is only a place where a copy may be found.",
+                "answer_order": [
+                    "Say that WOM identifies source objets by content fingerprint, not by today's folder path or cloud URL.",
+                    "Explain that sha256:<hex> names the bytes; if unchanged bytes move from local disk to R2, the identity stays the same.",
+                    "Explain that location evidence can be added later through reviewed receipts or manifests.",
+                    "Remind the AI not to claim upload, availability, or recovery until a receipt proves it.",
+                ],
+                "short_script": "WOM is not pointing at where the file happens to sit today. It points at which exact bytes this was. The sha256 is the fingerprint; R2 or a local folder is only a shelf where a copy can live.",
+                "korean_script": "WOM은 지금 파일이 어디 폴더에 있느냐보다, 이 파일이 정확히 어떤 바이트인가를 먼저 봅니다. sha256은 파일의 지문이고, R2나 로컬 폴더는 그 파일 사본이 놓인 선반입니다.",
+                "safe_claim": "You can register the fingerprint first, upload later, and then add stronger location or receipt evidence later.",
+                "unsafe_claim": "Do not say the file is safe in R2 unless a real upload or verification receipt exists.",
+            }
+        )
+
+    if include_manifest:
+        sections.append(
+            {
+                "section_id": "manifest_vs_zet",
+                "title": "manifest vs zet",
+                "beginner_explanation": "The object manifest is the catalog of known source objects. A zet is human-approved archive memory that cites evidence instead of storing private paths.",
+                "analogy": {
+                    "sha256_object_id": "fingerprint of the bytes",
+                    "object_manifest": "address book or catalog for known objects",
+                    "location": "one possible shelf or address where a copy may be found",
+                    "zet": "human-authored memory that cites the fingerprint or derived text",
+                },
+                "say": [
+                    "The manifest is like a catalog: this object exists, here is its fingerprint, and here are safe labels for where it may live.",
+                    "The zet should cite an object id or derived-text record instead of a private local path or provider URL.",
+                ],
+                "do_not_say": [
+                    "The manifest proves the remote file is definitely online.",
+                    "The zet stores the R2 path.",
+                    "The store_ref is a URL.",
+                ],
+            }
+        )
+
+    if include_layers:
+        sections.append(
+            {
+                "section_id": "three_layers",
+                "title": "objet -> derived text -> zet",
+                "beginner_explanation": "WOM keeps source evidence, extracted readable text, and human memory as separate layers so an AI does not confuse evidence with interpretation.",
+                "layers": [
+                    {
+                        "layer": "objet",
+                        "plain_meaning": "original source evidence",
+                        "important_claim": "This object id identifies these exact source bytes.",
+                    },
+                    {
+                        "layer": "derived_text",
+                        "plain_meaning": "extracted, OCR, ASR, parser, or model-readable text from an objet",
+                        "important_claim": "This text came from that source object, by this tool or method version, with this review status.",
+                    },
+                    {
+                        "layer": "zet",
+                        "plain_meaning": "human-approved memory, summary, decision, or connection",
+                        "important_claim": "This is the human's durable note or conclusion, and it cites its evidence.",
+                    },
+                ],
+                "safe_warning": "Derived text helps search and drafting, but it does not replace the original objet.",
+            }
+        )
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "ai_response_concept_guide",
+        "archive_id": archive_id,
+        "topic": resolved_topic,
+        "guide_contract": {
+            "beginner_first": True,
+            "answer_before_jargon": True,
+            "use_analogy_without_overclaiming": True,
+            "separate_identity_from_location": True,
+            "separate_evidence_from_interpretation": True,
+            "requires_receipt_before_upload_or_availability_claim": True,
+        },
+        "sections": sections,
+        "next_safe_question": "Are we trying to register known object ids now, verify/upload the bytes now, or draft human zets from already registered evidence?",
+        "safe_routing": [
+            {
+                "human_intent": "register known external hashes",
+                "command": "archive prehashed-objet-ledger <archive-root> --dry-run --format json",
+            },
+            {
+                "human_intent": "register already extracted text",
+                "command": "archive derive-text capture <archive-root> --dry-run --format json",
+            },
+            {
+                "human_intent": "check extraction completeness",
+                "command": "archive derive-text-coverage <archive-root> --dry-run --format json",
+            },
+            {
+                "human_intent": "explain local or remote object lookup",
+                "command": "archive resolve-objet-ref <archive-root> --object-id sha256:<hex> --dry-run --format json",
+            },
+            {
+                "human_intent": "upload or sync bytes",
+                "command": "future work until a later release explicitly adds an approval-gated adapter",
+            },
+            {
+                "human_intent": "draft or mint zets",
+                "command": "continue only after source or derived evidence and human intent are clear",
+            },
+        ],
+        "overclaim_guardrails": {
+            "do_not_say": [
+                "The file is safe in R2.",
+                "The URL is the identity.",
+                "Derived text is the original.",
+                "The zet contains the file.",
+                "The manifest row proves availability.",
+            ],
+            "may_say": [
+                "The identity is stable if the bytes are unchanged.",
+                "The location can change while the object id stays the same.",
+                "Upload evidence and location evidence can be added later.",
+                "A store label is safe to show; raw paths, provider URLs, account ids, and tokens are not.",
+            ],
+        },
+        "current_capability": {
+            "cli_read_only_preview_available": True,
+            "mcp_tool_available": False,
+            "object_upload_adapter_implemented": False,
+            "provider_availability_probe_implemented": False,
+        },
+        "cross_links": [
+            "source-object-storage-policy",
+            "text-provenance-hierarchy",
+            "derived-text",
+            "derived-text-coverage-and-toolchain",
+            "objet-ref-resolution",
+            "beginner-setup-manual",
+        ],
+        "closed_actions": {
+            "source_bytes_read": False,
+            "derived_text_body_read": False,
+            "object_manifest_written": False,
+            "derived_text_written": False,
+            "receipt_written": False,
+            "zettel_drafted": False,
+            "zettel_minted": False,
+            "upload_performed": False,
+            "provider_api_called": False,
+            "secret_value_read": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "source_filenames_echoed": False,
+            "source_bodies_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "tokens_echoed": False,
+            "secret_values_echoed": False,
             "writes": False,
         },
         "would_change": [],

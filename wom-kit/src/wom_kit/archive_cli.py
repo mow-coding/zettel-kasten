@@ -73,6 +73,8 @@ Commands:
           Plan safe human vault onboarding without opening or reading a vault.
   beginner-setup-manual
           Print beginner-friendly secret vault and text-tool setup steps.
+  ai-response-concept-guide
+          Print beginner-friendly AI explanation cards for WOM object identity and evidence layers.
   credential-semantic-extraction-recipe
           Print a read-only semantic recipe for splitting complex credential notes without reading secrets.
   connected-accounts
@@ -2702,6 +2704,59 @@ def command_beginner_setup_manual(args: argparse.Namespace) -> int:
             print("\nCommands to dry-run:")
             for command in result["command_checklist"]:
                 print(f"- {command}")
+        if result.get("blockers"):
+            print("\nBlockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("\nWarnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_ai_response_concept_guide(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("ai-response-concept-guide is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.ai_response_concept_guide(
+            Path(args.archive_root),
+            topic=args.topic,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        print(f"AI response concept guide {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Topic: {result.get('topic') or '-'}")
+        for section in result.get("sections", []):
+            if not isinstance(section, dict):
+                continue
+            print(f"\n{section.get('title') or section.get('section_id') or 'Section'}")
+            if section.get("beginner_explanation"):
+                print(str(section["beginner_explanation"]))
+            if section.get("short_script"):
+                print(f"Script: {section['short_script']}")
+            if section.get("korean_script"):
+                print(f"Korean script: {section['korean_script']}")
+            if section.get("safe_warning"):
+                print(f"Warning: {section['safe_warning']}")
+        if result.get("next_safe_question"):
+            print("\nNext safe question:")
+            print(str(result["next_safe_question"]))
+        if result.get("safe_routing"):
+            print("\nSafe routing:")
+            for route in result["safe_routing"]:
+                if not isinstance(route, dict):
+                    continue
+                print(f"- {route.get('human_intent') or '-'}: {route.get('command') or '-'}")
         if result.get("blockers"):
             print("\nBlockers:")
             for blocker in result["blockers"]:
@@ -8961,6 +9016,22 @@ def build_parser() -> argparse.ArgumentParser:
     beginner_setup_manual.add_argument("--dry-run", action="store_true", help="Required; read-only manual.")
     beginner_setup_manual.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     beginner_setup_manual.set_defaults(func=command_beginner_setup_manual)
+
+    ai_response_concept_guide = subcommands.add_parser(
+        "ai-response-concept-guide",
+        aliases=["ai-concept-guide", "wom-concept-guide"],
+        help="Print beginner-friendly AI explanation cards for WOM object identity and evidence layers.",
+    )
+    ai_response_concept_guide.add_argument("archive_root", help="Archive root to inspect.")
+    ai_response_concept_guide.add_argument(
+        "--topic",
+        choices=sorted(archive_services.AI_RESPONSE_CONCEPT_GUIDE_TOPICS),
+        default="all",
+        help="Explanation topic.",
+    )
+    ai_response_concept_guide.add_argument("--dry-run", action="store_true", help="Required; read-only guide.")
+    ai_response_concept_guide.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    ai_response_concept_guide.set_defaults(func=command_ai_response_concept_guide)
 
     credential_semantic_extraction_recipe = subcommands.add_parser(
         "credential-semantic-extraction-recipe",
