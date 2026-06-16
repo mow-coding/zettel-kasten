@@ -2193,6 +2193,55 @@ def command_connection_evidence_parse_fixture(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_zettel_edge(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.zettel_edge_write(
+            Path(args.archive_root),
+            from_zettel=args.from_zettel,
+            from_path=args.from_path,
+            target_ref=args.target,
+            edge_type=args.edge_type,
+            visibility=args.visibility,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("write_status") or ("passed" if result.get("ok") else "blocked")
+        print(f"Zettel edge: {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        source = result.get("source") if isinstance(result.get("source"), dict) else {}
+        target = result.get("target") if isinstance(result.get("target"), dict) else {}
+        print(f"Source: {source.get('zettel_id') or '-'}")
+        print(f"Target: {target.get('ref') or '-'}")
+        print(f"Edge type: {result.get('edge_type') or '-'}")
+        print(f"Visibility: {result.get('visibility') or '-'}")
+        print(f"Receipt: {result.get('receipt_path') or '-'}")
+        if result.get("files_written"):
+            print("Files written:")
+            for path in result["files_written"]:
+                print(f"- {path}")
+        elif result.get("would_change"):
+            print("Would change:")
+            for path in result["would_change"]:
+                print(f"- {path}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
     if args.dry_run == args.approve:
         print("prehashed-objet-ledger requires exactly one of --dry-run or --approve.", file=sys.stderr)
@@ -7800,6 +7849,7 @@ def create_recommended_dirs(target: Path) -> None:
         "receipts",
         "receipts/derived-text-capture",
         "receipts/delegate",
+        "receipts/edges",
         "receipts/import",
         "receipts/lineage",
         "receipts/mint",
@@ -10383,6 +10433,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     connection_evidence_parse_fixture.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     connection_evidence_parse_fixture.set_defaults(func=command_connection_evidence_parse_fixture)
+
+    zettel_edge = subcommands.add_parser(
+        "zettel-edge",
+        aliases=["link-zettel-edge", "write-zettel-edge"],
+        help="Preview or approve one typed edge from a zettel to another zettel or manifested objet.",
+    )
+    zettel_edge.add_argument("archive_root", help="Archive root to update.")
+    zettel_edge.add_argument("--from-zettel", help="Source zettel id. Mutually exclusive with --from-path.")
+    zettel_edge.add_argument("--from-path", help="Source archive-relative zettel path. Mutually exclusive with --from-zettel.")
+    zettel_edge.add_argument("--target", required=True, help="Target zet_<id>, sha256:<64hex>, or objet:sha256:<64hex> ref.")
+    zettel_edge.add_argument("--edge-type", required=True, help="Typed edge id from zettel-kasten/types.yml.")
+    zettel_edge.add_argument("--visibility", default="private", help="Safe edge visibility label. Default: private.")
+    zettel_edge.add_argument("--dry-run", action="store_true", help="Preview the edge and receipt path without writing files.")
+    zettel_edge.add_argument("--approve", action="store_true", help="Write the reviewed edge and receipt.")
+    zettel_edge.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
+    zettel_edge.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    zettel_edge.set_defaults(func=command_zettel_edge)
 
     import_external = subcommands.add_parser("import-external", help="Import Notion or Google Drive exports as inbox drafts.")
     import_external.add_argument("archive_root", help="Target archive root.")

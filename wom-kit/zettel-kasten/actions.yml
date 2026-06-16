@@ -139,9 +139,9 @@ actions:
 
   - action_id: link_zettels
     display_name: Link zettels
-    status: draft
+    status: implemented_cli_approval_gated
     category: relation
-    description: Create a typed edge between two zettels or archive entities.
+    description: Create one reviewed typed edge from a source zettel to another zettel or manifested objet.
     actor_types:
       - person
       - ai_runtime
@@ -157,17 +157,27 @@ actions:
     policy_checks:
       - mounted_archives_only
       - allowed_link_type_only
+      - human_review_required
+      - duplicate_edge_blocked
     preconditions:
       - Source entity exists.
-      - Target entity exists or is represented as an external reference.
+      - Target zettel exists or target object is represented in objects/manifests/files.jsonl.
       - Link type is defined in zettel-kasten/types.yml.
+      - Human explicitly approves the edge write.
     writes:
       - zettel frontmatter edges
-      - db.edges
+      - receipts/edges/*.zettel-edge.json
     outputs:
       - edge_id
+      - receipt_path
     receipt:
-      required: false
+      required: true
+      records:
+        - source_zettel_id
+        - target_ref
+        - edge_type
+        - reviewed_by
+        - result
 
   - action_id: attach_object
     display_name: Attach original object
