@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.69 - 2026-06-16
+
+- Added `archive imap-mailbox-material-capture-request-plan <archive-root>
+  --material-selection-receipt <archive-relative-json> --capture-action
+  message_body_capture|attachment_capture|derived_text_capture --dry-run
+  --format json`.
+- Added aliases `archive imap-material-capture-request-plan` and
+  `archive mailbox-material-capture-request-plan`.
+- The new read-only gate validates a non-secret material selection receipt and
+  checks whether the selected future material lane authorizes the requested
+  body, attachment, or derived-text capture action.
+- Kept material capture closed: the command reads no original execution
+  receipt, opens no IMAP connection, reads no environment variables, opens no
+  keyring/password manager, reads no message headers, bodies, or attachments,
+  creates no derived text, writes no files, and echoes no material-selection
+  receipt path, execution receipt path, candidate refs, local paths, tokens, or
+  secret values.
+
 ## v0.3.68 - 2026-06-16
 
 - Added `archive imap-mailbox-material-selection-record <archive-root>

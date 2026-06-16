@@ -151,6 +151,7 @@ Onboarding and setup plans:
 - [IMAP Mailbox Header Scan Receipt Audit](imap-mailbox-header-scan-receipt-audit.md)
 - [IMAP Mailbox Material Selection Plan](imap-mailbox-material-selection-plan.md)
 - [IMAP Mailbox Material Selection Record](imap-mailbox-material-selection-record.md)
+- [IMAP Mailbox Material Capture Request Plan](imap-mailbox-material-capture-request-plan.md)
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)
 - [Objet Ref Resolution](objet-ref-resolution.md)
 - [Zettel Objet Links](zettel-objet-links.md)
