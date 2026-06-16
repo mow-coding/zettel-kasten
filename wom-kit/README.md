@@ -87,6 +87,7 @@ docs/security-audit-2026-05-21.md
 docs/new-user-flow.md
 docs/ai-response-concept-guide.md
 docs/connection-import-plan.md
+docs/connection-evidence-parser-contract.md
 docs/project-intake-session.md
 docs/project-intake-cookbook.md
 docs/derived-text-coverage-and-toolchain.md
@@ -188,6 +189,9 @@ external-export-plan
 
 connection-import-plan
   Plan Notion connection evidence import into WOM typed-edge candidates. Dry-run only; maps relation properties, synced block references, database view/filter snapshots, internal links, page mentions, comment context, and objet embeds to the base connection edge vocabulary without calling Notion, reading exports, writing zets, writing edges, writing receipts, or echoing provider URLs or local paths.
+
+connection-evidence-parser-contract
+  Preview the future Notion connection evidence parser contract. Dry-run only; defines accepted input lanes, candidate edge record fields, static snapshot requirements, parser stages, and redaction rules without calling Notion, reading exports, reading comments, downloading media, executing a parser, writing candidate records, writing zets, writing edges, writing receipts, updating manifests, or echoing provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
 
 imap-mailbox-plan
   Plan a Gmail, Naver, or generic IMAP mailbox source with safe account, username, mailbox, and credential refs. Dry-run only; opens no connection, logs into nothing, reads no headers/bodies/attachments, sends no mail, changes no flags, stores no secrets, and writes no files.

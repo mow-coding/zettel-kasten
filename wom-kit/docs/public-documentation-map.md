@@ -136,6 +136,7 @@ Onboarding and setup plans:
 - [Human Artifact Store Contract](human-artifact-store-contract.md)
 - [External Export Plan](external-export-plan.md)
 - [Connection Import Plan](connection-import-plan.md)
+- [Connection Evidence Parser Contract](connection-evidence-parser-contract.md)
 - [Object Storage Recommendations](object-storage-recommendations.md)
 - [Object Storage Adapter Readiness Plan](object-storage-adapter-readiness-plan.md)
 - [Object Storage Operation Request Plan](object-storage-operation-request-plan.md)

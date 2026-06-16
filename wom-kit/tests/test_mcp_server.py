@@ -642,6 +642,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("object_storage_adapter_execution_contract", tool_names)
             self.assertIn("human_artifact_store_plan", tool_names)
             self.assertIn("connection_import_plan", tool_names)
+            self.assertIn("connection_evidence_parser_contract", tool_names)
             self.assertIn("imap_mailbox_plan", tool_names)
             self.assertIn("imap_mailbox_operation_request_plan", tool_names)
             self.assertIn("imap_mailbox_adapter_readiness_plan", tool_names)
@@ -1976,7 +1977,7 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(structured["lifecycle_action"], "connection_import_plan")
                 self.assertEqual(structured["source"], "notion")
                 self.assertIn("objet_embed", {item["connection_kind"] for item in structured["connection_mappings"]})
-                self.assertIn("view_query", structured["archive_link_type_status"]["missing_recommended_edge_types"])
+                self.assertEqual(structured["archive_link_type_status"]["missing_recommended_edge_types"], [])
                 self.assertFalse(structured["closed_actions"]["provider_api_called"])
                 self.assertFalse(structured["closed_actions"]["source_export_files_read"])
                 self.assertFalse(structured["closed_actions"]["edges_written"])
@@ -2015,6 +2016,104 @@ class McpServerTests(unittest.TestCase):
                         "method": "tools/call",
                         "params": {
                             "name": "connection_import_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "source": "notion",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_connection_evidence_parser_contract_tool_writes_nothing_and_respects_allowed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "connection_evidence_parser_contract",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "source": "notion",
+                                "connection_kind": "all",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"])
+                self.assertTrue(structured["dry_run"])
+                self.assertEqual(structured["lifecycle_action"], "connection_evidence_parser_contract")
+                self.assertEqual(structured["contract_state"], "contract_ready_for_future_parser")
+                self.assertEqual(structured["source"], "notion")
+                lanes = {item["connection_kind"] for item in structured["input_contract"]["accepted_input_lanes"]}
+                self.assertIn("database_view_filter", lanes)
+                self.assertIn("comment_context", lanes)
+                self.assertIn("candidate_id", structured["output_contract"]["candidate_record_required_fields"])
+                self.assertFalse(structured["current_capability"]["evidence_parser_implemented"])
+                self.assertFalse(structured["closed_actions"]["provider_api_called"])
+                self.assertFalse(structured["closed_actions"]["source_export_files_read"])
+                self.assertFalse(structured["closed_actions"]["parser_executed"])
+                self.assertFalse(structured["closed_actions"]["candidate_records_written"])
+                self.assertFalse(structured["closed_actions"]["edges_written"])
+                self.assertEqual(structured["would_change"], [])
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "connection_evidence_parser_contract",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "source": "notion",
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "connection_evidence_parser_contract",
                             "arguments": {
                                 "archive_root": str(allowed_archive),
                                 "source": "notion",

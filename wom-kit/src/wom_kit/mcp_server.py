@@ -1564,6 +1564,24 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "connection_evidence_parser_contract",
+        "description": "Preview the dry-run-only contract a future Notion connection evidence parser must satisfy. It never reads exports, parses files, writes candidates, or writes edges.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "source": {"type": "string", "enum": sorted(archive_services.CONNECTION_IMPORT_SOURCES)},
+                "connection_kind": {
+                    "type": "string",
+                    "enum": ["all"] + sorted(archive_services.CONNECTION_IMPORT_KINDS),
+                    "default": "all",
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "source"],
+        },
+    },
+    {
         "name": "list_sources",
         "description": "List registered source bindings and current source map status.",
         "inputSchema": {
@@ -2461,6 +2479,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_external_import_plan(arguments)
     if name == "connection_import_plan":
         return tool_connection_import_plan(arguments)
+    if name == "connection_evidence_parser_contract":
+        return tool_connection_evidence_parser_contract(arguments)
     if name == "list_sources":
         return tool_list_sources(arguments)
     if name == "source_scan_plan":
@@ -3816,6 +3836,21 @@ def tool_connection_import_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"connection_import_plan: {state}.", result)
+
+
+def tool_connection_evidence_parser_contract(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("connection_evidence_parser_contract is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.connection_evidence_parser_contract,
+        archive_root,
+        source=require_string_arg(arguments, "source"),
+        connection_kind=optional_string_arg(arguments, "connection_kind") or "all",
+        dry_run=True,
+    )
+    state = result.get("contract_state") or ("passed" if result["ok"] else "blocked")
+    return tool_success_result(f"connection_evidence_parser_contract: {state}.", result)
 
 
 def tool_list_sources(arguments: dict[str, Any]) -> dict[str, Any]:

@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.80 - 2026-06-16
+
+- Added read-only `archive connection-evidence-parser-contract --source
+  notion --dry-run`, aliases `connection-parser-contract` and
+  `notion-connection-parser-contract`, and MCP
+  `connection_evidence_parser_contract`.
+- Defined the future Notion connection evidence parser contract before real
+  export parsing: accepted input lanes, candidate edge record fields, static
+  snapshot requirements for dynamic view/filter and comment-context evidence,
+  parser stages, and redaction rules.
+- Kept the workflow read-only: no Notion call, OAuth, export read, comment read,
+  media download, parser execution, candidate record write, zet write, edge
+  write, receipt write, object manifest update, provider URL, local path, raw
+  export path, page title, comment body, account id, email, token, or secret
+  value is produced.
+
 ## v0.3.79 - 2026-06-16
 
 - Added the recommended Notion connection edge vocabulary to the base
