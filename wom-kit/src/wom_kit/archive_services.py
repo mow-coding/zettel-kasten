@@ -15367,6 +15367,229 @@ def beginner_setup_manual_vault_walkthrough(store_id: str, platform: str) -> dic
     }
 
 
+CREDENTIAL_SEMANTIC_SOURCE_KINDS = {
+    "plaintext_note",
+    "password_manager_export",
+    "browser_export",
+    "workspace_note",
+    "manual_review_session",
+}
+CREDENTIAL_SEMANTIC_CONTEXTS = {
+    "mixed",
+    "personal_logins",
+    "mail_accounts",
+    "developer_api_keys",
+    "institutional_accounts",
+    "wallet_or_recovery_material",
+}
+
+
+def credential_semantic_extraction_recipe(
+    archive_root: Path | str,
+    *,
+    source_label: str,
+    source_kind: str = "plaintext_note",
+    context: str = "mixed",
+    target_store_id: str = "recommended",
+    platform: str = "windows",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("credential-semantic-extraction-recipe is read-only and requires --dry-run.")
+
+    resolved_source_label = (source_label or "").strip()
+    if not resolved_source_label:
+        blockers.append("source_label is required.")
+    elif not safe_source_intake_plan_scalar(resolved_source_label):
+        blockers.append("source_label must be a safe non-secret label, not a path, URL, email, token, or secret.")
+        resolved_source_label = ""
+
+    resolved_source_kind = (source_kind or "plaintext_note").strip().lower().replace("-", "_")
+    if resolved_source_kind not in CREDENTIAL_SEMANTIC_SOURCE_KINDS:
+        blockers.append("source_kind must be one of: " + ", ".join(sorted(CREDENTIAL_SEMANTIC_SOURCE_KINDS)) + ".")
+        resolved_source_kind = "plaintext_note"
+
+    resolved_context = (context or "mixed").strip().lower().replace("-", "_")
+    if resolved_context not in CREDENTIAL_SEMANTIC_CONTEXTS:
+        blockers.append("context must be one of: " + ", ".join(sorted(CREDENTIAL_SEMANTIC_CONTEXTS)) + ".")
+        resolved_context = "mixed"
+
+    resolved_target_store = (target_store_id or "recommended").strip().lower().replace("-", "_")
+    if resolved_target_store not in CREDENTIAL_VAULT_ONBOARDING_STORE_IDS:
+        blockers.append(
+            "target_store_id must be one of: "
+            + ", ".join(sorted(CREDENTIAL_VAULT_ONBOARDING_STORE_IDS))
+            + "."
+        )
+        resolved_target_store = "recommended"
+
+    resolved_platform = (platform or "windows").strip().lower().replace("-", "_")
+    if resolved_platform not in CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS:
+        blockers.append(
+            "platform must be one of: "
+            + ", ".join(sorted(CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS))
+            + "."
+        )
+        resolved_platform = "cross_platform"
+
+    if resolved_context == "wallet_or_recovery_material":
+        warnings.append("Wallet seed or recovery material should not be returned to AI or imported through a generic credential flow.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "credential_semantic_extraction_recipe",
+        "archive_id": archive_id,
+        "source": {
+            "source_label": resolved_source_label or None,
+            "source_kind": resolved_source_kind,
+            "source_file_path_echoed": False,
+            "source_file_read": False,
+            "source_bytes_hashed": False,
+            "secret_detection_run": False,
+            "secret_values_returned_to_ai": False,
+        },
+        "recipe_context": {
+            "context": resolved_context,
+            "target_store_id": resolved_target_store,
+            "platform": resolved_platform,
+            "semantic_pass_only": True,
+            "human_review_required": True,
+        },
+        "entry_classes": credential_semantic_entry_classes(),
+        "human_review_questions": [
+            "Is this one credential, or several separate credentials in one note?",
+            "Which parts are identifiers, labels, URLs, or usernames, and which parts are secret values?",
+            "Does this account use SSO, passkeys, OAuth, app passwords, or a normal password?",
+            "Are there multiple accounts for the same service that must stay separate?",
+            "Are recovery codes, backup codes, seed phrases, or wallet material present?",
+            "Is any line only a status/toggle note rather than a credential?",
+            "Which external vault/keyring/store should hold each confirmed secret?",
+        ],
+        "classification_rules": {
+            "split_multi_account_notes": True,
+            "never_merge_accounts_only_because_provider_matches": True,
+            "classify_sso_without_password_as_auth_route_not_missing_secret": True,
+            "classify_toggle_or_status_notes_as_non_secret_context": True,
+            "wallet_seed_material_requires_separate_high_risk_flow": True,
+            "record_only_safe_refs_in_wom": True,
+        },
+        "proposed_output_shape": {
+            "credential_id": "safe label such as cred:mail-personal-app-password",
+            "credential_kind": "one of the WOM credential kinds, selected after human review",
+            "provider": "safe provider label, not a provider URL",
+            "account_label": "safe non-secret account label, not the real email/username if sensitive",
+            "target_store_id": resolved_target_store,
+            "target_ref_prefix": "secret: or keyring: or env: depending on the chosen store",
+            "secret_value": "never returned to AI",
+            "review_status": "human_confirmed | needs_more_review | not_a_credential",
+        },
+        "next_safe_actions": [
+            "Run this recipe before credential-plaintext-migration-plan when a note may contain multiple credentials.",
+            "Ask the human to classify one candidate at a time without pasting secret values into chat.",
+            "Use credential-plaintext-migration-plan only after a single safe credential_id and target store are chosen.",
+            "Use credential-ref-plan and credential-ref-inventory to record refs, not secret values.",
+        ],
+        "closed_actions": {
+            "plaintext_file_read": False,
+            "browser_password_store_opened": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "secret_value_detected": False,
+            "secret_value_returned_to_ai": False,
+            "secret_value_written": False,
+            "files_written": False,
+            "provider_api_called": False,
+        },
+        "privacy_guards": {
+            "local_paths_echoed": False,
+            "emails_echoed": False,
+            "usernames_echoed": False,
+            "provider_urls_echoed": False,
+            "secret_values_echoed": False,
+            "wallet_seed_material_echoed": False,
+        },
+        "current_capability": {
+            "semantic_recipe_available": True,
+            "secret_scanner_implemented": False,
+            "automatic_candidate_extraction_implemented": False,
+            "vault_write_adapter_implemented": False,
+            "browser_password_import_implemented": False,
+            "wallet_seed_migration_implemented": False,
+        },
+        "would_change": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def credential_semantic_entry_classes() -> list[dict[str, Any]]:
+    return [
+        {
+            "class_id": "login_password",
+            "human_meaning": "A website/app login with an account identifier and password-like secret.",
+            "split_rule": "One provider plus one human account label becomes one credential candidate.",
+            "safe_target_kinds": ["generic_secret"],
+            "not_secret_fields": ["service label", "account label", "login route"],
+        },
+        {
+            "class_id": "multi_account_same_service",
+            "human_meaning": "Several accounts for one provider in the same note.",
+            "split_rule": "Create separate credential candidates; do not merge them by provider.",
+            "safe_target_kinds": ["generic_secret", "mail_app_password", "mail_oauth_token"],
+            "not_secret_fields": ["provider label", "purpose label"],
+        },
+        {
+            "class_id": "api_key_or_cli_token",
+            "human_meaning": "A developer/API/CLI token used by tools or adapters.",
+            "split_rule": "Separate by provider, purpose, environment, and rotation lifecycle.",
+            "safe_target_kinds": ["openai_api_key", "ocr_api_key", "provider_api_key", "object_storage_token", "generic_secret"],
+            "not_secret_fields": ["provider label", "purpose label", "environment label"],
+        },
+        {
+            "class_id": "mail_access",
+            "human_meaning": "Mail access through IMAP, app password, OAuth, or institutional login.",
+            "split_rule": "Separate username refs, app-password refs, OAuth refs, mailbox labels, and provider labels.",
+            "safe_target_kinds": ["mail_username", "mail_app_password", "mail_oauth_token"],
+            "not_secret_fields": ["mailbox label", "provider label", "adapter label"],
+        },
+        {
+            "class_id": "sso_or_passkey_route",
+            "human_meaning": "Login uses SSO, passkey, browser session, or institution portal.",
+            "split_rule": "Record the auth route as context; do not invent a password candidate.",
+            "safe_target_kinds": [],
+            "not_secret_fields": ["SSO provider label", "institution label", "browser/platform route"],
+        },
+        {
+            "class_id": "recovery_codes",
+            "human_meaning": "Backup codes, recovery codes, or emergency access material.",
+            "split_rule": "Keep as high-risk recovery material with separate human confirmation.",
+            "safe_target_kinds": ["backup_password"],
+            "not_secret_fields": ["recovery material label", "storage policy label"],
+        },
+        {
+            "class_id": "wallet_seed_or_private_key_material",
+            "human_meaning": "Seed phrases, private keys, wallet backups, or signing authority.",
+            "split_rule": "Do not route through generic credential migration; require a separate high-risk custody plan.",
+            "safe_target_kinds": [],
+            "not_secret_fields": ["wallet/custody policy label"],
+        },
+        {
+            "class_id": "toggle_or_status_note",
+            "human_meaning": "A note saying enabled/disabled/old/new/needs reset, not a secret.",
+            "split_rule": "Do not create a secret entry unless a human confirms a real secret value exists.",
+            "safe_target_kinds": [],
+            "not_secret_fields": ["status", "date label", "human note"],
+        },
+    ]
+
+
 def credential_plaintext_migration_plan(
     archive_root: Path | str,
     *,

@@ -128,6 +128,26 @@ It is a plaintext migration planner, not a migration executor.
 The safe chain remains:
 
 ```text
+credential-semantic-extraction-recipe
+-> human separates complex notes into one candidate at a time
+-> credential-store-recommendation
+-> credential-vault-onboarding-plan
+-> credential-plaintext-migration-plan
+-> credential-ref-plan
+-> credential-ref-inventory
+-> credential-access-broker-plan
+-> credential-access-approval-plan
+-> credential-policy-check
+-> credential-keepassxc-command-plan
+-> credential-keepassxc-write
+-> credential-adapter-readiness-plan
+-> credential-adapter-manifest-plan
+-> credential-adapter-audit-plan
+```
+
+Earlier versions described the chain as:
+
+```text
 credential-store-recommendation
 -> credential-vault-onboarding-plan
 -> credential-plaintext-migration-plan
@@ -159,3 +179,6 @@ v0.3.32 adds a KeePassXC command preflight after receipt verification. See
 
 v0.3.33 adds a minimal CLI-only KeePassXC write adapter after the same approval
 and policy gates. See [Credential KeePassXC Write](credential-keepassxc-write.md).
+
+v0.3.60 adds a semantic extraction recipe before plaintext migration. See
+[Credential Semantic Extraction Recipe](credential-semantic-extraction-recipe.md).
