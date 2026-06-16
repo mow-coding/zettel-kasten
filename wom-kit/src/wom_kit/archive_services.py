@@ -1346,6 +1346,7 @@ BEGINNER_SETUP_MANUAL_TOPICS = {
     "credential_vault",
     "credential_bulk_migration",
     "derived_text_tools",
+    "object_storage_setup_manual",
 }
 CONNECTED_ACCOUNT_SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 CREDENTIAL_ACCESS_BROKER_ACTIONS = {
@@ -15863,6 +15864,7 @@ def beginner_setup_manual(
     }
     include_text_tools = resolved_topic in {"first_secret_and_text_tools", "derived_text_tools"}
     include_bulk_migration = resolved_topic == "credential_bulk_migration"
+    include_object_storage = resolved_topic == "object_storage_setup_manual"
 
     vault_preview: dict[str, Any] | None = None
     if include_credentials:
@@ -15997,6 +15999,28 @@ def beginner_setup_manual(
             }
         )
 
+    if include_object_storage:
+        sections.append(
+            {
+                "section_id": "object_storage_setup_manual",
+                "title": "Set up Cloudflare R2 without inventing fields",
+                "beginner_explanation": "Object storage is the remote shelf for original objets. WOM can recommend safe names and refs, but the human still creates the bucket and token in the provider dashboard.",
+                "provider": "cloudflare-r2",
+                "example_bucket_name": "zettel-kasten-<profile-slug>-objets",
+                "field_walkthrough": object_storage_provider_setup_screen_guidance(
+                    "cloudflare-r2",
+                    bucket_name="zettel-kasten-profile-slug-objets",
+                    region="auto",
+                ),
+                "stop_rules": [
+                    "Do not invent a prettier bucket name; use the bucket name returned by object-storage-recommendation or object-storage --dry-run.",
+                    "Do not create an R2 API token until the bucket scope and permission are reviewed.",
+                    "Do not paste Access Key ID, Secret Access Key, account IDs, endpoint URLs, tokens, emails, or local paths into chat.",
+                    "Do not enable public access for a private WOM archive bucket.",
+                ],
+            }
+        )
+
     command_checklist = []
     if include_credentials:
         command_checklist.extend(
@@ -16039,6 +16063,14 @@ def beginner_setup_manual(
                 "archive derive-text-coverage <archive-root> --dry-run --format json",
             ]
         )
+    if include_object_storage:
+        command_checklist.extend(
+            [
+                "archive object-storage-recommendation <archive-root> --scenario personal_low_ops --profile-id <safe-profile-id> --profile-slug <safe-profile-slug> --storage-account-ref storage:account:<label> --dry-run --format json",
+                "archive object-storage <archive-root> --dry-run --provider cloudflare-r2 --profile-id <safe-profile-id> --profile-slug <safe-profile-slug> --bucket-name zettel-kasten-<safe-profile-slug>-objets --region auto --visibility private --storage-account-ref storage:account:<label> --format json",
+                "archive credential-ref-plan <archive-root> --credential-id cred:object-storage-r2 --credential-ref secret:keepassxc-r2-object-storage --credential-kind object_storage_token --provider cloudflare-r2 --dry-run --format json",
+            ]
+        )
 
     return {
         "ok": not blockers,
@@ -16056,20 +16088,30 @@ def beginner_setup_manual(
             "human_secret_entry_stays_visible_and_local": True,
             "ai_may_help_prepare_commands": True,
             "ai_may_not_receive_secret_values": True,
+            "provider_dashboard_field_walkthrough_available": include_object_storage,
         },
         "sections": sections,
         "command_checklist": command_checklist,
-        "cross_links": [
-            "credential-store-recommendation",
-            "credential-vault-onboarding-plan",
-            "credential-plaintext-migration-plan",
-            "credential-ref-plan",
-            "credential-access-approval-plan",
-            "credential-keepassxc-command-plan",
-            "credential-keepassxc-write",
-            "derive-text-doctor",
-            "derive-text-coverage",
-        ],
+        "cross_links": unique_preserve_order(
+            [
+                item
+                for item in [
+                    "credential-store-recommendation",
+                    "credential-vault-onboarding-plan",
+                    "credential-plaintext-migration-plan",
+                    "credential-ref-plan",
+                    "credential-access-approval-plan",
+                    "credential-keepassxc-command-plan",
+                    "credential-keepassxc-write",
+                    "derive-text-doctor",
+                    "derive-text-coverage",
+                    "object-storage-recommendation" if include_object_storage else "",
+                    "object-storage" if include_object_storage else "",
+                    "object-storage-operation-request-plan" if include_object_storage else "",
+                ]
+                if item
+            ]
+        ),
         "closed_actions": {
             "secret_prompted_in_chat": False,
             "secret_value_read": False,
@@ -16078,6 +16120,9 @@ def beginner_setup_manual(
             "os_keyring_opened": False,
             "browser_password_store_opened": False,
             "environment_read": False,
+            "provider_dashboard_opened": False,
+            "bucket_created": False,
+            "api_token_created": False,
             "tool_installed": False,
             "tool_executed": False,
             "tool_hint_file_written": False,
@@ -16103,6 +16148,7 @@ def beginner_setup_manual(
             "csv_paths_echoed": False,
             "tool_hint_paths_echoed": False,
             "provider_urls_echoed": False,
+            "bucket_names_invented": False,
             "writes": False,
         },
         "would_change": [],
@@ -25174,6 +25220,11 @@ def object_storage_setup_plan(
     )
     receipt_path = object_storage_provider_setup_receipt_path(resolved_bucket)
     manual_steps = object_storage_manual_steps(resolved_provider, resolved_bucket, resolved_region, resolved_prefix)
+    provider_setup_guidance = object_storage_provider_setup_screen_guidance(
+        resolved_provider,
+        bucket_name=resolved_bucket,
+        region=resolved_region,
+    )
     receipt_preview = build_object_storage_provider_setup_receipt(
         archive_id=archive_id,
         profile_id=resolved_profile_id,
@@ -25218,6 +25269,7 @@ def object_storage_setup_plan(
         "provider_setup_receipt_preview": json_safe(receipt_preview),
         "objet_storage_policy_preview": json_safe(policy_preview),
         "manual_steps": manual_steps,
+        "provider_setup_guidance": provider_setup_guidance,
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
         "would_change": [provider_action, f"write {receipt_path}"],
@@ -25290,6 +25342,10 @@ def object_storage_recommendation(
     if requested_scenario == "auto_from_manifest":
         warnings.append("Auto scenario is a heuristic; ask the human whether the archive is backup-only, frequently read, shared, or compliance-bound before signup.")
 
+    proposed_bucket_slug = object_storage_bucket_slug(resolved_profile_slug)
+    proposed_bucket_name = resolve_object_storage_bucket_name(None, proposed_bucket_slug, blockers)
+    proposed_region = "auto"
+    proposed_visibility = OBJECT_STORAGE_DEFAULT_VISIBILITY
     setup_command = (
         "archive object-storage <archive-root> --dry-run --provider "
         + primary["provider"]
@@ -25299,7 +25355,19 @@ def object_storage_recommendation(
         + resolved_profile_slug
         + " --storage-account-ref "
         + resolved_account_ref
+        + " --bucket-name "
+        + proposed_bucket_name
+        + " --region "
+        + proposed_region
+        + " --visibility "
+        + proposed_visibility
         + " --format json"
+    )
+    setup_manual_command = "archive beginner-setup-manual <archive-root> --topic object_storage_setup_manual --dry-run --format json"
+    provider_setup_guidance = object_storage_provider_setup_screen_guidance(
+        str(primary.get("provider") or ""),
+        bucket_name=proposed_bucket_name,
+        region=proposed_region,
     )
 
     return {
@@ -25316,12 +25384,32 @@ def object_storage_recommendation(
         "candidates": candidates,
         "rough_cost_estimates": rough_cost,
         "selection_logic": object_storage_recommendation_selection_logic(),
+        "recommended_setup_values": {
+            "provider": primary["provider"],
+            "bucket_name": proposed_bucket_name,
+            "bucket_naming_rule": "zettel-kasten-<profile-slug>-objets",
+            "region": proposed_region,
+            "visibility": proposed_visibility,
+            "objet_prefix_rule": "archives/<archive_id>/objets/",
+            "bucket_availability_checked": False,
+            "do_not_invent_bucket_names": True,
+        },
+        "next_exact_commands": {
+            "object_storage_setup_manual": setup_manual_command,
+            "object_storage_dry_run": setup_command,
+        },
         "setup_bridge": {
             "planner_command": setup_command,
+            "setup_manual_command": setup_manual_command,
+            "setup_manual_doc": "wom-kit/docs/beginner-setup-manual.md#object-storage-setup-manual",
+            "proposed_bucket_name": proposed_bucket_name,
+            "bucket_naming_rule": "zettel-kasten-<profile-slug>-objets",
             "next_command": "object-storage",
             "requires_human_provider_signup": True,
             "requires_manual_price_policy_review": True,
             "bucket_availability_checked": False,
+            "do_not_invent_bucket_names": True,
+            "provider_setup_guidance": provider_setup_guidance,
         },
         "current_capability": {
             "recommendation_matching_available": True,
@@ -25329,6 +25417,8 @@ def object_storage_recommendation(
             "manifest_based_auto_scenario_available": True,
             "rough_cost_estimate_available": True,
             "object_storage_setup_plan_available": True,
+            "bucket_name_surface_available": True,
+            "provider_setup_screen_guidance_available": primary.get("provider") == "cloudflare-r2",
             "live_price_lookup_implemented": False,
             "provider_account_lookup_implemented": False,
             "bucket_availability_check_implemented": False,
@@ -25341,6 +25431,7 @@ def object_storage_recommendation(
             "pricing_api_called": False,
             "bucket_created": False,
             "bucket_availability_checked": False,
+            "api_token_created": False,
             "files_uploaded": False,
             "files_downloaded": False,
             "object_bytes_read": False,
@@ -25362,6 +25453,7 @@ def object_storage_recommendation(
             "Review the recommendation and tradeoffs with the human before provider signup.",
             "Verify current provider pricing, retention, region, and data-residency policy outside WOM.",
             "Run the returned object-storage dry-run command before any approved local metadata write.",
+            "For Cloudflare R2, run the object-storage setup manual before creating the bucket or API token.",
             "Keep provider credentials in a vault/keyring/secret manager and store only refs in WOM.",
         ],
         "would_change": [],
@@ -25599,6 +25691,146 @@ def object_storage_recommendation_selection_logic() -> list[str]:
         "If the human already selected a different S3-compatible provider, use generic-s3 and keep endpoint refs non-secret.",
         "Never treat this recommendation as live pricing, bucket availability, provider signup, upload approval, or presigned URL authorization.",
     ]
+
+
+def object_storage_provider_setup_screen_guidance(
+    provider_kind: str,
+    *,
+    bucket_name: str,
+    region: str = "auto",
+) -> dict[str, Any]:
+    provider = normalize_object_storage_provider(provider_kind)
+    safe_bucket = bucket_name if safe_object_storage_bucket_name(bucket_name) else "<bucket-name>"
+    if provider != "cloudflare-r2":
+        return {
+            "provider": provider or "generic-s3",
+            "guidance_available": False,
+            "status": "generic_provider_manual_review_required",
+            "summary": "Use the provider's official setup docs and run object-storage --dry-run before any local metadata write.",
+            "bucket_name": safe_bucket,
+            "provider_api_called": False,
+            "provider_urls_echoed": False,
+        }
+
+    return {
+        "provider": "cloudflare-r2",
+        "guidance_available": True,
+        "status": "v0.3.64_screen_field_walkthrough",
+        "docs_checked_date": "2026-06-16",
+        "official_source_ids": [
+            "cloudflare_r2_get_started_s3",
+            "cloudflare_r2_data_location",
+            "cloudflare_r2_storage_classes",
+            "cloudflare_r2_pricing",
+            "cloudflare_r2_public_buckets",
+            "cloudflare_api_token_restrictions",
+        ],
+        "bucket_creation": {
+            "dashboard_area": "Storage and databases > R2 > Overview > Create bucket",
+            "fields": [
+                {
+                    "field": "Bucket name",
+                    "recommended_value": safe_bucket,
+                    "basis": "WOM bucket naming rule; availability is not checked by WOM.",
+                    "human_review_required": True,
+                },
+                {
+                    "field": "Location",
+                    "recommended_value": "None / automatic selection",
+                    "basis": "Cloudflare supports automatic placement; choose a location hint only when the human knows most access comes from a different region.",
+                    "human_review_required": True,
+                },
+                {
+                    "field": "Jurisdiction",
+                    "recommended_value": "Do not specify by default",
+                    "basis": "Use jurisdictional restrictions only when a legal, compliance, or data-residency requirement applies.",
+                    "human_review_required": True,
+                },
+                {
+                    "field": "Default storage class",
+                    "recommended_value": "Standard",
+                    "basis": "Standard avoids Infrequent Access retrieval fees and minimum-duration surprises for early personal archive setup.",
+                    "ia_when_to_choose": "Consider Infrequent Access only for cold data that is rarely read, kept beyond the minimum duration, and reviewed against current pricing.",
+                    "human_review_required": True,
+                },
+                {
+                    "field": "Public access",
+                    "recommended_value": "Disabled / private",
+                    "basis": "WOM source objets are private by default. Do not enable public development URLs or custom-domain public access for a private archive bucket.",
+                    "human_review_required": True,
+                },
+            ],
+        },
+        "api_token": {
+            "dashboard_area": "R2 Overview > Manage API Tokens > Create API Token",
+            "fields": [
+                {
+                    "field": "Token type",
+                    "recommended_value": "Account or User R2 API token chosen by the human",
+                    "basis": "Use the Cloudflare R2 S3 credential flow that fits the account governance model.",
+                    "human_review_required": True,
+                },
+                {
+                    "field": "Permissions",
+                    "recommended_value": "Object Read & Write",
+                    "basis": "R2 S3-compatible setup docs use Object Read & Write for tools that need to upload and later read objects.",
+                    "human_review_required": True,
+                },
+                {
+                    "field": "Bucket scope",
+                    "recommended_value": f"Apply to specific buckets only: {safe_bucket}",
+                    "basis": "Limit the token to the one WOM objet bucket instead of all buckets.",
+                    "human_review_required": True,
+                },
+                {
+                    "field": "TTL / expiration",
+                    "recommended_value": "Set a reviewed expiration when practical; otherwise mark it as a long-lived token to revisit",
+                    "basis": "Cloudflare token restrictions support TTL constraints; shorter lifetimes reduce exposure after compromise.",
+                    "human_review_required": True,
+                },
+                {
+                    "field": "Client IP filtering",
+                    "recommended_value": "Use only if the human has a stable known IP/CIDR; otherwise leave unrestricted and document the tradeoff",
+                    "basis": "Cloudflare token restrictions support client IP filtering, but a wrong range can lock out legitimate use.",
+                    "human_review_required": True,
+                },
+                {
+                    "field": "Secret handling after creation",
+                    "recommended_value": "Copy Access Key ID and Secret Access Key once into a vault/keyring/env flow; never paste them into chat",
+                    "basis": "Cloudflare shows the secret only once; WOM stores only safe refs, not secret values.",
+                    "human_review_required": True,
+                },
+            ],
+        },
+        "wom_ref_bridge": {
+            "credential_kind": "object_storage_token",
+            "recommended_ref_examples": [
+                "secret:keepassxc-r2-object-storage",
+                "env:WOM_R2_OBJECT_STORAGE_TOKEN",
+            ],
+            "dry_run_command": (
+                "archive credential-ref-plan <archive-root> --credential-id cred:object-storage-r2 "
+                "--credential-ref secret:keepassxc-r2-object-storage --credential-kind object_storage_token "
+                "--provider cloudflare-r2 --dry-run --format json"
+            ),
+            "secret_values_echoed": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "bucket_created": False,
+            "api_token_created": False,
+            "secret_value_read": False,
+            "secret_value_written": False,
+            "files_uploaded": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "tokens_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+        },
+    }
 
 
 def approve_object_storage_setup_plan(

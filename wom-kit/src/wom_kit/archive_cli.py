@@ -1951,6 +1951,13 @@ def command_object_storage_recommendation(args: argparse.Namespace) -> int:
                 f"{dominant.get('share_percent', 0)}%"
             )
         print(f"Primary: {primary.get('provider') or '-'} ({primary.get('label') or '-'})")
+        setup_values = result.get("recommended_setup_values") if isinstance(result.get("recommended_setup_values"), dict) else {}
+        next_commands = result.get("next_exact_commands") if isinstance(result.get("next_exact_commands"), dict) else {}
+        print(f"Suggested bucket: {setup_values.get('bucket_name') or '-'}")
+        if next_commands.get("object_storage_setup_manual"):
+            print(f"Setup manual: {next_commands['object_storage_setup_manual']}")
+        if next_commands.get("object_storage_dry_run"):
+            print(f"Next dry-run: {next_commands['object_storage_dry_run']}")
         print("Writes: none")
         if result.get("blockers"):
             print("Blockers:")

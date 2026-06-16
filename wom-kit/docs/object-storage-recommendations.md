@@ -1,7 +1,7 @@
 # Object Storage Recommendations
 
-Status: v0.3.43 read-only manifest-aware object storage recommendation matching
-Date: 2026-06-15
+Status: v0.3.64 read-only manifest-aware object storage recommendation matching with setup bridge
+Date: 2026-06-16
 
 `object-storage-recommendation` maps a human storage scenario to the existing
 WOM-kit `object-storage --dry-run` planner.
@@ -42,8 +42,17 @@ Optional bridge fields:
 --storage-account-ref storage:account:<label>
 ```
 
-When those are supplied, the output includes a ready next-command shape for
-`archive object-storage --dry-run`.
+When those are supplied, the output includes:
+
+- `recommended_setup_values.bucket_name`,
+- the bucket naming rule,
+- a ready next-command shape for `archive object-storage --dry-run`,
+- the `beginner-setup-manual --topic object_storage_setup_manual` command,
+- Cloudflare R2 screen-field guidance when R2 is the primary recommendation.
+
+This is intentionally redundant. The bucket name must be visible as a value,
+not hidden only inside a command string, so a human or AI helper does not invent
+one.
 
 ## Scenarios
 
@@ -112,6 +121,49 @@ Before spending money or uploading source objets, the human must separately
 verify current pricing, retention, region, data residency, lifecycle policy,
 provider account ownership, and recovery/restore needs.
 
+## Cloudflare R2 Setup Bridge
+
+For the default `personal_low_ops` recommendation, WOM-kit usually ranks
+`cloudflare-r2` first.
+
+The recommendation output now surfaces:
+
+```text
+recommended_setup_values.bucket_name
+recommended_setup_values.bucket_naming_rule
+next_exact_commands.object_storage_setup_manual
+next_exact_commands.object_storage_dry_run
+setup_bridge.provider_setup_guidance
+```
+
+For R2, the screen guidance covers:
+
+- bucket name,
+- Location,
+- Jurisdiction,
+- Default storage class,
+- Public access,
+- API token type,
+- API token permission,
+- bucket scope,
+- TTL / expiration,
+- client IP filtering,
+- secret handling after creation.
+
+The Cloudflare-specific guidance is based on official docs checked for this
+release:
+
+- [R2 S3 setup](https://developers.cloudflare.com/r2/get-started/s3/)
+- [R2 data location](https://developers.cloudflare.com/r2/reference/data-location/)
+- [R2 storage classes](https://developers.cloudflare.com/r2/buckets/storage-classes/)
+- [R2 pricing](https://developers.cloudflare.com/r2/pricing/)
+- [R2 public buckets](https://developers.cloudflare.com/r2/buckets/public-buckets/)
+- [Cloudflare token restrictions](https://developers.cloudflare.com/fundamentals/api/how-to/restrict-tokens/)
+
+The guidance still does not check live pricing, bucket availability, account
+policy, or the current dashboard UI. It is a safe setup bridge, not provider
+automation.
+
 ## Current Closed Actions
 
 `object-storage-recommendation` does not:
@@ -121,6 +173,7 @@ provider account ownership, and recovery/restore needs.
 - call pricing APIs,
 - check bucket availability,
 - create buckets,
+- create API tokens,
 - upload files,
 - download files,
 - read object bytes,

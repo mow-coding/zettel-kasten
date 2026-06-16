@@ -166,7 +166,7 @@ object-storage
   Plan object storage setup for WOM objets. Dry-run writes nothing. Approved mode writes only local provider metadata and a setup receipt; it does not create buckets, upload, sync, copy, hash, or import source files.
 
 object-storage-recommendation
-  Recommend an object storage provider path before setup planning. Dry-run only; writes nothing, calls no providers, performs no live price lookup, checks no bucket availability, uploads nothing, creates no presigned URLs, and returns the next object-storage dry-run command shape.
+  Recommend an object storage provider path before setup planning. Dry-run only; writes nothing, calls no providers, performs no live price lookup, checks no bucket availability, uploads nothing, creates no presigned URLs, and returns the proposed bucket name, setup manual command, and next object-storage dry-run command shape.
 
 object-storage-operation-request-plan
   Compose a future object-storage operation approval request package. Dry-run only; combines provider readiness, object target validation, presigned URL planning or objet-ref resolution, and credential policy checks without calling providers, reading secrets, creating presigned URLs, uploading, downloading, or writing files.
@@ -226,7 +226,7 @@ credential-keepassxc-write
   Execute a minimal KeePassXC CLI add after verifying a credential access approval receipt. Dry-run previews first; approved mode is CLI-only, requires a local .kdbx path, invokes keepassxc-cli add --password-prompt, writes a non-secret execution receipt, blocks replay with the same approval receipt, and echoes no secret value, exact credential ref, database path, username, email, token, provider URL, or raw adapter output.
 
 beginner-setup-manual
-  Print beginner-friendly secret vault, KeePassXC CSV bulk migration, and derived-text tool setup steps. Dry-run only; explains what to do in external UIs, shows safe non-secret labels and dry-run commands, writes nothing, opens no vault, reads no CSV, imports or merges no database, installs no tools, runs no extraction, deletes no temporary files, and echoes no secret values or local paths.
+  Print beginner-friendly secret vault, KeePassXC CSV bulk migration, Cloudflare R2 object-storage setup, and derived-text tool setup steps. Dry-run only; explains what to do in external UIs, shows safe non-secret labels and dry-run commands, writes nothing, opens no vault/provider dashboard, reads no CSV, imports or merges no database, creates no bucket/API token, installs no tools, runs no extraction, deletes no temporary files, and echoes no secret values or local paths.
 
 connected-accounts
   Summarize provider/source account metadata and credential store types. Dry-run only; reads metadata from provider bindings, source bindings, and ignored local credential inventory, writes nothing, opens no vault/keyring/browser store, calls no providers, opens no IMAP connection, and echoes no exact credential refs or secret values.
