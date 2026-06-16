@@ -105,6 +105,7 @@ docs/imap-mailbox-adapter-preflight-plan.md
 docs/version-truth-source.md
 docs/runtime-canonical-entrypoints.md
 docs/connected-accounts.md
+docs/credential-semantic-extraction-recipe.md
 docs/credential-keepassxc-command-plan.md
 docs/credential-keepassxc-write.md
 docs/zet-surface-prototypes.md
@@ -217,6 +218,9 @@ beginner-setup-manual
 
 connected-accounts
   Summarize provider/source account metadata and credential store types. Dry-run only; reads metadata from provider bindings, source bindings, and ignored local credential inventory, writes nothing, opens no vault/keyring/browser store, calls no providers, opens no IMAP connection, and echoes no exact credential refs or secret values.
+
+credential-semantic-extraction-recipe
+  Print a read-only semantic recipe for splitting complex credential notes before plaintext migration. Dry-run only; reads no plaintext file, detects no secret values, opens no password manager/keyring/browser store, writes nothing, calls no providers, and returns no secret values to AI.
 
 derive-text-coverage
   Check derived-text coverage for textual or plausibly textual objets without reading source bodies. Dry-run only; compares files.jsonl to derived-text.jsonl, classifies missing/encrypted items, echoes no source filenames or local paths, and writes nothing.

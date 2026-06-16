@@ -3466,6 +3466,117 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn("sk-proj-", serialized)
             self.assertNotIn(str(archive_root.resolve()), serialized)
 
+    def test_credential_semantic_extraction_recipe_splits_complex_notes_without_reading_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "credential-semantic-extraction-recipe",
+                    str(archive_root),
+                    "--source-label",
+                    "legacy-note-001",
+                    "--source-kind",
+                    "plaintext_note",
+                    "--context",
+                    "mixed",
+                    "--target-store-id",
+                    "keepassxc",
+                    "--platform",
+                    "windows",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            class_ids = {entry["class_id"] for entry in result["entry_classes"]}
+            allowed_target_kinds = {
+                "mail_username",
+                "mail_app_password",
+                "mail_oauth_token",
+                "openai_api_key",
+                "ocr_api_key",
+                "provider_api_key",
+                "object_storage_token",
+                "backup_password",
+                "generic_secret",
+            }
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "credential_semantic_extraction_recipe")
+            self.assertEqual(result["source"]["source_label"], "legacy-note-001")
+            self.assertEqual(result["source"]["source_kind"], "plaintext_note")
+            self.assertEqual(result["recipe_context"]["context"], "mixed")
+            self.assertEqual(result["recipe_context"]["target_store_id"], "keepassxc")
+            self.assertTrue(result["recipe_context"]["semantic_pass_only"])
+            self.assertTrue(result["recipe_context"]["human_review_required"])
+            self.assertIn("multi_account_same_service", class_ids)
+            self.assertIn("sso_or_passkey_route", class_ids)
+            self.assertIn("wallet_seed_or_private_key_material", class_ids)
+            self.assertIn("toggle_or_status_note", class_ids)
+            self.assertIn("mail_access", class_ids)
+            self.assertIn("api_key_or_cli_token", class_ids)
+            for entry in result["entry_classes"]:
+                self.assertTrue(set(entry["safe_target_kinds"]).issubset(allowed_target_kinds))
+            self.assertTrue(result["classification_rules"]["split_multi_account_notes"])
+            self.assertTrue(result["classification_rules"]["record_only_safe_refs_in_wom"])
+            self.assertTrue(result["classification_rules"]["wallet_seed_material_requires_separate_high_risk_flow"])
+            self.assertFalse(result["source"]["source_file_path_echoed"])
+            self.assertFalse(result["source"]["source_file_read"])
+            self.assertFalse(result["source"]["secret_detection_run"])
+            self.assertFalse(result["source"]["secret_values_returned_to_ai"])
+            self.assertFalse(result["closed_actions"]["plaintext_file_read"])
+            self.assertFalse(result["closed_actions"]["password_manager_opened"])
+            self.assertFalse(result["closed_actions"]["secret_value_detected"])
+            self.assertFalse(result["closed_actions"]["secret_value_returned_to_ai"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertFalse(result["privacy_guards"]["secret_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["emails_echoed"])
+            self.assertFalse(result["privacy_guards"]["wallet_seed_material_echoed"])
+            self.assertTrue(result["current_capability"]["semantic_recipe_available"])
+            self.assertFalse(result["current_capability"]["automatic_candidate_extraction_implemented"])
+            self.assertFalse(result["current_capability"]["vault_write_adapter_implemented"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn("C:\\", output)
+            self.assertNotIn("sk-proj-", output)
+            self.assertNotIn("seed phrase value", output)
+
+            path_code, path_output = self.run_cli(
+                [
+                    "credential-semantic-extraction-recipe",
+                    str(archive_root),
+                    "--source-label",
+                    "C:\\Users\\example\\Desktop\\secret.txt",
+                    "--target-store-id",
+                    "keepassxc",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            path_result = json.loads(path_output)
+            self.assertEqual(path_code, 1)
+            self.assertFalse(path_result["ok"])
+            self.assertTrue(any("source_label must be a safe non-secret label" in blocker for blocker in path_result["blockers"]))
+            self.assertNotIn("secret.txt", path_output)
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "credential-semantic-extraction-recipe",
+                    str(archive_root),
+                    "--source-label",
+                    "legacy-note-001",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_credential_plaintext_migration_plan_is_read_only_and_pathless(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

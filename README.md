@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.59 pre-release
+v0.3.60 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -41,7 +41,7 @@ What exists today:
 - read-only derived-text coverage/toolchain/doctor/agent-contract gates, manifest-scoped completeness signals, including non-echoed tool-hint paths for PATH-missing local extractors, plus approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
 - approval-gated `.gitignore` repair for missing WOM-kit safe defaults,
 - human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
-- read-only beginner setup manual with KeePassXC first-vault field walkthroughs and KeePassXC CSV bulk migration import/merge guidance, connected accounts bridge with separate credential-catalog status, plus read-only credential reference planning, inventory, external store recommendation, vault onboarding planning, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, CLI-only KeePassXC write execution with non-secret execution receipts, adapter readiness planning, adapter manifest preview, and adapter audit receipt preview for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
+- read-only beginner setup manual with KeePassXC first-vault field walkthroughs and KeePassXC CSV bulk migration import/merge guidance, connected accounts bridge with separate credential-catalog status, plus read-only credential reference planning, inventory, external store recommendation, vault onboarding planning, credential semantic extraction recipe, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, CLI-only KeePassXC write execution with non-secret execution receipts, adapter readiness planning, adapter manifest preview, and adapter audit receipt preview for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
 - read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces, plus manifest-aware object-storage recommendation matching, adapter readiness planning, operation request packaging, and presigned URL planning before live provider adapters,
 - read-only IMAP mailbox source planning, operation request packaging, schema-validated adapter manifest previews, approval-gated local adapter manifest writes, adapter readiness checks, mailbox selection planning, adapter audit receipt previews, approval-gated local adapter audit receipt writes, and adapter preflight checks for Gmail, Naver, and generic IMAP account refs,
 - documented Notion page snapshot and `store-ref` boundaries for page/block JSON exports,
@@ -115,6 +115,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Credential Vault Onboarding Plan](wom-kit/docs/credential-vault-onboarding-plan.md)
 - [Beginner Setup Manual](wom-kit/docs/beginner-setup-manual.md)
 - [Connected Accounts](wom-kit/docs/connected-accounts.md)
+- [Credential Semantic Extraction Recipe](wom-kit/docs/credential-semantic-extraction-recipe.md)
 - [Credential Plaintext Migration Plan](wom-kit/docs/credential-plaintext-migration-plan.md)
 - [Credential Access Broker Plan](wom-kit/docs/credential-access-broker-plan.md)
 - [Credential Access Approval Plan](wom-kit/docs/credential-access-approval-plan.md)
@@ -260,6 +261,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.60
 v0.3.59
 v0.3.58
 v0.3.57

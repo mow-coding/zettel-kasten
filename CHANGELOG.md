@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.60 - 2026-06-16
+
+- Added `archive credential-semantic-extraction-recipe <archive-root>
+  --source-label <safe-label> --dry-run --format json`.
+- Added aliases `archive credential-extraction-recipe` and
+  `archive secret-semantic-extraction-recipe`.
+- The new read-only recipe helps a human and AI split complex credential notes
+  into separate semantic candidates before plaintext migration planning,
+  including multi-account, multi-secret, mail, API/CLI token, SSO/passkey,
+  recovery-code, wallet/private-key, and status/toggle notes.
+- Kept the recipe closed by default: it reads no plaintext files, detects no
+  secret values, opens no vaults/keyrings/browser stores, calls no providers,
+  writes no files, and returns no secret values to AI.
+
 ## v0.3.59 - 2026-06-16
 
 - Added a derived-text completeness signal to

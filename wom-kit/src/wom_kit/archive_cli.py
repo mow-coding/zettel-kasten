@@ -57,6 +57,8 @@ Commands:
           Plan safe human vault onboarding without opening or reading a vault.
   beginner-setup-manual
           Print beginner-friendly secret vault and text-tool setup steps.
+  credential-semantic-extraction-recipe
+          Print a read-only semantic recipe for splitting complex credential notes without reading secrets.
   connected-accounts
           Summarize connected provider/source accounts and credential store types without reading secrets.
   credential-plaintext-migration-plan
@@ -2472,6 +2474,52 @@ def command_credential_plaintext_migration_plan(args: argparse.Namespace) -> int
         print(f"Target store: {target.get('selected_store_id') or '-'} ({target.get('store_kind') or '-'})")
         print(f"WOM ref prefix: {target.get('wom_ref_prefix') or '-'}")
         print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_credential_semantic_extraction_recipe(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("credential-semantic-extraction-recipe is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.credential_semantic_extraction_recipe(
+            Path(args.archive_root),
+            source_label=args.source_label,
+            source_kind=args.source_kind,
+            context=args.context,
+            target_store_id=args.target_store_id,
+            platform=args.platform,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        source = result.get("source") if isinstance(result.get("source"), dict) else {}
+        recipe_context = result.get("recipe_context") if isinstance(result.get("recipe_context"), dict) else {}
+        print(f"Credential semantic extraction recipe {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source label: {source.get('source_label') or '-'}")
+        print(f"Context: {recipe_context.get('context') or '-'}")
+        print(f"Target store: {recipe_context.get('target_store_id') or '-'}")
+        print("Writes: none")
+        if result.get("entry_classes"):
+            print("Entry classes:")
+            for entry_class in result["entry_classes"]:
+                if isinstance(entry_class, dict):
+                    print(f"- {entry_class.get('class_id') or '-'}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -8070,6 +8118,45 @@ def build_parser() -> argparse.ArgumentParser:
     beginner_setup_manual.add_argument("--dry-run", action="store_true", help="Required; read-only manual.")
     beginner_setup_manual.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     beginner_setup_manual.set_defaults(func=command_beginner_setup_manual)
+
+    credential_semantic_extraction_recipe = subcommands.add_parser(
+        "credential-semantic-extraction-recipe",
+        aliases=["credential-extraction-recipe", "secret-semantic-extraction-recipe"],
+        help="Print a read-only semantic recipe for splitting complex credential notes without reading secrets.",
+    )
+    credential_semantic_extraction_recipe.add_argument("archive_root", help="Archive root to inspect.")
+    credential_semantic_extraction_recipe.add_argument(
+        "--source-label",
+        required=True,
+        help="Safe label for the human-selected source. Do not pass a path, email, URL, token, or secret.",
+    )
+    credential_semantic_extraction_recipe.add_argument(
+        "--source-kind",
+        choices=sorted(archive_services.CREDENTIAL_SEMANTIC_SOURCE_KINDS),
+        default="plaintext_note",
+        help="Human-declared source kind; the command still reads no source file.",
+    )
+    credential_semantic_extraction_recipe.add_argument(
+        "--context",
+        choices=sorted(archive_services.CREDENTIAL_SEMANTIC_CONTEXTS),
+        default="mixed",
+        help="Human-declared review context.",
+    )
+    credential_semantic_extraction_recipe.add_argument(
+        "--target-store-id",
+        choices=sorted(archive_services.CREDENTIAL_VAULT_ONBOARDING_STORE_IDS),
+        default="recommended",
+        help="Selected target vault/store family. Defaults to the scenario recommendation.",
+    )
+    credential_semantic_extraction_recipe.add_argument(
+        "--platform",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        default="windows",
+        help="Host platform for OS keyring wording.",
+    )
+    credential_semantic_extraction_recipe.add_argument("--dry-run", action="store_true", help="Required; read-only recipe.")
+    credential_semantic_extraction_recipe.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    credential_semantic_extraction_recipe.set_defaults(func=command_credential_semantic_extraction_recipe)
 
     credential_plaintext_migration_plan = subcommands.add_parser(
         "credential-plaintext-migration-plan",
