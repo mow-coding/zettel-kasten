@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.61 - 2026-06-16
+
+- Added `archive imap-mailbox-adapter-execution-contract <archive-root>
+  --dry-run --format json`.
+- Added aliases `archive imap-mailbox-adapter-execution-plan` and
+  `archive mailbox-adapter-execution-contract`.
+- The new read-only contract wraps IMAP adapter preflight and becomes ready only
+  when the adapter manifest, approval receipt, selection plan, and audit
+  preview are ready.
+- Kept live IMAP execution closed: the command opens no connection, logs into
+  nothing, selects no mailbox, reads no headers/bodies/attachments, retrieves
+  no credential values, calls no providers, writes no receipts, and writes no
+  files.
+
 ## v0.3.60 - 2026-06-16
 
 - Added `archive credential-semantic-extraction-recipe <archive-root>

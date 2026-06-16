@@ -2298,6 +2298,76 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn("imap:mailbox:inbox", ready_output)
             self.assertNotIn(str(archive_root), ready_output)
 
+            contract_code, contract_output = self.run_cli(
+                [
+                    "imap-mailbox-adapter-execution-contract",
+                    str(archive_root),
+                    "--adapter-id",
+                    "local-imap",
+                    "--source-id",
+                    "imap:naver",
+                    "--provider",
+                    "naver",
+                    "--account-ref",
+                    "imap:account:naver-personal",
+                    "--username-ref",
+                    "env:NAVER_IMAP_USERNAME",
+                    "--auth-mode",
+                    "app_password_ref",
+                    "--app-password-ref",
+                    "keyring:naver-app-password",
+                    "--mailbox-ref",
+                    "imap:mailbox:inbox",
+                    "--credential-id",
+                    "cred:naver-mail-access",
+                    "--operation",
+                    "header_metadata_scan",
+                    "--selection-rule",
+                    "newest_first",
+                    "--selector-id",
+                    "mail-selection:recent-inbox",
+                    "--max-messages",
+                    "25",
+                    "--approval-decision",
+                    "approve_once",
+                    "--approval-receipt",
+                    approval_receipt,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            contract = json.loads(contract_output)
+            self.assertEqual(contract_code, 0, contract_output)
+            self.assertTrue(contract["ok"], contract)
+            self.assertEqual(contract["lifecycle_action"], "imap_mailbox_adapter_execution_contract")
+            self.assertEqual(contract["contract_state"], "contract_ready_for_future_implementation")
+            self.assertEqual(contract["preflight_summary"]["preflight_state"], "ready_for_future_adapter_after_approval")
+            self.assertFalse(contract["preflight_summary"]["live_execution_allowed_now"])
+            self.assertTrue(contract["execution_inputs_contract"]["future_adapter_must_repeat_preflight"])
+            self.assertFalse(contract["execution_inputs_contract"]["credential_values_visible_to_ai"])
+            self.assertTrue(contract["future_allowed_actions_after_implementation_and_approval"]["read_header_metadata_only"])
+            self.assertTrue(contract["future_allowed_actions_after_implementation_and_approval"]["described_not_performed_in_this_release"])
+            self.assertFalse(contract["mail_material_output_contract"]["headers_returned_to_ai"])
+            self.assertFalse(contract["mail_material_output_contract"]["bodies_returned_to_ai"])
+            self.assertFalse(contract["mail_material_output_contract"]["attachment_names_returned_to_ai"])
+            self.assertTrue(contract["receipt_contract"]["proposed_receipt_path"].startswith("receipts/imap/adapter-executions/"))
+            self.assertFalse(contract["receipt_contract"]["records_secret_values"])
+            self.assertFalse(contract["current_capability"]["live_imap_adapter_implemented"])
+            self.assertFalse(contract["current_capability"]["execution_receipt_write_implemented"])
+            self.assertFalse(contract["closed_actions"]["live_adapter_executed"])
+            self.assertFalse(contract["closed_actions"]["imap_connection_opened"])
+            self.assertFalse(contract["closed_actions"]["message_headers_read"])
+            self.assertFalse(contract["closed_actions"]["credential_value_read"])
+            self.assertEqual(contract["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), after_setup)
+            self.assertNotIn(approval_receipt, contract_output)
+            self.assertNotIn("keyring:naver-app-password", contract_output)
+            self.assertNotIn("env:NAVER_IMAP_USERNAME", contract_output)
+            self.assertNotIn("imap:account:naver-personal", contract_output)
+            self.assertNotIn("imap:mailbox:inbox", contract_output)
+            self.assertNotIn(str(archive_root), contract_output)
+
     def test_imap_mailbox_selection_plan_is_read_only_and_does_not_list_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
