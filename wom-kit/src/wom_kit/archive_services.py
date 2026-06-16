@@ -33696,6 +33696,14 @@ def derived_text_coverage(
             "missing_items_truncated": missing_count > len(missing_items),
             "blocked_items_truncated": blocked_count > len(blocked_items),
         },
+        "completeness_signal": derived_text_completeness_signal(
+            manifest_record_count=len(manifest_records),
+            derived_text_record_count=len(derived_records),
+            textual_candidate_count=textual_candidate_count,
+            covered_textual_count=covered_textual_count,
+            missing_derived_text_count=missing_count,
+            needs_password_or_encrypted_count=blocked_count,
+        ),
         "manifest_counts": {
             "object_manifest_record_count": len(manifest_records),
             "derived_text_record_count": len(derived_records),
@@ -33717,6 +33725,67 @@ def derived_text_coverage(
         ],
         "blockers": unique_preserve_order(blockers + (["missing_derived_text"] if missing_count else [])),
         "warnings": unique_preserve_order(warnings),
+    }
+
+
+def derived_text_completeness_signal(
+    *,
+    manifest_record_count: int,
+    derived_text_record_count: int,
+    textual_candidate_count: int,
+    covered_textual_count: int,
+    missing_derived_text_count: int,
+    needs_password_or_encrypted_count: int,
+) -> dict[str, Any]:
+    if manifest_record_count == 0:
+        state = "no_manifested_objets"
+    elif missing_derived_text_count:
+        state = "manifest_scoped_incomplete"
+    elif needs_password_or_encrypted_count:
+        state = "manifest_scoped_with_blocked_items"
+    else:
+        state = "manifest_scoped_text_coverage_passed"
+    return {
+        "lifecycle_action": "derived_text_completeness_signal",
+        "state": state,
+        "scope_kind": "manifest_scoped",
+        "scope_source_of_truth": [
+            "objects/manifests/files.jsonl",
+            DERIVED_TEXT_MANIFEST_RELATIVE_PATH,
+        ],
+        "full_mirror_claimed": False,
+        "full_mirror_proof_present": False,
+        "operator_reading": (
+            "This signal covers manifested objets only. It is not proof that an external "
+            "workspace, mailbox, cloud drive, or export has been fully mirrored."
+        ),
+        "counts": {
+            "manifest_record_count": manifest_record_count,
+            "derived_text_record_count": derived_text_record_count,
+            "textual_candidate_count": textual_candidate_count,
+            "covered_textual_count": covered_textual_count,
+            "missing_derived_text_count": missing_derived_text_count,
+            "needs_password_or_encrypted_count": needs_password_or_encrypted_count,
+        },
+        "cannot_prove": [
+            "external_workspace_fully_exported",
+            "external_mailbox_fully_mirrored",
+            "cloud_drive_fully_mirrored",
+            "notion_or_workspace_full_account_coverage",
+            "unmanifested_local_files_absent",
+        ],
+        "next_safe_actions": [
+            "Treat passed coverage as derived-text coverage for manifested objets, not full source mirror completion.",
+            "Record a separate source/export mirror receipt before claiming full external account coverage.",
+            "Keep partial exports labeled partial until a human-reviewed mirror manifest exists.",
+        ],
+        "closed_actions": {
+            "source_file_body_read": False,
+            "external_workspace_scanned": False,
+            "provider_api_called": False,
+            "files_written": False,
+            "secrets_read": False,
+        },
     }
 
 
