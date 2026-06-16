@@ -39,6 +39,8 @@ Commands:
           Print the read-only future execution contract before any live IMAP adapter exists.
   imap-mailbox-header-metadata-scan
           Run the first approval-gated local IMAP header metadata scan.
+  imap-mailbox-header-scan-receipt-audit
+          Audit a non-secret IMAP header metadata scan execution receipt.
   prehashed-objet-ledger
           Preview or approve-register an already-hashed external objet ledger without reading blob bytes.
   resolve-objet-ref
@@ -5834,6 +5836,52 @@ def command_imap_mailbox_header_metadata_scan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_imap_mailbox_header_scan_receipt_audit(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.imap_mailbox_header_scan_receipt_audit(
+            Path(args.archive_root),
+            execution_receipt=args.execution_receipt,
+            reviewed_by=args.reviewed_by,
+            dry_run=args.dry_run,
+            approve=args.approve,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("execution_receipt_summary") if isinstance(result.get("execution_receipt_summary"), dict) else {}
+        print(f"IMAP header scan receipt audit {result.get('audit_state') or '-'}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Execution status: {summary.get('execution_status') or '-'}")
+        print(f"Candidates: {summary.get('candidate_count') or 0}")
+        print(f"Headers fetched: {summary.get('headers_fetched_count') or 0}")
+        print(f"Audit receipt: {result.get('audit_receipt_path') or result.get('proposed_audit_receipt_path') or '-'}")
+        print("IMAP connection opened: no")
+        print("Secrets read: no")
+        writes = result.get("files_written") or []
+        if writes:
+            print("Files written:")
+            for path in writes:
+                print(f"- {path}")
+        else:
+            print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_imap_mailbox_adapter_manifest_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("imap-mailbox-adapter-manifest-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -10716,6 +10764,35 @@ def build_parser() -> argparse.ArgumentParser:
     imap_mailbox_header_metadata_scan.add_argument("--approve", action="store_true", help="Run the local header metadata scan and write a non-secret receipt.")
     imap_mailbox_header_metadata_scan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     imap_mailbox_header_metadata_scan.set_defaults(func=command_imap_mailbox_header_metadata_scan)
+
+    imap_mailbox_header_scan_receipt_audit = subcommands.add_parser(
+        "imap-mailbox-header-scan-receipt-audit",
+        aliases=["imap-header-scan-receipt-audit", "mailbox-header-scan-audit"],
+        help="Audit a non-secret IMAP header metadata scan execution receipt.",
+    )
+    imap_mailbox_header_scan_receipt_audit.add_argument("archive_root", help="Archive root to inspect.")
+    imap_mailbox_header_scan_receipt_audit.add_argument(
+        "--execution-receipt",
+        required=True,
+        help="Archive-relative receipts/imap/adapter-executions/*.json path. The exact path is not echoed in JSON output.",
+    )
+    imap_mailbox_header_scan_receipt_audit.add_argument(
+        "--reviewed-by",
+        default="human:pending-review",
+        help="Safe non-secret reviewer label. Required to be non-empty with --approve.",
+    )
+    imap_mailbox_header_scan_receipt_audit.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate the receipt and preview the audit receipt without writing files.",
+    )
+    imap_mailbox_header_scan_receipt_audit.add_argument(
+        "--approve",
+        action="store_true",
+        help="Write a non-secret audit receipt after validation passes.",
+    )
+    imap_mailbox_header_scan_receipt_audit.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    imap_mailbox_header_scan_receipt_audit.set_defaults(func=command_imap_mailbox_header_scan_receipt_audit)
 
     sources = subcommands.add_parser("sources", help="Inspect source bindings and source map status.")
     sources.add_argument("archive_root", help="Archive root to inspect.")

@@ -147,6 +147,7 @@ Onboarding and setup plans:
 - [IMAP Mailbox Adapter Preflight Plan](imap-mailbox-adapter-preflight-plan.md)
 - [IMAP Mailbox Adapter Execution Contract](imap-mailbox-adapter-execution-contract.md)
 - [IMAP Mailbox Header Metadata Scan](imap-mailbox-header-metadata-scan.md)
+- [IMAP Mailbox Header Scan Receipt Audit](imap-mailbox-header-scan-receipt-audit.md)
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)
 - [Objet Ref Resolution](objet-ref-resolution.md)
 - [Zettel Objet Links](zettel-objet-links.md)
