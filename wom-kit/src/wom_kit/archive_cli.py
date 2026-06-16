@@ -2007,6 +2007,46 @@ def command_human_artifact_store(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_external_export_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("external-export-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.external_export_plan(
+            Path(args.archive_root),
+            source=args.source,
+            export_goal=args.export_goal,
+            media_policy=args.media_policy,
+            estimated_media_gb=args.estimated_media_gb,
+            dry_run=args.dry_run,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result["ok"] else "blocked"
+        recommended = result.get("recommended_export_mode") if isinstance(result.get("recommended_export_mode"), dict) else {}
+        print(f"External export plan {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source: {result.get('source') or '-'}")
+        print(f"Risk: {result.get('risk_level') or '-'}")
+        print(f"Recommended mode: {recommended.get('mode') or '-'}")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
     if args.dry_run == args.approve:
         print("prehashed-objet-ledger requires exactly one of --dry-run or --approve.", file=sys.stderr)
@@ -9681,6 +9721,38 @@ def build_parser() -> argparse.ArgumentParser:
     derive_text_agent_contract_alias.add_argument("--dry-run", action="store_true", help="Required; read-only agent contract.")
     derive_text_agent_contract_alias.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     derive_text_agent_contract_alias.set_defaults(func=command_derive_text_agent_contract)
+
+    external_export_plan = subcommands.add_parser(
+        "external-export-plan",
+        help="Plan a text-first external export before large media downloads.",
+    )
+    external_export_plan.add_argument("archive_root", help="Archive root to inspect.")
+    external_export_plan.add_argument(
+        "--source",
+        required=True,
+        choices=sorted(archive_services.EXTERNAL_EXPORT_PLAN_SOURCES),
+        help="External source/export surface to plan.",
+    )
+    external_export_plan.add_argument(
+        "--export-goal",
+        default="text_only",
+        choices=sorted(archive_services.EXTERNAL_EXPORT_GOALS),
+        help="Human-reviewed export goal.",
+    )
+    external_export_plan.add_argument(
+        "--media-policy",
+        default="avoid_bulk_media",
+        choices=sorted(archive_services.EXTERNAL_EXPORT_MEDIA_POLICIES),
+        help="How to treat uploaded files and large media before export.",
+    )
+    external_export_plan.add_argument(
+        "--estimated-media-gb",
+        type=float,
+        help="Optional rough media-size estimate for risk classification.",
+    )
+    external_export_plan.add_argument("--dry-run", action="store_true", help="Required; read-only export preflight.")
+    external_export_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    external_export_plan.set_defaults(func=command_external_export_plan)
 
     import_external = subcommands.add_parser("import-external", help="Import Notion or Google Drive exports as inbox drafts.")
     import_external.add_argument("archive_root", help="Target archive root.")
