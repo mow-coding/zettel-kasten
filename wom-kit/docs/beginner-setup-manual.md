@@ -1,7 +1,7 @@
 # Beginner Setup Manual
 
-Status: v0.3.48 read-only beginner setup manual
-Date: 2026-06-15
+Status: v0.3.64 read-only beginner setup manual with object storage setup screens
+Date: 2026-06-16
 
 This document is the beginner-facing bridge between recommendations and actual
 first-use setup.
@@ -37,6 +37,7 @@ Supported topics:
 - `credential_vault`
 - `credential_bulk_migration`
 - `derived_text_tools`
+- `object_storage_setup_manual`
 
 ## What It Explains
 
@@ -56,6 +57,8 @@ The manual explains:
 - how to prepare derived-text tools such as LibreOffice and Tesseract,
 - how to use a private local `--tool-hints` JSON file when a tool is installed
   but not on `PATH`,
+- how to walk through Cloudflare R2 bucket and API token setup fields without
+  inventing bucket names, token permissions, or public-access choices,
 - which dry-run commands to run next.
 
 ## Beginner Rules
@@ -201,6 +204,81 @@ archive derive-text-doctor <archive-root> \
 The doctor checks whether hinted files exist. It does not execute the tools and
 does not echo the hint file path or executable paths.
 
+## Object Storage Setup Manual
+
+For Cloudflare R2 setup, run:
+
+```bash
+archive beginner-setup-manual <archive-root> \
+  --topic object_storage_setup_manual \
+  --dry-run \
+  --format json
+```
+
+This topic exists because recommending a provider is not enough. A beginner also
+needs the next exact bucket name, the setup screen fields, and the token/ref
+bridge.
+
+The manual tells the human to run `object-storage-recommendation` first and use
+the returned bucket name. Do not invent a nicer name. The WOM default naming
+rule is:
+
+```text
+zettel-kasten-<profile-slug>-objets
+```
+
+For a first private personal archive on Cloudflare R2, the v0.3.64 walkthrough
+recommends:
+
+```text
+Bucket name: use the value returned by WOM
+Location: None / automatic selection
+Jurisdiction: do not specify by default
+Default storage class: Standard
+Public access: disabled / private
+API token permission: Object Read & Write
+API token bucket scope: specific bucket only
+TTL / expiration: set a reviewed expiration when practical
+Client IP filtering: use only when the human has a stable known IP/CIDR
+Secret handling: store Access Key ID and Secret Access Key in a vault/keyring/env flow, never in chat
+```
+
+The Cloudflare-specific recommendations are based on official docs checked for
+this release:
+
+- [R2 S3 setup](https://developers.cloudflare.com/r2/get-started/s3/)
+- [R2 data location](https://developers.cloudflare.com/r2/reference/data-location/)
+- [R2 storage classes](https://developers.cloudflare.com/r2/buckets/storage-classes/)
+- [R2 pricing](https://developers.cloudflare.com/r2/pricing/)
+- [R2 public buckets](https://developers.cloudflare.com/r2/buckets/public-buckets/)
+- [Cloudflare token restrictions](https://developers.cloudflare.com/fundamentals/api/how-to/restrict-tokens/)
+
+Interpretation notes:
+
+- Location `None` means automatic placement. Choose a location hint only if the
+  human knows the access pattern needs it.
+- Jurisdiction restrictions are for data residency or compliance needs. If the
+  human does not have such a requirement, do not guess one.
+- Standard storage is the beginner default because Infrequent Access has
+  retrieval fees and a minimum storage duration. Infrequent Access may be right
+  for cold archives, but only after reviewing expected read/copy behavior and
+  current pricing.
+- Public development URLs and custom-domain public access are not part of the
+  private WOM archive setup path.
+
+Safe dry-run chain:
+
+```text
+object-storage-recommendation
+-> beginner-setup-manual --topic object_storage_setup_manual
+-> object-storage --dry-run
+-> create bucket/token manually in Cloudflare only after human review
+-> credential-ref-plan for the token ref
+```
+
+The manual still does not open Cloudflare, create a bucket, create an API token,
+read secrets, write secrets, upload files, call provider APIs, or write files.
+
 ## Related Dry-Run Chain
 
 Credential setup:
@@ -225,6 +303,16 @@ beginner-setup-manual
 -> derive-text capture
 ```
 
+Object-storage setup:
+
+```text
+object-storage-recommendation
+-> beginner-setup-manual --topic object_storage_setup_manual
+-> object-storage --dry-run
+-> credential-ref-plan
+-> object-storage-operation-request-plan
+```
+
 ## Closed Actions
 
 `beginner-setup-manual` does not:
@@ -236,6 +324,9 @@ beginner-setup-manual
 - open a keyring,
 - open a browser password store,
 - read environment variables,
+- open provider dashboards,
+- create buckets,
+- create API tokens,
 - install tools,
 - execute tools,
 - write a tool-hints file,

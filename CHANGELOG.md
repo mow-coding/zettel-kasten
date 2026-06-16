@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.64 - 2026-06-16
+
+- Added `archive beginner-setup-manual <archive-root> --topic
+  object_storage_setup_manual --dry-run --format json`.
+- Extended `archive object-storage-recommendation` so the recommendation output
+  surfaces the proposed bucket name, the bucket naming rule, the exact
+  `beginner-setup-manual --topic object_storage_setup_manual` command, and the
+  exact `archive object-storage --dry-run` command.
+- Added Cloudflare R2 bucket/API-token setup guidance for beginner fields:
+  Location, Jurisdiction, Standard storage default, private/public-access
+  boundary, Object Read & Write permission, single-bucket scope, TTL/IP
+  restriction tradeoffs, and credential-ref bridging.
+- Kept the flow read-only: no provider APIs are called, no live pricing or
+  bucket availability is checked, no bucket/API token is created, no object
+  bytes are read, no files are uploaded, no secrets are read, and no provider
+  URLs or secret values are echoed by CLI JSON.
+
 ## v0.3.63 - 2026-06-16
 
 - Added `archive imap-mailbox-header-scan-receipt-audit <archive-root>

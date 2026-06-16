@@ -1508,6 +1508,9 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["proposed_objet_prefix"], "archives/archive:personal:fake-life/objets/")
             self.assertEqual(result["proposed_visibility"], "private")
             self.assertEqual(result["provider"], "cloudflare-r2")
+            self.assertEqual(result["provider_setup_guidance"]["provider"], "cloudflare-r2")
+            self.assertEqual(result["provider_setup_guidance"]["bucket_creation"]["fields"][0]["recommended_value"], "zettel-kasten-username-objets")
+            self.assertEqual(result["provider_setup_guidance"]["api_token"]["fields"][1]["recommended_value"], "Object Read & Write")
             self.assertFalse(result["provider_setup_receipt_preview"]["external_actions"]["provider_api_called"])
             self.assertFalse(result["provider_setup_receipt_preview"]["external_actions"]["files_uploaded"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
@@ -1542,12 +1545,35 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["lifecycle_action"], "object_storage_recommendation")
             self.assertEqual(result["primary_recommendation"]["provider"], "cloudflare-r2")
             self.assertTrue(result["primary_recommendation"]["s3_compatible_path"])
+            self.assertEqual(result["recommended_setup_values"]["provider"], "cloudflare-r2")
+            self.assertEqual(result["recommended_setup_values"]["bucket_name"], "zettel-kasten-username-objets")
+            self.assertEqual(result["recommended_setup_values"]["bucket_naming_rule"], "zettel-kasten-<profile-slug>-objets")
+            self.assertTrue(result["recommended_setup_values"]["do_not_invent_bucket_names"])
+            self.assertIn("object_storage_setup_manual", result["next_exact_commands"])
+            self.assertIn("object_storage_dry_run", result["next_exact_commands"])
             self.assertIn("object-storage", result["setup_bridge"]["planner_command"])
             self.assertIn("--provider cloudflare-r2", result["setup_bridge"]["planner_command"])
+            self.assertIn("--bucket-name zettel-kasten-username-objets", result["setup_bridge"]["planner_command"])
+            self.assertEqual(result["setup_bridge"]["proposed_bucket_name"], "zettel-kasten-username-objets")
+            self.assertTrue(result["setup_bridge"]["do_not_invent_bucket_names"])
+            self.assertEqual(result["setup_bridge"]["provider_setup_guidance"]["provider"], "cloudflare-r2")
+            self.assertEqual(result["setup_bridge"]["provider_setup_guidance"]["bucket_creation"]["fields"][0]["recommended_value"], "zettel-kasten-username-objets")
+            self.assertEqual(
+                result["setup_bridge"]["provider_setup_guidance"]["bucket_creation"]["fields"][3]["recommended_value"],
+                "Standard",
+            )
+            self.assertEqual(
+                result["setup_bridge"]["provider_setup_guidance"]["api_token"]["fields"][1]["recommended_value"],
+                "Object Read & Write",
+            )
+            self.assertIn("Apply to specific buckets only", result["setup_bridge"]["provider_setup_guidance"]["api_token"]["fields"][2]["recommended_value"])
             self.assertFalse(result["setup_bridge"]["bucket_availability_checked"])
+            self.assertTrue(result["current_capability"]["bucket_name_surface_available"])
+            self.assertTrue(result["current_capability"]["provider_setup_screen_guidance_available"])
             self.assertFalse(result["current_capability"]["live_price_lookup_implemented"])
             self.assertFalse(result["current_capability"]["provider_api_call_implemented"])
             self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["api_token_created"])
             self.assertFalse(result["closed_actions"]["presigned_url_created"])
             self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
             self.assertEqual(result["would_change"], [])
@@ -3867,6 +3893,70 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(result["privacy_guards"]["csv_paths_echoed"])
             self.assertEqual(result["would_change"], [])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn("C:\\", serialized)
+            self.assertNotIn("sk-proj-", serialized)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+
+    def test_beginner_setup_manual_guides_cloudflare_r2_setup_without_provider_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "beginner-setup-manual",
+                    str(archive_root),
+                    "--topic",
+                    "object_storage_setup_manual",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["topic"], "object_storage_setup_manual")
+            self.assertTrue(result["manual_contract"]["provider_dashboard_field_walkthrough_available"])
+            self.assertIn("object-storage-recommendation", result["cross_links"])
+            self.assertIn("object-storage", result["cross_links"])
+            self.assertTrue(any("object-storage-recommendation" in command for command in result["command_checklist"]))
+            self.assertTrue(any("--bucket-name zettel-kasten-<safe-profile-slug>-objets" in command for command in result["command_checklist"]))
+            self.assertTrue(any("credential-ref-plan" in command for command in result["command_checklist"]))
+
+            section_ids = [section["section_id"] for section in result["sections"]]
+            self.assertEqual(section_ids, ["first_rule", "object_storage_setup_manual"])
+            section = result["sections"][1]
+            self.assertEqual(section["provider"], "cloudflare-r2")
+            self.assertEqual(section["example_bucket_name"], "zettel-kasten-<profile-slug>-objets")
+            walkthrough = section["field_walkthrough"]
+            self.assertEqual(walkthrough["provider"], "cloudflare-r2")
+            self.assertTrue(walkthrough["guidance_available"])
+            bucket_fields = {field["field"]: field for field in walkthrough["bucket_creation"]["fields"]}
+            self.assertEqual(bucket_fields["Bucket name"]["recommended_value"], "zettel-kasten-profile-slug-objets")
+            self.assertEqual(bucket_fields["Location"]["recommended_value"], "None / automatic selection")
+            self.assertEqual(bucket_fields["Jurisdiction"]["recommended_value"], "Do not specify by default")
+            self.assertEqual(bucket_fields["Default storage class"]["recommended_value"], "Standard")
+            self.assertEqual(bucket_fields["Public access"]["recommended_value"], "Disabled / private")
+            token_fields = {field["field"]: field for field in walkthrough["api_token"]["fields"]}
+            self.assertEqual(token_fields["Permissions"]["recommended_value"], "Object Read & Write")
+            self.assertIn("specific buckets", token_fields["Bucket scope"]["recommended_value"])
+            self.assertIn("expiration", token_fields["TTL / expiration"]["recommended_value"])
+            self.assertIn("stable known IP/CIDR", token_fields["Client IP filtering"]["recommended_value"])
+            self.assertEqual(walkthrough["wom_ref_bridge"]["credential_kind"], "object_storage_token")
+            self.assertFalse(walkthrough["closed_actions"]["provider_api_called"])
+            self.assertFalse(walkthrough["closed_actions"]["bucket_created"])
+            self.assertFalse(walkthrough["closed_actions"]["api_token_created"])
+            self.assertFalse(result["closed_actions"]["provider_dashboard_opened"])
+            self.assertFalse(result["closed_actions"]["bucket_created"])
+            self.assertFalse(result["closed_actions"]["api_token_created"])
+            self.assertFalse(result["privacy_guards"]["secret_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["bucket_names_invented"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn("https://", serialized)
             self.assertNotIn("C:\\", serialized)
             self.assertNotIn("sk-proj-", serialized)
             self.assertNotIn(str(archive_root.resolve()), serialized)

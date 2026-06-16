@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.63 pre-release
+v0.3.64 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -41,8 +41,8 @@ What exists today:
 - read-only derived-text coverage/toolchain/doctor/agent-contract gates, manifest-scoped completeness signals, including non-echoed tool-hint paths for PATH-missing local extractors, plus approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
 - approval-gated `.gitignore` repair for missing WOM-kit safe defaults,
 - human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
-- read-only beginner setup manual with KeePassXC first-vault field walkthroughs and KeePassXC CSV bulk migration import/merge guidance, connected accounts bridge with separate credential-catalog status, plus read-only credential reference planning, inventory, external store recommendation, vault onboarding planning, credential semantic extraction recipe, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, CLI-only KeePassXC write execution with non-secret execution receipts, adapter readiness planning, adapter manifest preview, and adapter audit receipt preview for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
-- read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces, plus manifest-aware object-storage recommendation matching, adapter readiness planning, operation request packaging, and presigned URL planning before live provider adapters,
+- read-only beginner setup manual with KeePassXC first-vault field walkthroughs, KeePassXC CSV bulk migration import/merge guidance, and Cloudflare R2 bucket/API-token field walkthroughs, connected accounts bridge with separate credential-catalog status, plus read-only credential reference planning, inventory, external store recommendation, vault onboarding planning, credential semantic extraction recipe, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, CLI-only KeePassXC write execution with non-secret execution receipts, adapter readiness planning, adapter manifest preview, and adapter audit receipt preview for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
+- read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces, plus manifest-aware object-storage recommendation matching with surfaced bucket names, exact next commands, Cloudflare R2 setup field guidance, adapter readiness planning, operation request packaging, and presigned URL planning before live provider adapters,
 - read-only IMAP mailbox source planning, operation request packaging, schema-validated adapter manifest previews, approval-gated local adapter manifest writes, adapter readiness checks, mailbox selection planning, adapter audit receipt previews, approval-gated local adapter audit receipt writes, adapter preflight checks, adapter execution-contract planning, a first approval-gated local IMAP header metadata scan for Gmail, Naver, and generic IMAP account refs, and an offline audit checkpoint for those header scan execution receipts,
 - documented Notion page snapshot and `store-ref` boundaries for page/block JSON exports,
 - read-only objet reference resolution, presigned URL planning, and zettel objet link previews for mapping `sha256:<hex>` refs to safe local/external candidates without creating provider URLs,
@@ -264,7 +264,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.63
+v0.3.64
 v0.3.61
 v0.3.60
 v0.3.59
