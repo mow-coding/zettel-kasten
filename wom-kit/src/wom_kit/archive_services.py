@@ -15629,6 +15629,206 @@ def imap_mailbox_material_capture_request_plan(
     }
 
 
+def imap_mailbox_material_capture_execution_contract(
+    archive_root: Path | str,
+    *,
+    material_selection_receipt: str,
+    capture_action: str = "message_body_capture",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("imap-mailbox-material-capture-execution-contract is read-only and requires --dry-run.")
+
+    request_plan = imap_mailbox_material_capture_request_plan(
+        root,
+        material_selection_receipt=material_selection_receipt,
+        capture_action=capture_action,
+        dry_run=True,
+    )
+    blockers.extend(str(item) for item in request_plan.get("blockers") or [])
+    warnings.extend(str(item) for item in request_plan.get("warnings") or [])
+
+    normalized_action = str(request_plan.get("capture_action") or "message_body_capture")
+    material_summary = (
+        request_plan.get("material_selection_summary")
+        if isinstance(request_plan.get("material_selection_summary"), dict)
+        else {}
+    )
+    capture_request = (
+        request_plan.get("capture_request")
+        if isinstance(request_plan.get("capture_request"), dict)
+        else {}
+    )
+    closed_request_actions = (
+        request_plan.get("closed_actions")
+        if isinstance(request_plan.get("closed_actions"), dict)
+        else {}
+    )
+    privacy_guards = (
+        request_plan.get("privacy_guards")
+        if isinstance(request_plan.get("privacy_guards"), dict)
+        else {}
+    )
+    redaction_check = (
+        request_plan.get("redaction_check")
+        if isinstance(request_plan.get("redaction_check"), dict)
+        else {}
+    )
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "imap_mailbox_material_capture_execution_contract",
+        "archive_id": archive_id,
+        "contract_state": "contract_ready_for_future_material_capture_implementation"
+        if not blockers
+        else "blocked",
+        "capture_action": normalized_action,
+        "material_selection_summary": material_summary,
+        "request_summary": {
+            "request_state": request_plan.get("request_state"),
+            "requires_separate_execution_approval": capture_request.get("requires_separate_execution_approval") is True,
+            "requires_credential_policy_check": capture_request.get("requires_credential_policy_check") is True,
+            "requires_future_live_adapter": capture_request.get("requires_future_live_adapter") is True,
+            "selected_count": material_summary.get("selected_count")
+            if isinstance(material_summary.get("selected_count"), int)
+            else None,
+            "selected_index_basis": capture_request.get("selected_index_basis"),
+            "material_selection_receipt_path_echoed": False,
+            "execution_receipt_path_echoed": False,
+            "candidate_refs_echoed": False,
+            "message_material_read_now": False,
+        },
+        "future_adapter_contract": {
+            "execution_mode": "future_local_cli",
+            "allowed_actions_after_implementation_and_approval": {
+                "read_selected_message_bodies": normalized_action == "message_body_capture",
+                "read_selected_attachments": normalized_action == "attachment_capture",
+                "create_mail_derived_text": normalized_action == "derived_text_capture",
+                "described_not_performed_in_this_release": True,
+            },
+            "required_inputs": [
+                "material_selection_receipt",
+                "capture_action",
+                "separate_material_capture_execution_approval_receipt",
+                "credential_policy_pass",
+                "credential_broker_or_safe_credential_refs",
+                "adapter_manifest_and_preflight_pass",
+            ],
+            "output_receipt_contract": {
+                "receipt_kind": "imap_mailbox_material_capture",
+                "lifecycle_action": "imap_mailbox_material_capture",
+                "must_include": [
+                    "material_selection_receipt_sha256",
+                    "capture_action",
+                    "selected_indexes",
+                    "selected_count",
+                    "selected_index_basis",
+                    "result_status",
+                    "redaction",
+                    "closed_actions",
+                ],
+                "must_not_include": [
+                    "credential_values",
+                    "credential_refs",
+                    "env_var_names",
+                    "imap_host_values",
+                    "mailbox_refs",
+                    "material_selection_receipt_path",
+                    "execution_receipt_path",
+                    "candidate_refs",
+                    "raw_message_uids",
+                    "message_id_values",
+                    "subject_values",
+                    "sender_values",
+                    "recipient_values",
+                    "attachment_names",
+                    "attachment_bytes",
+                    "local_absolute_paths",
+                    "tokens",
+                    "secret_values",
+                ],
+                "source_material_storage": "future_receipt_may_reference_archive_relative_objet_or_derived_text_records_only",
+            },
+            "redaction_rules": {
+                "credential_values_included": False,
+                "credential_refs_included": False,
+                "env_var_names_included": False,
+                "imap_host_included": False,
+                "mailbox_ref_included": False,
+                "material_selection_receipt_path_included": False,
+                "execution_receipt_path_included": False,
+                "candidate_refs_included": False,
+                "message_uid_values_included": False,
+                "message_id_values_included": False,
+                "headers_included": False,
+                "bodies_included_in_receipt": False,
+                "attachment_names_included": False,
+                "attachment_bytes_included": False,
+                "local_absolute_paths_included": False,
+                "secret_values_included": False,
+            },
+        },
+        "redaction_check": redaction_check,
+        "current_capability": {
+            "material_capture_execution_contract_implemented": True,
+            "material_capture_request_plan_implemented": True,
+            "material_selection_receipt_read_implemented": True,
+            "message_body_capture_implemented": False,
+            "attachment_capture_implemented": False,
+            "derived_text_capture_implemented": False,
+            "future_live_adapter_implemented": False,
+        },
+        "closed_actions": {
+            "material_selection_receipt_read": closed_request_actions.get("material_selection_receipt_read") is True,
+            "execution_receipt_read": False,
+            "live_adapter_executed": False,
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "mailbox_selected": False,
+            "mailbox_searched": False,
+            "message_uids_read": False,
+            "message_ids_read": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "derived_text_created": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "oauth_started": False,
+            "provider_api_called": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            **privacy_guards,
+            "material_selection_receipt_path_echoed": False,
+            "execution_receipt_path_echoed": False,
+            "candidate_refs_echoed": False,
+            "candidate_refs_recorded": False,
+            "local_absolute_paths_echoed": False,
+        },
+        "would_change": [],
+        "files_written": [],
+        "next_safe_actions": [
+            "Keep using this as a contract only until a separately approved live material capture adapter exists.",
+            "Require a new execution approval receipt before any future command reads selected message material.",
+            "Use output receipt redaction rules as release-blocking tests for any future live material capture command.",
+        ]
+        if not blockers
+        else ["Resolve blockers before treating the material capture execution contract as ready."],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
 def credential_ref_plan(
     archive_root: Path | str,
     *,
