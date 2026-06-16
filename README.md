@@ -25,7 +25,7 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.62 pre-release
+v0.3.63 pre-release
 ```
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -43,7 +43,7 @@ What exists today:
 - human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
 - read-only beginner setup manual with KeePassXC first-vault field walkthroughs and KeePassXC CSV bulk migration import/merge guidance, connected accounts bridge with separate credential-catalog status, plus read-only credential reference planning, inventory, external store recommendation, vault onboarding planning, credential semantic extraction recipe, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, CLI-only KeePassXC write execution with non-secret execution receipts, adapter readiness planning, adapter manifest preview, and adapter audit receipt preview for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
 - read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces, plus manifest-aware object-storage recommendation matching, adapter readiness planning, operation request packaging, and presigned URL planning before live provider adapters,
-- read-only IMAP mailbox source planning, operation request packaging, schema-validated adapter manifest previews, approval-gated local adapter manifest writes, adapter readiness checks, mailbox selection planning, adapter audit receipt previews, approval-gated local adapter audit receipt writes, adapter preflight checks, adapter execution-contract planning, and a first approval-gated local IMAP header metadata scan for Gmail, Naver, and generic IMAP account refs,
+- read-only IMAP mailbox source planning, operation request packaging, schema-validated adapter manifest previews, approval-gated local adapter manifest writes, adapter readiness checks, mailbox selection planning, adapter audit receipt previews, approval-gated local adapter audit receipt writes, adapter preflight checks, adapter execution-contract planning, a first approval-gated local IMAP header metadata scan for Gmail, Naver, and generic IMAP account refs, and an offline audit checkpoint for those header scan execution receipts,
 - documented Notion page snapshot and `store-ref` boundaries for page/block JSON exports,
 - read-only objet reference resolution, presigned URL planning, and zettel objet link previews for mapping `sha256:<hex>` refs to safe local/external candidates without creating provider URLs,
 - approval-gated local write paths for selected private archive, foreign-block review records, and the first v0.3.0 shared update attestation/review record,
@@ -140,6 +140,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [IMAP Mailbox Adapter Preflight Plan](wom-kit/docs/imap-mailbox-adapter-preflight-plan.md)
 - [IMAP Mailbox Adapter Execution Contract](wom-kit/docs/imap-mailbox-adapter-execution-contract.md)
 - [IMAP Mailbox Header Metadata Scan](wom-kit/docs/imap-mailbox-header-metadata-scan.md)
+- [IMAP Mailbox Header Scan Receipt Audit](wom-kit/docs/imap-mailbox-header-scan-receipt-audit.md)
 - [Notion Page Snapshot Model](wom-kit/docs/notion-page-snapshot-model.md)
 - [Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)
 - [Presigned URL Plan](wom-kit/docs/presigned-url-plan.md)
@@ -263,7 +264,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.62
+v0.3.63
 v0.3.61
 v0.3.60
 v0.3.59

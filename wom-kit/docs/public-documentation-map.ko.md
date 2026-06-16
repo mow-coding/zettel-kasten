@@ -140,6 +140,7 @@
 - [IMAP Mailbox Adapter Preflight Plan](imap-mailbox-adapter-preflight-plan.md)
 - [IMAP Mailbox Adapter Execution Contract](imap-mailbox-adapter-execution-contract.md)
 - [IMAP Mailbox Header Metadata Scan](imap-mailbox-header-metadata-scan.md)
+- [IMAP Mailbox Header Scan Receipt Audit](imap-mailbox-header-scan-receipt-audit.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
 - [WOM Profile Registry](wom-profile-registry.md)
 - [WOM Profile Wallet Model](wom-profile-wallet-model.md)

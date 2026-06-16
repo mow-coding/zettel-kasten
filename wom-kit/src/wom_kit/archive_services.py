@@ -1276,6 +1276,7 @@ IMAP_MAILBOX_ADAPTER_MANIFESTS_DIR = "config/imap-adapters"
 IMAP_MAILBOX_ADAPTER_MANIFEST_WRITE_RECEIPTS_DIR = "receipts/imap/adapter-manifests"
 IMAP_MAILBOX_ADAPTER_AUDIT_RECEIPTS_DIR = "receipts/imap/adapter-audits"
 IMAP_MAILBOX_ADAPTER_EXECUTION_RECEIPTS_DIR = "receipts/imap/adapter-executions"
+IMAP_MAILBOX_ADAPTER_EXECUTION_AUDIT_RECEIPTS_DIR = "receipts/imap/adapter-execution-audits"
 IMAP_MAILBOX_ADAPTER_AUDIT_RESULT_STATUSES = {"not_run", "succeeded", "failed", "denied"}
 IMAP_MAILBOX_ADAPTER_EXECUTION_MODES = {"future_local_cli", "local_cli_dry_run_contract"}
 IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT = 100
@@ -14248,6 +14249,371 @@ def imap_mailbox_header_metadata_scan_receipt_payload(
             "attachment_names_included": False,
             "attachment_bytes_included": False,
             "local_absolute_paths_included": False,
+        },
+    }
+
+
+def imap_mailbox_header_scan_receipt_audit(
+    archive_root: Path | str,
+    *,
+    execution_receipt: str,
+    reviewed_by: str | None = None,
+    dry_run: bool = True,
+    approve: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+
+    receipt_relative = (execution_receipt or "").strip().replace("\\", "/")
+    if not receipt_relative:
+        blockers.append("execution_receipt is required.")
+    elif (
+        receipt_relative.startswith("/")
+        or ":" in receipt_relative
+        or "\x00" in receipt_relative
+        or ".." in receipt_relative.split("/")
+        or not receipt_relative.startswith(f"{IMAP_MAILBOX_ADAPTER_EXECUTION_RECEIPTS_DIR}/")
+        or not receipt_relative.endswith(".json")
+    ):
+        blockers.append("execution_receipt must be an archive-relative IMAP adapter execution receipt JSON path.")
+
+    resolved_reviewer = (reviewed_by or ("human:pending-review" if dry_run else "")).strip()
+    if approve and not resolved_reviewer:
+        blockers.append("reviewed_by is required when --approve writes an IMAP header scan receipt audit.")
+        resolved_reviewer = "human:required"
+    if not safe_source_intake_plan_scalar(resolved_reviewer):
+        blockers.append("reviewed_by must be a safe non-secret reviewer label.")
+        resolved_reviewer = "human:pending-review"
+
+    receipt_payload: dict[str, Any] = {}
+    receipt_text = ""
+    receipt_sha256: str | None = None
+    if not blockers:
+        receipt_path = archive_internal_path(root, receipt_relative)
+        if not receipt_path.is_file():
+            blockers.append("execution_receipt file is missing.")
+        else:
+            try:
+                receipt_text = receipt_path.read_text(encoding="utf-8")
+                receipt_sha256 = hashlib.sha256(receipt_text.encode("utf-8")).hexdigest()
+                loaded = json.loads(receipt_text)
+                if isinstance(loaded, dict):
+                    receipt_payload = loaded
+                else:
+                    blockers.append("execution_receipt must contain a JSON object.")
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                blockers.append("execution_receipt could not be read as UTF-8 JSON.")
+
+    result = receipt_payload.get("result") if isinstance(receipt_payload.get("result"), dict) else {}
+    redaction = receipt_payload.get("redaction") if isinstance(receipt_payload.get("redaction"), dict) else {}
+    receipt_kind_valid = receipt_payload.get("receipt_kind") == "imap_mailbox_header_metadata_scan"
+    lifecycle_valid = receipt_payload.get("lifecycle_action") == "imap_mailbox_header_metadata_scan"
+    if receipt_payload:
+        if not receipt_kind_valid:
+            blockers.append("execution_receipt is not an IMAP mailbox header metadata scan receipt.")
+        if not lifecycle_valid:
+            blockers.append("execution_receipt lifecycle action is not imap_mailbox_header_metadata_scan.")
+
+    execution_status = result.get("status") if isinstance(result.get("status"), str) else None
+    if receipt_payload and execution_status not in {"not_run", "succeeded", "failed"}:
+        blockers.append("execution_receipt result status is not a valid IMAP header scan status.")
+        execution_status = None
+
+    candidate_count = result.get("candidate_count")
+    headers_fetched_count = result.get("headers_fetched_count")
+    if receipt_payload and (not isinstance(candidate_count, int) or candidate_count < 0):
+        blockers.append("execution_receipt candidate_count must be a non-negative integer.")
+        candidate_count = None
+    if receipt_payload and (not isinstance(headers_fetched_count, int) or headers_fetched_count < 0):
+        blockers.append("execution_receipt headers_fetched_count must be a non-negative integer.")
+        headers_fetched_count = None
+    if isinstance(candidate_count, int) and isinstance(headers_fetched_count, int) and headers_fetched_count > candidate_count:
+        blockers.append("execution_receipt headers_fetched_count cannot exceed candidate_count.")
+
+    candidate_refs = result.get("candidate_refs")
+    candidate_refs_valid = isinstance(candidate_refs, list)
+    candidate_refs_count = len(candidate_refs) if isinstance(candidate_refs, list) else 0
+    candidate_refs_digest = (
+        hashlib.sha256(json.dumps(candidate_refs, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+        if isinstance(candidate_refs, list)
+        else None
+    )
+    if receipt_payload and not candidate_refs_valid:
+        blockers.append("execution_receipt candidate_refs must be a list of opaque candidate refs.")
+    elif isinstance(candidate_refs, list):
+        opaque_ref_re = re.compile(r"^imap-candidate:[0-9a-f]{64}$")
+        for candidate_ref in candidate_refs:
+            if not isinstance(candidate_ref, str) or not opaque_ref_re.match(candidate_ref):
+                blockers.append("execution_receipt candidate_refs must all be opaque imap-candidate hashes.")
+                break
+        if isinstance(headers_fetched_count, int) and candidate_refs_count != headers_fetched_count:
+            blockers.append("execution_receipt candidate_refs count must match headers_fetched_count.")
+
+    if receipt_payload and result.get("candidate_refs_are_opaque_hashes") is not True:
+        blockers.append("execution_receipt must mark candidate refs as opaque hashes.")
+
+    required_false_redaction_flags = (
+        "credential_values_included",
+        "credential_refs_included",
+        "env_var_names_included",
+        "imap_host_included",
+        "mailbox_ref_included",
+        "message_uid_values_included",
+        "message_id_values_included",
+        "headers_included",
+        "bodies_included",
+        "attachment_names_included",
+        "attachment_bytes_included",
+        "local_absolute_paths_included",
+    )
+    failed_redaction_flags: list[str] = []
+    if receipt_payload:
+        for flag in required_false_redaction_flags:
+            if redaction.get(flag) is not False:
+                failed_redaction_flags.append(flag)
+        if failed_redaction_flags:
+            blockers.append("execution_receipt redaction flags do not prove a non-secret header scan receipt.")
+
+    audit_receipt_id = imap_mailbox_header_scan_receipt_audit_id(
+        archive_id=archive_id,
+        execution_receipt_sha256=receipt_sha256 or "unread",
+        reviewed_by=resolved_reviewer,
+        created_at=now,
+    )
+    proposed_receipt_path = f"{IMAP_MAILBOX_ADAPTER_EXECUTION_AUDIT_RECEIPTS_DIR}/{audit_receipt_id}.json"
+    audit_receipt_path = archive_internal_path(root, proposed_receipt_path)
+    if not blockers and audit_receipt_path.exists():
+        blockers.append("IMAP header scan receipt audit already exists.")
+
+    receipt_written = False
+    files_written: list[str] = []
+    audit_receipt = imap_mailbox_header_scan_receipt_audit_payload(
+        archive_id=archive_id,
+        audit_receipt_id=audit_receipt_id,
+        created_at=now,
+        reviewed_by=resolved_reviewer,
+        execution_receipt_sha256=receipt_sha256,
+        execution_status=execution_status,
+        candidate_count=candidate_count if isinstance(candidate_count, int) else None,
+        headers_fetched_count=headers_fetched_count if isinstance(headers_fetched_count, int) else None,
+        candidate_refs_count=candidate_refs_count,
+        candidate_refs_digest=candidate_refs_digest,
+        failed_redaction_flags=failed_redaction_flags,
+        audit_state="passed" if not blockers else "blocked",
+    )
+
+    if approve and not blockers:
+        created_paths: list[Path] = []
+        created_dirs = missing_parent_dirs_before_write(root, [audit_receipt_path])
+        try:
+            audit_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_new_file(audit_receipt_path, audit_receipt)
+            created_paths.append(audit_receipt_path)
+            files_written = [proposed_receipt_path]
+            receipt_written = True
+        except OSError as exc:
+            for path in reversed(created_paths):
+                path.unlink(missing_ok=True)
+            cleanup_empty_archive_dirs(root, created_dirs)
+            raise ArchiveServiceError(f"Could not write IMAP header scan receipt audit: {exc}") from exc
+
+    would_change = [proposed_receipt_path] if dry_run and not blockers else []
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "approved": receipt_written,
+        "lifecycle_action": "imap_mailbox_header_scan_receipt_audit_plan" if dry_run else "imap_mailbox_header_scan_receipt_audit",
+        "archive_id": archive_id,
+        "audit_state": "written" if receipt_written else ("audit_ready" if not blockers else "blocked"),
+        "audit_receipt_path": proposed_receipt_path if receipt_written else None,
+        "proposed_audit_receipt_path": proposed_receipt_path,
+        "execution_receipt_summary": {
+            "receipt_loaded": bool(receipt_payload),
+            "execution_receipt_path_echoed": False,
+            "execution_receipt_sha256": receipt_sha256 if not blockers else None,
+            "receipt_kind_valid": receipt_kind_valid,
+            "lifecycle_action_valid": lifecycle_valid,
+            "execution_status": execution_status,
+            "candidate_count": candidate_count if isinstance(candidate_count, int) else None,
+            "headers_fetched_count": headers_fetched_count if isinstance(headers_fetched_count, int) else None,
+            "candidate_refs_count": candidate_refs_count,
+            "candidate_refs_echoed": False,
+            "candidate_refs_are_opaque_hashes": result.get("candidate_refs_are_opaque_hashes") is True,
+        },
+        "redaction_check": {
+            "ok": not failed_redaction_flags,
+            "required_false_flags": list(required_false_redaction_flags),
+            "failed_flags": failed_redaction_flags,
+        },
+        "current_capability": {
+            "execution_receipt_audit_implemented": True,
+            "execution_receipt_read_implemented": True,
+            "audit_receipt_write_implemented": True,
+            "live_imap_adapter_executed_by_audit": False,
+            "secret_retrieval_implemented_by_audit": False,
+            "body_capture_implemented": False,
+            "attachment_capture_implemented": False,
+            "derived_text_capture_implemented": False,
+        },
+        "closed_actions": {
+            "execution_receipt_read": bool(receipt_payload),
+            "audit_receipt_written": receipt_written,
+            "live_adapter_executed": False,
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "mailbox_selected": False,
+            "mailbox_searched": False,
+            "message_uids_read": False,
+            "message_ids_read": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "oauth_started": False,
+            "provider_api_called": False,
+            "files_written": bool(files_written),
+        },
+        "privacy_guards": {
+            "email_addresses_echoed": False,
+            "username_values_echoed": False,
+            "exact_account_refs_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "exact_mailbox_refs_echoed": False,
+            "env_var_names_echoed": False,
+            "imap_host_values_echoed": False,
+            "provider_urls_echoed": False,
+            "message_uid_values_echoed": False,
+            "message_id_values_echoed": False,
+            "message_headers_echoed": False,
+            "message_bodies_echoed": False,
+            "subject_values_echoed": False,
+            "sender_values_echoed": False,
+            "recipient_values_echoed": False,
+            "attachment_names_echoed": False,
+            "secret_values_echoed": False,
+            "execution_receipt_path_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "candidate_refs_echoed": False,
+        },
+        "would_change": would_change,
+        "files_written": files_written,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def imap_mailbox_header_scan_receipt_audit_id(
+    *,
+    archive_id: str,
+    execution_receipt_sha256: str,
+    reviewed_by: str,
+    created_at: datetime,
+) -> str:
+    digest = hashlib.sha256(
+        json.dumps(
+            {
+                "archive_id": archive_id,
+                "execution_receipt_sha256": execution_receipt_sha256,
+                "reviewed_by": reviewed_by,
+                "created_at": created_at.isoformat(),
+                "nonce": secrets.token_hex(8),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"imap-header-scan-receipt-audit-{created_at.strftime('%Y%m%dT%H%M%SZ')}-{digest}"
+
+
+def imap_mailbox_header_scan_receipt_audit_payload(
+    *,
+    archive_id: str,
+    audit_receipt_id: str,
+    created_at: datetime,
+    reviewed_by: str,
+    execution_receipt_sha256: str | None,
+    execution_status: str | None,
+    candidate_count: int | None,
+    headers_fetched_count: int | None,
+    candidate_refs_count: int,
+    candidate_refs_digest: str | None,
+    failed_redaction_flags: list[str],
+    audit_state: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "wom-imap-header-scan-receipt-audit/v0.1",
+        "receipt_kind": "imap_header_scan_receipt_audit",
+        "lifecycle_action": "imap_mailbox_header_scan_receipt_audit",
+        "receipt_id": audit_receipt_id,
+        "created_at": created_at.isoformat().replace("+00:00", "Z"),
+        "archive_id": archive_id,
+        "review": {
+            "reviewed_by": reviewed_by,
+            "reviewed_at": created_at.isoformat().replace("+00:00", "Z"),
+        },
+        "execution_receipt": {
+            "path_included": False,
+            "sha256": execution_receipt_sha256,
+            "receipt_kind": "imap_mailbox_header_metadata_scan",
+        },
+        "result": {
+            "audit_state": audit_state,
+            "execution_status": execution_status,
+            "candidate_count": candidate_count,
+            "headers_fetched_count": headers_fetched_count,
+            "candidate_refs_count": candidate_refs_count,
+            "candidate_refs_digest": candidate_refs_digest,
+            "candidate_refs_included": False,
+        },
+        "redaction_check": {
+            "passed": not failed_redaction_flags,
+            "failed_flags": list(failed_redaction_flags),
+        },
+        "closed_actions": {
+            "live_adapter_executed": False,
+            "imap_connection_opened": False,
+            "imap_login_attempted": False,
+            "mailbox_selected": False,
+            "mailbox_searched": False,
+            "message_uids_read": False,
+            "message_ids_read": False,
+            "message_headers_read": False,
+            "message_bodies_read": False,
+            "attachments_read": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "oauth_started": False,
+            "provider_api_called": False,
+        },
+        "redaction": {
+            "credential_values_included": False,
+            "credential_refs_included": False,
+            "env_var_names_included": False,
+            "imap_host_included": False,
+            "mailbox_ref_included": False,
+            "message_uid_values_included": False,
+            "message_id_values_included": False,
+            "headers_included": False,
+            "bodies_included": False,
+            "attachment_names_included": False,
+            "attachment_bytes_included": False,
+            "local_absolute_paths_included": False,
+            "candidate_refs_included": False,
+            "execution_receipt_path_included": False,
         },
     }
 

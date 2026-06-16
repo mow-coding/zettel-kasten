@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.63 - 2026-06-16
+
+- Added `archive imap-mailbox-header-scan-receipt-audit <archive-root>
+  --execution-receipt <archive-relative-json> --dry-run|--approve --format json`.
+- Added aliases `archive imap-header-scan-receipt-audit` and
+  `archive mailbox-header-scan-audit`.
+- The new command validates an existing non-secret IMAP header metadata scan
+  execution receipt, checks opaque candidate refs and redaction flags, and can
+  write a separate non-secret audit receipt under
+  `receipts/imap/adapter-execution-audits/`.
+- Kept the audit offline and closed: it opens no IMAP connection, reads no
+  environment variables, opens no keyring/password manager, reads no
+  headers/bodies/attachments, calls no providers, and does not echo the
+  execution receipt path or candidate refs.
+
 ## v0.3.62 - 2026-06-16
 
 - Added `archive imap-mailbox-header-metadata-scan <archive-root>
