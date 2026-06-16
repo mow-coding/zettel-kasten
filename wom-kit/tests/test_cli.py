@@ -437,6 +437,44 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assertIn("0 error(s), 0 warning(s)", output)
 
+    def test_version_commands_report_running_cli_and_project_pin_status(self) -> None:
+        code, output = self.run_cli(["--version"])
+        self.assertEqual(code, 0, output)
+        self.assertEqual(output.strip(), f"archive {archive_cli.__version__}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            pin_dir = project_root / ".zettel-kasten" / "source"
+            pin_dir.mkdir(parents=True)
+            (pin_dir / "installed-version.txt").write_text("v0.0.1\n", encoding="utf-8")
+
+            json_code, json_output = self.run_cli(["version", str(project_root), "--format", "json"])
+            result = json.loads(json_output)
+            self.assertEqual(json_code, 1, json_output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "wom_kit_version")
+            self.assertEqual(result["version"], archive_cli.__version__)
+            self.assertEqual(result["version_label"], f"v{archive_cli.__version__}")
+            self.assertEqual(result["source_of_truth"], "wom_kit.__version__")
+            self.assertTrue(result["pyproject_matches_package_version"])
+            self.assertEqual(result["project_pin"]["status"], "present")
+            self.assertEqual(result["project_pin"]["path"], ".zettel-kasten/source/installed-version.txt")
+            self.assertEqual(result["project_pin"]["installed_version"], "v0.0.1")
+            self.assertFalse(result["project_pin"]["matches_package_version"])
+            self.assertEqual(result["consistency_state"], "project_pin_mismatch")
+            self.assertEqual(result["canonical_checks"]["human_readable"], "archive --version")
+            self.assertTrue(result["redaction"]["local_paths_redacted"])
+            self.assertNotIn("local_paths", result)
+            self.assertNotIn(str(project_root), json_output)
+
+            (pin_dir / "installed-version.txt").write_text(f"v{archive_cli.__version__}\n", encoding="utf-8")
+            ok_code, ok_output = self.run_cli(["version", str(project_root), "--format", "json"])
+            ok_result = json.loads(ok_output)
+            self.assertEqual(ok_code, 0, ok_output)
+            self.assertTrue(ok_result["ok"])
+            self.assertTrue(ok_result["project_pin"]["matches_package_version"])
+            self.assertEqual(ok_result["consistency_state"], "source_checkout_match")
+
     def test_profile_list_reads_example_registry_and_redacts_paths(self) -> None:
         registry = KIT_ROOT / "templates" / "profiles" / "wom-profiles.example.yml"
         code, output = self.run_cli(["profile-list", "--registry", str(registry), "--format", "json"])
@@ -926,6 +964,12 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["redaction"]["local_paths_redacted"])
             self.assertNotIn("local_archive_root", result)
             self.assertNotIn("local_paths", result)
+            self.assertEqual(result["wom_kit_version"]["version"], archive_cli.__version__)
+            self.assertEqual(result["wom_kit_version"]["version_label"], f"v{archive_cli.__version__}")
+            self.assertEqual(result["wom_kit_version"]["source_of_truth"], "wom_kit.__version__")
+            self.assertEqual(result["wom_kit_version"]["project_pin"]["status"], "missing")
+            self.assertTrue(result["wom_kit_version"]["redaction"]["local_paths_redacted"])
+            self.assertNotIn("local_paths", result["wom_kit_version"])
             self.assertIn("create draft in inbox", result["available_safe_actions"])
             self.assertIn("mint only through CLI approve path", result["available_safe_actions"])
 

@@ -20,6 +20,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
+from . import __version__ as WOM_KIT_VERSION
 from .paths import (
     ArchivePathError,
     archive_relative_path,
@@ -259,6 +260,11 @@ PROFILE_NEXT_ACTIONS = {
     "register_profile_token",
     "suggest_delegate_flow",
 }
+WOM_KIT_VERSION_PIN_CANDIDATES = (
+    ".zettel-kasten/source/installed-version.txt",
+    ".zettel-kasten/installed-version.txt",
+    "installed-version.txt",
+)
 PROFILE_WALLET_NODE_KINDS = {"person", "organization", "team", "family", "project", "agent"}
 PROFILE_WALLET_CUSTODY_MODES = {
     "local_device",
@@ -29400,6 +29406,135 @@ def redacted_path_value(path: Path, *, redact_local_paths: bool) -> str:
     return "<local-path-redacted>" if redact_local_paths else str(path)
 
 
+def normalize_version_label(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if normalized.lower().startswith("v"):
+        normalized = normalized[1:]
+    return normalized or None
+
+
+def read_wom_kit_pyproject_version() -> str | None:
+    service_path = Path(__file__).resolve()
+    pyproject_path = service_path.parents[2] / "pyproject.toml"
+    try:
+        text = pyproject_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r'(?m)^version\s*=\s*"([^"]+)"\s*$', text)
+    return match.group(1) if match else None
+
+
+def wom_kit_version_info(
+    inspection_root: Path | str | None = None,
+    *,
+    redact_local_paths: bool = True,
+) -> dict[str, Any]:
+    service_path = Path(__file__).resolve()
+    kit_root = service_path.parents[2]
+    pyproject_version = read_wom_kit_pyproject_version()
+    package_version = WOM_KIT_VERSION
+    normalized_package = normalize_version_label(package_version)
+    normalized_pyproject = normalize_version_label(pyproject_version)
+    pyproject_matches = (
+        normalized_pyproject == normalized_package
+        if normalized_pyproject is not None
+        else None
+    )
+    warnings: list[str] = []
+    if pyproject_matches is False:
+        warnings.append("WOM-kit package version and pyproject.toml version differ.")
+
+    pin_summary: dict[str, Any] = {
+        "checked": False,
+        "status": "not_checked",
+        "path": None,
+        "installed_version": None,
+        "matches_package_version": None,
+    }
+    if inspection_root is not None:
+        root = Path(inspection_root).expanduser().resolve()
+        pin_summary["checked"] = True
+        if not root.exists():
+            pin_summary["status"] = "inspection_root_missing"
+            warnings.append("Version inspection root does not exist.")
+        else:
+            for candidate in WOM_KIT_VERSION_PIN_CANDIDATES:
+                candidate_path = root / candidate
+                if candidate_path.is_file():
+                    try:
+                        installed_version = candidate_path.read_text(encoding="utf-8").strip()
+                    except OSError:
+                        installed_version = None
+                        pin_summary["status"] = "unreadable"
+                        warnings.append("WOM-kit installed-version pin could not be read.")
+                    else:
+                        pin_summary["status"] = "present"
+                        pin_summary["path"] = candidate
+                        pin_summary["installed_version"] = installed_version
+                        pin_summary["matches_package_version"] = (
+                            normalize_version_label(installed_version) == normalized_package
+                        )
+                        if pin_summary["matches_package_version"] is False:
+                            warnings.append("WOM-kit installed-version pin differs from the running CLI version.")
+                    break
+            else:
+                pin_summary["status"] = "missing"
+
+    consistency_state = "source_checkout_match"
+    if pyproject_matches is False:
+        consistency_state = "source_checkout_mismatch"
+    elif pyproject_matches is None:
+        consistency_state = "package_version_only"
+    if pin_summary["matches_package_version"] is False:
+        consistency_state = "project_pin_mismatch"
+
+    result: dict[str, Any] = {
+        "ok": not warnings,
+        "lifecycle_action": "wom_kit_version",
+        "package": "wom_kit",
+        "cli_entrypoint": "archive",
+        "version": package_version,
+        "version_label": f"v{package_version}",
+        "source_of_truth": "wom_kit.__version__",
+        "pyproject_version": pyproject_version,
+        "pyproject_matches_package_version": pyproject_matches,
+        "project_pin": pin_summary,
+        "consistency_state": consistency_state,
+        "canonical_checks": {
+            "human_readable": "archive --version",
+            "structured": "archive version --format json",
+            "runtime_context": "archive runtime-context <archive-root> --format json",
+        },
+        "paths": {
+            "pyproject": "wom-kit/pyproject.toml" if pyproject_version is not None else None,
+            "package_init": "wom-kit/src/wom_kit/__init__.py",
+            "repo_root_shim": "wom_kit/__init__.py",
+        },
+        "redaction": {
+            "local_paths_redacted": bool(redact_local_paths),
+        },
+        "closed_actions": {
+            "files_written": False,
+            "provider_api_called": False,
+            "secrets_read": False,
+        },
+        "warnings": unique_preserve_order(warnings),
+        "blockers": [],
+    }
+    if not redact_local_paths:
+        local_paths: dict[str, str | None] = {
+            "module": str(service_path),
+            "kit_root": str(kit_root),
+            "pyproject": str(kit_root / "pyproject.toml") if pyproject_version is not None else None,
+        }
+        if inspection_root is not None:
+            local_paths["inspection_root"] = str(Path(inspection_root).expanduser().resolve())
+        result["local_paths"] = local_paths
+    return result
+
+
 def runtime_context(
     archive_root: Path | str,
     *,
@@ -29454,6 +29589,7 @@ def runtime_context(
         "owner": runtime_context_owner_summary(identity_doc),
         "ai_write_policy": runtime_context_ai_write_policy_summary(archive_config),
         "paths": paths,
+        "wom_kit_version": wom_kit_version_info(root, redact_local_paths=redact_local_paths),
         "available_safe_actions": list(RUNTIME_CONTEXT_SAFE_ACTIONS),
         "doctor_summary": doctor_summary,
         "blockers": unique_preserve_order(blockers),

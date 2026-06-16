@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.56 IMAP adapter audit write checkpoint
+Status: v0.3.57 version truth-source checkpoint
 Date: 2026-06-16
-Version: v0.3.56, release candidate
+Version: v0.3.57, release candidate
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -39,6 +39,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Anchor lifecycle preview | `read-only preview` | none | `anchor-zet --dry-run` previews local meaning anchoring without writing anchor metadata. |
 | Block header preview | `read-only preview` | none | Derives a header preview for an existing draft or canonical zet. It does not modify the zet. |
 | Runtime context | `read-only preview` | none | AI runtimes can confirm archive id, type, paths, policy, and safe next actions. |
+| WOM-kit version truth source | `read-only preview` | none | CLI `archive --version` prints the running CLI version. CLI `archive version [root] --format json` and runtime-context field `wom_kit_version` report `wom_kit.__version__`, source-checkout consistency, and an optional project installed-version pin without writing files, calling providers, reading secrets, or echoing local absolute paths by default. |
 | Profile registry list/resolve | `read-only preview` | none | Resolves the intended WOM profile before runtime-context or draft work. |
 | Profile wallet preview | `read-only preview` | none | Wallet-ready identity model only. No keys, signing, or blockchain calls. |
 | GitHub repository setup plan | `approval-gated write` | CLI approve writes local provider metadata/receipt only | Does not create a repository, configure remotes, push, call GitHub APIs, or run OAuth. |
