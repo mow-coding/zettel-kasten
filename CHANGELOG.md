@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.65 - 2026-06-16
+
+- Extended `archive version <root> --format json` and runtime-context
+  `wom_kit_version` pin discovery so an inspected archive root can also find a
+  project-local installed-version pin in the parent project root.
+- Added redacted logical pin-location reporting through `project_pin.path`,
+  `project_pin.pin_root`, and `project_pin.checked_locations`, including
+  locations such as `parent_of_archive/.zettel-kasten/installed-version.txt`.
+- Normalized UTF-8 BOM-prefixed installed-version files so Windows-created pin
+  files do not produce confusing version strings.
+- Kept the version check read-only and private by default: it writes no files,
+  calls no providers, reads no secrets, and does not echo local absolute paths
+  unless the trusted debugging flag is used.
+
 ## v0.3.64 - 2026-06-16
 
 - Added `archive beginner-setup-manual <archive-root> --topic

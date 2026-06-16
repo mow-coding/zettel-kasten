@@ -30977,7 +30977,7 @@ def redacted_path_value(path: Path, *, redact_local_paths: bool) -> str:
 def normalize_version_label(value: str | None) -> str | None:
     if value is None:
         return None
-    normalized = value.strip()
+    normalized = value.strip().lstrip("\ufeff").strip()
     if normalized.lower().startswith("v"):
         normalized = normalized[1:]
     return normalized or None
@@ -30992,6 +30992,19 @@ def read_wom_kit_pyproject_version() -> str | None:
         return None
     match = re.search(r'(?m)^version\s*=\s*"([^"]+)"\s*$', text)
     return match.group(1) if match else None
+
+
+def wom_kit_version_pin_search_roots(root: Path) -> list[tuple[str, Path]]:
+    roots = [("inspection_root", root)]
+    if (root / "archive.yml").is_file() and root.parent != root:
+        roots.append(("parent_of_archive", root.parent))
+    return roots
+
+
+def wom_kit_version_pin_location(root_label: str, candidate: str) -> str:
+    if root_label == "inspection_root":
+        return candidate
+    return f"{root_label}/{candidate}"
 
 
 def wom_kit_version_info(
@@ -31018,8 +31031,10 @@ def wom_kit_version_info(
         "checked": False,
         "status": "not_checked",
         "path": None,
+        "pin_root": None,
         "installed_version": None,
         "matches_package_version": None,
+        "checked_locations": [],
     }
     if inspection_root is not None:
         root = Path(inspection_root).expanduser().resolve()
@@ -31028,24 +31043,33 @@ def wom_kit_version_info(
             pin_summary["status"] = "inspection_root_missing"
             warnings.append("Version inspection root does not exist.")
         else:
-            for candidate in WOM_KIT_VERSION_PIN_CANDIDATES:
-                candidate_path = root / candidate
-                if candidate_path.is_file():
-                    try:
-                        installed_version = candidate_path.read_text(encoding="utf-8").strip()
-                    except OSError:
-                        installed_version = None
-                        pin_summary["status"] = "unreadable"
-                        warnings.append("WOM-kit installed-version pin could not be read.")
-                    else:
-                        pin_summary["status"] = "present"
-                        pin_summary["path"] = candidate
-                        pin_summary["installed_version"] = installed_version
-                        pin_summary["matches_package_version"] = (
-                            normalize_version_label(installed_version) == normalized_package
-                        )
-                        if pin_summary["matches_package_version"] is False:
-                            warnings.append("WOM-kit installed-version pin differs from the running CLI version.")
+            for root_label, search_root in wom_kit_version_pin_search_roots(root):
+                for candidate in WOM_KIT_VERSION_PIN_CANDIDATES:
+                    logical_location = wom_kit_version_pin_location(root_label, candidate)
+                    pin_summary["checked_locations"].append(logical_location)
+                    candidate_path = search_root / candidate
+                    if candidate_path.is_file():
+                        try:
+                            installed_version = candidate_path.read_text(encoding="utf-8").strip()
+                        except OSError:
+                            installed_version = None
+                            pin_summary["status"] = "unreadable"
+                            pin_summary["path"] = logical_location
+                            pin_summary["pin_root"] = root_label
+                            warnings.append("WOM-kit installed-version pin could not be read.")
+                        else:
+                            installed_version = installed_version.lstrip("\ufeff").strip()
+                            pin_summary["status"] = "present"
+                            pin_summary["path"] = logical_location
+                            pin_summary["pin_root"] = root_label
+                            pin_summary["installed_version"] = installed_version
+                            pin_summary["matches_package_version"] = (
+                                normalize_version_label(installed_version) == normalized_package
+                            )
+                            if pin_summary["matches_package_version"] is False:
+                                warnings.append("WOM-kit installed-version pin differs from the running CLI version.")
+                        break
+                if pin_summary["status"] != "not_checked":
                     break
             else:
                 pin_summary["status"] = "missing"

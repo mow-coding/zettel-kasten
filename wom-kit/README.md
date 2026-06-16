@@ -136,7 +136,7 @@ Current commands:
 
 ```text
 version
-  Print the running WOM-kit CLI version and optional project pin status. JSON output is available for AI/runtime checks and redacts local paths by default.
+  Print the running WOM-kit CLI version and optional project pin status. When an archive root is inspected, the command can also find a parent project installed-version pin. JSON output is available for AI/runtime checks and redacts local paths by default.
 
 onboard
   Plan or apply first archive setup. Dry-run writes nothing; --approve creates the archive, provider-bindings.yml, and runs strict doctor.

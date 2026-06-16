@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.64 R2 setup guide checkpoint
+Status: v0.3.65 version pin discovery checkpoint
 Date: 2026-06-16
-Version: v0.3.64, release candidate
+Version: v0.3.65, release candidate
 
 This matrix is a plain-language map of what WOM-kit can do today and what is only planned.
 
@@ -40,7 +40,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Anchor lifecycle preview | `read-only preview` | none | `anchor-zet --dry-run` previews local meaning anchoring without writing anchor metadata. |
 | Block header preview | `read-only preview` | none | Derives a header preview for an existing draft or canonical zet. It does not modify the zet. |
 | Runtime context | `read-only preview` | none | AI runtimes can confirm archive id, type, paths, policy, and safe next actions. |
-| WOM-kit version truth source | `read-only preview` | none | CLI `archive --version` prints the running CLI version. CLI `archive version [root] --format json` and runtime-context field `wom_kit_version` report `wom_kit.__version__`, source-checkout consistency, and an optional project installed-version pin without writing files, calling providers, reading secrets, or echoing local absolute paths by default. |
+| WOM-kit version truth source | `read-only preview` | none | CLI `archive --version` prints the running CLI version. CLI `archive version [root] --format json` and runtime-context field `wom_kit_version` report `wom_kit.__version__`, source-checkout consistency, and an optional project installed-version pin. When the inspected root is an archive root, the pin check also looks at the parent project root and reports safe logical checked locations such as `parent_of_archive/.zettel-kasten/installed-version.txt` without echoing local absolute paths. It writes no files, calls no providers, and reads no secrets. |
 | Runtime canonical entrypoints | `read-only preview` | none | Runtime-context field `canonical_entrypoints` names `archive.yml` as the start-here file and lists archive-relative authoritative files/directories such as `AGENTS.md`, `source-bindings.yml`, `provider-bindings.yml`, `zettels/`, `inbox/`, object and derived-text manifests, views, and schema context. It reads no file bodies, writes nothing, calls no providers, reads no secrets, and echoes no local absolute paths by default. |
 | Profile registry list/resolve | `read-only preview` | none | Resolves the intended WOM profile before runtime-context or draft work. |
 | Profile wallet preview | `read-only preview` | none | Wallet-ready identity model only. No keys, signing, or blockchain calls. |

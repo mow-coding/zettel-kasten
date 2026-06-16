@@ -1,6 +1,6 @@
 # WOM-kit Version Truth Source
 
-Status: v0.3.57 read-only version truth-source checkpoint
+Status: v0.3.65 read-only version truth-source checkpoint with parent project pin discovery
 
 WOM-kit has several places where a human or AI might see a version-like value:
 the installed CLI, the source checkout, and a project-local pin left by a setup
@@ -47,9 +47,17 @@ installed-version.txt
 
 These files are optional. If one is present under the inspected root,
 `archive version <root> --format json` compares it with the running CLI version.
-A mismatch does not rewrite anything; it simply returns `ok: false` with
+If the inspected root is an archive root containing `archive.yml`, the version
+check also searches the parent project root. This covers the common layout where
+the project pin lives beside the archive folder instead of inside it.
+
+The JSON result reports safe logical locations such as
+`parent_of_archive/.zettel-kasten/installed-version.txt`; it does not print the
+local absolute path unless `--no-redact-local-paths` is explicitly used. A
+mismatch does not rewrite anything; it simply returns `ok: false` with
 `consistency_state: project_pin_mismatch` so the human can decide whether to
-upgrade the project-local source or switch to the intended CLI.
+upgrade the project-local source or switch to the intended CLI. UTF-8
+BOM-prefixed pin files are normalized for Windows-created text files.
 
 ## Privacy Boundary
 
@@ -65,7 +73,7 @@ Use `--no-redact-local-paths` only for trusted local debugging.
 
 ## Not Implemented
 
-v0.3.57 does not provide automatic upgrade, installer repair, live provider
+v0.3.65 does not provide automatic upgrade, installer repair, live provider
 sync, IMAP execution, secret retrieval, or project migration. It only gives a
 clear read-only signal about which WOM-kit version is running and whether an
 optional project pin agrees with it.

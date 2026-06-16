@@ -446,7 +446,7 @@ class ArchiveCliTests(unittest.TestCase):
             project_root = Path(tmp) / "project"
             pin_dir = project_root / ".zettel-kasten" / "source"
             pin_dir.mkdir(parents=True)
-            (pin_dir / "installed-version.txt").write_text("v0.0.1\n", encoding="utf-8")
+            (pin_dir / "installed-version.txt").write_text("\ufeffv0.0.1\n", encoding="utf-8")
 
             json_code, json_output = self.run_cli(["version", str(project_root), "--format", "json"])
             result = json.loads(json_output)
@@ -459,8 +459,13 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["pyproject_matches_package_version"])
             self.assertEqual(result["project_pin"]["status"], "present")
             self.assertEqual(result["project_pin"]["path"], ".zettel-kasten/source/installed-version.txt")
+            self.assertEqual(result["project_pin"]["pin_root"], "inspection_root")
             self.assertEqual(result["project_pin"]["installed_version"], "v0.0.1")
             self.assertFalse(result["project_pin"]["matches_package_version"])
+            self.assertIn(
+                ".zettel-kasten/source/installed-version.txt",
+                result["project_pin"]["checked_locations"],
+            )
             self.assertEqual(result["consistency_state"], "project_pin_mismatch")
             self.assertEqual(result["canonical_checks"]["human_readable"], "archive --version")
             self.assertTrue(result["redaction"]["local_paths_redacted"])
@@ -474,6 +479,38 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(ok_result["ok"])
             self.assertTrue(ok_result["project_pin"]["matches_package_version"])
             self.assertEqual(ok_result["consistency_state"], "source_checkout_match")
+
+    def test_version_command_finds_parent_project_pin_from_archive_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            archive_root = project_root / "archive"
+            archive_root.mkdir(parents=True)
+            (archive_root / "archive.yml").write_text(
+                "archive_id: archive:personal:fake-life\narchive_type: personal\n",
+                encoding="utf-8",
+            )
+            pin_dir = project_root / ".zettel-kasten"
+            pin_dir.mkdir()
+            (pin_dir / "installed-version.txt").write_text("v0.0.1\n", encoding="utf-8")
+
+            code, output = self.run_cli(["version", str(archive_root), "--format", "json"])
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["project_pin"]["status"], "present")
+            self.assertEqual(result["project_pin"]["path"], "parent_of_archive/.zettel-kasten/installed-version.txt")
+            self.assertEqual(result["project_pin"]["pin_root"], "parent_of_archive")
+            self.assertEqual(result["project_pin"]["installed_version"], "v0.0.1")
+            self.assertFalse(result["project_pin"]["matches_package_version"])
+            self.assertIn(
+                "parent_of_archive/.zettel-kasten/installed-version.txt",
+                result["project_pin"]["checked_locations"],
+            )
+            self.assertEqual(result["consistency_state"], "project_pin_mismatch")
+            self.assertTrue(result["redaction"]["local_paths_redacted"])
+            self.assertNotIn(str(project_root), output)
+            self.assertNotIn(str(archive_root), output)
 
     def test_profile_list_reads_example_registry_and_redacts_paths(self) -> None:
         registry = KIT_ROOT / "templates" / "profiles" / "wom-profiles.example.yml"
