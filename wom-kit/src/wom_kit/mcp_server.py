@@ -1702,6 +1702,19 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "view_health",
+        "description": "Diagnose saved view hit counts and facet distributions without reading zettel bodies or writing files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+                "max_values": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "notion_objet_link_plan",
         "description": "Plan Notion provider locator to manifested objet link candidates for one zettel. Read-only; never echoes provider URLs, body text, frontmatter values, absolute paths, presigned URLs, object bytes, or writes files.",
         "inputSchema": {
@@ -2533,6 +2546,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_read_zettel(arguments)
     if name == "zettel_objet_links":
         return tool_zettel_objet_links(arguments)
+    if name == "view_health":
+        return tool_view_health(arguments)
     if name == "notion_objet_link_plan":
         return tool_notion_objet_link_plan(arguments)
     if name == "block_header_check":
@@ -4027,6 +4042,26 @@ def tool_notion_objet_link_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result.get("ok") else "blocked"
     return tool_success_result(f"notion_objet_link_plan: {state}, {result['locator_count']} locator(s).", result)
+
+
+def tool_view_health(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("view_health is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.view_health,
+        archive_root,
+        dry_run=True,
+        max_values=int(arguments.get("max_values", 10)),
+    )
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    state = "passed" if result.get("ok") else "blocked"
+    return tool_success_result(
+        "view_health: "
+        f"{state}, {summary.get('active_view_count', 0)} active, "
+        f"{summary.get('empty_view_count', 0)} empty.",
+        result,
+    )
 
 
 def tool_block_header_check(arguments: dict[str, Any]) -> dict[str, Any]:

@@ -24212,6 +24212,72 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(code, 1, output)
             self.assertIn("View not found", output)
 
+    def test_view_health_reports_empty_and_blocked_saved_views_without_content_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._facet_archive(tmp)
+            (archive_root / "views" / "empty.yml").write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "id": "view.test.empty",
+                        "name": "Empty View",
+                        "filters": {"facets.domain": "missing-domain"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            code, output = self.run_cli(
+                ["view-health", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "view_health")
+            self.assertGreaterEqual(result["summary"]["active_view_count"], 2)
+            self.assertGreaterEqual(result["summary"]["empty_view_count"], 1)
+            self.assertGreaterEqual(result["summary"]["blocked_view_count"], 1)
+            states = {view["id"]: view["state"] for view in result["views"]}
+            self.assertEqual(states["view.test.top"], "active")
+            self.assertEqual(states["view.test.edu-memory"], "active")
+            self.assertEqual(states["view.test.empty"], "empty_result")
+            self.assertEqual(states["view.test.unsupported"], "blocked")
+            empty = next(view for view in result["views"] if view["id"] == "view.test.empty")
+            self.assertEqual(empty["filter_diagnostics"][0]["matching_zettel_count"], 0)
+            domain_distribution = next(item for item in result["facet_distribution"] if item["key"] == "domain")
+            self.assertTrue(any(item["value"] == "education" for item in domain_distribution["top_values"]))
+            self.assertFalse(result["privacy_guards"]["zettel_body_text_echoed"])
+            self.assertFalse(result["privacy_guards"]["zettel_titles_echoed"])
+            self.assertFalse(result["privacy_guards"]["absolute_local_paths_echoed"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            self.assertNotIn("Body.", output)
+            self.assertNotIn("Title zet_", output)
+            self.assertNotIn(str(archive_root), output)
+
+            no_dry_code, no_dry_output = self.run_cli(["view-health", str(archive_root)])
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+
+    def test_view_health_blocks_when_index_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:view-health-missing-index")
+            views_dir = archive_root / "views"
+            views_dir.mkdir(exist_ok=True)
+            (views_dir / "home.yml").write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "id": "view.test.home",
+                        "name": "Home",
+                        "filters": {"facets.domain": "education"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = archive_services.view_health(archive_root, dry_run=True)
+            self.assertFalse(result["ok"])
+            self.assertIn("archive_index_missing", result["blockers"])
+            self.assertEqual(result["views"][0]["state"], "blocked")
+            self.assertIn("Run archive index", " ".join(result["next_safe_actions"]))
+
     def test_staged_cleanup_check_fails_closed_on_unenumerable_tree(self) -> None:
         # A deletion-safety verifier must NEVER report safe when it cannot fully enumerate
         # the staged tree (Windows MAX_PATH, permission denied). os.walk's onerror -> blocker.

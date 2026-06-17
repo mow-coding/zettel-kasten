@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.90 - 2026-06-17
+
+- Added read-only CLI `archive view-health <archive-root> --dry-run` and MCP
+  `view_health` to diagnose saved view drift before editing `views/*.yml`.
+- The health check reads the generated local index and reports saved view
+  counts by `active`, `empty_result`, and `blocked`, plus per-filter facet
+  diagnostics and observed facet value samples for keys used by saved views.
+- This helps real archives discover why default or imported AI navigation views
+  return zero zets when saved filters such as `facets.domain` no longer match
+  the actual facet distribution.
+- Kept the command read-only: it writes nothing, reads no zettel bodies, echoes
+  no zettel titles, absolute local paths, provider URLs, account ids, emails,
+  tokens, or secret values, calls no providers, and reads no object bytes.
+
 ## v0.3.89 - 2026-06-17
 
 - Added read-only CLI `archive notion-objet-link-plan --path <zet.md>|--zettel-id

@@ -5098,6 +5098,43 @@ def command_view_zets(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_view_health(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("view-health is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.view_health(
+            Path(args.archive_root),
+            dry_run=True,
+            max_values=args.max_values,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(
+            "View health: "
+            f"{summary.get('active_view_count', 0)} active, "
+            f"{summary.get('empty_view_count', 0)} empty, "
+            f"{summary.get('blocked_view_count', 0)} blocked"
+        )
+        for view in result.get("views", []):
+            if not isinstance(view, dict):
+                continue
+            print(f"- {view.get('id')}: {view.get('state')} ({view.get('count', 0)} zet(s))")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+        for warning in result.get("warnings", []):
+            print(f"WARNING: {warning}")
+        for action in result.get("next_safe_actions", []):
+            print(f"NEXT: {action}")
+        print("Writes: none")
+    return 0 if result.get("ok") else 1
+
+
 def command_related_zets(args: argparse.Namespace) -> int:
     try:
         result = archive_services.get_related_zets(
@@ -10495,6 +10532,16 @@ def build_parser() -> argparse.ArgumentParser:
     view_zets_parser.add_argument("--limit", type=int, default=50, help="Maximum zets to return.")
     view_zets_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     view_zets_parser.set_defaults(func=command_view_zets)
+
+    view_health_parser = subcommands.add_parser(
+        "view-health",
+        help="Diagnose saved view hit counts and facet distributions without reading zettel bodies.",
+    )
+    view_health_parser.add_argument("archive_root", help="Archive root to inspect.")
+    view_health_parser.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    view_health_parser.add_argument("--max-values", type=int, default=10, help="Maximum observed values to show per facet key.")
+    view_health_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    view_health_parser.set_defaults(func=command_view_health)
 
     related = subcommands.add_parser(
         "related-zets",

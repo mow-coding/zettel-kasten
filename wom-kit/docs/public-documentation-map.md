@@ -49,6 +49,7 @@ Supporting philosophy and model docs:
 - [Presigned URL Plan](presigned-url-plan.md)
 - [Zettel Objet Links](zettel-objet-links.md)
 - [Notion Objet Link Plan](notion-objet-link-plan.md)
+- [View Health](view-health.md)
 
 These documents cover:
 

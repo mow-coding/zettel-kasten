@@ -70,6 +70,7 @@ NOTION_PAGE_SNAPSHOT_MODEL_PATH = KIT_ROOT / "docs" / "notion-page-snapshot-mode
 OBJET_REF_RESOLUTION_PATH = KIT_ROOT / "docs" / "objet-ref-resolution.md"
 ZETTEL_OBJET_LINKS_PATH = KIT_ROOT / "docs" / "zettel-objet-links.md"
 NOTION_OBJET_LINK_PLAN_PATH = KIT_ROOT / "docs" / "notion-objet-link-plan.md"
+VIEW_HEALTH_PATH = KIT_ROOT / "docs" / "view-health.md"
 SOURCE_OBJECT_STORAGE_POLICY_PATH = KIT_ROOT / "docs" / "source-object-storage-policy.md"
 TEXT_PROVENANCE_HIERARCHY_PATH = KIT_ROOT / "docs" / "text-provenance-hierarchy.md"
 AI_RESPONSE_CONCEPT_GUIDE_PATH = KIT_ROOT / "docs" / "ai-response-concept-guide.md"
@@ -1071,6 +1072,42 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, readme_text)
         self.assertIn("[Zettel Objet Links](zettel-objet-links.md)", public_map_text)
         self.assertIn("[Notion Objet Link Plan](notion-objet-link-plan.md)", public_map_text)
+
+    def test_view_health_doc_and_matrix_explain_empty_saved_view_diagnostics(self) -> None:
+        view_health_text = VIEW_HEALTH_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.90 read-only saved view diagnostics",
+            "archive view-health <archive-root> --dry-run",
+            "view_health",
+            "active",
+            "empty_result",
+            "blocked",
+            "observed facet value samples",
+            "read zettel bodies",
+            "echo zettel titles",
+            "Relationship To `view-zets`",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, view_health_text)
+        for phrase in (
+            "Saved view health",
+            "archive view-health --dry-run",
+            "MCP `view_health`",
+            "observed facet distribution samples",
+            "echo no zettel titles",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "[View Health](wom-kit/docs/view-health.md)",
+            "saved view health checks",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        self.assertIn("[View Health](view-health.md)", public_map_text)
 
     def test_derived_text_coverage_doc_and_matrix_expose_agent_contract(self) -> None:
         coverage_text = DERIVED_TEXT_COVERAGE_PATH.read_text(encoding="utf-8")
