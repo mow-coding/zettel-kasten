@@ -123,9 +123,15 @@ Use `zettel-objet-links` after reviewed `sha256:` or `objet:sha256:` refs exist.
 That split keeps the dangerous provider locator layer separate from the stable
 content-addressed objet layer.
 
+If the zettel has locator fingerprints but the manifest candidates are missing,
+use `notion-objet-manifest-locator-label` after human review to add a
+non-secret fingerprint label to the selected object manifest record. Then run
+this plan again.
+
 ## Future Work
 
-A later approval-gated command can replace reviewed Notion provider locators
-with `objet:sha256:<hex>` refs or write reviewed `embed` edges.
+An approval-gated manifest locator label command now exists. A later
+approval-gated command can still replace reviewed Notion provider locators with
+`objet:sha256:<hex>` refs or write reviewed `embed` edges.
 
-This release does not perform that rewrite.
+This release does not perform that body rewrite.

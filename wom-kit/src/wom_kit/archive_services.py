@@ -751,6 +751,7 @@ MINT_RECEIPTS_DIR = "receipts/mint"
 MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
 ZETTEL_EDGE_RECEIPTS_DIR = "receipts/edges"
 ZETTEL_EDGE_BATCH_RECEIPTS_DIR = "receipts/edges/batches"
+NOTION_OBJET_MANIFEST_LOCATOR_LABEL_RECEIPTS_DIR = "receipts/objects/notion-locator-labels"
 DELEGATE_RECEIPTS_DIR = "receipts/delegate"
 ATTESTATION_RECEIPTS_DIR = "receipts/attest"
 FOREIGN_BLOCK_QUARANTINE_RECEIPTS_DIR = "receipts/quarantine"
@@ -3044,6 +3045,297 @@ def notion_objet_link_rewrite_plan(
         "next_safe_actions": unique_preserve_order(next_safe_actions),
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
+    }
+
+
+def notion_objet_manifest_locator_label_receipt_relative(
+    *,
+    archive_id: str,
+    object_id: str,
+    locator_fingerprint: str,
+) -> str:
+    digest = sha256_json_hex(
+        {
+            "archive_id": archive_id,
+            "object_id": object_id,
+            "locator_fingerprint": locator_fingerprint,
+            "receipt_kind": "notion_objet_manifest_locator_label",
+        }
+    )
+    return f"{NOTION_OBJET_MANIFEST_LOCATOR_LABEL_RECEIPTS_DIR}/{digest[:24]}.notion-objet-manifest-locator-label.json"
+
+
+def notion_manifest_record_has_locator_label(record: dict[str, Any], locator_fingerprint: str) -> bool:
+    return bool(
+        notion_locator_manifest_match_fields(
+            record,
+            normalized_locator="",
+            locator_fingerprint=locator_fingerprint,
+        )
+    )
+
+
+def add_notion_locator_label_to_manifest_record(record: dict[str, Any], locator_fingerprint: str) -> str:
+    fingerprint_hex = locator_fingerprint.removeprefix("sha256:")
+    provenance = record.get("provenance") if isinstance(record.get("provenance"), dict) else {}
+    existing_primary = provenance.get("provider_locator_sha256")
+    if isinstance(existing_primary, str) and existing_primary.strip().lower() in {locator_fingerprint, fingerprint_hex}:
+        record["provenance"] = provenance
+        return "provenance.provider_locator_sha256"
+    if not isinstance(existing_primary, str) or not existing_primary.strip():
+        provenance["provider_locator_sha256"] = fingerprint_hex
+        record["provenance"] = provenance
+        return "provenance.provider_locator_sha256"
+
+    values: list[str] = []
+    existing_values = provenance.get("provider_locator_sha256_values")
+    if isinstance(existing_values, list):
+        values.extend(str(item).strip().lower().removeprefix("sha256:") for item in existing_values if str(item).strip())
+    values.append(existing_primary.strip().lower().removeprefix("sha256:"))
+    values.append(fingerprint_hex)
+    provenance["provider_locator_sha256_values"] = unique_preserve_order(
+        value for value in values if SHA256_RE.match(value)
+    )
+    record["provenance"] = provenance
+    return "provenance.provider_locator_sha256_values"
+
+
+def update_manifest_with_notion_locator_label(
+    manifest_path: Path,
+    *,
+    object_id: str,
+    locator_fingerprint: str,
+) -> tuple[int, str | None]:
+    changed_count = 0
+    label_field: str | None = None
+    rewritten_lines: list[str] = []
+    for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            rewritten_lines.append(raw_line)
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            rewritten_lines.append(raw_line)
+            continue
+        if not isinstance(record, dict) or str(record.get("object_id") or "").lower() != object_id:
+            rewritten_lines.append(raw_line)
+            continue
+        if notion_manifest_record_has_locator_label(record, locator_fingerprint):
+            rewritten_lines.append(raw_line)
+            continue
+        label_field = add_notion_locator_label_to_manifest_record(record, locator_fingerprint)
+        rewritten_lines.append(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+        changed_count += 1
+    if changed_count:
+        manifest_path.write_text("\n".join(rewritten_lines) + "\n", encoding="utf-8")
+    return changed_count, label_field
+
+
+def notion_objet_manifest_locator_label(
+    archive_root: Path | str,
+    *,
+    object_id: str | None = None,
+    locator_fingerprint: str | None = None,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if dry_run and approve:
+        blockers.append("Use either --dry-run or --approve, not both.")
+    if not dry_run and not approve:
+        blockers.append("notion-objet-manifest-locator-label requires --dry-run or --approve.")
+    if approve and not reviewed_by:
+        blockers.append("notion-objet-manifest-locator-label --approve requires --reviewed-by.")
+    if reviewed_by and not safe_source_intake_plan_scalar(str(reviewed_by)):
+        blockers.append("reviewed_by must be a safe non-secret scalar.")
+
+    normalized_object_id = normalize_object_id(str(object_id or ""), blockers)
+    selected_fingerprint = normalize_notion_locator_fingerprint(locator_fingerprint, blockers)
+    manifest_relative = "objects/manifests/files.jsonl"
+    manifest_path = archive_internal_path(root, manifest_relative)
+    manifest_present = manifest_path.is_file()
+    manifest_records = load_manifest_records(root) if manifest_present else []
+    matching_records = [
+        record
+        for record in manifest_records
+        if isinstance(record, dict) and str(record.get("object_id") or "").lower() == normalized_object_id
+    ]
+    if not manifest_present:
+        blockers.append("objects/manifests/files.jsonl is required before labeling Notion locator fingerprints.")
+    if normalized_object_id and len(matching_records) == 0:
+        blockers.append("object_id was not found in objects/manifests/files.jsonl.")
+    if len(matching_records) > 1:
+        blockers.append("object_id appears multiple times in objects/manifests/files.jsonl; label one reviewed record manually.")
+
+    already_labeled = False
+    label_field = "provenance.provider_locator_sha256"
+    if len(matching_records) == 1 and selected_fingerprint:
+        already_labeled = notion_manifest_record_has_locator_label(matching_records[0], selected_fingerprint)
+        if already_labeled:
+            match_fields = notion_locator_manifest_match_fields(
+                matching_records[0],
+                normalized_locator="",
+                locator_fingerprint=selected_fingerprint,
+            )
+            if match_fields:
+                label_field = str(match_fields[0].get("field") or label_field).lstrip("$.")
+        elif isinstance(matching_records[0].get("provenance"), dict) and matching_records[0]["provenance"].get("provider_locator_sha256"):
+            label_field = "provenance.provider_locator_sha256_values"
+
+    receipt_relative = (
+        notion_objet_manifest_locator_label_receipt_relative(
+            archive_id=archive_id,
+            object_id=normalized_object_id,
+            locator_fingerprint=selected_fingerprint,
+        )
+        if normalized_object_id and selected_fingerprint
+        else None
+    )
+    receipt_path = archive_internal_path(root, receipt_relative) if receipt_relative else None
+    if approve and not already_labeled and receipt_path is not None and receipt_path.exists():
+        blockers.append("Notion objet manifest locator label receipt already exists.")
+
+    would_change = []
+    if not blockers and not already_labeled:
+        would_change = [manifest_relative, receipt_relative] if receipt_relative else [manifest_relative]
+
+    base_result = {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "notion_objet_manifest_locator_label_plan" if dry_run else "notion_objet_manifest_locator_label_write",
+        "archive_id": archive_id,
+        "object_id": normalized_object_id or None,
+        "locator_fingerprint": selected_fingerprint or None,
+        "write_status": "blocked" if blockers else "already_labeled" if already_labeled else "would_write" if dry_run else "written",
+        "manifest_update": {
+            "manifest_path": manifest_relative,
+            "manifest_present": manifest_present,
+            "matched_manifest_records": len(matching_records),
+            "label_field": label_field,
+            "already_labeled": already_labeled,
+            "would_add_label": bool(not blockers and not already_labeled and dry_run),
+            "added_labels": 0,
+            "object_ids_echoed": True,
+            "locator_fingerprints_echoed": True,
+        },
+        "receipt": {
+            "schema": "wom-kit/notion-objet-manifest-locator-label-receipt/v0.1",
+            "receipt_path": receipt_relative,
+            "receipt_written": False,
+        },
+        "current_capability": {
+            "manifest_locator_label_write_implemented": True,
+            "notion_objet_link_index_can_match_labeled_manifests": True,
+            "provider_locator_text_write_implemented": False,
+            "notion_body_rewrite_implemented": False,
+            "embed_edge_write_implemented": False,
+            "mcp_write_tool_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "real_source_export_files_read": False,
+            "zettel_body_read": False,
+            "zettel_body_rewritten": False,
+            "object_file_bytes_read": False,
+            "candidate_records_written": False,
+            "edges_written": False,
+            "manifest_written": False,
+            "receipt_written": False,
+        },
+        "privacy_guards": {
+            "provider_urls_echoed": False,
+            "provider_locator_text_echoed": False,
+            "zettel_body_text_echoed": False,
+            "zettel_title_echoed": False,
+            "frontmatter_values_echoed": False,
+            "page_titles_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "tokens_echoed": False,
+            "secret_values_echoed": False,
+        },
+        "would_change": [item for item in would_change if item],
+        "files_written": [],
+        "next_safe_actions": [
+            "Run notion-objet-link-index or notion-objet-link-plan again; labeled manifests can now match selected locator fingerprints."
+            if not blockers
+            else "Fix blockers before labeling a manifest locator fingerprint.",
+            "Use notion-objet-link-rewrite-plan before any future body rewrite or embed edge write.",
+        ],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+    if blockers or dry_run or already_labeled:
+        return base_result
+
+    assert receipt_path is not None and receipt_relative is not None
+    changed_count, written_label_field = update_manifest_with_notion_locator_label(
+        manifest_path,
+        object_id=normalized_object_id,
+        locator_fingerprint=selected_fingerprint,
+    )
+    if changed_count != 1:
+        raise ArchiveServiceError("Could not add exactly one Notion locator label to objects/manifests/files.jsonl.")
+    labeled_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    receipt = {
+        "schema": "wom-kit/notion-objet-manifest-locator-label-receipt/v0.1",
+        "lifecycle_action": "notion_objet_manifest_locator_label_write",
+        "receipt_kind": "notion_objet_manifest_locator_label",
+        "archive_id": archive_id,
+        "object_id": normalized_object_id,
+        "locator_fingerprint": selected_fingerprint,
+        "manifest_path": manifest_relative,
+        "label_field": written_label_field or label_field,
+        "reviewed_by": reviewed_by,
+        "labeled_at": labeled_at,
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "real_source_export_files_read": False,
+            "zettel_body_read": False,
+            "zettel_body_rewritten": False,
+            "object_file_bytes_read": False,
+            "candidate_records_written": False,
+            "edges_written": False,
+        },
+        "privacy_guards": base_result["privacy_guards"],
+    }
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json_new_file(receipt_path, receipt)
+    return {
+        **base_result,
+        "ok": True,
+        "dry_run": False,
+        "write_status": "written",
+        "manifest_update": {
+            **base_result["manifest_update"],
+            "label_field": written_label_field or label_field,
+            "already_labeled": False,
+            "would_add_label": False,
+            "added_labels": changed_count,
+        },
+        "receipt": {
+            **base_result["receipt"],
+            "receipt_written": True,
+        },
+        "closed_actions": {
+            **base_result["closed_actions"],
+            "manifest_written": True,
+            "receipt_written": True,
+        },
+        "would_change": [],
+        "files_written": [manifest_relative, receipt_relative],
+        "blockers": [],
     }
 
 

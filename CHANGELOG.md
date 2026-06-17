@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.100 - 2026-06-17
+
+- Added approval-gated CLI `archive notion-objet-manifest-locator-label
+  <archive-root> --object-id sha256:<hex> --locator-fingerprint sha256:<hex>
+  --dry-run|--approve` with alias `archive notion-objet-locator-label`.
+- The command writes one reviewed, non-secret Notion locator fingerprint to one
+  existing `objects/manifests/files.jsonl` object record, plus a receipt under
+  `receipts/objects/notion-locator-labels/`.
+- This lets `notion-objet-link-index` and `notion-objet-link-plan` match a
+  zettel locator to a manifested objet when the manifest knows it came from a
+  Notion export but did not preserve the locator fingerprint.
+- Kept raw provider locator text closed: the command reads no zettel bodies or
+  object bytes, rewrites no zettels, writes no edges, calls no providers,
+  exposes no MCP write tool, and echoes no provider URLs, provider locator
+  text, zettel body text, zettel titles, credentials, or secrets.
+
 ## v0.3.99 - 2026-06-17
 
 - Added approval-gated CLI `archive zettel-edge-batch <archive-root>

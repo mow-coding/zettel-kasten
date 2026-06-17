@@ -4149,6 +4149,55 @@ def command_notion_objet_link_rewrite_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_notion_objet_manifest_locator_label(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.notion_objet_manifest_locator_label(
+            Path(args.archive_root),
+            object_id=args.object_id,
+            locator_fingerprint=args.locator_fingerprint,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        update = result.get("manifest_update") if isinstance(result.get("manifest_update"), dict) else {}
+        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
+        print(f"Notion objet manifest locator label: {result.get('write_status') or '-'}")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Object: {result.get('object_id') or '-'}")
+        print(f"Locator fingerprint: {result.get('locator_fingerprint') or '-'}")
+        print(f"Label field: {update.get('label_field') or '-'}")
+        print(f"Already labeled: {update.get('already_labeled')}")
+        print(f"Receipt: {receipt.get('receipt_path') or '-'}")
+        if result.get("files_written"):
+            print("Files written:")
+            for path in result["files_written"]:
+                print(f"- {path}")
+        elif result.get("would_change"):
+            print("Would change:")
+            for path in result["would_change"]:
+                print(f"- {path}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_create_draft(args: argparse.Namespace) -> int:
     try:
         body = read_body_arg(args)
@@ -10266,6 +10315,24 @@ def build_parser() -> argparse.ArgumentParser:
     notion_objet_link_rewrite_plan.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing and open nothing.")
     notion_objet_link_rewrite_plan.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     notion_objet_link_rewrite_plan.set_defaults(func=command_notion_objet_link_rewrite_plan)
+
+    notion_objet_manifest_locator_label = subcommands.add_parser(
+        "notion-objet-manifest-locator-label",
+        aliases=["notion-objet-locator-label"],
+        help="Preview or approve adding a reviewed Notion locator fingerprint label to one object manifest record.",
+    )
+    notion_objet_manifest_locator_label.add_argument("archive_root", help="Archive root to update.")
+    notion_objet_manifest_locator_label.add_argument("--object-id", required=True, help="Manifested object id, sha256:<64 hex>.")
+    notion_objet_manifest_locator_label.add_argument(
+        "--locator-fingerprint",
+        required=True,
+        help="Reviewed sha256 locator fingerprint from notion-objet-link-plan or notion-objet-link-index.",
+    )
+    notion_objet_manifest_locator_label.add_argument("--dry-run", action="store_true", help="Preview manifest label update without writing files.")
+    notion_objet_manifest_locator_label.add_argument("--approve", action="store_true", help="Write the reviewed non-secret locator label and receipt.")
+    notion_objet_manifest_locator_label.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
+    notion_objet_manifest_locator_label.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    notion_objet_manifest_locator_label.set_defaults(func=command_notion_objet_manifest_locator_label)
 
     block_header = subcommands.add_parser("block-header", help="Preview the derived block header for one zet.")
     block_header.add_argument("archive_root", help="Archive root to inspect.")
