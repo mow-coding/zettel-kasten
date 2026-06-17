@@ -5931,6 +5931,8 @@ class ArchiveCliTests(unittest.TestCase):
                 "Currently translates through semantic unless the human names a more specific meaning.",
             )
             self.assertTrue(any("derive-text-coverage" in route["command"] for route in result["safe_routing"]))
+            self.assertTrue(any("notion-objet-source-map-link-plan" in route["command"] for route in result["safe_routing"]))
+            self.assertTrue(any("notion-objet-link-index" in route["command"] for route in result["safe_routing"]))
             self.assertFalse(result["closed_actions"]["source_bytes_read"])
             self.assertFalse(result["closed_actions"]["provider_api_called"])
             self.assertFalse(result["closed_actions"]["upload_performed"])
@@ -5940,6 +5942,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(result["privacy_guards"]["secret_values_echoed"])
             self.assertTrue(result["current_capability"]["operational_term_translation_available"])
             self.assertTrue(result["current_capability"]["locale_aware_korean_available"])
+            self.assertTrue(result["current_capability"]["source_map_material_link_routing_available"])
             self.assertFalse(result["current_capability"]["object_upload_adapter_implemented"])
             self.assertEqual(result["would_change"], [])
             self.assertNotIn("C:\\", serialized)
@@ -8835,6 +8838,168 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
             no_dry_code, no_dry_output = self.run_cli(["notion-objet-link-index", str(archive_root)])
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+
+    def test_notion_objet_source_map_link_plan_joins_redacted_import_to_ledger_without_body_locator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            source_map_path = archive_root / "source-maps" / "notion-material.jsonl"
+            ledger_path = archive_root / "receipts" / "import" / "notion-download-ledger.jsonl"
+            unsupported_source_map_path = archive_root / "source-maps" / "notion-material.txt"
+            source_map_path.parent.mkdir(parents=True, exist_ok=True)
+            ledger_path.parent.mkdir(parents=True, exist_ok=True)
+
+            page_id = "notion-page-private-123"
+            page_url = "https://www.notion.so/private-workspace/Private-Material-abcdef1234567890"
+            private_download_name = "attachments/private-client-file.pdf"
+            object_digest = "a" * 64
+            object_id = f"sha256:{object_digest}"
+            manifest_record = {
+                "object_id": object_id,
+                "sha256": object_digest,
+                "logical_key": f"objects/external/prehashed/notion_source_export/{object_digest[:2]}/{object_digest}",
+                "mime": "application/pdf",
+                "size_bytes": 999,
+                "locations": [
+                    {
+                        "provider": "external_prehashed",
+                        "store_kind": "notion_source_export",
+                        "store_ref": "notion-export-20260617",
+                        "availability": "declared_external",
+                    }
+                ],
+                "provenance": {"source": "prehashed_external_objet_ledger"},
+            }
+            with manifest_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(manifest_record, ensure_ascii=False, sort_keys=True) + "\n")
+            source_map_path.write_text(
+                json.dumps(
+                    {
+                        "source_id": "notion:export",
+                        "item_id": page_id,
+                        "external_id": page_id,
+                        "download_path": private_download_name,
+                        "title": "Private Material Title Must Not Echo",
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            unsupported_source_map_path.write_text(
+                "Private source-map text body must not be parsed or echoed.\n",
+                encoding="utf-8",
+            )
+            ledger_path.write_text(
+                json.dumps(
+                    {
+                        "key": private_download_name,
+                        "name": "Private Attachment Name Must Not Echo",
+                        "sha256": object_digest,
+                        "bytes": 999,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            zettel_path = archive_root / "inbox" / "zet_notion_material_without_locator.md"
+            zettel_path.write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_material_without_locator",
+                        "status: draft",
+                        "title: Private Imported Zettel Title Must Not Echo",
+                        "external_import:",
+                        "  source_system: notion",
+                        f"  external_id: {page_id}",
+                        "  source_path: pages/private-material.md",
+                        f"  source_url: {page_url}",
+                        "---",
+                        "",
+                        "Imported body has no provider locator because safety redaction already ran.",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "notion-objet-source-map-link-plan",
+                    str(archive_root),
+                    "--source-map",
+                    "source-maps/notion-material.jsonl",
+                    "--ledger",
+                    "receipts/import/notion-download-ledger.jsonl",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "notion_objet_source_map_link_plan")
+            self.assertEqual(result["summary"]["candidate_count"], 1)
+            self.assertEqual(result["summary"]["source_map_record_count"], 1)
+            self.assertEqual(result["summary"]["ledger_record_count"], 1)
+            self.assertFalse(result["current_capability"]["body_locator_required"])
+            candidate = result["candidates"][0]
+            self.assertEqual(candidate["from_zettel"]["id"], "zet_notion_material_without_locator")
+            self.assertEqual(candidate["target_object_id"], object_id)
+            self.assertEqual(candidate["target_mode"], "embed_edge")
+            self.assertEqual(candidate["edge_type"], "embed")
+            self.assertEqual(candidate["join_basis"][0]["kind"], "page_to_file_to_object")
+            self.assertEqual(candidate["write_status"], "not_written")
+            self.assertTrue(candidate["human_review_required"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["provider_locator_text_echoed"])
+            self.assertFalse(result["privacy_guards"]["page_titles_echoed"])
+            self.assertFalse(result["privacy_guards"]["zettel_body_text_read"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            for forbidden in (
+                page_url,
+                "private-workspace",
+                "Private Material Title",
+                "Private Attachment Name",
+                "Private Imported Zettel Title",
+                "Imported body has no provider locator",
+                private_download_name,
+                str(archive_root),
+            ):
+                with self.subTest(forbidden=forbidden):
+                    self.assertNotIn(forbidden, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            bad_extension_code, bad_extension_output = self.run_cli(
+                [
+                    "notion-objet-source-map-link-plan",
+                    str(archive_root),
+                    "--source-map",
+                    "source-maps/notion-material.txt",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(bad_extension_code, 1, bad_extension_output)
+            bad_extension_result = json.loads(bad_extension_output)
+            self.assertFalse(bad_extension_result["ok"], bad_extension_result)
+            self.assertTrue(
+                any("must be JSON, JSONL, YAML, or YML" in blocker for blocker in bad_extension_result["blockers"])
+            )
+            self.assertNotIn("Private source-map text body", bad_extension_output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            no_dry_code, no_dry_output = self.run_cli(["notion-objet-source-map-link-plan", str(archive_root)])
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
 

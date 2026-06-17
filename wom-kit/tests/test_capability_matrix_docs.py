@@ -77,6 +77,7 @@ NOTION_OBJET_LINK_INDEX_PATH = KIT_ROOT / "docs" / "notion-objet-link-index.md"
 NOTION_OBJET_LINK_REWRITE_PLAN_PATH = KIT_ROOT / "docs" / "notion-objet-link-rewrite-plan.md"
 NOTION_OBJET_LINK_CONVERT_PATH = KIT_ROOT / "docs" / "notion-objet-link-convert.md"
 NOTION_OBJET_MANIFEST_LOCATOR_LABEL_PATH = KIT_ROOT / "docs" / "notion-objet-manifest-locator-label.md"
+NOTION_OBJET_SOURCE_MAP_LINK_PLAN_PATH = KIT_ROOT / "docs" / "notion-objet-source-map-link-plan.md"
 VIEW_HEALTH_PATH = KIT_ROOT / "docs" / "view-health.md"
 VIEW_RECOMMENDATION_PLAN_PATH = KIT_ROOT / "docs" / "view-recommendation-plan.md"
 INDEX_HEALTH_PATH = KIT_ROOT / "docs" / "index-health.md"
@@ -313,11 +314,15 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.58.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.58 read-only runtime canonical entrypoint checkpoint",
+            "Status: v0.3.103 read-only runtime canonical entrypoint and material-link routing checkpoint",
             "archive runtime-context <archive-root> --format json",
             "canonical_entrypoints",
+            "AI Runtime Order",
             "archive.yml",
             "AGENTS.md",
+            "archive ai-response-concept-guide <archive-root> --topic all --dry-run",
+            "notion-objet-source-map-link-plan",
+            "notion-objet-link-index",
             "source-bindings.yml",
             "provider-bindings.yml",
             "objects/manifests/files.jsonl",
@@ -1000,7 +1005,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
 
         for phrase in (
-            "Status: v0.3.102 read-only concept and operational terminology guide checkpoint",
+            "Status: v0.3.103 read-only concept, operational terminology, and material-link routing checkpoint",
             "archive ai-response-concept-guide <archive-root> --topic all --locale ko-KR --dry-run --format json",
             "ai-concept-guide",
             "wom-concept-guide",
@@ -1008,6 +1013,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "manifest vs zet",
             "objet -> derived text -> zet",
             "operational terminology translation layer",
+            "material-link routing after body locator omission",
             "derived_from",
             "supersedes",
             "WOM identifies source objets by content fingerprint",
@@ -1018,9 +1024,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Do not say:",
             "The manifest proves the remote file is definitely online.",
             "The AI must not say:",
+            "notion-objet-source-map-link-plan",
+            "notion-objet-link-index",
             "Upload/sync bytes: future work unless a later release explicitly adds",
             "[Source Object Storage Policy](source-object-storage-policy.md)",
             "[Text Provenance Hierarchy](text-provenance-hierarchy.md)",
+            "[Notion Objet Source Map Link Plan](notion-objet-source-map-link-plan.md)",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, guide_text)
@@ -1031,6 +1040,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "operational terminology translation layer",
             "`read-only preview`",
             "CLI `archive ai-response-concept-guide --topic all --locale ko-KR --dry-run`",
+            "`notion-objet-source-map-link-plan`",
             "writes nothing, adds no MCP tool, calls no providers",
         ):
             with self.subTest(phrase=phrase):
@@ -1141,9 +1151,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         notion_rewrite_text = NOTION_OBJET_LINK_REWRITE_PLAN_PATH.read_text(encoding="utf-8")
         notion_convert_text = NOTION_OBJET_LINK_CONVERT_PATH.read_text(encoding="utf-8")
         notion_label_text = NOTION_OBJET_MANIFEST_LOCATOR_LABEL_PATH.read_text(encoding="utf-8")
+        notion_source_map_text = NOTION_OBJET_SOURCE_MAP_LINK_PLAN_PATH.read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         for phrase in (
             "Status: v0.3.18 read-only preview",
             "archive zettel-objet-links <archive-root>",
@@ -1241,6 +1253,22 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, notion_label_text)
         for phrase in (
+            "Status: v0.3.103 read-only source-map material-link planner",
+            "archive notion-objet-source-map-link-plan",
+            "notion_objet_source_map_link_plan",
+            "source-maps/*.jsonl",
+            "download/retrieval ledgers",
+            "page -> file -> `sha256`",
+            "target_mode=embed_edge",
+            "body provider locators",
+            "provider URLs",
+            "page titles",
+            "zettel body text",
+            "Future import adapters should remove provider locators from zettel bodies",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, notion_source_map_text)
+        for phrase in (
             "Zettel objet link preview",
             "archive zettel-objet-links --path <zet.md>|--zettel-id <id> --dry-run",
             "MCP `zettel_objet_links`",
@@ -1251,6 +1279,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "MCP `notion_objet_link_plan`",
             "archive notion-objet-link-index <archive-root> --dry-run",
             "MCP `notion_objet_link_index`",
+            "Notion objet source-map material bridge",
+            "archive notion-objet-source-map-link-plan <archive-root> --source-map <archive-relative-jsonl> --ledger <archive-relative-jsonl> --dry-run",
+            "MCP `notion_objet_source_map_link_plan`",
+            "body provider locators",
+            "candidate_id",
+            "human_review_required",
             "archive notion-objet-link-rewrite-plan --path <zet.md>|--zettel-id <id> --locator-fingerprint sha256:<hex> --object-id sha256:<hex> --dry-run",
             "MCP `notion_objet_link_rewrite_plan`",
             "archive notion-objet-manifest-locator-label --object-id sha256:<hex> --locator-fingerprint sha256:<hex> --dry-run|--approve",
@@ -1269,10 +1303,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "[Zettel Objet Links](wom-kit/docs/zettel-objet-links.md)",
             "[Notion Objet Link Plan](wom-kit/docs/notion-objet-link-plan.md)",
             "[Notion Objet Link Index](wom-kit/docs/notion-objet-link-index.md)",
+            "[Notion Objet Source Map Link Plan](wom-kit/docs/notion-objet-source-map-link-plan.md)",
             "[Notion Objet Link Rewrite Plan](wom-kit/docs/notion-objet-link-rewrite-plan.md)",
             "[Notion Objet Link Convert](wom-kit/docs/notion-objet-link-convert.md)",
             "[Notion Objet Manifest Locator Label](wom-kit/docs/notion-objet-manifest-locator-label.md)",
             "zettel objet link previews",
+            "source-map/ledger based Notion material-link planning",
             "approval-gated Notion objet manifest locator fingerprint labels",
             "approval-gated Notion locator conversion to reviewed `embed` edges",
         ):
@@ -1281,6 +1317,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("[Zettel Objet Links](zettel-objet-links.md)", public_map_text)
         self.assertIn("[Notion Objet Link Plan](notion-objet-link-plan.md)", public_map_text)
         self.assertIn("[Notion Objet Link Index](notion-objet-link-index.md)", public_map_text)
+        self.assertIn("[Notion Objet Source Map Link Plan](notion-objet-source-map-link-plan.md)", public_map_text)
+        self.assertIn("[Notion Objet Source Map Link Plan](notion-objet-source-map-link-plan.md)", public_map_ko_text)
         self.assertIn("[Notion Objet Link Rewrite Plan](notion-objet-link-rewrite-plan.md)", public_map_text)
         self.assertIn("[Notion Objet Link Convert](notion-objet-link-convert.md)", public_map_text)
         self.assertIn("[Notion Objet Manifest Locator Label](notion-objet-manifest-locator-label.md)", public_map_text)

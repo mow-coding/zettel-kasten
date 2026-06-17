@@ -4109,6 +4109,59 @@ def command_notion_objet_link_index(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_notion_objet_source_map_link_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("notion-objet-source-map-link-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.notion_objet_source_map_link_plan(
+            Path(args.archive_root),
+            source_maps=args.source_map,
+            ledgers=args.ledger,
+            dry_run=True,
+            max_rows=args.max_rows,
+            max_candidates=args.max_candidates,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print("Notion objet source-map link plan:")
+        print(f"- source-map records: {summary.get('source_map_record_count', 0)}")
+        print(f"- ledger records: {summary.get('ledger_record_count', 0)}")
+        print(f"- zettel sources: {summary.get('zettel_source_count', 0)}")
+        print(f"- object ref sources: {summary.get('object_ref_source_count', 0)}")
+        print(f"- candidates: {summary.get('candidate_count', 0)}")
+        for candidate in result.get("candidates", []):
+            if not isinstance(candidate, dict):
+                continue
+            zettel = candidate.get("from_zettel") if isinstance(candidate.get("from_zettel"), dict) else {}
+            print(
+                f"* {candidate.get('candidate_id')}: "
+                f"{zettel.get('id') or zettel.get('path') or '-'} -> "
+                f"{candidate.get('target_object_id') or '-'} "
+                f"({candidate.get('confidence') or '-'}, {candidate.get('write_status') or '-'})"
+            )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+        print("Writes: none")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_notion_objet_link_rewrite_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("notion-objet-link-rewrite-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -10362,6 +10415,27 @@ def build_parser() -> argparse.ArgumentParser:
     notion_objet_link_index.add_argument("--max-candidates", type=int, default=5, help="Maximum manifest candidates per locator.")
     notion_objet_link_index.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     notion_objet_link_index.set_defaults(func=command_notion_objet_link_index)
+
+    notion_objet_source_map_link_plan = subcommands.add_parser(
+        "notion-objet-source-map-link-plan",
+        help="Plan zettel to objet material-link candidates from source maps and ledgers without body locators.",
+    )
+    notion_objet_source_map_link_plan.add_argument("archive_root", help="Archive root to inspect.")
+    notion_objet_source_map_link_plan.add_argument(
+        "--source-map",
+        action="append",
+        help="Archive-relative source-map JSON/JSONL/YAML file. Defaults to source-maps/*.jsonl.",
+    )
+    notion_objet_source_map_link_plan.add_argument(
+        "--ledger",
+        action="append",
+        help="Archive-relative download/retrieval ledger JSON/JSONL/YAML file with sha256/object_id metadata.",
+    )
+    notion_objet_source_map_link_plan.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    notion_objet_source_map_link_plan.add_argument("--max-rows", type=int, default=10000, help="Maximum source-map rows to read.")
+    notion_objet_source_map_link_plan.add_argument("--max-candidates", type=int, default=200, help="Maximum candidate links to return.")
+    notion_objet_source_map_link_plan.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    notion_objet_source_map_link_plan.set_defaults(func=command_notion_objet_source_map_link_plan)
 
     notion_objet_link_rewrite_plan = subcommands.add_parser(
         "notion-objet-link-rewrite-plan",

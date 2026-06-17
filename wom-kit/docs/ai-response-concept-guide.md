@@ -1,6 +1,6 @@
 # AI Response Concept Guide
 
-Status: v0.3.102 read-only concept and operational terminology guide checkpoint
+Status: v0.3.103 read-only concept, operational terminology, and material-link routing checkpoint
 Date: 2026-06-17
 
 This guide tells an AI runtime how to explain core WOM ideas when a beginner
@@ -11,12 +11,15 @@ sha256 identity vs location URL
 manifest vs zet
 objet -> derived text -> zet
 operational terminology translation layer
+material-link routing after body locator omission
 ```
 
 It is not a new adapter, importer, uploader, or proof system. It is a read-only
-language guide for safer human-facing answers. v0.3.102 adds an operational
+language guide for safer human-facing answers. v0.3.102 added an operational
 term dictionary so AI responses can translate terms such as `derived_from`,
-`references`, and `supersedes` before asking a human to decide.
+`references`, and `supersedes` before asking a human to decide. v0.3.103 adds
+safe routing for Notion material links when provider locators were already
+removed from imported zettel bodies.
 
 ## Command
 
@@ -222,6 +225,13 @@ draft human zets from already registered evidence?
 
 Then route safely:
 
+- Recover Notion zet-to-objet material candidates after imported zettel bodies
+  no longer contain provider locators: use
+  `notion-objet-source-map-link-plan` with source maps and optional
+  download/retrieval ledgers.
+- Index or plan remaining body-locator matches: use `notion-objet-link-index`
+  or `notion-objet-link-plan` only when imported zettels still contain
+  provider locator text that can be fingerprinted.
 - Register known external hashes: use `prehashed-objet-ledger`.
 - Register already extracted text: use `derive-text capture`.
 - Check extraction completeness: use `derive-text coverage`.
@@ -265,6 +275,7 @@ This guide rephrases existing model documents for AI-human conversation:
 - [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md)
 - [Connection Edge Intelligence Plan](connection-edge-intelligence-plan.md)
 - [Zettel Edge Batch](zettel-edge-batch.md)
+- [Notion Objet Source Map Link Plan](notion-objet-source-map-link-plan.md)
 
 It does not change those underlying implementation boundaries.
 
