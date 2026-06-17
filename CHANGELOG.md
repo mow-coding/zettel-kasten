@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.93 - 2026-06-17
+
+- Extended read-only `archive view-health <archive-root> --dry-run` and MCP
+  `view_health` with `facet_role_summary` and `facet_roles`.
+- The new output uses static key heuristics to separate likely navigation axes
+  such as `subject`, `institution`, `record_type`, and `source_category` from
+  internal/import metadata such as `notion_status`, `migration_batch`, and
+  `contents`.
+- Text output now prints navigation/internal/unknown facet key counts so AI
+  navigation view repair can start from visible facet roles instead of one
+  noisy mixed table.
+- Kept the feature read-only: it writes no view files, rewrites no zettel
+  facets, rebuilds no index, reads no zettel bodies or object bytes, calls no
+  providers, and echoes no zettel titles, absolute local paths, provider URLs,
+  account ids, emails, tokens, or secret values.
+
 ## v0.3.92 - 2026-06-17
 
 - Added `review_summary` output to read-only

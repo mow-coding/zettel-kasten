@@ -1089,12 +1089,18 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         for phrase in (
             "Status: v0.3.90 read-only saved view diagnostics",
+            "Status: v0.3.93 read-only saved view and facet role diagnostics",
             "archive view-health <archive-root> --dry-run",
             "view_health",
             "active",
             "empty_result",
             "blocked",
             "observed facet value samples",
+            "facet_role_summary",
+            "facet_roles",
+            "notion_status",
+            "migration_batch",
+            "unknown",
             "read zettel bodies",
             "echo zettel titles",
             "Relationship To `view-zets`",
@@ -1106,13 +1112,16 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "archive view-health --dry-run",
             "MCP `view_health`",
             "observed facet distribution samples",
+            "facet_role_summary",
+            "navigation axes",
+            "internal/import metadata",
             "echo no zettel titles",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
             "[View Health](wom-kit/docs/view-health.md)",
-            "saved view health checks",
+            "saved view health and facet role diagnostics",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)

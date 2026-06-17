@@ -5125,6 +5125,13 @@ def command_view_health(args: argparse.Namespace) -> int:
             f"{summary.get('empty_view_count', 0)} empty, "
             f"{summary.get('blocked_view_count', 0)} blocked"
         )
+        role_summary = result.get("facet_role_summary") if isinstance(result.get("facet_role_summary"), dict) else {}
+        print(
+            "Facet roles: "
+            f"{role_summary.get('navigation_key_count', 0)} navigation, "
+            f"{role_summary.get('internal_key_count', 0)} internal, "
+            f"{role_summary.get('unknown_key_count', 0)} unknown"
+        )
         for view in result.get("views", []):
             if not isinstance(view, dict):
                 continue

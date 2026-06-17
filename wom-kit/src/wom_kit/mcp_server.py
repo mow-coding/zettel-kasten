@@ -1703,7 +1703,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "view_health",
-        "description": "Diagnose saved view hit counts and facet distributions without reading zettel bodies or writing files.",
+        "description": "Diagnose saved view hit counts, facet distributions, and navigation/internal facet roles without reading zettel bodies or writing files.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -4070,11 +4070,13 @@ def tool_view_health(arguments: dict[str, Any]) -> dict[str, Any]:
         max_values=int(arguments.get("max_values", 10)),
     )
     summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    role_summary = result.get("facet_role_summary") if isinstance(result.get("facet_role_summary"), dict) else {}
     state = "passed" if result.get("ok") else "blocked"
     return tool_success_result(
         "view_health: "
         f"{state}, {summary.get('active_view_count', 0)} active, "
-        f"{summary.get('empty_view_count', 0)} empty.",
+        f"{summary.get('empty_view_count', 0)} empty, "
+        f"{role_summary.get('internal_key_count', 0)} internal facet key(s).",
         result,
     )
 
