@@ -1701,6 +1701,7 @@ def command_migrate(args: argparse.Namespace) -> int:
             target=args.target,
             dry_run=bool(args.dry_run),
             approve=bool(args.approve),
+            revert=bool(args.revert),
         )
     except archive_services.ArchiveServiceError as exc:
         print(str(exc), file=sys.stderr)
@@ -1709,7 +1710,10 @@ def command_migrate(args: argparse.Namespace) -> int:
     if args.format == "json":
         print_json(result)
     else:
-        action = "dry-run" if result["dry_run"] else "approved write"
+        if result.get("revert"):
+            action = "revert dry-run" if result["dry_run"] else "approved revert"
+        else:
+            action = "dry-run" if result["dry_run"] else "approved write"
         print(f"Migration {action}: {result['target']}")
         print(f"Archive: {result['archive_id']}")
         print(f"Files scanned: {result['files_scanned']}")
@@ -9146,6 +9150,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     migrate.add_argument("--dry-run", action="store_true", help="Preview migration changes without writing files.")
     migrate.add_argument("--approve", action="store_true", help="Apply the reviewed migration changes.")
+    migrate.add_argument("--revert", action="store_true", help="Preview or apply a safe migration rollback where the target supports it.")
     migrate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     migrate.set_defaults(func=command_migrate)
 

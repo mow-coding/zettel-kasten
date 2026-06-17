@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.109 - 2026-06-18
+
+- Added receipt-backed `archive migrate --target link-types-v0.3 --revert
+  --dry-run|--approve` for safe link-type migration rollback.
+- The link-type revert removes only recommended connection edge vocabulary
+  records that the migration receipt lists as appended, are unused by current
+  zettel edges, and are unchanged from the base WOM-kit type template.
+- Forward `link-types-v0.3` approval now writes a migration receipt under
+  `receipts/migrations/`; approved revert writes a matching receipt under
+  `receipts/migrations/reverts/`.
+- The revert blocks if a candidate link type is already used by a zettel edge or
+  has been locally modified, avoiding accidental vocabulary loss after real
+  graph writes.
+- Added explicit `frontmatter-v0.3 --revert` fail-closed behavior with
+  `snapshot_receipt_required`, because lossless frontmatter rollback needs
+  future migration snapshot receipts.
+- Kept the boundary local: no provider calls, source export reads, edge writes,
+  edge receipt deletion, unreceipted type removal, or guessed frontmatter
+  restoration were added.
+
 ## v0.3.108 - 2026-06-18
 
 - Fixed the matching large-manifest scale issue in `archive zettel-edge-batch`
