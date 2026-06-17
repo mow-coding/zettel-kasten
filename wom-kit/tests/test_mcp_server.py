@@ -670,6 +670,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("zettel_objet_links", tool_names)
             self.assertIn("notion_objet_link_plan", tool_names)
             self.assertIn("notion_objet_link_index", tool_names)
+            self.assertIn("notion_objet_link_rewrite_plan", tool_names)
             self.assertIn("view_recommendation_plan", tool_names)
             self.assertIn("project_intake_plan", tool_names)
             self.assertIn("project_intake_unpack_queue", tool_names)
@@ -4878,6 +4879,134 @@ class McpServerTests(unittest.TestCase):
                             "arguments": {
                                 "archive_root": str(allowed_archive),
                                 "path": "inbox/zet_mcp_objet_links.md",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                self.assertTrue(dry_run_response["result"]["isError"])
+                self.assertIn("dry-run only", dry_run_response["result"]["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_notion_objet_link_rewrite_plan_tool_validates_selection_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            manifest_path = allowed_archive / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+            notion_url = "https://www.notion.so/private-workspace/Mcp-Rewrite-abcdef1234567890"
+            locator_fingerprint = "sha256:" + hashlib.sha256(notion_url.lower().encode("utf-8")).hexdigest()
+            object_digest = "c" * 64
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "object_id": f"sha256:{object_digest}",
+                        "sha256": object_digest,
+                        "logical_key": f"objects/external/prehashed/notion_source_export/{object_digest[:2]}/{object_digest}",
+                        "mime": "application/json",
+                        "size_bytes": 321,
+                        "locations": [
+                            {
+                                "provider": "external_prehashed",
+                                "store_kind": "notion_source_export",
+                                "store_ref": "notion-export-20260617",
+                                "availability": "declared_external",
+                                "content_addressed": True,
+                                "byte_verification_by_wom_kit": False,
+                            }
+                        ],
+                        "provenance": {
+                            "source": "prehashed_external_objet_ledger",
+                            "provider_locator_sha256": locator_fingerprint.removeprefix("sha256:"),
+                        },
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (allowed_archive / "inbox" / "zet_mcp_notion_rewrite_plan.md").write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_mcp_notion_rewrite_plan",
+                        "status: draft",
+                        "title: MCP rewrite private title must not echo",
+                        "---",
+                        "",
+                        "MCP rewrite private body must not echo.",
+                        f'<mention-page url="{notion_url}">MCP rewrite private page title</mention-page>',
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8", errors="ignore")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "notion_objet_link_rewrite_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "path": "inbox/zet_mcp_notion_rewrite_plan.md",
+                                "locator_fingerprint": locator_fingerprint,
+                                "object_id": f"sha256:{object_digest}",
+                                "expected_occurrence_count": 1,
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"], structured)
+                self.assertEqual(structured["lifecycle_action"], "notion_objet_link_rewrite_plan")
+                self.assertEqual(structured["selected_object_id"], f"sha256:{object_digest}")
+                self.assertEqual(structured["selected_locator"]["occurrence_count"], 1)
+                self.assertEqual(structured["would_change"][0]["change_kind"], "replace_provider_locator_with_objet_ref")
+                self.assertFalse(structured["privacy_guards"]["provider_urls_echoed"])
+                self.assertFalse(structured["privacy_guards"]["zettel_body_text_echoed"])
+                self.assertFalse(structured["privacy_guards"]["page_titles_echoed"])
+                self.assertFalse(structured["privacy_guards"]["writes"])
+                structured_dump = json.dumps(structured)
+                self.assertNotIn(notion_url, structured_dump)
+                self.assertNotIn("MCP rewrite private", structured_dump)
+                self.assertNotIn(str(allowed_archive), structured_dump)
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8", errors="ignore")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "notion_objet_link_rewrite_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "path": "inbox/zet_mcp_notion_rewrite_plan.md",
+                                "locator_fingerprint": locator_fingerprint,
+                                "object_id": f"sha256:{object_digest}",
                                 "dry_run": False,
                             },
                         },

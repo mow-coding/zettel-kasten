@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.98 - 2026-06-17
+
+- Added read-only `archive notion-objet-link-rewrite-plan <archive-root>
+  --path <zet.md>|--zettel-id <id> --locator-fingerprint sha256:<hex>
+  --object-id sha256:<hex> --dry-run` and MCP
+  `notion_objet_link_rewrite_plan`.
+- The new planner validates one human-reviewed Notion locator/object pair after
+  `notion-objet-link-plan`: selected locator fingerprint, selected object id,
+  target mode, and optional occurrence-count drift guard.
+- Output includes safe selected locator metadata, selected manifest candidate
+  metadata, an approval checklist, and `would_change` for the future approved
+  conversion shape.
+- Kept the feature read-only: it writes no zettels, rewrites no provider
+  locators, writes no `embed` edges, reads no object bytes, calls no providers,
+  creates no presigned URLs, and echoes no provider URLs, zettel body text,
+  frontmatter values, page titles, absolute local paths, credentials, or
+  secrets.
+
 ## v0.3.97 - 2026-06-17
 
 - Added read-only `archive view-recommendation-plan <archive-root> --dry-run`

@@ -44,6 +44,7 @@
 - [Derived Text Capture](derived-text.md)
 - [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md)
 - [Notion Objet Link Index](notion-objet-link-index.md)
+- [Notion Objet Link Rewrite Plan](notion-objet-link-rewrite-plan.md)
 - [View Recommendation Plan](view-recommendation-plan.md)
 
 이 문서들이 다루는 내용:
@@ -162,6 +163,7 @@
 - [IMAP Mailbox Material Capture Approval Plan](imap-mailbox-material-capture-approval-plan.md)
 - [IMAP Mailbox Material Capture Approval Audit](imap-mailbox-material-capture-approval-audit.md)
 - [Notion Objet Link Index](notion-objet-link-index.md)
+- [Notion Objet Link Rewrite Plan](notion-objet-link-rewrite-plan.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
 - [WOM Profile Registry](wom-profile-registry.md)
 - [WOM Profile Wallet Model](wom-profile-wallet-model.md)
