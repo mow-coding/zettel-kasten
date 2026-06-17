@@ -40,6 +40,7 @@ CREDENTIAL_ADAPTER_MANIFEST_SCHEMA_PATH = KIT_ROOT / "schemas" / "credential-ada
 CREDENTIAL_ADAPTER_AUDIT_PATH = KIT_ROOT / "docs" / "credential-adapter-audit-plan.md"
 HUMAN_ARTIFACT_STORE_CONTRACT_PATH = KIT_ROOT / "docs" / "human-artifact-store-contract.md"
 EXTERNAL_EXPORT_PLAN_PATH = KIT_ROOT / "docs" / "external-export-plan.md"
+EXTERNAL_IMPORTS_PATH = KIT_ROOT / "docs" / "external-imports.md"
 CONNECTION_IMPORT_PLAN_PATH = KIT_ROOT / "docs" / "connection-import-plan.md"
 CONNECTION_EVIDENCE_PARSER_CONTRACT_PATH = KIT_ROOT / "docs" / "connection-evidence-parser-contract.md"
 CONNECTION_EVIDENCE_FIXTURE_PARSER_PATH = KIT_ROOT / "docs" / "connection-evidence-fixture-parser.md"
@@ -137,6 +138,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Credential adapter manifest plan",
             "Credential adapter audit plan",
             "External export plan",
+            "External import",
             "IMAP mailbox source plan",
             "IMAP mailbox operation request plan",
             "IMAP mailbox adapter manifest plan",
@@ -178,6 +180,50 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for row in required_rows:
             with self.subTest(row=row):
                 self.assertIn(row, text)
+
+    def test_external_import_docs_explain_source_ref_preservation_boundary(self) -> None:
+        imports_text = EXTERNAL_IMPORTS_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        root_readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.105.md").read_text(
+            encoding="utf-8"
+        )
+        for phrase in (
+            "source_refs, when the manifest supplies explicit safe object refs",
+            "Source Ref Preservation",
+            "object_id",
+            "objet_ref",
+            "source_ref_count",
+            "source_refs_preserved",
+            "does not treat the imported text body hash as an object ref",
+            "calls no providers",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, imports_text)
+        for phrase in (
+            "External import",
+            "archive import-external <archive-root> --source notion|google_drive --export <folder-or-manifest> --dry-run|--approve --reviewed-by <actor>",
+            "source_ref_count",
+            "source_refs_preserved",
+            "does not call Notion or Google Drive APIs",
+            "MCP exposes read-only `external_import_plan` only",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "explicit safe object refs",
+            "source_refs",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, kit_readme_text)
+                self.assertIn(phrase, root_readme_text)
+        for phrase in (
+            "# v0.3.105 - External Import Source Ref Preservation",
+            "does not treat the imported text body hash as a source object id",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
 
     def test_projection_plan_docs_surface_supported_values_and_notion_boundary(self) -> None:
         text = ZET_PROJECTION_PLAN_PATH.read_text(encoding="utf-8")
