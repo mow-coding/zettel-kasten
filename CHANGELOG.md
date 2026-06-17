@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.107 - 2026-06-18
+
+- Fixed the large-manifest startup hang in
+  `archive notion-objet-source-map-link-plan` and the dependent
+  `archive notion-objet-import-clue-audit` path.
+- Reused one preloaded object-manifest index for source-map material planning
+  instead of resolving each manifest object through a full manifest reload, and
+  kept local candidate checks lightweight for archive-relative paths.
+- Added a regression test that blocks per-object `resolve_objet_ref` calls on a
+  scaled manifest fixture.
+- Verified the fix against a real large local archive shape with 19k object
+  manifest rows, 303 zettel sources, and 121/120 source-map/ledger rows: the
+  source-map planner and import clue audit complete in seconds instead of
+  timing out with zero output.
+- Kept the commands read-only: no zettel body reads, object byte reads, provider
+  calls, provider URL echoes, edge writes, receipt writes, or body rewrites were
+  added.
+
 ## v0.3.106 - 2026-06-17
 
 - Added machine-readable AI guide handoff fields to `runtime-context`

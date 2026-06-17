@@ -926,7 +926,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.106 pre-release",
+            "v0.3.107 pre-release",
             "[Zettel Edge Write](wom-kit/docs/zettel-edge-write.md)",
             "[Zettel Edge Batch](wom-kit/docs/zettel-edge-batch.md)",
             "approval-gated single-edge zettel edge writes",
@@ -1225,6 +1225,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         notion_source_map_text = NOTION_OBJET_SOURCE_MAP_LINK_PLAN_PATH.read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.107.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         for phrase in (
@@ -1324,13 +1325,15 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, notion_label_text)
         for phrase in (
-            "Status: v0.3.104 read-only import material-clue audit",
+            "Status: v0.3.107 read-only scaled import material-clue audit",
             "archive notion-objet-import-clue-audit",
             "notion_objet_import_clue_audit",
             "preserved_object_ref_or_edge",
             "source_map_join_available",
             "missing_material_clue_after_locator_omission",
             "no_omission_signal_or_body_locator_path_needed",
+            "large-manifest startup fix",
+            "preloaded manifest index",
             "reads no zettel body text",
             "provider URLs",
             "frontmatter values",
@@ -1339,11 +1342,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, notion_import_audit_text)
         for phrase in (
-            "Status: v0.3.103 read-only source-map material-link planner",
+            "Status: v0.3.107 read-only scaled source-map material-link planner",
             "archive notion-objet-source-map-link-plan",
             "notion_objet_source_map_link_plan",
             "source-maps/*.jsonl",
             "download/retrieval ledgers",
+            "manifest once and reusing a local object-id index",
+            "large-manifest optimization",
             "page -> file -> `sha256`",
             "target_mode=embed_edge",
             "body provider locators",
@@ -1372,6 +1377,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Notion objet source-map material bridge",
             "archive notion-objet-source-map-link-plan <archive-root> --source-map <archive-relative-jsonl> --ledger <archive-relative-jsonl> --dry-run",
             "MCP `notion_objet_source_map_link_plan`",
+            "preloads the manifest once",
+            "large manifests do not trigger per-object full manifest resolution",
             "body provider locators",
             "candidate_id",
             "human_review_required",
@@ -1400,12 +1407,22 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "[Notion Objet Manifest Locator Label](wom-kit/docs/notion-objet-manifest-locator-label.md)",
             "zettel objet link previews",
             "import material-clue auditing",
-            "source-map/ledger based Notion material-link planning",
+            "scaled source-map/ledger based Notion material-link planning",
             "approval-gated Notion objet manifest locator fingerprint labels",
             "approval-gated Notion locator conversion to reviewed `embed` edges",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
+        for phrase in (
+            "# v0.3.107 - Source Map Scale Fix",
+            "large-manifest startup hang",
+            "reuses a local object-id index",
+            "19,055",
+            "Both affected commands completed in seconds",
+            "read-only",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
         self.assertIn("[Zettel Objet Links](zettel-objet-links.md)", public_map_text)
         self.assertIn("[Notion Objet Link Plan](notion-objet-link-plan.md)", public_map_text)
         self.assertIn("[Notion Objet Link Index](notion-objet-link-index.md)", public_map_text)
