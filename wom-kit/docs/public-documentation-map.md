@@ -49,6 +49,7 @@ Supporting philosophy and model docs:
 - [Presigned URL Plan](presigned-url-plan.md)
 - [Zettel Objet Links](zettel-objet-links.md)
 - [Notion Objet Link Plan](notion-objet-link-plan.md)
+- [Notion Objet Link Index](notion-objet-link-index.md)
 - [View Health](view-health.md)
 - [Index Health](index-health.md)
 
@@ -170,6 +171,7 @@ Onboarding and setup plans:
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)
 - [Objet Ref Resolution](objet-ref-resolution.md)
 - [Zettel Objet Links](zettel-objet-links.md)
+- [Notion Objet Link Index](notion-objet-link-index.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
 - [WOM Profile Registry](wom-profile-registry.md)
 - [WOM Profile Wallet Model](wom-profile-wallet-model.md)

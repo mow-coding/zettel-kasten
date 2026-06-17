@@ -1744,6 +1744,21 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "notion_objet_link_index",
+        "description": "Index Notion provider locator to manifested objet link candidates across zettels. Read-only; never echoes provider URLs, body text, frontmatter values, absolute paths, presigned URLs, object bytes, or writes files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+                "max_zettels": {"type": "integer", "minimum": 1, "maximum": 500, "default": 50},
+                "max_locators_per_zettel": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                "max_candidates": {"type": "integer", "minimum": 1, "maximum": 50, "default": 5},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "block_header_check",
         "description": "Dry-run preview of the derived block header for one draft or canonical zet.",
         "inputSchema": {
@@ -2565,6 +2580,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_index_health(arguments)
     if name == "notion_objet_link_plan":
         return tool_notion_objet_link_plan(arguments)
+    if name == "notion_objet_link_index":
+        return tool_notion_objet_link_index(arguments)
     if name == "block_header_check":
         return tool_block_header_check(arguments)
     if name == "zet_projection_plan_check":
@@ -4057,6 +4074,28 @@ def tool_notion_objet_link_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result.get("ok") else "blocked"
     return tool_success_result(f"notion_objet_link_plan: {state}, {result['locator_count']} locator(s).", result)
+
+
+def tool_notion_objet_link_index(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("notion_objet_link_index is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.notion_objet_link_index,
+        archive_root,
+        dry_run=True,
+        max_zettels=int(arguments.get("max_zettels", 50)),
+        max_locators_per_zettel=int(arguments.get("max_locators_per_zettel", 20)),
+        max_candidates=int(arguments.get("max_candidates", 5)),
+    )
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    state = "passed" if result.get("ok") else "blocked"
+    return tool_success_result(
+        "notion_objet_link_index: "
+        f"{state}, {summary.get('zettels_with_locator_count', 0)} zettel(s), "
+        f"{summary.get('zettel_locator_rows_with_manifest_candidate_count', 0)} matched locator row(s).",
+        result,
+    )
 
 
 def tool_view_health(arguments: dict[str, Any]) -> dict[str, Any]:
