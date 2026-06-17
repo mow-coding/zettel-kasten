@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.91 - 2026-06-17
+
+- Added read-only CLI `archive index-health <archive-root> --dry-run` and MCP
+  `index_health` to check generated-index drift before running `view-zets`,
+  `view-health`, `related-zets`, or `search`.
+- The check compares live zettel paths and basic frontmatter metadata
+  (`id`, `status`, and `kind`) against rows in `db/archive-index.sqlite`, and
+  flags zettel files modified after the index was generated.
+- Output reports missing live zets, extra indexed paths, changed metadata, and
+  modified-after-index samples with archive-relative paths only.
+- Kept the command read-only: it writes nothing, rebuilds no index, reads no
+  object bytes, calls no providers, and echoes no zettel body text, zettel
+  titles, absolute local paths, provider URLs, account ids, emails, tokens, or
+  secret values.
+
 ## v0.3.90 - 2026-06-17
 
 - Added read-only CLI `archive view-health <archive-root> --dry-run` and MCP
