@@ -75,6 +75,7 @@ ZETTEL_OBJET_LINKS_PATH = KIT_ROOT / "docs" / "zettel-objet-links.md"
 NOTION_OBJET_LINK_PLAN_PATH = KIT_ROOT / "docs" / "notion-objet-link-plan.md"
 NOTION_OBJET_LINK_INDEX_PATH = KIT_ROOT / "docs" / "notion-objet-link-index.md"
 NOTION_OBJET_LINK_REWRITE_PLAN_PATH = KIT_ROOT / "docs" / "notion-objet-link-rewrite-plan.md"
+NOTION_OBJET_MANIFEST_LOCATOR_LABEL_PATH = KIT_ROOT / "docs" / "notion-objet-manifest-locator-label.md"
 VIEW_HEALTH_PATH = KIT_ROOT / "docs" / "view-health.md"
 VIEW_RECOMMENDATION_PLAN_PATH = KIT_ROOT / "docs" / "view-recommendation-plan.md"
 INDEX_HEALTH_PATH = KIT_ROOT / "docs" / "index-health.md"
@@ -843,7 +844,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.99 pre-release",
+            "v0.3.100 pre-release",
             "[Zettel Edge Write](wom-kit/docs/zettel-edge-write.md)",
             "[Zettel Edge Batch](wom-kit/docs/zettel-edge-batch.md)",
             "approval-gated single-edge zettel edge writes",
@@ -1124,6 +1125,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         notion_plan_text = NOTION_OBJET_LINK_PLAN_PATH.read_text(encoding="utf-8")
         notion_index_text = NOTION_OBJET_LINK_INDEX_PATH.read_text(encoding="utf-8")
         notion_rewrite_text = NOTION_OBJET_LINK_REWRITE_PLAN_PATH.read_text(encoding="utf-8")
+        notion_label_text = NOTION_OBJET_MANIFEST_LOCATOR_LABEL_PATH.read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
@@ -1154,7 +1156,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "provider URLs",
             "page titles",
             "Redacted zettels are blocked",
-            "This release does not perform that rewrite",
+            "notion-objet-manifest-locator-label",
+            "This release does not perform that body rewrite",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, notion_plan_text)
@@ -1168,7 +1171,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "provider URLs",
             "zettel body text",
             "Redacted zettels are counted",
-            "This release does not perform that rewrite",
+            "notion-objet-manifest-locator-label",
+            "This release does not perform that body rewrite",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, notion_index_text)
@@ -1182,10 +1186,25 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "embed_edge",
             "provider URLs",
             "page titles",
-            "This release does not perform that rewrite or edge write",
+            "notion-objet-manifest-locator-label",
+            "This release does not perform that body rewrite or edge write",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, notion_rewrite_text)
+        for phrase in (
+            "Status: v0.3.100 approval-gated manifest locator label write checkpoint",
+            "archive notion-objet-manifest-locator-label",
+            "notion-objet-locator-label",
+            "provider_locator_sha256",
+            "provider_locator_sha256_values",
+            "receipts/objects/notion-locator-labels",
+            "MCP exposes no write tool",
+            "does not store or print the Notion URL",
+            "notion-objet-link-index",
+            "notion-objet-link-rewrite-plan",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, notion_label_text)
         for phrase in (
             "Zettel objet link preview",
             "archive zettel-objet-links --path <zet.md>|--zettel-id <id> --dry-run",
@@ -1199,9 +1218,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "MCP `notion_objet_link_index`",
             "archive notion-objet-link-rewrite-plan --path <zet.md>|--zettel-id <id> --locator-fingerprint sha256:<hex> --object-id sha256:<hex> --dry-run",
             "MCP `notion_objet_link_rewrite_plan`",
+            "archive notion-objet-manifest-locator-label --object-id sha256:<hex> --locator-fingerprint sha256:<hex> --dry-run|--approve",
+            "receipts/objects/notion-locator-labels/*.notion-objet-manifest-locator-label.json",
             "future target mode",
-            "provider URLs, page titles",
+            "provider URLs, provider locator text",
             "skip or block redacted zettel content",
+            "MCP exposes no write tool for the manifest label surface",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -1210,8 +1232,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "[Notion Objet Link Plan](wom-kit/docs/notion-objet-link-plan.md)",
             "[Notion Objet Link Index](wom-kit/docs/notion-objet-link-index.md)",
             "[Notion Objet Link Rewrite Plan](wom-kit/docs/notion-objet-link-rewrite-plan.md)",
+            "[Notion Objet Manifest Locator Label](wom-kit/docs/notion-objet-manifest-locator-label.md)",
             "zettel objet link previews",
-            "archive-wide Notion provider locator to manifested objet link planning and reviewed rewrite planning",
+            "approval-gated Notion objet manifest locator fingerprint labels",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
@@ -1219,6 +1242,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("[Notion Objet Link Plan](notion-objet-link-plan.md)", public_map_text)
         self.assertIn("[Notion Objet Link Index](notion-objet-link-index.md)", public_map_text)
         self.assertIn("[Notion Objet Link Rewrite Plan](notion-objet-link-rewrite-plan.md)", public_map_text)
+        self.assertIn("[Notion Objet Manifest Locator Label](notion-objet-manifest-locator-label.md)", public_map_text)
 
     def test_view_health_doc_and_matrix_explain_empty_saved_view_diagnostics(self) -> None:
         view_health_text = VIEW_HEALTH_PATH.read_text(encoding="utf-8")

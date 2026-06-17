@@ -8791,6 +8791,205 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
 
+    def test_notion_objet_manifest_locator_label_write_enables_index_matching_without_echoing_locator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+            notion_url = "https://www.notion.so/private-workspace/Label-Page-abcdef1234567890"
+            locator_fingerprint = "sha256:" + hashlib.sha256(notion_url.lower().encode("utf-8")).hexdigest()
+            object_digest = "c" * 64
+            object_id = f"sha256:{object_digest}"
+            manifest_record = {
+                "object_id": object_id,
+                "sha256": object_digest,
+                "logical_key": f"objects/external/prehashed/notion_source_export/{object_digest[:2]}/{object_digest}",
+                "mime": "application/json",
+                "size_bytes": 654,
+                "locations": [
+                    {
+                        "provider": "external_prehashed",
+                        "store_kind": "notion_source_export",
+                        "store_ref": "notion-export-20260617",
+                        "availability": "declared_external",
+                        "content_addressed": True,
+                        "byte_verification_by_wom_kit": False,
+                    }
+                ],
+                "provenance": {"source": "prehashed_external_objet_ledger"},
+            }
+            with manifest_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(manifest_record, ensure_ascii=False, sort_keys=True) + "\n")
+
+            zettel_path = archive_root / "inbox" / "zet_notion_locator_label.md"
+            zettel_path.write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_locator_label",
+                        "status: draft",
+                        "title: Label private title must not echo",
+                        "---",
+                        "",
+                        "Label private body must not echo.",
+                        f'<mention-page url="{notion_url}">Label private page title</mention-page>',
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            pre_code, pre_output = self.run_cli(
+                [
+                    "notion-objet-link-index",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            pre_index = json.loads(pre_output)
+            self.assertEqual(pre_code, 0, pre_output)
+            self.assertEqual(pre_index["summary"]["zettel_locator_rows_with_manifest_candidate_count"], 0)
+            self.assertEqual(pre_index["summary"]["zettel_locator_rows_without_manifest_candidate_count"], 1)
+            self.assertEqual(pre_index["manifest_summary"]["notion_labeled_record_count"], 1)
+
+            before = self.snapshot_archive_files(archive_root)
+            dry_code, dry_output = self.run_cli(
+                [
+                    "notion-objet-manifest-locator-label",
+                    str(archive_root),
+                    "--object-id",
+                    object_id,
+                    "--locator-fingerprint",
+                    locator_fingerprint,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            dry_result = json.loads(dry_output)
+            serialized_dry = json.dumps(dry_result, ensure_ascii=False)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertTrue(dry_result["ok"], dry_result)
+            self.assertEqual(dry_result["lifecycle_action"], "notion_objet_manifest_locator_label_plan")
+            self.assertEqual(dry_result["write_status"], "would_write")
+            self.assertTrue(dry_result["manifest_update"]["would_add_label"])
+            self.assertFalse(dry_result["manifest_update"]["already_labeled"])
+            self.assertEqual(dry_result["files_written"], [])
+            self.assertIn("objects/manifests/files.jsonl", dry_result["would_change"])
+            self.assertFalse(dry_result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(dry_result["privacy_guards"]["provider_locator_text_echoed"])
+            self.assertFalse(dry_result["privacy_guards"]["zettel_body_text_echoed"])
+            self.assertFalse(dry_result["closed_actions"]["provider_api_called"])
+            self.assertFalse(dry_result["closed_actions"]["zettel_body_read"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            for forbidden in (
+                notion_url,
+                "Label private title",
+                "Label private body",
+                "Label private page title",
+                str(archive_root),
+            ):
+                with self.subTest(forbidden=forbidden):
+                    self.assertNotIn(forbidden, serialized_dry)
+
+            missing_review_code, missing_review_output = self.run_cli(
+                [
+                    "notion-objet-manifest-locator-label",
+                    str(archive_root),
+                    "--object-id",
+                    object_id,
+                    "--locator-fingerprint",
+                    locator_fingerprint,
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            missing_review = json.loads(missing_review_output)
+            self.assertEqual(missing_review_code, 1)
+            self.assertIn("requires --reviewed-by", "\n".join(missing_review["blockers"]))
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "notion-objet-manifest-locator-label",
+                    str(archive_root),
+                    "--object-id",
+                    object_id,
+                    "--locator-fingerprint",
+                    locator_fingerprint,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:fixture-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            approve_result = json.loads(approve_output)
+            serialized_approve = json.dumps(approve_result, ensure_ascii=False)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"], approve_result)
+            self.assertEqual(approve_result["lifecycle_action"], "notion_objet_manifest_locator_label_write")
+            self.assertEqual(approve_result["write_status"], "written")
+            self.assertEqual(approve_result["manifest_update"]["added_labels"], 1)
+            self.assertTrue(approve_result["receipt"]["receipt_written"])
+            self.assertIn("objects/manifests/files.jsonl", approve_result["files_written"])
+            self.assertIn(approve_result["receipt"]["receipt_path"], approve_result["files_written"])
+            self.assertFalse(approve_result["closed_actions"]["provider_api_called"])
+            self.assertFalse(approve_result["closed_actions"]["zettel_body_read"])
+            self.assertFalse(approve_result["closed_actions"]["edges_written"])
+            self.assertTrue(approve_result["closed_actions"]["manifest_written"])
+            self.assertTrue(approve_result["closed_actions"]["receipt_written"])
+            self.assertNotIn(notion_url, serialized_approve)
+            self.assertNotIn("Label private", serialized_approve)
+            self.assertNotIn(str(archive_root), serialized_approve)
+
+            updated_records = [json.loads(line) for line in manifest_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(updated_records[-1]["provenance"]["provider_locator_sha256"], locator_fingerprint.removeprefix("sha256:"))
+            receipt_path = archive_root / approve_result["receipt"]["receipt_path"]
+            self.assertTrue(receipt_path.is_file())
+            receipt_text = receipt_path.read_text(encoding="utf-8")
+            self.assertNotIn(notion_url, receipt_text)
+            self.assertNotIn("Label private", receipt_text)
+
+            post_code, post_output = self.run_cli(
+                [
+                    "notion-objet-link-index",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            post_index = json.loads(post_output)
+            self.assertEqual(post_code, 0, post_output)
+            self.assertEqual(post_index["summary"]["zettel_locator_rows_with_manifest_candidate_count"], 1)
+            self.assertEqual(post_index["summary"]["zettel_locator_rows_without_manifest_candidate_count"], 0)
+            matched_entry = next(entry for entry in post_index["zettels"] if entry["id"] == "zet_notion_locator_label")
+            self.assertEqual(matched_entry["locators"][0]["candidates"][0]["object_id"], object_id)
+            self.assertNotIn(notion_url, post_output)
+            self.assertNotIn("Label private", post_output)
+
+            already_code, already_output = self.run_cli(
+                [
+                    "notion-objet-manifest-locator-label",
+                    str(archive_root),
+                    "--object-id",
+                    object_id,
+                    "--locator-fingerprint",
+                    locator_fingerprint,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            already = json.loads(already_output)
+            self.assertEqual(already_code, 0, already_output)
+            self.assertEqual(already["write_status"], "already_labeled")
+            self.assertEqual(already["would_change"], [])
+
     def test_prehashed_objet_ledger_approve_blocks_invalid_rows_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

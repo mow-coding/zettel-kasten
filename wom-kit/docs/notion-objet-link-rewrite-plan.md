@@ -117,6 +117,10 @@ Use `notion-objet-link-plan` next on one matched zettel.
 Use `notion-objet-link-rewrite-plan` only after selecting one locator/object
 pair from the one-zettel plan.
 
+If the one-zettel plan cannot find a manifest candidate because the manifest
+lacks the reviewed locator fingerprint, use
+`notion-objet-manifest-locator-label` first.
+
 After a future approved conversion writes stable refs or edges, use
 `zettel-objet-links` to inspect safe local-client objet link candidates.
 
@@ -126,4 +130,5 @@ A later approval-gated command can perform the actual reviewed conversion. It
 should require `--approve`, `--reviewed-by`, this dry-run plan shape, and a
 fresh re-run of the same checks before writing.
 
-This release does not perform that rewrite or edge write.
+This release does not perform that body rewrite or edge write. The approved
+manifest locator label write is a separate earlier step.

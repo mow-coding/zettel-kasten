@@ -119,9 +119,15 @@ rewrite or edge write.
 This keeps the bulk discovery step separate from the high-trust conversion
 step.
 
+If the index finds locator rows but 0 manifest candidates even though Notion
+source-export objects exist, use
+`notion-objet-manifest-locator-label` after human review to add the missing
+non-secret locator fingerprint to the chosen object manifest record.
+
 ## Future Work
 
-A later approval-gated command can replace reviewed Notion provider locators
-with `objet:sha256:<hex>` refs or write reviewed `embed` edges.
+An approval-gated manifest locator label command now exists. A later
+approval-gated command can still replace reviewed Notion provider locators with
+`objet:sha256:<hex>` refs or write reviewed `embed` edges.
 
-This release does not perform that rewrite.
+This release does not perform that body rewrite.
