@@ -72,6 +72,7 @@ NOTION_PAGE_SNAPSHOT_MODEL_PATH = KIT_ROOT / "docs" / "notion-page-snapshot-mode
 OBJET_REF_RESOLUTION_PATH = KIT_ROOT / "docs" / "objet-ref-resolution.md"
 ZETTEL_OBJET_LINKS_PATH = KIT_ROOT / "docs" / "zettel-objet-links.md"
 NOTION_OBJET_LINK_PLAN_PATH = KIT_ROOT / "docs" / "notion-objet-link-plan.md"
+NOTION_OBJET_LINK_INDEX_PATH = KIT_ROOT / "docs" / "notion-objet-link-index.md"
 VIEW_HEALTH_PATH = KIT_ROOT / "docs" / "view-health.md"
 INDEX_HEALTH_PATH = KIT_ROOT / "docs" / "index-health.md"
 SOURCE_OBJECT_STORAGE_POLICY_PATH = KIT_ROOT / "docs" / "source-object-storage-policy.md"
@@ -1091,6 +1092,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
     def test_zettel_objet_links_doc_and_matrix_keep_read_only_boundaries(self) -> None:
         links_text = ZETTEL_OBJET_LINKS_PATH.read_text(encoding="utf-8")
         notion_plan_text = NOTION_OBJET_LINK_PLAN_PATH.read_text(encoding="utf-8")
+        notion_index_text = NOTION_OBJET_LINK_INDEX_PATH.read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
@@ -1126,6 +1128,20 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, notion_plan_text)
         for phrase in (
+            "Status: v0.3.96 read-only bulk locator index",
+            "archive notion-objet-link-index",
+            "notion_objet_link_index",
+            "archive-wide counts",
+            "locator rows with and without manifest candidates",
+            "suggested `objet:sha256:<hex>` refs",
+            "provider URLs",
+            "zettel body text",
+            "Redacted zettels are counted",
+            "This release does not perform that rewrite",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, notion_index_text)
+        for phrase in (
             "Zettel objet link preview",
             "archive zettel-objet-links --path <zet.md>|--zettel-id <id> --dry-run",
             "MCP `zettel_objet_links`",
@@ -1134,20 +1150,25 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Notion objet locator bridge",
             "archive notion-objet-link-plan --path <zet.md>|--zettel-id <id> --dry-run",
             "MCP `notion_objet_link_plan`",
+            "archive notion-objet-link-index <archive-root> --dry-run",
+            "MCP `notion_objet_link_index`",
             "provider URLs, page titles",
+            "skip redacted zettel content",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
             "[Zettel Objet Links](wom-kit/docs/zettel-objet-links.md)",
             "[Notion Objet Link Plan](wom-kit/docs/notion-objet-link-plan.md)",
+            "[Notion Objet Link Index](wom-kit/docs/notion-objet-link-index.md)",
             "zettel objet link previews",
-            "Notion provider locator to manifested objet link planning",
+            "archive-wide Notion provider locator to manifested objet link planning",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         self.assertIn("[Zettel Objet Links](zettel-objet-links.md)", public_map_text)
         self.assertIn("[Notion Objet Link Plan](notion-objet-link-plan.md)", public_map_text)
+        self.assertIn("[Notion Objet Link Index](notion-objet-link-index.md)", public_map_text)
 
     def test_view_health_doc_and_matrix_explain_empty_saved_view_diagnostics(self) -> None:
         view_health_text = VIEW_HEALTH_PATH.read_text(encoding="utf-8")

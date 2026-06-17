@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.96 - 2026-06-17
+
+- Added read-only `archive notion-objet-link-index <archive-root> --dry-run`
+  and MCP `notion_objet_link_index`.
+- The new index scans non-redacted zets across an archive for Notion provider
+  locator fingerprints, then reports safe counts for zets, locator rows,
+  distinct locator fingerprints, and locator rows with or without manifested
+  objet candidates.
+- Output includes safe zettel summaries, object ids, and suggested
+  `objet:sha256:<hex>` refs for later human review, but never echoes provider
+  URLs, zettel body text, frontmatter values, page titles, absolute local paths,
+  credentials, or secrets.
+- The existing one-zettel `notion-objet-link-plan` remains the next review step
+  before any future approval-gated locator rewrite or reviewed `embed` edge.
+- Kept the feature read-only: it writes no zettels, writes no edges, calls no
+  providers, creates no presigned URLs, reads no object bytes, and skips
+  redacted zettel content.
+
 ## v0.3.95 - 2026-06-17
 
 - Added `mint_checklist_guidance` to read-only `archive mint-zettel --dry-run`

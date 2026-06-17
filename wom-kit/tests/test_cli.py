@@ -8323,6 +8323,140 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
 
+    def test_notion_objet_link_index_summarizes_archive_without_echoing_private_locators(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+            matched_url = "https://www.notion.so/private-workspace/Matched-Page-abcdef1234567890"
+            unmatched_url = "https://www.notion.so/private-workspace/Unmatched-Page-fedcba0987654321"
+            matched_url_hash = hashlib.sha256(matched_url.lower().encode("utf-8")).hexdigest()
+            object_digest = "f" * 64
+            manifest_record = {
+                "object_id": f"sha256:{object_digest}",
+                "sha256": object_digest,
+                "logical_key": f"objects/external/prehashed/notion_source_export/{object_digest[:2]}/{object_digest}",
+                "mime": "application/json",
+                "size_bytes": 4321,
+                "locations": [
+                    {
+                        "provider": "external_prehashed",
+                        "store_kind": "notion_source_export",
+                        "store_ref": "notion-export-20260617",
+                        "availability": "declared_external",
+                        "content_addressed": True,
+                        "byte_verification_by_wom_kit": False,
+                    }
+                ],
+                "provenance": {
+                    "source": "prehashed_external_objet_ledger",
+                    "provider_locator_sha256": matched_url_hash,
+                },
+            }
+            with manifest_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(manifest_record, ensure_ascii=False, sort_keys=True) + "\n")
+
+            (archive_root / "inbox" / "zet_notion_index_matched.md").write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_index_matched",
+                        "status: draft",
+                        "title: Matched private title must not echo",
+                        "---",
+                        "",
+                        "Matched private body must not echo.",
+                        f'<mention-page url="{matched_url}">Matched private page title</mention-page>',
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (archive_root / "inbox" / "zet_notion_index_unmatched.md").write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_index_unmatched",
+                        "status: draft",
+                        "title: Unmatched private title must not echo",
+                        "---",
+                        "",
+                        "Unmatched private body must not echo.",
+                        f'<mention-page url="{unmatched_url}">Unmatched private page title</mention-page>',
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (archive_root / "inbox" / "zet_notion_index_redacted.md").write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_index_redacted",
+                        "status: redacted",
+                        "title: Redacted private title must not echo",
+                        "---",
+                        "",
+                        f'<mention-page url="{matched_url}">Redacted page title</mention-page>',
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "notion-objet-link-index",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "notion_objet_link_index")
+            self.assertGreaterEqual(result["summary"]["scanned_non_redacted_zettel_count"], 2)
+            self.assertEqual(result["summary"]["zettels_with_locator_count"], 2)
+            self.assertEqual(result["summary"]["distinct_locator_count"], 2)
+            self.assertEqual(result["summary"]["zettel_locator_rows_with_manifest_candidate_count"], 1)
+            self.assertEqual(result["summary"]["zettel_locator_rows_without_manifest_candidate_count"], 1)
+            self.assertGreaterEqual(result["summary"]["redacted_zettel_count"], 1)
+            self.assertEqual(result["manifest_summary"]["notion_labeled_record_count"], 1)
+            indexed_ids = {entry["id"] for entry in result["zettels"]}
+            self.assertIn("zet_notion_index_matched", indexed_ids)
+            self.assertIn("zet_notion_index_unmatched", indexed_ids)
+            self.assertNotIn("zet_notion_index_redacted", indexed_ids)
+            matched_entry = next(entry for entry in result["zettels"] if entry["id"] == "zet_notion_index_matched")
+            self.assertEqual(matched_entry["matched_locator_count"], 1)
+            self.assertEqual(
+                matched_entry["locators"][0]["candidates"][0]["suggested_objet_ref"],
+                f"objet:sha256:{object_digest}",
+            )
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["zettel_body_text_echoed"])
+            self.assertFalse(result["privacy_guards"]["frontmatter_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["provider_api_called"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            for forbidden in (
+                matched_url,
+                unmatched_url,
+                "Matched private",
+                "Unmatched private",
+                "Redacted private",
+                str(archive_root),
+            ):
+                with self.subTest(forbidden=forbidden):
+                    self.assertNotIn(forbidden, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            no_dry_code, no_dry_output = self.run_cli(["notion-objet-link-index", str(archive_root)])
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+
     def test_prehashed_objet_ledger_approve_blocks_invalid_rows_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
