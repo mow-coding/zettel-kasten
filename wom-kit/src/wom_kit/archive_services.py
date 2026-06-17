@@ -39513,6 +39513,246 @@ def view_zets(
     }
 
 
+def iter_saved_view_definitions(root: Path) -> list[dict[str, Any]]:
+    views_root = root / "views"
+    if not views_root.is_dir():
+        return []
+    views: list[dict[str, Any]] = []
+    for view_path in safe_archive_glob(views_root, "*.yml", root):
+        try:
+            doc = load_yaml(view_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(doc, dict):
+            continue
+        candidates = [doc] + [item for item in doc.get("saved_views") or [] if isinstance(item, dict)]
+        for candidate in candidates:
+            view_id = str(candidate.get("id") or "").strip()
+            if not view_id:
+                continue
+            views.append(
+                {
+                    "id": view_id,
+                    "name": safe_manifest_label(candidate.get("name"), fallback=None),
+                    "filters": candidate.get("filters") if isinstance(candidate.get("filters"), dict) else {},
+                    "source_path": archive_relative_path(view_path, root),
+                    "nested": candidate is not doc,
+                }
+            )
+    return views
+
+
+def normalize_view_facet_filters(raw_filters: dict[str, Any]) -> tuple[dict[str, str], list[str]]:
+    wanted: dict[str, str] = {}
+    blockers: list[str] = []
+    for raw_key, raw_value in raw_filters.items():
+        key = str(raw_key)
+        if not key.startswith("facets."):
+            blockers.append(f"view filter key not supported: {key}")
+            continue
+        if isinstance(raw_value, list):
+            blockers.append(f"view filter value list not supported: {key}")
+            continue
+        wanted[key.split(".", 1)[1]] = str(raw_value)
+    return wanted, blockers
+
+
+def count_indexed_zets_for_facets(conn: sqlite3.Connection, facets: dict[str, str]) -> int:
+    sql = [
+        "SELECT COUNT(*) AS count FROM zettels",
+        "WHERE zettel_id IS NOT NULL AND coalesce(status, '') != 'redacted'",
+    ]
+    params: list[Any] = []
+    for key, value in facets.items():
+        sql.append(
+            "AND EXISTS (SELECT 1 FROM zettel_facets f WHERE f.zettel_id = zettels.zettel_id"
+            " AND f.facet_key = ? AND f.facet_value = ?)"
+        )
+        params.extend([key, value])
+    row = conn.execute(" ".join(sql), params).fetchone()
+    return int(row["count"] if isinstance(row, sqlite3.Row) else row[0])
+
+
+def indexed_facet_value_count(conn: sqlite3.Connection, key: str, value: str) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(DISTINCT f.zettel_id) AS count
+        FROM zettel_facets f
+        JOIN zettels z ON z.zettel_id = f.zettel_id
+        WHERE coalesce(z.status, '') != 'redacted'
+          AND f.facet_key = ?
+          AND f.facet_value = ?
+        """,
+        (key, value),
+    ).fetchone()
+    return int(row["count"] if isinstance(row, sqlite3.Row) else row[0])
+
+
+def indexed_facet_distribution(conn: sqlite3.Connection, key: str, *, limit: int) -> dict[str, Any]:
+    total_row = conn.execute(
+        """
+        SELECT COUNT(DISTINCT facet_value) AS count
+        FROM zettel_facets f
+        JOIN zettels z ON z.zettel_id = f.zettel_id
+        WHERE coalesce(z.status, '') != 'redacted'
+          AND f.facet_key = ?
+        """,
+        (key,),
+    ).fetchone()
+    rows = conn.execute(
+        """
+        SELECT f.facet_value, COUNT(DISTINCT f.zettel_id) AS count
+        FROM zettel_facets f
+        JOIN zettels z ON z.zettel_id = f.zettel_id
+        WHERE coalesce(z.status, '') != 'redacted'
+          AND f.facet_key = ?
+        GROUP BY f.facet_value
+        ORDER BY count DESC, f.facet_value ASC
+        LIMIT ?
+        """,
+        (key, limit),
+    ).fetchall()
+    values: list[dict[str, Any]] = []
+    for row in rows:
+        safe_value = safe_manifest_label(row["facet_value"], fallback="redacted_facet_value")
+        values.append({"value": safe_value, "count": int(row["count"])})
+    distinct_count = int(total_row["count"] if isinstance(total_row, sqlite3.Row) else total_row[0])
+    return {"key": key, "distinct_value_count": distinct_count, "top_values": values}
+
+
+def view_health(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = True,
+    max_values: int = 10,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("view-health is read-only; pass --dry-run.")
+    db_path = root / INDEX_RELATIVE_PATH
+    if not db_path.is_file():
+        blockers.append("archive_index_missing")
+    views = iter_saved_view_definitions(root)
+    if not views:
+        warnings.append("no_saved_views_found")
+
+    max_values = max(1, min(int(max_values), 50))
+    view_results: list[dict[str, Any]] = []
+    used_facet_keys: set[str] = set()
+    summary = {
+        "saved_view_count": len(views),
+        "active_view_count": 0,
+        "empty_view_count": 0,
+        "blocked_view_count": 0,
+    }
+    facet_distribution: list[dict[str, Any]] = []
+
+    if blockers:
+        for view in views:
+            normalized_filters, view_blockers = normalize_view_facet_filters(view.get("filters") if isinstance(view.get("filters"), dict) else {})
+            used_facet_keys.update(normalized_filters)
+            view_results.append(
+                {
+                    "id": view.get("id"),
+                    "name": view.get("name"),
+                    "source_path": view.get("source_path"),
+                    "filters": normalized_filters,
+                    "state": "blocked",
+                    "count": 0,
+                    "filter_diagnostics": [],
+                    "blockers": unique_preserve_order(view_blockers + blockers),
+                    "warnings": [],
+                }
+            )
+        summary["blocked_view_count"] = len(view_results)
+    else:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            for view in views:
+                normalized_filters, view_blockers = normalize_view_facet_filters(
+                    view.get("filters") if isinstance(view.get("filters"), dict) else {}
+                )
+                used_facet_keys.update(normalized_filters)
+                filter_diagnostics: list[dict[str, Any]] = []
+                for key, value in normalized_filters.items():
+                    filter_diagnostics.append(
+                        {
+                            "facet_key": key,
+                            "filter_value": safe_manifest_label(value, fallback="redacted_facet_value"),
+                            "matching_zettel_count": indexed_facet_value_count(conn, key, value),
+                            "observed_values": indexed_facet_distribution(conn, key, limit=max_values)["top_values"],
+                        }
+                    )
+                count = count_indexed_zets_for_facets(conn, normalized_filters) if not view_blockers else 0
+                if view_blockers:
+                    state = "blocked"
+                    summary["blocked_view_count"] += 1
+                elif count == 0:
+                    state = "empty_result"
+                    summary["empty_view_count"] += 1
+                else:
+                    state = "active"
+                    summary["active_view_count"] += 1
+                view_warnings: list[str] = []
+                if state == "empty_result":
+                    view_warnings.append("saved_view_has_zero_matches")
+                view_results.append(
+                    {
+                        "id": view.get("id"),
+                        "name": view.get("name"),
+                        "source_path": view.get("source_path"),
+                        "filters": normalized_filters,
+                        "state": state,
+                        "count": count,
+                        "filter_diagnostics": filter_diagnostics,
+                        "blockers": unique_preserve_order(view_blockers),
+                        "warnings": view_warnings,
+                    }
+                )
+            for key in sorted(used_facet_keys):
+                facet_distribution.append(indexed_facet_distribution(conn, key, limit=max_values))
+        finally:
+            conn.close()
+
+    next_safe_actions: list[str] = []
+    if "archive_index_missing" in blockers:
+        next_safe_actions.append("Run archive index before checking saved view health.")
+    elif summary["empty_view_count"]:
+        next_safe_actions.append("Review empty saved views against observed facet distributions before changing view filters.")
+    elif summary["blocked_view_count"]:
+        next_safe_actions.append("Fix unsupported saved view filters before relying on those views.")
+    else:
+        next_safe_actions.append("Saved views have matching indexed zets.")
+
+    return {
+        "ok": not blockers and summary["blocked_view_count"] == 0,
+        "dry_run": True,
+        "lifecycle_action": "view_health",
+        "archive_id": archive_id,
+        "index_path": INDEX_RELATIVE_PATH,
+        "summary": summary,
+        "views": view_results,
+        "facet_distribution": facet_distribution,
+        "privacy_guards": {
+            "zettel_body_text_echoed": False,
+            "zettel_titles_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "provider_api_called": False,
+            "object_file_bytes_read": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": unique_preserve_order(next_safe_actions),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
 def get_related_zets(
     archive_root: Path | str,
     zettel_id: str,
