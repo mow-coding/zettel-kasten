@@ -762,6 +762,8 @@ ZETTEL_EDGE_RECEIPTS_DIR = "receipts/edges"
 ZETTEL_EDGE_BATCH_RECEIPTS_DIR = "receipts/edges/batches"
 ZETTEL_EDGE_REVERT_RECEIPTS_DIR = "receipts/edges/reverts"
 ZETTEL_EDGE_BATCH_REVERT_RECEIPTS_DIR = "receipts/edges/batches/reverts"
+MIGRATION_RECEIPTS_DIR = "receipts/migrations"
+MIGRATION_REVERT_RECEIPTS_DIR = "receipts/migrations/reverts"
 NOTION_OBJET_MANIFEST_LOCATOR_LABEL_RECEIPTS_DIR = "receipts/objects/notion-locator-labels"
 NOTION_OBJET_LINK_CONVERT_RECEIPTS_DIR = "receipts/objects/notion-link-conversions"
 DELEGATE_RECEIPTS_DIR = "receipts/delegate"
@@ -28426,7 +28428,7 @@ def prehashed_objet_ledger_register(
         warnings.append("Some ledger MIME values were invalid and were ignored without echoing row values.")
     if ledger_summary["invalid_row_count"]:
         warnings.append("Some ledger rows are invalid and were counted without echoing row values.")
-        if approve:
+        if approve and not blockers:
             blockers.append("prehashed objet ledger registration blocks when any ledger row is invalid.")
     if ledger_summary["truncated"] and approve:
         blockers.append("prehashed objet ledger registration blocks when max_rows truncates the ledger.")
@@ -44524,12 +44526,68 @@ def migrate_archive(
     target: str,
     dry_run: bool,
     approve: bool,
+    revert: bool = False,
 ) -> dict[str, Any]:
     if target == FRONTMATTER_V03_TARGET:
+        if revert:
+            return migrate_frontmatter_v03_revert(archive_root, target=target, dry_run=dry_run, approve=approve)
         return migrate_frontmatter_v03(archive_root, target=target, dry_run=dry_run, approve=approve)
     if target == LINK_TYPES_V03_TARGET:
+        if revert:
+            return migrate_link_types_v03_revert(archive_root, target=target, dry_run=dry_run, approve=approve)
         return migrate_link_types_v03(archive_root, target=target, dry_run=dry_run, approve=approve)
     raise ArchiveServiceError(f"Unsupported migration target: {target}")
+
+
+def migration_receipt_relative_path(target: str, seed: dict[str, Any]) -> str:
+    digest = sha256_json_hex(seed)
+    target_segment = zettel_edge_filename_segment(target)
+    return f"{MIGRATION_RECEIPTS_DIR}/{target_segment}.{digest[:24]}.migration.json"
+
+
+def migration_revert_receipt_relative_path(target: str, source_receipt_relative: str) -> str:
+    digest = sha256_json_hex({"target": target, "source_receipt_path": source_receipt_relative})
+    target_segment = zettel_edge_filename_segment(target)
+    return f"{MIGRATION_REVERT_RECEIPTS_DIR}/{target_segment}.{digest[:24]}.migration-revert.json"
+
+
+def latest_migration_receipt(root: Path, target: str, blockers: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, str | None]:
+    receipts_root = archive_internal_path(root, MIGRATION_RECEIPTS_DIR)
+    if not receipts_root.is_dir():
+        blockers.append(
+            {
+                "path": MIGRATION_RECEIPTS_DIR,
+                "field": "receipt",
+                "code": "migration_receipt_required",
+                "message": f"{target} revert requires a prior migration receipt.",
+            }
+        )
+        return None, None
+    target_segment = zettel_edge_filename_segment(target)
+    candidates = sorted(receipts_root.glob(f"{target_segment}.*.migration.json"))
+    if not candidates:
+        blockers.append(
+            {
+                "path": MIGRATION_RECEIPTS_DIR,
+                "field": "receipt",
+                "code": "migration_receipt_required",
+                "message": f"{target} revert requires a prior migration receipt.",
+            }
+        )
+        return None, None
+    for path in reversed(candidates):
+        receipt_doc = load_json_object_for_review(path, "migration receipt", [])
+        if receipt_doc is not None and receipt_doc.get("target") == target and receipt_doc.get("receipt_kind") == "migration_write":
+            return receipt_doc, archive_relative_path(path, root)
+    blockers.append(
+        {
+            "path": MIGRATION_RECEIPTS_DIR,
+            "field": "receipt",
+            "code": "migration_receipt_required",
+            "message": f"{target} revert requires a valid prior migration receipt.",
+        }
+    )
+    return None, None
 
 
 def migrate_link_types_v03(
@@ -44584,7 +44642,9 @@ def migrate_link_types_v03(
     ]
 
     files_written: list[str] = []
-    new_text = types_path.read_text(encoding="utf-8")
+    original_text = types_path.read_text(encoding="utf-8")
+    new_text = original_text
+    receipt_relative: str | None = None
     if missing_records and not blockers:
         new_types = copy.deepcopy(archive_types)
         new_link_types = copy.deepcopy(archive_link_types)
@@ -44592,9 +44652,65 @@ def migrate_link_types_v03(
         new_types["link_types"] = new_link_types
         new_types.setdefault("schema_version", archive_types.get("schema_version") or "wom-kit/zettel-kasten-types/v0.2-draft")
         new_text = dump_yaml(new_types)
+        receipt_relative = migration_receipt_relative_path(
+            target,
+            {
+                "archive_id": archive_id,
+                "target": target,
+                "appended_link_type_ids": missing,
+                "before_sha256": sha256_text(original_text),
+                "after_sha256": sha256_text(new_text),
+            },
+        )
+        receipt_path = archive_internal_path(root, receipt_relative)
+        if receipt_path.exists():
+            blockers.append(
+                {
+                    "path": receipt_relative,
+                    "field": "receipt",
+                    "code": "migration_receipt_exists",
+                    "message": "Link type migration receipt already exists.",
+                }
+            )
         if approve:
-            write_text_atomic(types_path, new_text)
-            files_written.append(types_relative)
+            now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            receipt = {
+                "schema_version": "wom-kit/migration-receipt/v0.1",
+                "lifecycle_action": "link_types_v03_migration",
+                "receipt_kind": "migration_write",
+                "created_at": now,
+                "archive_id": archive_id,
+                "target": LINK_TYPES_V03_TARGET,
+                "migration_direction": "forward",
+                "files_changed": [types_relative],
+                "appended_link_type_ids": missing,
+                "before_sha256": sha256_text(original_text),
+                "after_sha256": sha256_text(new_text),
+                "result": {
+                    "types_file_written": True,
+                    "receipt_written": True,
+                },
+                "closed_actions": {
+                    "provider_api_called": False,
+                    "real_source_export_files_read": False,
+                    "zettel_files_written": False,
+                    "edge_receipts_deleted": False,
+                },
+            }
+            try:
+                write_text_atomic(types_path, new_text)
+                files_written.append(types_relative)
+                receipt_path.parent.mkdir(parents=True, exist_ok=True)
+                write_json_new_file(receipt_path, receipt)
+                files_written.append(receipt_relative)
+            except OSError:
+                write_text_atomic(types_path, original_text)
+                if receipt_path.exists():
+                    try:
+                        receipt_path.unlink()
+                    except OSError:
+                        pass
+                raise
 
     changes = [
         {
@@ -44624,10 +44740,22 @@ def migrate_link_types_v03(
             "present_recommended_edge_types": sorted(edge_type for edge_type in recommended if edge_type in present_ids),
             "missing_recommended_edge_types": missing,
         },
+        "receipt_path": receipt_relative,
         "would_change": [
             {
                 "path": types_relative,
-                "changes": changes,
+                "changes": changes
+                + (
+                    [
+                        {
+                            "action": "write_receipt",
+                            "field": "receipt",
+                            "path": receipt_relative,
+                        }
+                    ]
+                    if receipt_relative
+                    else []
+                ),
                 "manual_review_required": bool(blockers),
                 "blockers": blockers,
             }
@@ -44635,6 +44763,313 @@ def migrate_link_types_v03(
         if changes or blockers
         else [],
         "new_text": new_text if dry_run and changes and not blockers else None,
+    }
+
+
+def used_zettel_edge_types(root: Path, candidate_types: set[str]) -> dict[str, list[str]]:
+    usage: dict[str, list[str]] = {edge_type: [] for edge_type in candidate_types}
+    for path in iter_zettel_paths(root):
+        try:
+            frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
+        except (OSError, ArchiveServiceError, ValueError):
+            continue
+        edges = frontmatter.get("edges")
+        if not isinstance(edges, list):
+            continue
+        relative = archive_relative_path(path, root)
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            edge_type = str(edge.get("type") or "").strip()
+            if edge_type in candidate_types:
+                usage.setdefault(edge_type, []).append(relative)
+    return {edge_type: unique_preserve_order(paths) for edge_type, paths in usage.items() if paths}
+
+
+def migrate_link_types_v03_revert(
+    archive_root: Path | str,
+    *,
+    target: str,
+    dry_run: bool,
+    approve: bool,
+) -> dict[str, Any]:
+    if target != LINK_TYPES_V03_TARGET:
+        raise ArchiveServiceError(f"Unsupported migration target: {target}")
+    if dry_run == approve:
+        raise ArchiveServiceError("archive migrate --revert requires exactly one of --dry-run or --approve.")
+
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    types_relative = "zettel-kasten/types.yml"
+    types_path = archive_internal_path(root, types_relative)
+    if not types_path.is_file():
+        raise ArchiveServiceError("zettel-kasten/types.yml is missing; initialize or restore archive type metadata first.")
+
+    archive_types = load_yaml(types_path.read_text(encoding="utf-8"))
+    base_types = load_yaml((KIT_ROOT / "zettel-kasten" / "types.yml").read_text(encoding="utf-8"))
+    if not isinstance(archive_types, dict) or not isinstance(archive_types.get("link_types"), list):
+        raise ArchiveServiceError("zettel-kasten/types.yml must be a YAML object with link_types.")
+    if not isinstance(base_types, dict) or not isinstance(base_types.get("link_types"), list):
+        raise ArchiveServiceError("Base zettel-kasten/types.yml must be a YAML object with link_types.")
+
+    archive_link_types = archive_types["link_types"]
+    base_by_id = {
+        item.get("id"): item
+        for item in base_types["link_types"]
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item.get("id")
+    }
+    recommended = sorted(CONNECTION_IMPORT_RECOMMENDED_EDGE_TYPES)
+    recommended_set = set(recommended)
+    blockers: list[dict[str, Any]] = []
+    source_receipt, source_receipt_relative = latest_migration_receipt(root, LINK_TYPES_V03_TARGET, blockers)
+    appended_ids = []
+    if source_receipt is not None:
+        if source_receipt.get("schema_version") != "wom-kit/migration-receipt/v0.1":
+            blockers.append(
+                {
+                    "path": source_receipt_relative or MIGRATION_RECEIPTS_DIR,
+                    "field": "schema_version",
+                    "code": "migration_receipt_invalid",
+                    "message": "Migration receipt schema_version must be wom-kit/migration-receipt/v0.1.",
+                }
+            )
+        if source_receipt.get("archive_id") != archive_id:
+            blockers.append(
+                {
+                    "path": source_receipt_relative or MIGRATION_RECEIPTS_DIR,
+                    "field": "archive_id",
+                    "code": "migration_receipt_archive_mismatch",
+                    "message": "Migration receipt archive_id must match this archive.",
+                }
+            )
+        raw_appended_ids = source_receipt.get("appended_link_type_ids")
+        if not isinstance(raw_appended_ids, list) or not raw_appended_ids:
+            blockers.append(
+                {
+                    "path": source_receipt_relative or MIGRATION_RECEIPTS_DIR,
+                    "field": "appended_link_type_ids",
+                    "code": "migration_receipt_invalid",
+                    "message": "Migration receipt must list appended link type ids.",
+                }
+            )
+        else:
+            appended_ids = [str(item) for item in raw_appended_ids if isinstance(item, str) and item in recommended_set]
+    revert_candidate_set = set(appended_ids)
+    used_types = used_zettel_edge_types(root, revert_candidate_set)
+
+    removable_ids: list[str] = []
+    kept_records: list[dict[str, Any]] = []
+    changed_records: list[str] = []
+    for item in archive_link_types:
+        if not isinstance(item, dict):
+            kept_records.append(item)
+            continue
+        edge_type = item.get("id")
+        if not isinstance(edge_type, str) or edge_type not in revert_candidate_set:
+            kept_records.append(item)
+            continue
+        if edge_type in used_types:
+            kept_records.append(item)
+            blockers.append(
+                {
+                    "path": types_relative,
+                    "field": "link_types",
+                    "code": "link_type_in_use",
+                    "id": edge_type,
+                    "message": f"Cannot revert link type while existing zettel edges use it: {edge_type}",
+                    "used_in": used_types[edge_type],
+                }
+            )
+            continue
+        if json_safe(item) != json_safe(base_by_id.get(edge_type)):
+            kept_records.append(item)
+            changed_records.append(edge_type)
+            blockers.append(
+                {
+                    "path": types_relative,
+                    "field": "link_types",
+                    "code": "link_type_record_changed",
+                    "id": edge_type,
+                    "message": f"Cannot safely revert modified link type record: {edge_type}",
+                }
+            )
+            continue
+        removable_ids.append(edge_type)
+
+    changes = [
+        {
+            "action": "remove_link_type",
+            "field": "link_types",
+            "id": edge_type,
+            "source": types_relative,
+        }
+        for edge_type in removable_ids
+    ]
+    files_written: list[str] = []
+    original_text = types_path.read_text(encoding="utf-8")
+    new_text = original_text
+    revert_receipt_relative = (
+        migration_revert_receipt_relative_path(LINK_TYPES_V03_TARGET, source_receipt_relative)
+        if source_receipt_relative
+        else None
+    )
+    if revert_receipt_relative and archive_internal_path(root, revert_receipt_relative).exists():
+        blockers.append(
+            {
+                "path": revert_receipt_relative,
+                "field": "receipt",
+                "code": "migration_revert_receipt_exists",
+                "message": "Migration revert receipt already exists.",
+            }
+        )
+    if changes and not blockers:
+        new_types = copy.deepcopy(archive_types)
+        new_types["link_types"] = kept_records
+        new_text = dump_yaml(new_types)
+        if approve:
+            assert revert_receipt_relative is not None
+            now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            revert_receipt = {
+                "schema_version": "wom-kit/migration-revert-receipt/v0.1",
+                "lifecycle_action": "link_types_v03_revert",
+                "receipt_kind": "migration_revert",
+                "created_at": now,
+                "archive_id": archive_id,
+                "target": LINK_TYPES_V03_TARGET,
+                "migration_direction": "revert",
+                "source_migration_receipt_path": source_receipt_relative,
+                "files_changed": [types_relative],
+                "removed_link_type_ids": removable_ids,
+                "before_sha256": sha256_text(original_text),
+                "after_sha256": sha256_text(new_text),
+                "result": {
+                    "types_file_written": True,
+                    "receipt_written": True,
+                },
+                "closed_actions": {
+                    "provider_api_called": False,
+                    "real_source_export_files_read": False,
+                    "zettel_files_written": False,
+                    "edge_receipts_deleted": False,
+                },
+            }
+            revert_receipt_path = archive_internal_path(root, revert_receipt_relative)
+            try:
+                write_text_atomic(types_path, new_text)
+                files_written.append(types_relative)
+                revert_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+                write_json_new_file(revert_receipt_path, revert_receipt)
+                files_written.append(revert_receipt_relative)
+            except OSError:
+                write_text_atomic(types_path, original_text)
+                if revert_receipt_path.exists():
+                    try:
+                        revert_receipt_path.unlink()
+                    except OSError:
+                        pass
+                raise
+
+    return {
+        "ok": not blockers,
+        "lifecycle_action": "link_types_v03_revert",
+        "target": LINK_TYPES_V03_TARGET,
+        "revert": True,
+        "dry_run": bool(dry_run),
+        "approved": bool(approve),
+        "archive_id": archive_id,
+        "files_scanned": 1 + len(iter_zettel_paths(root)),
+        "files_with_changes": 1 if changes and not blockers else 0,
+        "files_written": files_written,
+        "receipt_path": source_receipt_relative,
+        "revert_receipt_path": revert_receipt_relative,
+        "blocked": bool(blockers),
+        "blockers": blockers,
+        "warnings": [],
+        "archive_link_type_status": {
+            "source": types_relative,
+            "recommended_edge_types": recommended,
+            "revert_candidate_edge_types": removable_ids,
+            "source_receipt_appended_edge_types": appended_ids,
+            "used_recommended_edge_types": sorted(used_types),
+            "changed_recommended_edge_types": sorted(changed_records),
+        },
+        "would_change": [
+            {
+                "path": types_relative,
+                "changes": changes
+                + (
+                    [
+                        {
+                            "action": "write_receipt",
+                            "field": "receipt",
+                            "path": revert_receipt_relative,
+                        }
+                    ]
+                    if revert_receipt_relative and changes
+                    else []
+                ),
+                "manual_review_required": bool(blockers),
+                "blockers": blockers,
+            }
+        ]
+        if changes or blockers
+        else [],
+        "new_text": new_text if dry_run and changes and not blockers else None,
+        "next_safe_actions": [
+            "Run revert-batch or revert-edge for edges using these link types before reverting the type vocabulary."
+            if blockers
+            else "Run archive doctor after approving the link type revert."
+        ],
+    }
+
+
+def migrate_frontmatter_v03_revert(
+    archive_root: Path | str,
+    *,
+    target: str,
+    dry_run: bool,
+    approve: bool,
+) -> dict[str, Any]:
+    if target != FRONTMATTER_V03_TARGET:
+        raise ArchiveServiceError(f"Unsupported migration target: {target}")
+    if dry_run == approve:
+        raise ArchiveServiceError("archive migrate --revert requires exactly one of --dry-run or --approve.")
+
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers = [
+        {
+            "path": "zettels/",
+            "field": "frontmatter",
+            "code": "snapshot_receipt_required",
+            "message": "frontmatter-v0.3 revert requires a prior migration snapshot receipt before WOM-kit can restore old frontmatter safely.",
+        }
+    ]
+    return {
+        "ok": False,
+        "lifecycle_action": "frontmatter_v03_revert",
+        "target": FRONTMATTER_V03_TARGET,
+        "revert": True,
+        "dry_run": bool(dry_run),
+        "approved": bool(approve),
+        "archive_id": archive_id,
+        "files_scanned": len(iter_zettel_paths(root)),
+        "files_with_changes": 0,
+        "files_written": [],
+        "blocked": True,
+        "blockers": blockers,
+        "warnings": [],
+        "would_change": [
+            {
+                "path": "zettels/",
+                "changes": [],
+                "manual_review_required": True,
+                "blockers": blockers,
+            }
+        ],
+        "next_safe_actions": [
+            "Use receipt-based edge or link-type rollback where available; add migration snapshot receipts before attempting lossless frontmatter rollback.",
+        ],
     }
 
 

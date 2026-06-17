@@ -24275,6 +24275,15 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(migrated_frontmatter["visibility"]["allowed_archives"], [])
             self.assertEqual(migrated_frontmatter["visibility"]["source_visibility"], "private")
 
+            revert_code, revert_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "frontmatter-v0.3", "--revert", "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(revert_code, 1, revert_output)
+            revert_result = json.loads(revert_output)
+            self.assertEqual(revert_result["lifecycle_action"], "frontmatter_v03_revert")
+            self.assertTrue(revert_result["blocked"])
+            self.assertIn("snapshot_receipt_required", json.dumps(revert_result, ensure_ascii=False))
+
             second_code, second_output = self.run_cli(
                 ["migrate", str(archive_root), "--target", "frontmatter-v0.3", "--approve", "--format", "json"]
             )
@@ -24403,10 +24412,72 @@ class ArchiveCliTests(unittest.TestCase):
             )
             approve_result = json.loads(approve_output)
             self.assertEqual(approve_code, 0, approve_output)
-            self.assertEqual(approve_result["files_written"], ["zettel-kasten/types.yml"])
+            self.assertEqual(approve_result["files_written"][0], "zettel-kasten/types.yml")
+            self.assertTrue(approve_result["receipt_path"].startswith("receipts/migrations/link-types-v0.3."))
+            self.assertIn(approve_result["receipt_path"], approve_result["files_written"])
             migrated_types = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
             migrated_ids = {item["id"] for item in migrated_types["link_types"] if isinstance(item, dict)}
             self.assertTrue({"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"} <= migrated_ids)
+
+            revert_dry_code, revert_dry_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "link-types-v0.3", "--revert", "--dry-run", "--format", "json"]
+            )
+            revert_dry_result = json.loads(revert_dry_output)
+            self.assertEqual(revert_dry_code, 0, revert_dry_output)
+            self.assertEqual(revert_dry_result["lifecycle_action"], "link_types_v03_revert")
+            self.assertEqual(
+                set(revert_dry_result["archive_link_type_status"]["revert_candidate_edge_types"]),
+                {"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"},
+            )
+            self.assertEqual(revert_dry_result["files_written"], [])
+            self.assertEqual({item["id"] for item in migrated_types["link_types"] if isinstance(item, dict)}, migrated_ids)
+
+            revert_code, revert_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "link-types-v0.3", "--revert", "--approve", "--format", "json"]
+            )
+            revert_result = json.loads(revert_output)
+            self.assertEqual(revert_code, 0, revert_output)
+            self.assertEqual(revert_result["files_written"][0], "zettel-kasten/types.yml")
+            self.assertTrue(revert_result["revert_receipt_path"].startswith("receipts/migrations/reverts/link-types-v0.3."))
+            self.assertIn(revert_result["revert_receipt_path"], revert_result["files_written"])
+            reverted_types = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
+            reverted_ids = {item["id"] for item in reverted_types["link_types"] if isinstance(item, dict)}
+            self.assertFalse({"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"} & reverted_ids)
+
+    def test_migrate_link_types_v03_revert_blocks_types_used_by_edges(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            types_data = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
+            types_data["link_types"] = [
+                item
+                for item in types_data["link_types"]
+                if isinstance(item, dict) and item.get("id") != "embed"
+            ]
+            types_path.write_text(archive_cli.dump_yaml(types_data), encoding="utf-8")
+            migrate_code, migrate_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "link-types-v0.3", "--approve", "--format", "json"]
+            )
+            self.assertEqual(migrate_code, 0, migrate_output)
+            source_path = archive_root / "zettels" / "zet_20240504_fake_lunch_thought.md"
+            frontmatter, body = archive_services.split_zettel_text(source_path.read_text(encoding="utf-8"))
+            frontmatter["edges"] = [
+                {
+                    "type": "embed",
+                    "target": "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136",
+                    "visibility": "private",
+                }
+            ]
+            source_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n" + body, encoding="utf-8")
+
+            code, output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "link-types-v0.3", "--revert", "--dry-run", "--format", "json"]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertTrue(result["blocked"])
+            self.assertIn("link_type_in_use", json.dumps(result, ensure_ascii=False))
+            self.assertIn("embed", result["archive_link_type_status"]["used_recommended_edge_types"])
 
     def test_doctor_legacy_frontmatter_json_includes_migration_hint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1072,6 +1072,11 @@ each manifest object through repeated full manifest scans.
 v0.3.108 extends that large-manifest fix to `zettel-edge-batch` objet target
 resolution and adds receipt-based `revert-edge` / `revert-batch` rollback
 commands for approved edge writes while preserving original receipts.
+v0.3.109 adds receipt-backed `archive migrate --target link-types-v0.3
+--revert` for safe link-type migration rollback when the migration receipt says
+which edge types were added and those types remain unused and unchanged from the
+base template, while blocking `frontmatter-v0.3 --revert` until future snapshot
+receipts can make that rollback lossless.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 
