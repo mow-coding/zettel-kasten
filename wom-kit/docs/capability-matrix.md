@@ -1,8 +1,8 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.93 saved view facet role diagnostics checkpoint
+Status: v0.3.94 projection-plan surface help checkpoint
 Date: 2026-06-17
-Version: v0.3.93, release candidate
+Version: v0.3.94, release candidate
 
 Previous checkpoint: Status: v0.3.87 connection edge intelligence checkpoint
 
@@ -142,7 +142,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Attestation statement draft review index | `read-only preview` | none | Reviews recorded untrusted statement drafts and upstream chain consistency. |
 | Attestation statement draft decision preview | `read-only preview` | none | Proposes one safe next route without recording acceptance or creating trust. |
 | Publication surface baseline | `documented-only` | none | Describes future projection surfaces such as WordPress-like posts. No provider posting exists. |
-| Projection plan | `read-only preview` | none | Plans one local zet projection for one declared surface kind. No rendering, receipt, provider call, or publish action. |
+| Projection plan | `read-only preview` | none | CLI `archive projection-plan <archive-root> --zet <zet-id-or-path> --surface <surface-kind> --dry-run` and MCP `zet_projection_plan_check` plan one local zet projection for one declared projection surface kind. Help and blocked JSON output surface the supported projection surfaces (`generic_surface`, `private_workspace`, `rss_feed`, `static_site`, `wordpress_private_blog`), visibility values, and projection formats; `notion` is routed to the separate `zet-surface-prototype --surface-kind notion` planning surface instead of being treated as a projection surface. No rendering, receipt, provider call, publication, ZET transport, minting, trust/import/acceptance, attestation, signature, or write action is performed. |
 | Closed sharing model | `documented-only` | none | Describes the future closed sharing/SNS layer above GitHub, objet storage, and database infrastructure. |
 | Radio-frequency recommendation model | `documented-only` | none | Describes future user/node-owned recommendation selectors. No fetching, ranking, or feed update exists. |
 | Shared update record baseline | `documented-only` | none | Defines a future receiver-side review artifact and sanitized example. |

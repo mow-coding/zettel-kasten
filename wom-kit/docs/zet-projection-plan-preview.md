@@ -1,10 +1,14 @@
 # ZET Projection Plan Preview
 
 Date: 2026-05-26
+Updated: 2026-06-17
 
 ## Summary
 
 v0.2.46 adds the first executable dry-run layer after the ZET publication surface baseline.
+
+v0.3.94 improves the dry-run help and blocked JSON output so the supported
+surface kinds are visible without reading source code.
 
 `archive projection-plan` accepts one existing local archive zet and one operator-declared surface kind. It returns a safe planning preview for human review before any render, write, provider call, publication, receipt, or ZET transport exists.
 
@@ -18,11 +22,16 @@ archive projection-plan <archive-root> --zet <zet-id-or-archive-relative-path> -
 
 Supported surface kinds:
 
-- `wordpress_private_blog`
-- `static_site`
+- `generic_surface`
 - `private_workspace`
 - `rss_feed`
-- `generic_surface`
+- `static_site`
+- `wordpress_private_blog`
+
+`notion` is not a `projection-plan` surface kind. Use
+`zet-surface-prototype --surface-kind notion` to preview a Notion surface
+prototype, or `--surface generic_surface` when you only need a placeholder
+projection-plan surface.
 
 Optional flags:
 
@@ -41,6 +50,9 @@ The preview may include safe metadata:
 - simple title/status/kind metadata when safe,
 - body hash,
 - line/word/character counts,
+- requested/supported surface-kind status,
+- `projection_contract.supported_surface_kinds`,
+- supported visibility and projection-format values,
 - future review steps,
 - closed gates,
 - mutation flags set to false.

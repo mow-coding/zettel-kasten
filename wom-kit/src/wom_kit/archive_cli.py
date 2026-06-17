@@ -4113,6 +4113,9 @@ def command_projection_plan(args: argparse.Namespace) -> int:
         print(f"Archive: {result.get('archive_id') or '-'}")
         print(f"zet: {zet.get('zettel_id') or zet.get('source_path') or '-'}")
         print(f"Surface: {surface.get('surface_kind') or '-'}")
+        contract = result.get("projection_contract") if isinstance(result.get("projection_contract"), dict) else {}
+        if result.get("blockers") and contract.get("supported_surface_kinds"):
+            print("Supported surfaces: " + ", ".join(contract.get("supported_surface_kinds") or []))
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -10044,7 +10047,8 @@ def build_parser() -> argparse.ArgumentParser:
     projection_plan.add_argument(
         "--surface",
         required=True,
-        help="Operator-declared target surface kind.",
+        help="Operator-declared target surface kind. Supported: "
+        + ", ".join(sorted(archive_services.ZET_PROJECTION_SURFACE_KINDS)),
     )
     projection_plan.add_argument(
         "--visibility",
@@ -10054,7 +10058,8 @@ def build_parser() -> argparse.ArgumentParser:
     projection_plan.add_argument(
         "--projection-format",
         default="metadata_only",
-        help="Future projection format intent; v0.2.46 renders no body output.",
+        help="Future projection format intent; v0.2.46 renders no body output. Supported: "
+        + ", ".join(sorted(archive_services.ZET_PROJECTION_FORMATS)),
     )
     projection_plan.add_argument("--dry-run", action="store_true", help="Preview only; write nothing.")
     projection_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")

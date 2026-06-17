@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.94 - 2026-06-17
+
+- Improved read-only `archive projection-plan --dry-run` surface guidance.
+- CLI help now lists supported projection surface kinds and projection formats
+  instead of requiring users to infer them from source code.
+- Blocked JSON output now includes `projection_contract` with supported
+  surface kinds, surface prototype kinds, visibility values, and projection
+  formats, plus safe `surface.requested_surface_kind` and `surface_status`.
+- Unsupported surface values no longer prevent a safe zet reference from being
+  resolved, so blocked output can still show safe zet metadata instead of
+  nulling the whole plan context.
+- Invalid `--surface notion` now explains that Notion belongs to the separate
+  `zet-surface-prototype --surface-kind notion` preview rather than the
+  projection-plan surface set.
+- Kept the command read-only: it renders no body output, writes no projection
+  records or receipts, calls no providers, publishes nothing, runs no ZET
+  transport, and echoes no unsafe raw surface URLs, local paths, credentials, or
+  secret values.
+
 ## v0.3.93 - 2026-06-17
 
 - Extended read-only `archive view-health <archive-root> --dry-run` and MCP
