@@ -360,10 +360,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.58.md").read_text(encoding="utf-8")
+        current_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.106.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.104 read-only runtime canonical entrypoint and material-clue routing checkpoint",
+            "Status: v0.3.106 read-only AI guide handoff and material-route discovery checkpoint",
             "archive runtime-context <archive-root> --format json",
             "canonical_entrypoints",
+            "ai_runtime_order",
+            "recommended_first_commands",
+            "material_link_routes",
             "AI Runtime Order",
             "archive.yml",
             "AGENTS.md",
@@ -388,6 +392,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Status: v0.3.87 connection edge intelligence checkpoint",
             "Runtime canonical entrypoints",
             "Runtime-context field `canonical_entrypoints`",
+            "`ai_runtime_order`",
+            "`recommended_first_commands`",
+            "`material_link_routes`",
             "`archive.yml` as the start-here file",
             "`source-bindings.yml`",
             "reads no file bodies",
@@ -416,6 +423,18 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, release_text)
+        for phrase in (
+            "# v0.3.106 - Runtime AI Guide Handoff",
+            "`ai_runtime_order`",
+            "`recommended_first_commands`",
+            "`material_link_routes`",
+            "run `runtime-context`",
+            "read `AGENTS.md`",
+            "run `ai-response-concept-guide`",
+            "provider-free",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, current_release_text)
         self.assertIn("[Runtime Canonical Entry Points](runtime-canonical-entrypoints.md)", public_map_text)
         self.assertIn("[Runtime Canonical Entry Points](runtime-canonical-entrypoints.md)", public_map_ko_text)
 
@@ -907,7 +926,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.104 pre-release",
+            "v0.3.106 pre-release",
             "[Zettel Edge Write](wom-kit/docs/zettel-edge-write.md)",
             "[Zettel Edge Batch](wom-kit/docs/zettel-edge-batch.md)",
             "approval-gated single-edge zettel edge writes",

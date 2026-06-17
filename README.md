@@ -25,10 +25,10 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.105 pre-release
+v0.3.106 pre-release
 ```
 
-Previous public baseline: v0.3.104 pre-release.
+Previous public baseline: v0.3.105 pre-release.
 Earlier compatibility checkpoint: v0.3.87 pre-release.
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -38,7 +38,7 @@ What exists today:
 - a public WOM/zet/ZET design baseline with specs, schemas, fake archives, release notes, and work logs,
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
 - read-only WOM-kit version truth-source checks through `archive --version`, `archive version --format json`, parent project installed-version pin discovery from archive roots, and runtime-context version metadata,
-- runtime-context canonical entrypoint metadata so AI runtimes can see which archive-relative files/directories to treat as start-here and authoritative sources,
+- runtime-context canonical entrypoint metadata so AI runtimes can see which archive-relative files/directories to treat as start-here and authoritative sources, plus machine-readable `ai_runtime_order`, `recommended_first_commands`, and `material_link_routes` that hand off from `runtime-context` to `AGENTS.md` and `ai-response-concept-guide`,
 - private archive lifecycle tools for doctor checks, draft creation, minting with dry-run checklist guidance, delegation, receipts, search, and metadata review,
 - read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading, block headers with first-read summaries, generated index health checks, saved view health, facet role diagnostics, saved view recommendations, prompt boundaries, foreign block review, projection planning with supported-surface help, shared update review/index, shared update route pointers, and ZET would-transport planning,
 - read-only derived-text coverage/toolchain/doctor/agent-contract gates, manifest-scoped completeness signals, manifest-quality checks that block false complete claims when `tool_version` or required extraction metadata is missing, including existing derived-text records as a fallback textual signal for older prehashed manifests, non-echoed tool-hint paths for PATH-missing local extractors, plus approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
@@ -294,6 +294,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.106
 v0.3.105
 v0.3.104
 v0.3.103

@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.104 read-only runtime canonical entrypoint and material-clue routing checkpoint
+Status: v0.3.106 read-only AI guide handoff and material-route discovery checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -14,7 +14,10 @@ v0.3.58 adds that map to:
 archive runtime-context <archive-root> --format json
 ```
 
-The result includes `canonical_entrypoints`.
+The result includes `canonical_entrypoints`. From v0.3.106, that object also
+includes machine-readable `ai_runtime_order`, `recommended_first_commands`, and
+`material_link_routes` so a terminal-capable AI can discover the guide handoff
+without waiting for the human to mention it.
 
 ## AI Runtime Order
 
@@ -33,6 +36,18 @@ anything:
 
 This order keeps archive identity, local instructions, beginner-facing wording,
 and material-link safety gates aligned before any later approval-gated write.
+
+The same order is returned in JSON:
+
+```text
+canonical_entrypoints.ai_runtime_order
+canonical_entrypoints.recommended_first_commands
+canonical_entrypoints.material_link_routes
+```
+
+The route list includes `notion-objet-import-clue-audit`,
+`notion-objet-source-map-link-plan`, `notion-objet-link-index`, and
+`notion-objet-link-plan`, with each route marked as read-only and provider-free.
 
 ## Start Here
 
@@ -77,7 +92,8 @@ Use `runtime-context --no-redact-local-paths` only for trusted local debugging.
 
 ## Not Implemented
 
-v0.3.104 does not enforce migration, auto-upgrade project folders, scan file
+v0.3.106 does not enforce migration, auto-upgrade project folders, scan file
 contents, choose between competing exports, synchronize providers, write
 material links, or run IMAP adapters. It only gives AI runtimes a deterministic
-archive-relative map of what to consult first.
+archive-relative map of what to consult first and which read-only guide command
+or material-link route to run next.

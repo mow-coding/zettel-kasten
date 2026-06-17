@@ -181,7 +181,7 @@ profile-wallet
   Preview wallet-ready WOM profile/node identity metadata. Dry-run only; never generates keys, signs data, stores secrets, or calls blockchain/provider APIs.
 
 runtime-context
-  Print read-only JSON context for terminal-capable AI runtimes. It confirms archive id, archive type/scope, principal/owner summary, AI write policy, safe archive-relative paths, canonical entrypoint metadata, safe actions, WOM-kit version, and doctor summary. Local absolute paths are redacted by default.
+  Print read-only JSON context for terminal-capable AI runtimes. It confirms archive id, archive type/scope, principal/owner summary, AI write policy, safe archive-relative paths, canonical entrypoint metadata, AI guide handoff order, material-link routes, safe actions, WOM-kit version, and doctor summary. Local absolute paths are redacted by default.
 
 prompt-boundary
   Check untrusted text for obvious prompt-injection and unsafe-agent strings. Dry-run only; never calls LLMs, executes inspected text, approves, mints, or writes files.
@@ -1057,6 +1057,9 @@ body-safe.
 v0.3.105 preserves explicit safe manifest object refs into approved external
 import draft `source_refs`, while keeping dry-run object id values hidden in
 counts and avoiding provider calls, object byte reads, uploads, and edge writes.
+v0.3.106 adds machine-readable `runtime-context` guide handoff fields so AI
+runtimes can discover `AGENTS.md`, `ai-response-concept-guide`, and read-only
+Notion material-link routes before choosing tools.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

@@ -697,6 +697,7 @@ PROFILE_RAW_TOKEN_KEYS = {
 PROFILE_IGNORABLE_QUERY_CHARS = dict.fromkeys(map(ord, "\ufeff\u200b\u200c\u200d\u2060"), None)
 RUNTIME_CONTEXT_ARCHIVE_TYPES = {"personal", "company", "family", "project", "relationship", "child", "business_unit"}
 RUNTIME_CONTEXT_SAFE_ACTIONS = [
+    "run ai-response-concept-guide dry-run",
     "create draft in inbox",
     "run mint dry-run",
     "run check-safe-html dry-run",
@@ -40175,6 +40176,9 @@ def runtime_context_canonical_entrypoints(
         "lifecycle_action": "runtime_canonical_entrypoints",
         "start_here": "archive.yml",
         "read_order": read_order,
+        "ai_runtime_order": runtime_context_ai_runtime_order(),
+        "recommended_first_commands": runtime_context_recommended_first_commands(),
+        "material_link_routes": runtime_context_material_link_routes(),
         "source_truths": {
             "archive_identity_and_policy": "archive.yml",
             "local_agent_instructions": "AGENTS.md",
@@ -40197,6 +40201,84 @@ def runtime_context_canonical_entrypoints(
             "secrets_read": False,
         },
     }
+
+
+def runtime_context_recommended_first_commands() -> list[dict[str, str]]:
+    return [
+        {
+            "command": "archive runtime-context <archive-root> --format json",
+            "purpose": "confirm archive identity, local policy, canonical entrypoints, and redaction before any work",
+        },
+        {
+            "command": "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
+            "purpose": "load beginner-facing WOM concepts, safe routing hints, and overclaim guardrails",
+        },
+    ]
+
+
+def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
+    return [
+        {
+            "step": 1,
+            "action": "run_runtime_context",
+            "command": "archive runtime-context <archive-root> --format json",
+            "reason": "establish the archive root, identity, write policy, and safe entrypoint map",
+        },
+        {
+            "step": 2,
+            "action": "read_canonical_entrypoints",
+            "fields": ["canonical_entrypoints.read_order", "canonical_entrypoints.source_truths"],
+            "reason": "prefer archive-relative source-of-truth paths before inspecting zets or provider artifacts",
+        },
+        {
+            "step": 3,
+            "action": "read_local_agent_instructions",
+            "path": "AGENTS.md",
+            "when": "canonical_entrypoints.read_order reports AGENTS.md as present",
+            "reason": "load archive-local human/AI rules before choosing tools",
+        },
+        {
+            "step": 4,
+            "action": "run_ai_response_concept_guide",
+            "command": "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
+            "reason": "load WOM concept wording, safe routing, material-link routes, and overclaim guardrails",
+        },
+        {
+            "step": 5,
+            "action": "choose_material_link_route",
+            "field": "canonical_entrypoints.material_link_routes",
+            "reason": "use omitted-locator, source-map, or body-locator routes without inventing provider calls",
+        },
+    ]
+
+
+def runtime_context_material_link_routes() -> list[dict[str, Any]]:
+    return [
+        {
+            "when": "imported zettel bodies already omitted provider locators",
+            "command": "archive notion-objet-import-clue-audit <archive-root> --source-map source-maps/<source>.jsonl --ledger receipts/import/<ledger>.jsonl --dry-run --format json",
+            "writes": False,
+            "provider_api_called": False,
+        },
+        {
+            "when": "source maps or download ledgers can recover page-to-object material candidates",
+            "command": "archive notion-objet-source-map-link-plan <archive-root> --source-map source-maps/<source>.jsonl --ledger receipts/import/<ledger>.jsonl --dry-run --format json",
+            "writes": False,
+            "provider_api_called": False,
+        },
+        {
+            "when": "imported zettel bodies still contain provider locator text that can be fingerprinted",
+            "command": "archive notion-objet-link-index <archive-root> --dry-run --format json",
+            "writes": False,
+            "provider_api_called": False,
+        },
+        {
+            "when": "one zettel with body locator text needs a candidate material preview",
+            "command": "archive notion-objet-link-plan <archive-root> --path <zet.md> --dry-run --format json",
+            "writes": False,
+            "provider_api_called": False,
+        },
+    ]
 
 
 def runtime_context_entrypoint_status(root: Path, entry: dict[str, Any]) -> dict[str, Any]:
