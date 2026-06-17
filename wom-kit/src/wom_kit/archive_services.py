@@ -3480,14 +3480,93 @@ def notion_source_map_existing_object_refs(frontmatter: dict[str, Any]) -> list[
     return unique_preserve_order(refs)
 
 
+def manifest_records_by_normalized_object_id(manifest_records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    records_by_object_id: dict[str, list[dict[str, Any]]] = {}
+    for record in manifest_records:
+        blockers: list[str] = []
+        object_id = normalize_object_id(str(record.get("object_id") or ""), blockers)
+        if object_id and not blockers:
+            records_by_object_id.setdefault(object_id, []).append(record)
+    return records_by_object_id
+
+
+def notion_source_map_resolution_from_manifest_index(
+    root: Path,
+    object_id: str,
+    manifest_records_by_object_id: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    normalized_object_id = normalize_object_id(str(object_id or ""), blockers)
+    records = manifest_records_by_object_id.get(normalized_object_id, []) if normalized_object_id else []
+    if normalized_object_id and not records:
+        blockers.append("object_id_not_found_in_manifest")
+
+    digest = normalized_object_id.removeprefix("sha256:") if normalized_object_id else ""
+    local_openable = False
+    external_declared = False
+
+    def mark_local_candidate(relative_path: str) -> None:
+        nonlocal local_openable
+        try:
+            normalized = normalize_archive_relative_path(relative_path)
+        except ArchivePathError:
+            return
+        candidate = root.joinpath(*PurePosixPath(normalized).parts)
+        if candidate.is_file():
+            local_openable = True
+
+    if records and digest:
+        mark_local_candidate(f"objects/sha256/{digest[:2]}/{digest}")
+
+    for record in records:
+        logical_key = record.get("logical_key")
+        if isinstance(logical_key, str) and logical_key.startswith("objects/sha256/"):
+            mark_local_candidate(logical_key)
+        locations = record.get("locations")
+        if not isinstance(locations, list):
+            continue
+        for location in locations:
+            if not isinstance(location, dict):
+                continue
+            provider = str(location.get("provider") or "").strip()
+            path_value = location.get("path")
+            if provider == "local" and isinstance(path_value, str):
+                mark_local_candidate(path_value)
+            else:
+                external_declared = True
+
+    if blockers:
+        resolution_state = "blocked"
+    elif local_openable:
+        resolution_state = "local_available"
+    elif external_declared:
+        resolution_state = "external_declared"
+    elif records:
+        resolution_state = "manifest_only"
+    else:
+        resolution_state = "not_found"
+
+    return {
+        "resolution_state": resolution_state,
+        "manifest_record_count": len(records),
+        "local_openable": local_openable,
+        "external_declared": external_declared,
+        "blockers": blockers,
+    }
+
+
 def notion_source_map_object_entry(
     root: Path,
     object_id: str,
     *,
     hashes: dict[str, list[str]],
     source: str,
+    manifest_records_by_object_id: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
-    resolution = resolve_objet_ref(root, object_id=object_id, dry_run=True)
+    if manifest_records_by_object_id is None:
+        resolution = resolve_objet_ref(root, object_id=object_id, dry_run=True)
+    else:
+        resolution = notion_source_map_resolution_from_manifest_index(root, object_id, manifest_records_by_object_id)
     return {
         "object_id": object_id,
         "page_refs": hashes.get("page_refs", []),
@@ -3633,6 +3712,9 @@ def notion_objet_source_map_link_plan(
                 source=f"source_map:{record_source}",
             )
 
+    manifest_records = load_manifest_records(root)
+    manifest_records_by_object_id = manifest_records_by_normalized_object_id(manifest_records)
+
     object_entries: list[dict[str, Any]] = []
     page_to_files: dict[str, set[str]] = {}
     records_with_page_ref = 0
@@ -3658,10 +3740,10 @@ def notion_objet_source_map_link_plan(
                     object_id,
                     hashes=hashes,
                     source=f"metadata:{record_source}",
+                    manifest_records_by_object_id=manifest_records_by_object_id,
                 )
             )
 
-    manifest_records = load_manifest_records(root)
     for record in manifest_records:
         object_id_value = str(record.get("object_id") or "")
         record_blockers: list[str] = []
@@ -3674,6 +3756,7 @@ def notion_objet_source_map_link_plan(
                 object_id,
                 hashes=notion_source_map_hashes_from_value(record),
                 source="objects/manifests/files.jsonl",
+                manifest_records_by_object_id=manifest_records_by_object_id,
             )
         )
 

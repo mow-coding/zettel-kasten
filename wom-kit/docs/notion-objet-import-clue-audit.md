@@ -1,7 +1,7 @@
 # Notion Objet Import Clue Audit
 
-Status: v0.3.104 read-only import material-clue audit
-Date: 2026-06-17
+Status: v0.3.107 read-only scaled import material-clue audit
+Date: 2026-06-18
 
 `notion-objet-import-clue-audit` checks whether imported Notion zettels still
 have a safe material clue after provider locators were omitted from body text.
@@ -9,6 +9,10 @@ have a safe material clue after provider locators were omitted from body text.
 It is the companion to `notion-objet-source-map-link-plan`: the audit answers
 "which imported zets are safe, recoverable, or missing a clue?", while the
 source-map planner proposes candidate `embed` edges for the recoverable rows.
+
+v0.3.107 inherits the source-map planner's large-manifest startup fix, so the
+audit no longer resolves each manifest object through repeated full manifest
+scans before it can classify imported zettels.
 
 ## Command
 
@@ -59,6 +63,10 @@ text.
 It writes nothing, rewrites no zettel body text, writes no edges, writes no
 receipts, reads no zettel body text, reads no object bytes, calls no providers,
 and creates no presigned URLs.
+
+The scale fix does not add streaming output or background execution. It keeps
+the audit local and read-only while making the startup path linear over the
+preloaded manifest index.
 
 It echoes no provider URLs, provider locator text, page titles, zettel body
 text, frontmatter values, absolute local paths, account ids, emails, tokens, or

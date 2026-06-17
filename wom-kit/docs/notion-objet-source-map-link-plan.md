@@ -1,7 +1,7 @@
 # Notion Objet Source Map Link Plan
 
-Status: v0.3.103 read-only source-map material-link planner
-Date: 2026-06-17
+Status: v0.3.107 read-only scaled source-map material-link planner
+Date: 2026-06-18
 
 `notion-objet-source-map-link-plan` is the fallback planner for imported
 Notion zets whose provider locators were already removed from the zettel body.
@@ -11,6 +11,11 @@ work when a zettel still contains a provider locator that can be fingerprinted.
 This command works one step earlier in the evidence chain: it joins safe
 archive metadata from source maps, optional download/retrieval ledgers, and the
 object manifest to propose reviewed zet-to-objet `embed` candidates.
+
+v0.3.107 keeps this route usable on large object manifests by preloading the
+manifest once and reusing a local object-id index during planning. This prevents
+startup hangs caused by resolving every manifest object through repeated full
+manifest scans.
 
 ## Command
 
@@ -86,6 +91,10 @@ The planner returns:
 It writes nothing, rewrites no zettel body text, writes no edges, writes no
 receipts, reads no object bytes, calls no providers, creates no presigned URLs,
 and does not require body provider locators.
+
+The large-manifest optimization does not add background workers, streaming
+output, provider calls, or byte verification. It only changes the local planning
+algorithm so manifest rows are indexed once per command run.
 
 It echoes no provider URLs, provider locator text, page titles, zettel body
 text, frontmatter values, absolute local paths, account ids, emails, tokens, or

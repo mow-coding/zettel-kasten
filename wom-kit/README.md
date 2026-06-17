@@ -1060,6 +1060,9 @@ counts and avoiding provider calls, object byte reads, uploads, and edge writes.
 v0.3.106 adds machine-readable `runtime-context` guide handoff fields so AI
 runtimes can discover `AGENTS.md`, `ai-response-concept-guide`, and read-only
 Notion material-link routes before choosing tools.
+v0.3.107 fixes large-manifest startup hangs in source-map material planning and
+import clue auditing by reusing a preloaded manifest index instead of resolving
+each manifest object through repeated full manifest scans.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

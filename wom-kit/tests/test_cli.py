@@ -9031,6 +9031,145 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
 
+    def test_notion_objet_source_map_commands_do_not_resolve_each_large_manifest_object(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            source_map_path = archive_root / "source-maps" / "notion-scale.jsonl"
+            ledger_path = archive_root / "receipts" / "import" / "notion-scale-ledger.jsonl"
+            source_map_path.parent.mkdir(parents=True, exist_ok=True)
+            ledger_path.parent.mkdir(parents=True, exist_ok=True)
+
+            page_id = "notion-scale-page"
+            private_download_name = "private/scale-material.pdf"
+            target_digest = "d" * 64
+            target_object_id = f"sha256:{target_digest}"
+            manifest_records = [
+                {
+                    "object_id": target_object_id,
+                    "sha256": target_digest,
+                    "logical_key": f"objects/external/prehashed/notion_source_export/{target_digest[:2]}/{target_digest}",
+                    "locations": [{"provider": "external_prehashed", "store_kind": "notion_source_export"}],
+                    "provenance": {"source": "prehashed_external_objet_ledger"},
+                }
+            ]
+            for index in range(1200):
+                digest = f"{index + 1:064x}"
+                if digest == target_digest:
+                    continue
+                manifest_records.append(
+                    {
+                        "object_id": f"sha256:{digest}",
+                        "sha256": digest,
+                        "logical_key": f"objects/external/prehashed/notion_source_export/{digest[:2]}/{digest}",
+                        "locations": [{"provider": "external_prehashed", "store_kind": "notion_source_export"}],
+                        "provenance": {"source": "prehashed_external_objet_ledger"},
+                    }
+                )
+            manifest_path.write_text(
+                "".join(json.dumps(record, sort_keys=True) + "\n" for record in manifest_records),
+                encoding="utf-8",
+            )
+            source_map_path.write_text(
+                json.dumps(
+                    {
+                        "external_id": page_id,
+                        "download_path": private_download_name,
+                        "title": "Scale Private Title Must Not Echo",
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            ledger_path.write_text(
+                json.dumps(
+                    {
+                        "key": private_download_name,
+                        "sha256": target_digest,
+                        "name": "Scale Private Attachment Must Not Echo",
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            for index in range(40):
+                (archive_root / "inbox" / f"zet_notion_scale_{index:03d}.md").write_text(
+                    "\n".join(
+                        [
+                            "---",
+                            f"id: zet_notion_scale_{index:03d}",
+                            "status: draft",
+                            "external_import:",
+                            "  source_system: notion",
+                            f"  external_id: {page_id if index == 0 else f'unmatched-scale-{index}'}",
+                            "  source_locator_omitted_count: 1",
+                            "---",
+                            "",
+                            "Scale private body must not echo.",
+                        ]
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+
+            with patch.object(
+                archive_services,
+                "resolve_objet_ref",
+                side_effect=AssertionError("source-map planning must not resolve every manifest object"),
+            ):
+                link_code, link_output = self.run_cli(
+                    [
+                        "notion-objet-source-map-link-plan",
+                        str(archive_root),
+                        "--source-map",
+                        "source-maps/notion-scale.jsonl",
+                        "--ledger",
+                        "receipts/import/notion-scale-ledger.jsonl",
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+                audit_code, audit_output = self.run_cli(
+                    [
+                        "notion-objet-import-clue-audit",
+                        str(archive_root),
+                        "--source-map",
+                        "source-maps/notion-scale.jsonl",
+                        "--ledger",
+                        "receipts/import/notion-scale-ledger.jsonl",
+                        "--max-zettels",
+                        "50",
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(link_code, 0, link_output)
+            link_result = json.loads(link_output)
+            self.assertEqual(link_result["summary"]["manifest_record_count"], len(manifest_records))
+            self.assertEqual(link_result["summary"]["candidate_count"], 1)
+            self.assertEqual(link_result["candidates"][0]["target_object_id"], target_object_id)
+            self.assertEqual(link_result["candidates"][0]["resolution_state"], "external_declared")
+            self.assertEqual(link_result["candidates"][0]["manifest_record_count"], 1)
+
+            self.assertEqual(audit_code, 0, audit_output)
+            audit_result = json.loads(audit_output)
+            self.assertGreaterEqual(audit_result["summary"]["source_map_join_available_count"], 1)
+            for forbidden in (
+                private_download_name,
+                "Scale Private Title",
+                "Scale Private Attachment",
+                "Scale private body",
+                str(archive_root),
+            ):
+                with self.subTest(forbidden=forbidden):
+                    self.assertNotIn(forbidden, link_output)
+                    self.assertNotIn(forbidden, audit_output)
+
     def test_notion_objet_import_clue_audit_flags_omitted_locators_without_material_clue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
