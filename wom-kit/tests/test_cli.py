@@ -2754,6 +2754,160 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(skip_existing["files_written"], [])
             self.assertNotIn(str(archive_root.resolve()), serialized_skip_existing)
 
+            first_edge_receipt = approve_result["policy_writable_edges"][0]["receipt_path"]
+            single_revert_code, single_revert_output = self.run_cli(
+                [
+                    "revert-edge",
+                    str(archive_root),
+                    "--receipt",
+                    first_edge_receipt,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            single_revert = json.loads(single_revert_output)
+            self.assertEqual(single_revert_code, 0, single_revert_output)
+            self.assertTrue(single_revert["ok"])
+            self.assertEqual(single_revert["write_status"], "would_revert")
+            self.assertEqual(single_revert["edge_receipt_path"], first_edge_receipt)
+            self.assertTrue(single_revert["revert_receipt_path"].startswith("receipts/edges/reverts/"))
+            self.assertFalse(single_revert["closed_actions"]["original_edge_receipt_deleted"])
+            self.assertNotIn(str(archive_root.resolve()), json.dumps(single_revert, ensure_ascii=False))
+
+            batch_revert_dry_code, batch_revert_dry_output = self.run_cli(
+                [
+                    "revert-batch",
+                    str(archive_root),
+                    "--receipt",
+                    approve_result["receipt_path"],
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            batch_revert_dry = json.loads(batch_revert_dry_output)
+            self.assertEqual(batch_revert_dry_code, 0, batch_revert_dry_output)
+            self.assertTrue(batch_revert_dry["ok"])
+            self.assertEqual(batch_revert_dry["write_status"], "would_revert")
+            self.assertEqual(batch_revert_dry["summary"]["edge_revert_count"], 2)
+            self.assertTrue(batch_revert_dry["batch_revert_receipt_path"].startswith("receipts/edges/batches/reverts/"))
+            self.assertEqual(self.snapshot_archive_files(archive_root)["zettels/zet_20240504_fake_lunch_thought.md"], source_path.read_text(encoding="utf-8"))
+
+            missing_revert_review_code, missing_revert_review_output = self.run_cli(
+                [
+                    "revert-batch",
+                    str(archive_root),
+                    "--receipt",
+                    approve_result["receipt_path"],
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            missing_revert_review = json.loads(missing_revert_review_output)
+            self.assertEqual(missing_revert_review_code, 1)
+            self.assertIn("requires --reviewed-by", "\n".join(missing_revert_review["blockers"]))
+
+            batch_revert_code, batch_revert_output = self.run_cli(
+                [
+                    "revert-batch",
+                    str(archive_root),
+                    "--receipt",
+                    approve_result["receipt_path"],
+                    "--approve",
+                    "--reviewed-by",
+                    "person:fixture-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            batch_revert = json.loads(batch_revert_output)
+            serialized_batch_revert = json.dumps(batch_revert, ensure_ascii=False)
+            self.assertEqual(batch_revert_code, 0, batch_revert_output)
+            self.assertTrue(batch_revert["ok"])
+            self.assertEqual(batch_revert["write_status"], "reverted")
+            self.assertEqual(batch_revert["summary"]["edge_revert_count"], 2)
+            self.assertTrue(batch_revert["summary"]["batch_revert_receipt_written"])
+            self.assertFalse(batch_revert["closed_actions"]["original_edge_receipts_deleted"])
+            self.assertFalse(batch_revert["closed_actions"]["original_batch_receipt_deleted"])
+            self.assertIn(batch_revert["batch_revert_receipt_path"], batch_revert["files_written"])
+            self.assertNotIn(str(archive_root.resolve()), serialized_batch_revert)
+            self.assertNotIn("Fake thought while eating alone", serialized_batch_revert)
+
+            reverted_frontmatter, _reverted_body = archive_services.split_zettel_text(source_path.read_text(encoding="utf-8"))
+            reverted_pairs = {
+                (item.get("type"), item.get("target"))
+                for item in reverted_frontmatter["edges"]
+                if isinstance(item, dict)
+            }
+            self.assertNotIn(("material", material_target_id), reverted_pairs)
+            self.assertNotIn(("derived", derived_target_id), reverted_pairs)
+            for item in batch_revert["edge_reverts"]:
+                self.assertEqual(item["write_status"], "reverted")
+                self.assertTrue((archive_root / item["edge_receipt_path"]).is_file())
+                self.assertTrue((archive_root / item["revert_receipt_path"]).is_file())
+            self.assertTrue((archive_root / approve_result["receipt_path"]).is_file())
+            self.assertTrue((archive_root / batch_revert["batch_revert_receipt_path"]).is_file())
+
+    def test_zettel_edge_batch_objet_targets_preload_manifest_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            manifest_records = [
+                json.loads(line)
+                for line in (archive_root / "objects" / "manifests" / "files.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            object_ids = [item["object_id"] for item in manifest_records[:2]]
+            self.assertEqual(len(object_ids), 2)
+            plan_path = Path(tmp) / "zettel-edge-batch-objets.plan.json"
+            plan = {
+                "schema": "wom-kit/zettel-edge-batch/v0.1",
+                "policy": {
+                    "policy_id": "policy:fixture-high-confidence-embed",
+                    "auto_write_edge_types": ["embed"],
+                    "minimum_confidence": "high",
+                },
+                "edges": [
+                    {
+                        "candidate_id": f"candidate:fixture-embed-{index}",
+                        "from_zettel": "zet_20240504_fake_lunch_thought",
+                        "target": object_id,
+                        "edge_type": "embed",
+                        "visibility": "private",
+                        "confidence": "high",
+                        "review_status": "policy_candidate",
+                    }
+                    for index, object_id in enumerate(object_ids)
+                ],
+            }
+            plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            manifest_load_count = 0
+            original_load_manifest_records = archive_services.load_manifest_records
+
+            def counted_load_manifest_records(root: Path) -> list[dict[str, Any]]:
+                nonlocal manifest_load_count
+                manifest_load_count += 1
+                return original_load_manifest_records(root)
+
+            with patch.object(archive_services, "load_manifest_records", side_effect=counted_load_manifest_records):
+                code, output = self.run_cli(
+                    [
+                        "zettel-edge-batch",
+                        str(archive_root),
+                        "--plan",
+                        str(plan_path),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["summary"]["policy_writable_edge_count"], 2)
+            self.assertEqual(manifest_load_count, 1)
+
     def test_zettel_edge_batch_plan_path_is_archive_relative_first(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

@@ -760,6 +760,8 @@ MINT_RECEIPTS_DIR = "receipts/mint"
 MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
 ZETTEL_EDGE_RECEIPTS_DIR = "receipts/edges"
 ZETTEL_EDGE_BATCH_RECEIPTS_DIR = "receipts/edges/batches"
+ZETTEL_EDGE_REVERT_RECEIPTS_DIR = "receipts/edges/reverts"
+ZETTEL_EDGE_BATCH_REVERT_RECEIPTS_DIR = "receipts/edges/batches/reverts"
 NOTION_OBJET_MANIFEST_LOCATOR_LABEL_RECEIPTS_DIR = "receipts/objects/notion-locator-labels"
 NOTION_OBJET_LINK_CONVERT_RECEIPTS_DIR = "receipts/objects/notion-link-conversions"
 DELEGATE_RECEIPTS_DIR = "receipts/delegate"
@@ -15558,7 +15560,13 @@ def resolve_zettel_external_ref(root: Path, target_ref: str, blockers: list[str]
     }
 
 
-def zettel_edge_target_summary(root: Path, target_ref: str, blockers: list[str]) -> dict[str, Any]:
+def zettel_edge_target_summary(
+    root: Path,
+    target_ref: str,
+    blockers: list[str],
+    *,
+    manifest_records_by_object_id: dict[str, list[dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
     text = str(target_ref or "").strip()
     if not safe_source_intake_plan_scalar(text):
         blockers.append("target_ref must be a safe non-secret scalar.")
@@ -15595,14 +15603,18 @@ def zettel_edge_target_summary(root: Path, target_ref: str, blockers: list[str])
         return {"ref": text, "kind": "objet", "verified": False}
 
     if normalized_object_id:
-        record = find_manifest_record(root, normalized_object_id)
-        if record is None:
+        if manifest_records_by_object_id is None:
+            record_count = 1 if find_manifest_record(root, normalized_object_id) is not None else 0
+        else:
+            record_count = len(manifest_records_by_object_id.get(normalized_object_id, []))
+        if record_count == 0:
             blockers.append("target object_id was not found in objects/manifests/files.jsonl.")
         return {
             "ref": normalized_object_id,
             "kind": "objet",
-            "verified": record is not None,
+            "verified": record_count > 0,
             "manifest_path": "objects/manifests/files.jsonl",
+            "manifest_record_count": record_count,
         }
 
     blockers.append("target_ref must be an existing zet_<id>, sha256:<64hex>, or objet:sha256:<64hex> ref.")
@@ -15708,6 +15720,7 @@ def zettel_edge_write(
     dry_run: bool = False,
     approve: bool = False,
     reviewed_by: str | None = None,
+    manifest_records_by_object_id: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -15760,7 +15773,12 @@ def zettel_edge_write(
         except ArchiveServiceError as exc:
             blockers.append(str(exc))
 
-    target_summary = zettel_edge_target_summary(root, target_ref, blockers)
+    target_summary = zettel_edge_target_summary(
+        root,
+        target_ref,
+        blockers,
+        manifest_records_by_object_id=manifest_records_by_object_id,
+    )
     normalized_target_ref = str(target_summary.get("ref") or target_ref or "").strip()
     if source_zettel_id and normalized_target_ref == source_zettel_id:
         blockers.append("source and target must be different.")
@@ -16146,6 +16164,14 @@ def zettel_edge_batch_receipt_relative_path(batch_id: str) -> str:
     return f"{ZETTEL_EDGE_BATCH_RECEIPTS_DIR}/{digest[:24]}.zettel-edge-batch.json"
 
 
+def zettel_edge_batch_needs_manifest_index(rows: list[dict[str, Any]]) -> bool:
+    for row in rows:
+        target = str(row.get("target") or "").strip().lower()
+        if target.startswith("objet:sha256:") or target.startswith("sha256:") or SHA256_RE.match(target):
+            return True
+    return False
+
+
 def zettel_edge_batch_result(
     *,
     archive_id: str,
@@ -16365,7 +16391,10 @@ def zettel_edge_batch_write(
     effective_writable_rows: list[dict[str, Any]] = []
     skipped_existing_edges: list[dict[str, Any]] = []
     would_change: list[str] = []
+    manifest_records_by_object_id: dict[str, list[dict[str, Any]]] | None = None
     if not blockers:
+        if zettel_edge_batch_needs_manifest_index(policy_writable_rows):
+            manifest_records_by_object_id = manifest_records_by_normalized_object_id(load_manifest_records(root))
         for row in policy_writable_rows:
             dry_result = zettel_edge_write(
                 root,
@@ -16376,6 +16405,7 @@ def zettel_edge_batch_write(
                 visibility=str(row.get("visibility") or "private"),
                 dry_run=True,
                 approve=False,
+                manifest_records_by_object_id=manifest_records_by_object_id,
             )
             if not dry_result.get("ok") and skip_existing and zettel_edge_batch_existing_edge_blockers(dry_result.get("blockers")):
                 skipped_existing_edges.append(
@@ -16507,6 +16537,7 @@ def zettel_edge_batch_write(
                 dry_run=False,
                 approve=True,
                 reviewed_by=reviewed_by,
+                manifest_records_by_object_id=manifest_records_by_object_id,
             )
             if not write_result.get("ok"):
                 raise ArchiveServiceError("; ".join(str(blocker) for blocker in write_result.get("blockers", [])) or "batch edge item write failed.")
@@ -16579,6 +16610,632 @@ def zettel_edge_batch_write(
         skipped_existing_edges=skipped_existing_edges,
         skip_existing=skip_existing,
         plan_path_resolution=plan_path_resolution,
+        would_change=would_change,
+        files_written=files_written,
+        blockers=[],
+        warnings=warnings,
+    )
+
+
+def zettel_edge_receipt_input(root: Path, raw_receipt: str, blockers: list[str]) -> tuple[Path | None, str | None]:
+    try:
+        receipt_path = resolve_receipt_input_path(root, raw_receipt)
+    except ArchiveServiceError as exc:
+        blockers.append(str(exc))
+        return None, None
+    if not is_path_within_root(receipt_path, root):
+        blockers.append("edge receipt must be inside the archive root.")
+        return None, None
+    receipt_relative = archive_relative_path(receipt_path, root)
+    if (
+        not receipt_relative.startswith(f"{ZETTEL_EDGE_RECEIPTS_DIR}/")
+        or receipt_relative.startswith(f"{ZETTEL_EDGE_BATCH_RECEIPTS_DIR}/")
+        or not receipt_relative.endswith(".zettel-edge.json")
+    ):
+        blockers.append("edge receipt must be under receipts/edges/ and end with .zettel-edge.json.")
+        return receipt_path, receipt_relative
+    return receipt_path, receipt_relative
+
+
+def zettel_edge_batch_receipt_input(root: Path, raw_receipt: str, blockers: list[str]) -> tuple[Path | None, str | None]:
+    try:
+        receipt_path = resolve_receipt_input_path(root, raw_receipt)
+    except ArchiveServiceError as exc:
+        blockers.append(str(exc))
+        return None, None
+    if not is_path_within_root(receipt_path, root):
+        blockers.append("batch edge receipt must be inside the archive root.")
+        return None, None
+    receipt_relative = archive_relative_path(receipt_path, root)
+    if (
+        not receipt_relative.startswith(f"{ZETTEL_EDGE_BATCH_RECEIPTS_DIR}/")
+        or not receipt_relative.endswith(".zettel-edge-batch.json")
+    ):
+        blockers.append("batch edge receipt must be under receipts/edges/batches/ and end with .zettel-edge-batch.json.")
+        return receipt_path, receipt_relative
+    return receipt_path, receipt_relative
+
+
+def zettel_edge_revert_receipt_relative_path(edge_receipt_relative: str, edge_id: str) -> str:
+    digest = sha256_json_hex({"edge_receipt_path": edge_receipt_relative, "edge_id": edge_id})
+    return f"{ZETTEL_EDGE_REVERT_RECEIPTS_DIR}/{digest[:24]}.zettel-edge-revert.json"
+
+
+def zettel_edge_batch_revert_receipt_relative_path(batch_receipt_relative: str) -> str:
+    digest = sha256_json_hex({"batch_receipt_path": batch_receipt_relative})
+    return f"{ZETTEL_EDGE_BATCH_REVERT_RECEIPTS_DIR}/{digest[:24]}.zettel-edge-batch-revert.json"
+
+
+def zettel_edge_revert_result(
+    *,
+    archive_id: str,
+    dry_run: bool,
+    approve: bool,
+    reviewed_by: str | None,
+    edge_receipt_path: str | None,
+    revert_receipt_path: str | None,
+    source_summary: dict[str, Any],
+    edge_summary: dict[str, Any],
+    would_change: list[str],
+    files_written: list[str],
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    if blockers:
+        write_status = "blocked"
+    elif dry_run:
+        write_status = "would_revert"
+    elif approve:
+        write_status = "reverted"
+    else:
+        write_status = "blocked"
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "zettel_edge_revert_plan" if dry_run else "zettel_edge_revert_write",
+        "archive_id": archive_id,
+        "write_status": write_status,
+        "edge_receipt_path": edge_receipt_path,
+        "revert_receipt_path": revert_receipt_path,
+        "source": source_summary,
+        "edge": edge_summary,
+        "reviewed_by": reviewed_by if approve else None,
+        "summary": {
+            "edge_reverted": bool(files_written and source_summary),
+            "revert_receipt_written": bool(revert_receipt_path and revert_receipt_path in files_written),
+            "original_edge_receipt_preserved": True,
+        },
+        "current_capability": {
+            "receipt_based_edge_revert_implemented": True,
+            "batch_revert_implemented": True,
+            "mcp_write_tool_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "real_source_export_files_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "candidate_records_written": False,
+            "object_manifest_updated": False,
+            "original_edge_receipt_deleted": False,
+            "zettel_frontmatter_written": bool(files_written and source_summary),
+            "revert_receipt_written": bool(revert_receipt_path and revert_receipt_path in files_written),
+            "rollback_on_failure": True,
+        },
+        "privacy_guards": {
+            "body_text_echoed": False,
+            "zettel_title_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "page_titles_echoed": False,
+            "comment_bodies_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "secret_values_echoed": False,
+        },
+        "would_change": would_change,
+        "files_written": files_written,
+        "next_safe_actions": [
+            "Run archive index before relying on related-zets backlinks." if not blockers else "Fix blockers before reverting the edge.",
+            "Keep the original write receipt and the revert receipt together as the audit trail.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def zettel_edge_from_receipt(frontmatter_edges: Any, receipt: dict[str, Any], receipt_relative: str) -> tuple[int | None, dict[str, Any] | None]:
+    if not isinstance(frontmatter_edges, list):
+        return None, None
+    edge_id = str(receipt.get("edge_id") or "").strip()
+    edge_type = str(receipt.get("edge_type") or "").strip()
+    target_ref = str(receipt.get("target_ref") or "").strip()
+    for index, item in enumerate(frontmatter_edges):
+        if not isinstance(item, dict):
+            continue
+        if edge_id and str(item.get("edge_id") or "").strip() == edge_id:
+            return index, item
+        if (
+            str(item.get("type") or "").strip() == edge_type
+            and str(item.get("target") or item.get("target_id") or item.get("zettel_id") or "").strip() == target_ref
+            and str(item.get("receipt") or "").strip() == receipt_relative
+        ):
+            return index, item
+    return None, None
+
+
+def zettel_edge_revert(
+    archive_root: Path | str,
+    *,
+    receipt: str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run and approve:
+        blockers.append("Use either --dry-run or --approve, not both.")
+    if not dry_run and not approve:
+        blockers.append("revert-edge requires --dry-run or --approve.")
+    if approve and not reviewed_by:
+        blockers.append("revert-edge --approve requires --reviewed-by.")
+    if reviewed_by and not safe_source_intake_plan_scalar(str(reviewed_by)):
+        blockers.append("reviewed_by must be a safe non-secret scalar.")
+
+    receipt_path, receipt_relative = zettel_edge_receipt_input(root, receipt, blockers)
+    receipt_doc: dict[str, Any] | None = None
+    if receipt_path is not None and not blockers:
+        receipt_doc = load_json_object_for_review(receipt_path, "zettel edge receipt", blockers)
+    if receipt_doc is not None:
+        if receipt_doc.get("schema_version") != "wom-kit/zettel-edge-receipt/v0.1":
+            blockers.append("edge receipt schema_version must be wom-kit/zettel-edge-receipt/v0.1.")
+        if receipt_doc.get("receipt_kind") != "zettel_edge_write":
+            blockers.append("edge receipt_kind must be zettel_edge_write.")
+        if receipt_doc.get("archive_id") != archive_id:
+            blockers.append("edge receipt archive_id must match this archive.")
+
+    source_summary: dict[str, Any] = {}
+    edge_summary: dict[str, Any] = {}
+    source_path: Path | None = None
+    source_frontmatter: dict[str, Any] = {}
+    source_body = ""
+    edge_index: int | None = None
+    matched_edge: dict[str, Any] | None = None
+    revert_receipt_relative: str | None = None
+
+    if receipt_doc is not None:
+        source_zettel_id = str(receipt_doc.get("source_zettel_id") or "").strip()
+        source_relative = str(receipt_doc.get("source_zettel_path") or "").strip()
+        if not source_relative:
+            blockers.append("edge receipt source_zettel_path is missing.")
+        else:
+            try:
+                normalized_source = normalize_archive_relative_path(source_relative)
+            except ArchivePathError:
+                blockers.append("edge receipt source_zettel_path is not a safe archive-relative path.")
+                normalized_source = ""
+            if normalized_source and not normalized_source.startswith("zettels/"):
+                blockers.append("edge receipt source_zettel_path must point under zettels/.")
+            if normalized_source:
+                source_path = archive_internal_path(root, normalized_source)
+                if not source_path.is_file():
+                    blockers.append("edge receipt source zettel is missing.")
+                else:
+                    source_frontmatter, source_body = split_zettel_text(source_path.read_text(encoding="utf-8"))
+                    if source_zettel_id and str(source_frontmatter.get("id") or "").strip() != source_zettel_id:
+                        blockers.append("edge receipt source_zettel_id does not match the current zettel.")
+                    edge_index, matched_edge = zettel_edge_from_receipt(source_frontmatter.get("edges"), receipt_doc, receipt_relative or "")
+                    if edge_index is None or matched_edge is None:
+                        blockers.append("edge from receipt is not present on the source zettel.")
+                    source_summary = {
+                        "zettel_id": str(source_frontmatter.get("id") or source_zettel_id),
+                        "path": normalized_source,
+                    }
+        edge_id = str(receipt_doc.get("edge_id") or "").strip()
+        revert_receipt_relative = zettel_edge_revert_receipt_relative_path(receipt_relative or "", edge_id) if edge_id and receipt_relative else None
+        if revert_receipt_relative and archive_internal_path(root, revert_receipt_relative).exists():
+            blockers.append("edge revert receipt already exists.")
+        edge_summary = drop_none_values(
+            {
+                "edge_id": edge_id or None,
+                "edge_type": receipt_doc.get("edge_type"),
+                "target_ref": receipt_doc.get("target_ref"),
+                "target_kind": receipt_doc.get("target_kind"),
+                "visibility": receipt_doc.get("visibility"),
+            }
+        )
+
+    would_change: list[str] = []
+    if source_summary and revert_receipt_relative:
+        would_change = [
+            f"{source_summary['path']} frontmatter.edges -1",
+            f"{source_summary['path']} frontmatter.updated_at",
+            revert_receipt_relative,
+        ]
+
+    if blockers or dry_run:
+        return zettel_edge_revert_result(
+            archive_id=archive_id,
+            dry_run=bool(dry_run),
+            approve=bool(approve),
+            reviewed_by=reviewed_by,
+            edge_receipt_path=receipt_relative,
+            revert_receipt_path=revert_receipt_relative,
+            source_summary=source_summary,
+            edge_summary=edge_summary,
+            would_change=would_change,
+            files_written=[],
+            blockers=blockers,
+            warnings=warnings,
+        )
+
+    assert receipt_doc is not None
+    assert source_path is not None
+    assert isinstance(source_frontmatter.get("edges"), list)
+    assert edge_index is not None
+    assert revert_receipt_relative is not None
+    assert receipt_relative is not None
+    assert reviewed_by is not None
+
+    original_text = source_path.read_text(encoding="utf-8")
+    updated_frontmatter = copy.deepcopy(source_frontmatter)
+    updated_edges = list(source_frontmatter.get("edges") or [])
+    reverted_edge = updated_edges.pop(edge_index)
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    updated_frontmatter["edges"] = updated_edges
+    updated_frontmatter["updated_at"] = now
+    updated_text = "---\n" + dump_yaml(updated_frontmatter) + "---\n" + source_body
+    revert_receipt = {
+        "schema_version": "wom-kit/zettel-edge-revert-receipt/v0.1",
+        "lifecycle_action": "zettel_edge_revert_write",
+        "receipt_kind": "zettel_edge_revert",
+        "created_at": now,
+        "archive_id": archive_id,
+        "source_edge_receipt_path": receipt_relative,
+        "reverted_edge_id": edge_summary.get("edge_id"),
+        "edge_type": edge_summary.get("edge_type"),
+        "source_zettel_id": source_summary.get("zettel_id"),
+        "source_zettel_path": source_summary.get("path"),
+        "target_ref": edge_summary.get("target_ref"),
+        "target_kind": edge_summary.get("target_kind"),
+        "visibility": edge_summary.get("visibility"),
+        "reviewed_by": reviewed_by,
+        "result": {
+            "edge_removed": True,
+            "zettel_frontmatter_updated": True,
+            "revert_receipt_written": True,
+            "original_edge_receipt_preserved": True,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "real_source_export_files_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "candidate_records_written": False,
+            "object_manifest_updated": False,
+            "original_edge_receipt_deleted": False,
+        },
+    }
+    if isinstance(reverted_edge, dict) and str(reverted_edge.get("receipt") or "") != receipt_relative:
+        warnings.append("reverted edge receipt pointer differed from the reviewed receipt path.")
+
+    revert_receipt_path = archive_internal_path(root, revert_receipt_relative)
+    revert_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    zettel_written = False
+    try:
+        source_path.write_text(updated_text, encoding="utf-8")
+        zettel_written = True
+        write_json_new_file(revert_receipt_path, revert_receipt)
+    except OSError:
+        if zettel_written:
+            source_path.write_text(original_text, encoding="utf-8")
+        if revert_receipt_path.exists():
+            try:
+                revert_receipt_path.unlink()
+            except OSError:
+                pass
+        raise
+
+    return zettel_edge_revert_result(
+        archive_id=archive_id,
+        dry_run=False,
+        approve=True,
+        reviewed_by=reviewed_by,
+        edge_receipt_path=receipt_relative,
+        revert_receipt_path=revert_receipt_relative,
+        source_summary=source_summary,
+        edge_summary=edge_summary,
+        would_change=would_change,
+        files_written=[source_summary["path"], revert_receipt_relative],
+        blockers=[],
+        warnings=warnings,
+    )
+
+
+def zettel_edge_batch_revert_result(
+    *,
+    archive_id: str,
+    dry_run: bool,
+    approve: bool,
+    reviewed_by: str | None,
+    batch_receipt_path: str | None,
+    batch_revert_receipt_path: str | None,
+    item_results: list[dict[str, Any]],
+    would_change: list[str],
+    files_written: list[str],
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    reverted_count = sum(1 for item in item_results if item.get("write_status") == "reverted")
+    if blockers:
+        write_status = "blocked"
+    elif dry_run:
+        write_status = "would_revert"
+    elif approve:
+        write_status = "reverted"
+    else:
+        write_status = "blocked"
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "zettel_edge_batch_revert_plan" if dry_run else "zettel_edge_batch_revert_write",
+        "archive_id": archive_id,
+        "write_status": write_status,
+        "batch_receipt_path": batch_receipt_path,
+        "batch_revert_receipt_path": batch_revert_receipt_path,
+        "summary": {
+            "edge_revert_count": reverted_count if approve else len(item_results),
+            "batch_revert_receipt_written": bool(batch_revert_receipt_path and batch_revert_receipt_path in files_written),
+            "original_batch_receipt_preserved": True,
+        },
+        "edge_reverts": item_results,
+        "reviewed_by": reviewed_by if approve else None,
+        "current_capability": {
+            "receipt_based_batch_revert_implemented": True,
+            "uses_single_edge_revert_gate_per_item": True,
+            "mcp_write_tool_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "real_source_export_files_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "candidate_records_written": False,
+            "object_manifest_updated": False,
+            "original_edge_receipts_deleted": False,
+            "original_batch_receipt_deleted": False,
+            "zettel_frontmatter_written": bool(reverted_count),
+            "edge_revert_receipts_written": reverted_count,
+            "batch_revert_receipt_written": bool(batch_revert_receipt_path and batch_revert_receipt_path in files_written),
+            "rollback_on_failure": True,
+        },
+        "privacy_guards": {
+            "body_text_echoed": False,
+            "zettel_title_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "page_titles_echoed": False,
+            "comment_bodies_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "secret_values_echoed": False,
+        },
+        "would_change": unique_preserve_order(would_change),
+        "files_written": unique_preserve_order(files_written),
+        "next_safe_actions": [
+            "Run archive index before relying on related-zets backlinks." if not blockers else "Fix blockers before reverting the edge batch.",
+            "Keep the original batch receipt and revert receipt together as the audit trail.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def zettel_edge_batch_revert(
+    archive_root: Path | str,
+    *,
+    receipt: str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run and approve:
+        blockers.append("Use either --dry-run or --approve, not both.")
+    if not dry_run and not approve:
+        blockers.append("revert-batch requires --dry-run or --approve.")
+    if approve and not reviewed_by:
+        blockers.append("revert-batch --approve requires --reviewed-by.")
+    if reviewed_by and not safe_source_intake_plan_scalar(str(reviewed_by)):
+        blockers.append("reviewed_by must be a safe non-secret scalar.")
+
+    batch_receipt_path, batch_receipt_relative = zettel_edge_batch_receipt_input(root, receipt, blockers)
+    batch_receipt_doc: dict[str, Any] | None = None
+    if batch_receipt_path is not None and not blockers:
+        batch_receipt_doc = load_json_object_for_review(batch_receipt_path, "zettel edge batch receipt", blockers)
+    if batch_receipt_doc is not None:
+        if batch_receipt_doc.get("schema_version") != "wom-kit/zettel-edge-batch-receipt/v0.1":
+            blockers.append("batch edge receipt schema_version must be wom-kit/zettel-edge-batch-receipt/v0.1.")
+        if batch_receipt_doc.get("receipt_kind") != "zettel_edge_batch_write":
+            blockers.append("batch edge receipt_kind must be zettel_edge_batch_write.")
+        if batch_receipt_doc.get("archive_id") != archive_id:
+            blockers.append("batch edge receipt archive_id must match this archive.")
+
+    edge_receipts: list[str] = []
+    if batch_receipt_doc is not None:
+        raw_receipts = batch_receipt_doc.get("edge_receipts")
+        if not isinstance(raw_receipts, list) or not raw_receipts:
+            blockers.append("batch edge receipt edge_receipts must be a non-empty list.")
+        else:
+            for index, item in enumerate(raw_receipts):
+                if not isinstance(item, str) or not item.strip():
+                    blockers.append(f"edge_receipts[{index}] must be an archive-relative receipt path.")
+                    continue
+                try:
+                    normalized = normalize_archive_relative_path(item)
+                except ArchivePathError:
+                    blockers.append(f"edge_receipts[{index}] must be an archive-relative receipt path.")
+                    continue
+                if (
+                    not normalized.startswith(f"{ZETTEL_EDGE_RECEIPTS_DIR}/")
+                    or normalized.startswith(f"{ZETTEL_EDGE_BATCH_RECEIPTS_DIR}/")
+                    or not normalized.endswith(".zettel-edge.json")
+                ):
+                    blockers.append(f"edge_receipts[{index}] must point to a single edge receipt.")
+                    continue
+                edge_receipts.append(normalized)
+
+    batch_revert_receipt_relative = (
+        zettel_edge_batch_revert_receipt_relative_path(batch_receipt_relative)
+        if batch_receipt_relative and edge_receipts
+        else None
+    )
+    if batch_revert_receipt_relative and archive_internal_path(root, batch_revert_receipt_relative).exists():
+        blockers.append("batch edge revert receipt already exists.")
+
+    item_results: list[dict[str, Any]] = []
+    would_change: list[str] = []
+    if not blockers:
+        for index, edge_receipt in enumerate(edge_receipts):
+            item_result = zettel_edge_revert(
+                root,
+                receipt=edge_receipt,
+                dry_run=True,
+                approve=False,
+            )
+            if not item_result.get("ok"):
+                blockers.extend(f"edge_receipts[{index}]: {blocker}" for blocker in item_result.get("blockers", []))
+            item_results.append(
+                {
+                    "index": index,
+                    "edge_receipt_path": item_result.get("edge_receipt_path"),
+                    "revert_receipt_path": item_result.get("revert_receipt_path"),
+                    "write_status": item_result.get("write_status"),
+                    "source": item_result.get("source"),
+                    "edge": item_result.get("edge"),
+                    "would_change": item_result.get("would_change", []),
+                    "blockers": item_result.get("blockers", []),
+                }
+            )
+            would_change.extend(str(item) for item in item_result.get("would_change", []) if isinstance(item, str))
+        if batch_revert_receipt_relative:
+            would_change.append(batch_revert_receipt_relative)
+
+    if blockers or dry_run:
+        return zettel_edge_batch_revert_result(
+            archive_id=archive_id,
+            dry_run=bool(dry_run),
+            approve=bool(approve),
+            reviewed_by=reviewed_by,
+            batch_receipt_path=batch_receipt_relative,
+            batch_revert_receipt_path=batch_revert_receipt_relative,
+            item_results=item_results,
+            would_change=would_change,
+            files_written=[],
+            blockers=blockers,
+            warnings=warnings,
+        )
+
+    assert reviewed_by is not None
+    assert batch_receipt_relative is not None
+    assert batch_revert_receipt_relative is not None
+
+    snapshots: dict[str, str | None] = {}
+    for item in item_results:
+        source = item.get("source") if isinstance(item.get("source"), dict) else {}
+        for relative in (source.get("path"), item.get("revert_receipt_path"), batch_revert_receipt_relative):
+            if not isinstance(relative, str) or not relative or relative in snapshots:
+                continue
+            path = archive_internal_path(root, relative)
+            snapshots[relative] = path.read_text(encoding="utf-8") if path.exists() else None
+
+    written_results: list[dict[str, Any]] = []
+    files_written: list[str] = []
+    try:
+        for index, edge_receipt in enumerate(edge_receipts):
+            write_result = zettel_edge_revert(
+                root,
+                receipt=edge_receipt,
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewed_by,
+            )
+            if not write_result.get("ok"):
+                raise ArchiveServiceError("; ".join(str(blocker) for blocker in write_result.get("blockers", [])) or "batch edge revert item failed.")
+            written_results.append(
+                {
+                    "index": index,
+                    "edge_receipt_path": write_result.get("edge_receipt_path"),
+                    "revert_receipt_path": write_result.get("revert_receipt_path"),
+                    "write_status": write_result.get("write_status"),
+                    "source": write_result.get("source"),
+                    "edge": write_result.get("edge"),
+                    "files_written": write_result.get("files_written", []),
+                    "blockers": [],
+                }
+            )
+            files_written.extend(str(item) for item in write_result.get("files_written", []) if isinstance(item, str))
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        batch_revert_receipt = {
+            "schema_version": "wom-kit/zettel-edge-batch-revert-receipt/v0.1",
+            "lifecycle_action": "zettel_edge_batch_revert_write",
+            "receipt_kind": "zettel_edge_batch_revert",
+            "created_at": now,
+            "archive_id": archive_id,
+            "source_batch_receipt_path": batch_receipt_relative,
+            "edge_revert_count": len(written_results),
+            "edge_revert_receipts": [item.get("revert_receipt_path") for item in written_results],
+            "reviewed_by": reviewed_by,
+            "result": {
+                "edges_removed": len(written_results),
+                "batch_revert_receipt_written": True,
+                "original_batch_receipt_preserved": True,
+                "original_edge_receipts_preserved": True,
+            },
+            "closed_actions": {
+                "provider_api_called": False,
+                "oauth_started": False,
+                "notion_connection_opened": False,
+                "real_source_export_files_read": False,
+                "comments_read": False,
+                "media_downloaded": False,
+                "candidate_records_written": False,
+                "object_manifest_updated": False,
+                "original_edge_receipts_deleted": False,
+                "original_batch_receipt_deleted": False,
+                "rollback_on_failure": True,
+            },
+        }
+        batch_revert_path = archive_internal_path(root, batch_revert_receipt_relative)
+        batch_revert_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_new_file(batch_revert_path, batch_revert_receipt)
+        files_written.append(batch_revert_receipt_relative)
+    except (ArchiveServiceError, OSError):
+        restore_zettel_edge_batch_snapshots(snapshots, root)
+        raise
+
+    return zettel_edge_batch_revert_result(
+        archive_id=archive_id,
+        dry_run=False,
+        approve=True,
+        reviewed_by=reviewed_by,
+        batch_receipt_path=batch_receipt_relative,
+        batch_revert_receipt_path=batch_revert_receipt_relative,
+        item_results=written_results,
         would_change=would_change,
         files_written=files_written,
         blockers=[],

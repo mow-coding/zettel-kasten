@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.108 - 2026-06-18
+
+- Fixed the matching large-manifest scale issue in `archive zettel-edge-batch`
+  when policy-writable rows target manifested objets.
+- Batch edge preflight and approval now preload `objects/manifests/files.jsonl`
+  once and reuse a local object-id index instead of resolving each objet target
+  through repeated full manifest scans.
+- Added receipt-based rollback commands:
+  `archive revert-edge --receipt <edge-receipt> --dry-run|--approve` and
+  `archive revert-batch --receipt <batch-receipt> --dry-run|--approve`.
+- Reverts preserve the original write receipts, write new revert receipts under
+  `receipts/edges/reverts/` and `receipts/edges/batches/reverts/`, and restore
+  touched files if an approved batch revert fails partway through.
+- Added regression coverage for object-target batch manifest preloading and
+  batch receipt rollback.
+- Kept the boundary local and approval-gated: no provider calls, MCP write
+  tools, source export reads, zettel body echoes, object manifest updates, or
+  original receipt deletion were added.
+
 ## v0.3.107 - 2026-06-18
 
 - Fixed the large-manifest startup hang in
