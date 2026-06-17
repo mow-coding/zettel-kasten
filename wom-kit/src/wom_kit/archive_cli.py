@@ -2356,6 +2356,92 @@ def command_zettel_edge_batch(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_revert_edge(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.zettel_edge_revert(
+            Path(args.archive_root),
+            receipt=args.receipt,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("write_status") or ("passed" if result.get("ok") else "blocked")
+        source = result.get("source") if isinstance(result.get("source"), dict) else {}
+        edge = result.get("edge") if isinstance(result.get("edge"), dict) else {}
+        print(f"Zettel edge revert: {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source: {source.get('zettel_id') or '-'}")
+        print(f"Edge: {edge.get('edge_id') or '-'}")
+        print(f"Receipt: {result.get('edge_receipt_path') or '-'}")
+        print(f"Revert receipt: {result.get('revert_receipt_path') or '-'}")
+        if result.get("files_written"):
+            print("Files written:")
+            for path in result["files_written"]:
+                print(f"- {path}")
+        elif result.get("would_change"):
+            print("Would change:")
+            for path in result["would_change"]:
+                print(f"- {path}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_revert_batch(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.zettel_edge_batch_revert(
+            Path(args.archive_root),
+            receipt=args.receipt,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("write_status") or ("passed" if result.get("ok") else "blocked")
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(f"Zettel edge batch revert: {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Edges to revert: {summary.get('edge_revert_count', 0)}")
+        print(f"Receipt: {result.get('batch_receipt_path') or '-'}")
+        print(f"Batch revert receipt: {result.get('batch_revert_receipt_path') or '-'}")
+        if result.get("files_written"):
+            print("Files written:")
+            for path in result["files_written"]:
+                print(f"- {path}")
+        elif result.get("would_change"):
+            print("Would change:")
+            for path in result["would_change"]:
+                print(f"- {path}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
     if args.dry_run == args.approve:
         print("prehashed-objet-ledger requires exactly one of --dry-run or --approve.", file=sys.stderr)
@@ -11547,6 +11633,32 @@ def build_parser() -> argparse.ArgumentParser:
     zettel_edge_batch.add_argument("--skip-existing", action="store_true", help="Skip already-written edges or receipts instead of blocking the whole batch.")
     zettel_edge_batch.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     zettel_edge_batch.set_defaults(func=command_zettel_edge_batch)
+
+    revert_edge = subcommands.add_parser(
+        "revert-edge",
+        aliases=["rollback-edge"],
+        help="Preview or approve removing one edge using its zettel-edge write receipt.",
+    )
+    revert_edge.add_argument("archive_root", help="Archive root to update.")
+    revert_edge.add_argument("--receipt", required=True, help="Archive-relative receipts/edges/*.zettel-edge.json path.")
+    revert_edge.add_argument("--dry-run", action="store_true", help="Preview the edge removal and revert receipt path without writing files.")
+    revert_edge.add_argument("--approve", action="store_true", help="Remove the reviewed edge and write a revert receipt.")
+    revert_edge.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
+    revert_edge.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    revert_edge.set_defaults(func=command_revert_edge)
+
+    revert_batch = subcommands.add_parser(
+        "revert-batch",
+        aliases=["rollback-batch"],
+        help="Preview or approve removing all edges listed in a zettel-edge-batch receipt.",
+    )
+    revert_batch.add_argument("archive_root", help="Archive root to update.")
+    revert_batch.add_argument("--receipt", required=True, help="Archive-relative receipts/edges/batches/*.zettel-edge-batch.json path.")
+    revert_batch.add_argument("--dry-run", action="store_true", help="Preview all edge removals and the batch revert receipt without writing files.")
+    revert_batch.add_argument("--approve", action="store_true", help="Remove all reviewed batch edges and write revert receipts.")
+    revert_batch.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
+    revert_batch.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    revert_batch.set_defaults(func=command_revert_batch)
 
     import_external = subcommands.add_parser("import-external", help="Import Notion or Google Drive exports as inbox drafts.")
     import_external.add_argument("archive_root", help="Target archive root.")

@@ -877,9 +877,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.99.md").read_text(encoding="utf-8")
+        latest_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.108.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.99 approval-gated zettel edge write checkpoint",
+            "Status: v0.3.108 approval-gated zettel edge write and revert checkpoint",
+            "archive revert-edge <archive-root>",
+            "rollback-edge",
+            "receipts/edges/reverts/*.zettel-edge-revert.json",
             "archive zettel-edge <archive-root>",
             "link-zettel-edge",
             "write-zettel-edge",
@@ -887,7 +891,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "--reviewed-by person:reviewer",
             "receipts/edges/*.zettel-edge.json",
             "single-edge safety gate",
-            "MCP does not expose a write tool",
+            "MCP does not expose a write or revert tool",
             "echo zettel body text",
             "echo zettel titles",
             "[Zettel Edge Batch](zettel-edge-batch.md)",
@@ -895,15 +899,19 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)
         for phrase in (
-            "Status: v0.3.102 approval-gated policy batch zettel edge write ergonomics checkpoint",
+            "Status: v0.3.108 approval-gated policy batch zettel edge write scale and rollback checkpoint",
             "archive zettel-edge-batch <archive-root>",
+            "archive revert-batch <archive-root>",
             "--skip-existing",
             "bulk-zettel-edge",
             "batch-zettel-edge",
+            "rollback-batch",
             "human_review_queue",
             "skipped_existing_edges",
             "archive-relative",
             "receipts/edges/batches/*.zettel-edge-batch.json",
+            "receipts/edges/batches/reverts/*.zettel-edge-batch-revert.json",
+            "preloads",
             "policy.auto_write_edge_types",
             "policy.minimum_confidence",
             "expose a matching MCP write tool",
@@ -912,25 +920,32 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, batch_text)
         for phrase in (
-            "Status: v0.3.99 policy batch zettel edge write checkpoint",
+            "Status: v0.3.108 edge batch scale and rollback checkpoint",
             "Zettel edge write",
             "archive zettel-edge --from-zettel <zet> --target <zet-or-objet> --edge-type <type> --dry-run|--approve",
             "archive zettel-edge-batch --plan <json> --dry-run|--approve [--skip-existing]",
+            "archive revert-edge --receipt <edge-receipt> --dry-run|--approve",
+            "archive revert-batch --receipt <batch-receipt> --dry-run|--approve",
             "receipts/edges/*.zettel-edge.json",
             "receipts/edges/batches/*.zettel-edge-batch.json",
+            "receipts/edges/reverts/*.zettel-edge-revert.json",
+            "receipts/edges/batches/reverts/",
+            "preloads the manifest once",
+            "preserve original write receipts",
             "human_review_queue",
             "skipped_existing_edges",
-            "MCP exposes no write tool",
+            "MCP exposes no write or revert tool",
             "echo no zettel body text",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.107 pre-release",
+            "v0.3.108 pre-release",
             "[Zettel Edge Write](wom-kit/docs/zettel-edge-write.md)",
             "[Zettel Edge Batch](wom-kit/docs/zettel-edge-batch.md)",
             "approval-gated single-edge zettel edge writes",
             "approval-gated policy batch zettel edge writes",
+            "receipt-based `revert-edge` and `revert-batch`",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
@@ -939,14 +954,19 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "docs/zettel-edge-batch.md",
             "zettel-edge",
             "zettel-edge-batch",
+            "revert-edge",
+            "revert-batch",
             "Preview or approve one typed edge",
             "Preview or approve policy-gated typed edge batches",
+            "Preview or approve removing one previously approved edge",
+            "Preview or approve removing all edges listed",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, kit_readme_text)
         for phrase in (
             "[Zettel Edge Write](zettel-edge-write.md)",
             "[Zettel Edge Batch](zettel-edge-batch.md)",
+            "v0.3.108 - Edge Batch Scale And Rollback",
             "v0.3.99 - Policy Batch Zettel Edge Write",
             "archive zettel-edge",
             "archive zettel-edge-batch",
@@ -957,6 +977,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                     phrase in public_map_text
                     or phrase in public_map_ko_text
                     or phrase in release_text
+                    or phrase in latest_release_text
                     or phrase in changelog_text
                 )
 

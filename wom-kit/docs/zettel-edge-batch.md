@@ -1,6 +1,7 @@
 # Zettel Edge Batch
 
-Status: v0.3.102 approval-gated policy batch zettel edge write ergonomics checkpoint
+Status: v0.3.108 approval-gated policy batch zettel edge write scale and rollback checkpoint
+Previous checkpoint: Status: v0.3.102 approval-gated policy batch zettel edge write ergonomics checkpoint
 
 `archive zettel-edge-batch` is the policy approval companion to
 `archive zettel-edge`.
@@ -15,6 +16,10 @@ match that policy.
 
 Low-confidence, ambiguous, blocked, or policy-mismatched candidates are not
 written. They are returned in `human_review_queue` for a later human review.
+
+When batch rows target manifested objets, v0.3.108 preloads
+`objects/manifests/files.jsonl` once and reuses a local object-id index instead
+of resolving every objet target through repeated full manifest scans.
 
 ## Command
 
@@ -43,6 +48,31 @@ Aliases:
 ```text
 bulk-zettel-edge
 batch-zettel-edge
+```
+
+Rollback preview:
+
+```powershell
+archive revert-batch <archive-root> `
+  --receipt receipts/edges/batches/<batch>.zettel-edge-batch.json `
+  --dry-run `
+  --format json
+```
+
+Rollback approve:
+
+```powershell
+archive revert-batch <archive-root> `
+  --receipt receipts/edges/batches/<batch>.zettel-edge-batch.json `
+  --approve `
+  --reviewed-by person:reviewer `
+  --format json
+```
+
+Rollback alias:
+
+```text
+rollback-batch
 ```
 
 ## Plan Path Resolution
@@ -135,6 +165,24 @@ skipped-existing count, and review queue count. If an approved batch write fails
 partway through, WOM-kit restores the touched zettel and receipt files from
 in-process snapshots.
 
+## Reverts
+
+`archive revert-batch` reads a
+`receipts/edges/batches/*.zettel-edge-batch.json` receipt and plans one
+`revert-edge` operation for each listed edge receipt.
+
+With `--approve --reviewed-by <safe-id>`, it writes:
+
+```text
+zettels/*.md or inbox/*.md frontmatter edges -N
+receipts/edges/reverts/*.zettel-edge-revert.json
+receipts/edges/batches/reverts/*.zettel-edge-batch-revert.json
+```
+
+The original edge receipts and original batch receipt are preserved. If a batch
+revert fails partway through, WOM-kit restores the touched zettel and new revert
+receipt files from in-process snapshots.
+
 ## What It Does Not Do
 
 This command does not classify candidates by itself. It expects a reviewed JSON
@@ -155,6 +203,7 @@ It does not:
 - upload objects,
 - create provider URLs,
 - expose a matching MCP write tool.
+- delete original edge or batch receipts.
 
 The output also avoids zettel body text, zettel titles, provider URLs, local
 absolute paths, page titles, comment bodies, account ids, emails, tokens, and
