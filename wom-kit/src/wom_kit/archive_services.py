@@ -39636,6 +39636,124 @@ def indexed_facet_distribution(conn: sqlite3.Connection, key: str, *, limit: int
     return {"key": key, "distinct_value_count": distinct_count, "top_values": values}
 
 
+NAVIGATION_FACET_KEYS = {
+    "area",
+    "client",
+    "collection",
+    "course",
+    "domain",
+    "event",
+    "institution",
+    "organization",
+    "period",
+    "person",
+    "place",
+    "project",
+    "record_type",
+    "source_category",
+    "subject",
+    "tag",
+    "tags",
+    "theme",
+    "topic",
+    "workstream",
+}
+
+INTERNAL_FACET_KEYS = {
+    "block_count",
+    "contents",
+    "database_id",
+    "file_count",
+    "migration_batch",
+    "notion_status",
+    "object_count",
+    "page_id",
+    "raw_export",
+}
+
+INTERNAL_FACET_PREFIXES = (
+    "_",
+    "adapter_",
+    "asr_",
+    "crawl_",
+    "export_",
+    "import_",
+    "migration_",
+    "notion_",
+    "ocr_",
+    "pipeline_",
+    "provider_",
+    "raw_",
+    "schema_",
+    "sync_",
+    "tool_",
+)
+
+
+def facet_role_for_key(key: str) -> tuple[str, str]:
+    normalized = str(key or "").strip().lower().replace("-", "_")
+    if normalized in NAVIGATION_FACET_KEYS:
+        return "navigation", "known_navigation_axis"
+    if normalized in INTERNAL_FACET_KEYS:
+        return "internal", "known_import_or_system_metadata"
+    if any(normalized.startswith(prefix) for prefix in INTERNAL_FACET_PREFIXES):
+        return "internal", "internal_prefix"
+    if normalized.endswith(("_id", "_ids", "_hash", "_sha256", "_path", "_url", "_ref", "_refs")):
+        return "internal", "locator_or_machine_reference_suffix"
+    return "unknown", "needs_human_axis_review"
+
+
+def indexed_facet_role_report(conn: sqlite3.Connection, *, used_facet_keys: set[str], limit: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    rows = conn.execute(
+        """
+        SELECT f.facet_key,
+               COUNT(DISTINCT f.zettel_id) AS zettel_count,
+               COUNT(DISTINCT f.facet_value) AS distinct_value_count
+        FROM zettel_facets f
+        JOIN zettels z ON z.zettel_id = f.zettel_id
+        WHERE coalesce(z.status, '') != 'redacted'
+        GROUP BY f.facet_key
+        ORDER BY f.facet_key ASC
+        """
+    ).fetchall()
+    roles: list[dict[str, Any]] = []
+    counts = {"navigation": 0, "internal": 0, "unknown": 0}
+    saved_view_internal_keys: list[str] = []
+    saved_view_unknown_keys: list[str] = []
+    for row in rows:
+        key = str(row["facet_key"])
+        role, reason = facet_role_for_key(key)
+        counts[role] = counts.get(role, 0) + 1
+        used_by_saved_view = key in used_facet_keys
+        if used_by_saved_view and role == "internal":
+            saved_view_internal_keys.append(key)
+        if used_by_saved_view and role == "unknown":
+            saved_view_unknown_keys.append(key)
+        distribution = indexed_facet_distribution(conn, key, limit=limit)
+        roles.append(
+            {
+                "key": key,
+                "role": role,
+                "role_reason": reason,
+                "used_by_saved_view": used_by_saved_view,
+                "indexed_zettel_count": int(row["zettel_count"]),
+                "distinct_value_count": int(row["distinct_value_count"]),
+                "top_values": distribution["top_values"],
+            }
+        )
+    summary = {
+        "indexed_facet_key_count": len(roles),
+        "navigation_key_count": counts.get("navigation", 0),
+        "internal_key_count": counts.get("internal", 0),
+        "unknown_key_count": counts.get("unknown", 0),
+        "saved_view_filter_key_count": len(used_facet_keys),
+        "saved_view_internal_filter_keys": sorted(saved_view_internal_keys),
+        "saved_view_unknown_filter_keys": sorted(saved_view_unknown_keys),
+        "classification_basis": "static_key_heuristics_no_body_read",
+    }
+    return summary, roles
+
+
 def view_health(
     archive_root: Path | str,
     *,
@@ -39665,6 +39783,17 @@ def view_health(
         "blocked_view_count": 0,
     }
     facet_distribution: list[dict[str, Any]] = []
+    facet_role_summary: dict[str, Any] = {
+        "indexed_facet_key_count": 0,
+        "navigation_key_count": 0,
+        "internal_key_count": 0,
+        "unknown_key_count": 0,
+        "saved_view_filter_key_count": 0,
+        "saved_view_internal_filter_keys": [],
+        "saved_view_unknown_filter_keys": [],
+        "classification_basis": "static_key_heuristics_no_body_read",
+    }
+    facet_roles: list[dict[str, Any]] = []
 
     if blockers:
         for view in views:
@@ -39731,18 +39860,41 @@ def view_health(
                 )
             for key in sorted(used_facet_keys):
                 facet_distribution.append(indexed_facet_distribution(conn, key, limit=max_values))
+            facet_role_summary, facet_roles = indexed_facet_role_report(
+                conn,
+                used_facet_keys=used_facet_keys,
+                limit=max_values,
+            )
         finally:
             conn.close()
+
+    if blockers and used_facet_keys:
+        saved_view_internal_keys: list[str] = []
+        saved_view_unknown_keys: list[str] = []
+        for key in sorted(used_facet_keys):
+            role, _reason = facet_role_for_key(key)
+            if role == "internal":
+                saved_view_internal_keys.append(key)
+            if role == "unknown":
+                saved_view_unknown_keys.append(key)
+        facet_role_summary["saved_view_filter_key_count"] = len(used_facet_keys)
+        facet_role_summary["saved_view_internal_filter_keys"] = saved_view_internal_keys
+        facet_role_summary["saved_view_unknown_filter_keys"] = saved_view_unknown_keys
 
     next_safe_actions: list[str] = []
     if "archive_index_missing" in blockers:
         next_safe_actions.append("Run archive index before checking saved view health.")
-    elif summary["empty_view_count"]:
-        next_safe_actions.append("Review empty saved views against observed facet distributions before changing view filters.")
-    elif summary["blocked_view_count"]:
-        next_safe_actions.append("Fix unsupported saved view filters before relying on those views.")
     else:
-        next_safe_actions.append("Saved views have matching indexed zets.")
+        if summary["blocked_view_count"]:
+            next_safe_actions.append("Fix unsupported saved view filters before relying on those views.")
+        if summary["empty_view_count"]:
+            next_safe_actions.append("Review empty saved views against observed facet distributions before changing view filters.")
+        if facet_role_summary.get("saved_view_internal_filter_keys") or facet_role_summary.get("saved_view_unknown_filter_keys"):
+            next_safe_actions.append("Review saved views that filter on internal or unknown facet keys before relying on them for AI navigation.")
+        elif facet_role_summary.get("internal_key_count") or facet_role_summary.get("unknown_key_count"):
+            next_safe_actions.append("Prefer navigation facet keys when creating AI navigation views; review internal and unknown keys before adding filters.")
+        if not next_safe_actions:
+            next_safe_actions.append("Saved views have matching indexed zets.")
 
     return {
         "ok": not blockers and summary["blocked_view_count"] == 0,
@@ -39753,6 +39905,8 @@ def view_health(
         "summary": summary,
         "views": view_results,
         "facet_distribution": facet_distribution,
+        "facet_role_summary": facet_role_summary,
+        "facet_roles": facet_roles,
         "privacy_guards": {
             "zettel_body_text_echoed": False,
             "zettel_titles_echoed": False,

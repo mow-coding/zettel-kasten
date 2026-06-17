@@ -1,6 +1,7 @@
 # View Health
 
-Status: v0.3.90 read-only saved view diagnostics
+Status: v0.3.93 read-only saved view and facet role diagnostics
+Original checkpoint: Status: v0.3.90 read-only saved view diagnostics
 Date: 2026-06-17
 
 `view-health` checks whether saved `views/*.yml` filters still match the
@@ -64,6 +65,12 @@ The health report includes:
 - normalized facet filters,
 - per-filter `matching_zettel_count`,
 - observed facet value samples for the keys used by saved views,
+- `facet_role_summary` counts for `navigation`, `internal`, and `unknown`
+  indexed facet keys,
+- `facet_roles` rows that classify facet keys such as `subject`,
+  `institution`, and `record_type` as navigation candidates while marking
+  import or machine metadata such as `notion_status`, `migration_batch`, and
+  `contents` as internal,
 - next safe actions.
 
 An `empty_result` view is not automatically wrong. It means the saved filters
@@ -90,6 +97,11 @@ It does not:
 Facet values are metadata and can be shown as distribution samples. Unsafe
 facet values such as provider URLs, local paths, or secret-like strings are
 redacted before output.
+
+The facet role classifier is a static key heuristic. It does not rewrite
+facets, infer meaning from zettel bodies, or decide final taxonomy. Treat
+`unknown` keys as human-review prompts before adding them to AI navigation
+views.
 
 ## Relationship To `view-zets`
 

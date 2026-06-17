@@ -24248,6 +24248,24 @@ class ObjetCaptureTests(unittest.TestCase):
     def test_view_health_reports_empty_and_blocked_saved_views_without_content_echo(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self._facet_archive(tmp)
+            frontmatter = {
+                "id": "zet_20260610_import_meta",
+                "title": "Imported title must not echo",
+                "status": "canonical",
+                "kind": "note",
+                "facets": {
+                    "subject": "knowledge-management",
+                    "notion_status": "imported",
+                    "migration_batch": "batch-001",
+                    "contents": "page",
+                },
+            }
+            (archive_root / "zettels" / "zet_20260610_import_meta.md").write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\nImported body must not echo.\n",
+                encoding="utf-8",
+            )
+            index_code, index_output = self.run_cli(["index", str(archive_root), "--format", "json"])
+            self.assertEqual(index_code, 0, index_output)
             (archive_root / "views" / "empty.yml").write_text(
                 archive_cli.dump_yaml(
                     {
@@ -24277,12 +24295,25 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(empty["filter_diagnostics"][0]["matching_zettel_count"], 0)
             domain_distribution = next(item for item in result["facet_distribution"] if item["key"] == "domain")
             self.assertTrue(any(item["value"] == "education" for item in domain_distribution["top_values"]))
+            facet_roles = {item["key"]: item for item in result["facet_roles"]}
+            self.assertEqual(facet_roles["domain"]["role"], "navigation")
+            self.assertEqual(facet_roles["record_type"]["role"], "navigation")
+            self.assertEqual(facet_roles["subject"]["role"], "navigation")
+            self.assertEqual(facet_roles["notion_status"]["role"], "internal")
+            self.assertEqual(facet_roles["migration_batch"]["role"], "internal")
+            self.assertEqual(facet_roles["contents"]["role"], "internal")
+            self.assertGreaterEqual(result["facet_role_summary"]["navigation_key_count"], 3)
+            self.assertGreaterEqual(result["facet_role_summary"]["internal_key_count"], 3)
+            self.assertEqual(result["facet_role_summary"]["classification_basis"], "static_key_heuristics_no_body_read")
+            self.assertIn("Prefer navigation facet keys", " ".join(result["next_safe_actions"]))
             self.assertFalse(result["privacy_guards"]["zettel_body_text_echoed"])
             self.assertFalse(result["privacy_guards"]["zettel_titles_echoed"])
             self.assertFalse(result["privacy_guards"]["absolute_local_paths_echoed"])
             self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
             self.assertFalse(result["privacy_guards"]["writes"])
             self.assertNotIn("Body.", output)
+            self.assertNotIn("Imported title must not echo", output)
+            self.assertNotIn("Imported body must not echo", output)
             self.assertNotIn("Title zet_", output)
             self.assertNotIn(str(archive_root), output)
 
