@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.89 - 2026-06-17
+
+- Added read-only CLI `archive notion-objet-link-plan --path <zet.md>|--zettel-id
+  <id> --dry-run` and MCP `notion_objet_link_plan` for the Phase 3 gap where
+  imported zet bodies contain Notion provider locators instead of
+  `sha256:<hex>` or `objet:sha256:<hex>` refs.
+- The planner scans one non-redacted zettel for Notion provider locators,
+  groups them by opaque `sha256:` locator fingerprint, and matches them against
+  existing `objects/manifests/files.jsonl` records when the manifest carries an
+  exact redacted locator field or reviewed locator fingerprint.
+- Candidate output surfaces only safe manifest object ids, match field names,
+  store labels, and resolver states, so a reviewed operator can replace the
+  locator with `objet:sha256:<hex>` or write a reviewed embed edge later.
+- Kept the new path read-only and privacy-bounded: it writes nothing, calls no
+  providers, starts no OAuth, creates no provider or presigned URLs, reads no
+  object bytes, and echoes no zettel body text, frontmatter values, provider
+  URLs, page titles, local paths, account ids, emails, tokens, or secret values.
+
 ## v0.3.88 - 2026-06-17
 
 - Added overview-first zet reading through `archive read-zettel --section

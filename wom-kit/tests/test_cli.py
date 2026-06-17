@@ -8195,6 +8195,101 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
 
+    def test_notion_objet_link_plan_matches_manifest_without_echoing_provider_locator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+            notion_url = "https://www.notion.so/private-workspace/Client-Decision-abcdef1234567890"
+            notion_url_hash = hashlib.sha256(notion_url.lower().encode("utf-8")).hexdigest()
+            object_digest = "e" * 64
+            manifest_record = {
+                "object_id": f"sha256:{object_digest}",
+                "sha256": object_digest,
+                "logical_key": f"objects/external/prehashed/notion_source_export/{object_digest[:2]}/{object_digest}",
+                "mime": "application/json",
+                "size_bytes": 1234,
+                "locations": [
+                    {
+                        "provider": "external_prehashed",
+                        "store_kind": "notion_source_export",
+                        "store_ref": "notion-export-20260617",
+                        "availability": "declared_external",
+                        "content_addressed": True,
+                        "byte_verification_by_wom_kit": False,
+                        "provider_url": notion_url,
+                    }
+                ],
+                "provenance": {
+                    "source": "prehashed_external_objet_ledger",
+                    "provider_locator_sha256": notion_url_hash,
+                },
+            }
+            with manifest_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(manifest_record, ensure_ascii=False, sort_keys=True) + "\n")
+
+            zettel_path = archive_root / "inbox" / "zet_notion_locator_preview.md"
+            zettel_path.write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_locator_preview",
+                        "status: draft",
+                        "title: Do not echo this client title",
+                        "---",
+                        "",
+                        "A private Notion sentence must not be echoed.",
+                        f'<mention-page url="{notion_url}">Private Notion Page Title</mention-page>',
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "notion-objet-link-plan",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_notion_locator_preview.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "notion_objet_link_plan")
+            self.assertEqual(result["locator_count"], 1)
+            self.assertEqual(result["manifest_summary"]["notion_labeled_record_count"], 1)
+            locator = result["locators"][0]
+            self.assertEqual(locator["candidate_state"], "matched_manifest_object")
+            self.assertEqual(locator["candidate_count"], 1)
+            self.assertEqual(locator["candidates"][0]["object_id"], f"sha256:{object_digest}")
+            self.assertEqual(locator["candidates"][0]["suggested_objet_ref"], f"objet:sha256:{object_digest}")
+            self.assertTrue(locator["candidates"][0]["external_declared"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["zettel_body_text_echoed"])
+            self.assertFalse(result["privacy_guards"]["frontmatter_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["provider_api_called"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            self.assertNotIn(notion_url, output)
+            self.assertNotIn("Client-Decision", output)
+            self.assertNotIn("Private Notion Page Title", output)
+            self.assertNotIn("A private Notion sentence", output)
+            self.assertNotIn("Do not echo this client title", output)
+            self.assertNotIn(str(archive_root), output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            no_dry_code, no_dry_output = self.run_cli(
+                ["notion-objet-link-plan", str(archive_root), "--path", "inbox/zet_notion_locator_preview.md"]
+            )
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+
     def test_prehashed_objet_ledger_approve_blocks_invalid_rows_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

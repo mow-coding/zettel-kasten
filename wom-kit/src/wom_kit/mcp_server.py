@@ -1702,6 +1702,22 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "notion_objet_link_plan",
+        "description": "Plan Notion provider locator to manifested objet link candidates for one zettel. Read-only; never echoes provider URLs, body text, frontmatter values, absolute paths, presigned URLs, object bytes, or writes files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "zettel_id": {"type": "string"},
+                "path": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+                "max_locators": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+                "max_candidates": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "block_header_check",
         "description": "Dry-run preview of the derived block header for one draft or canonical zet.",
         "inputSchema": {
@@ -2517,6 +2533,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_read_zettel(arguments)
     if name == "zettel_objet_links":
         return tool_zettel_objet_links(arguments)
+    if name == "notion_objet_link_plan":
+        return tool_notion_objet_link_plan(arguments)
     if name == "block_header_check":
         return tool_block_header_check(arguments)
     if name == "zet_projection_plan_check":
@@ -3990,6 +4008,25 @@ def tool_zettel_objet_links(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result.get("ok") else "blocked"
     return tool_success_result(f"zettel_objet_links: {state}, {result['count']} link(s).", result)
+
+
+def tool_notion_objet_link_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("notion_objet_link_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    zettel_id = optional_string_arg(arguments, "zettel_id")
+    relative_path = optional_string_arg(arguments, "path")
+    result = call_service(
+        archive_services.notion_objet_link_plan,
+        archive_root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        dry_run=True,
+        max_locators=int(arguments.get("max_locators", 100)),
+        max_candidates=int(arguments.get("max_candidates", 20)),
+    )
+    state = "passed" if result.get("ok") else "blocked"
+    return tool_success_result(f"notion_objet_link_plan: {state}, {result['locator_count']} locator(s).", result)
 
 
 def tool_block_header_check(arguments: dict[str, Any]) -> dict[str, Any]:

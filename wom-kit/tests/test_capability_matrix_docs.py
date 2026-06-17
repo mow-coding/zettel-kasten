@@ -69,6 +69,7 @@ RUNTIME_CANONICAL_ENTRYPOINTS_PATH = KIT_ROOT / "docs" / "runtime-canonical-entr
 NOTION_PAGE_SNAPSHOT_MODEL_PATH = KIT_ROOT / "docs" / "notion-page-snapshot-model.md"
 OBJET_REF_RESOLUTION_PATH = KIT_ROOT / "docs" / "objet-ref-resolution.md"
 ZETTEL_OBJET_LINKS_PATH = KIT_ROOT / "docs" / "zettel-objet-links.md"
+NOTION_OBJET_LINK_PLAN_PATH = KIT_ROOT / "docs" / "notion-objet-link-plan.md"
 SOURCE_OBJECT_STORAGE_POLICY_PATH = KIT_ROOT / "docs" / "source-object-storage-policy.md"
 TEXT_PROVENANCE_HIERARCHY_PATH = KIT_ROOT / "docs" / "text-provenance-hierarchy.md"
 AI_RESPONSE_CONCEPT_GUIDE_PATH = KIT_ROOT / "docs" / "ai-response-concept-guide.md"
@@ -1012,6 +1013,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
     def test_zettel_objet_links_doc_and_matrix_keep_read_only_boundaries(self) -> None:
         links_text = ZETTEL_OBJET_LINKS_PATH.read_text(encoding="utf-8")
+        notion_plan_text = NOTION_OBJET_LINK_PLAN_PATH.read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
@@ -1029,25 +1031,46 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "presigned URLs",
             "Redacted zettels are blocked",
             "Provider-backed presigned URLs are separate future work",
+            "archive notion-objet-link-plan --dry-run",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, links_text)
+        for phrase in (
+            "Status: v0.3.89 read-only locator bridge",
+            "archive notion-objet-link-plan",
+            "notion_objet_link_plan",
+            "locator_fingerprint",
+            "suggested `objet:sha256:<hex>` ref",
+            "provider URLs",
+            "page titles",
+            "Redacted zettels are blocked",
+            "This release does not perform that rewrite",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, notion_plan_text)
         for phrase in (
             "Zettel objet link preview",
             "archive zettel-objet-links --path <zet.md>|--zettel-id <id> --dry-run",
             "MCP `zettel_objet_links`",
             "echo no zettel body text or frontmatter values",
             "block redacted zettels",
+            "Notion objet locator bridge",
+            "archive notion-objet-link-plan --path <zet.md>|--zettel-id <id> --dry-run",
+            "MCP `notion_objet_link_plan`",
+            "provider URLs, page titles",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
             "[Zettel Objet Links](wom-kit/docs/zettel-objet-links.md)",
+            "[Notion Objet Link Plan](wom-kit/docs/notion-objet-link-plan.md)",
             "zettel objet link previews",
+            "Notion provider locator to manifested objet link planning",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         self.assertIn("[Zettel Objet Links](zettel-objet-links.md)", public_map_text)
+        self.assertIn("[Notion Objet Link Plan](notion-objet-link-plan.md)", public_map_text)
 
     def test_derived_text_coverage_doc_and_matrix_expose_agent_contract(self) -> None:
         coverage_text = DERIVED_TEXT_COVERAGE_PATH.read_text(encoding="utf-8")
