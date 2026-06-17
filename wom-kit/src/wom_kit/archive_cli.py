@@ -63,6 +63,8 @@ Commands:
           Record reviewed external upload evidence and update manifest locations without provider calls.
   object-storage-upload-evidence-audit
           Audit upload evidence receipts and manifest locations without provider calls.
+  connection-edge-intelligence-plan
+          Classify sanitized connection fixture candidates into meaning/mechanism review signals.
   imap-mailbox-operation-request-plan
           Compose the read-only approval request package before any future IMAP mailbox operation.
   imap-mailbox-plan
@@ -2183,6 +2185,52 @@ def command_connection_evidence_parse_fixture(args: argparse.Namespace) -> int:
         print(f"Fixture records: {summary.get('declared_record_count', 0)}")
         print(f"Candidate edges: {summary.get('candidate_count', 0)}")
         print("Real export parser: no")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_connection_edge_intelligence_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("connection-edge-intelligence-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.connection_edge_intelligence_plan(
+            Path(args.archive_root),
+            evidence_path=args.evidence,
+            source=args.source,
+            connection_kind=args.connection_kind,
+            dry_run=args.dry_run,
+            max_items=args.max_items,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("classification_state") or ("passed" if result.get("ok") else "blocked")
+        summary = result.get("classification_summary") if isinstance(result.get("classification_summary"), dict) else {}
+        print(f"Connection edge intelligence plan: {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source: {result.get('source') or '-'}")
+        print(f"Connection kind: {result.get('connection_kind') or '-'}")
+        print(f"Candidate edges: {summary.get('candidate_count', 0)}")
+        print(f"Ambiguous edges: {summary.get('ambiguous_count', 0)}")
+        print("AI/LLM classifier: no")
         print("Writes: none")
         if result.get("blockers"):
             print("Blockers:")
@@ -10669,6 +10717,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     connection_evidence_parse_fixture.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     connection_evidence_parse_fixture.set_defaults(func=command_connection_evidence_parse_fixture)
+
+    connection_edge_intelligence_plan = subcommands.add_parser(
+        "connection-edge-intelligence-plan",
+        aliases=["connection-edge-classification-plan"],
+        help="Plan meaning/mechanism classification for sanitized connection fixture candidates.",
+    )
+    connection_edge_intelligence_plan.add_argument("archive_root", help="Archive root to inspect.")
+    connection_edge_intelligence_plan.add_argument(
+        "--evidence",
+        required=True,
+        help="Archive-relative sanitized fixture JSON path. Absolute paths and provider URLs are rejected.",
+    )
+    connection_edge_intelligence_plan.add_argument(
+        "--source",
+        required=True,
+        choices=sorted(archive_services.CONNECTION_IMPORT_SOURCES),
+        help="External connection evidence source declared by the fixture.",
+    )
+    connection_edge_intelligence_plan.add_argument(
+        "--connection-kind",
+        default="all",
+        choices=["all"] + sorted(archive_services.CONNECTION_IMPORT_KINDS),
+        help="Specific connection evidence kind to classify from the fixture.",
+    )
+    connection_edge_intelligence_plan.add_argument("--max-items", type=int, default=100, help="Maximum fixture records to parse.")
+    connection_edge_intelligence_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Classifies sanitized fixture candidates only; never calls AI/LLMs, reads bodies, writes candidates, zets, edges, receipts, or manifests.",
+    )
+    connection_edge_intelligence_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    connection_edge_intelligence_plan.set_defaults(func=command_connection_edge_intelligence_plan)
 
     zettel_edge = subcommands.add_parser(
         "zettel-edge",

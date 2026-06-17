@@ -89,6 +89,7 @@ docs/ai-response-concept-guide.md
 docs/connection-import-plan.md
 docs/connection-evidence-parser-contract.md
 docs/connection-evidence-fixture-parser.md
+docs/connection-edge-intelligence-plan.md
 docs/zettel-edge-write.md
 docs/project-intake-session.md
 docs/project-intake-cookbook.md
@@ -205,6 +206,9 @@ connection-evidence-parser-contract
 
 connection-evidence-parse-fixture
   Parse a sanitized archive-internal Notion connection evidence fixture into candidate edge previews. Dry-run only; reads only an archive-relative fixture JSON such as workbench/connection-evidence.sample.json, emits not-written candidate previews, and never reads real exports, calls Notion, reads comments, downloads media, writes candidate records, writes zets, writes edges, writes receipts, updates manifests, or echoes provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
+
+connection-edge-intelligence-plan
+  Plan meaning/mechanism classification for sanitized connection fixture candidates. Dry-run only; separates relationship meaning from source mechanism, flags ambiguity and parsimony review needs, reports provisional labels such as format_variant/responds_to/fulfills/enabling/sequence, and never reads real exports, source bodies, derived-text bodies, comment bodies, calls providers or LLMs, writes candidate records, zets, edges, receipts, or manifests, or echoes provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
 
 zettel-edge
   Preview or approve one typed edge from a source zet to one verified target zet or manifested objet. Dry-run previews first; approve requires --reviewed-by and writes only one source zettel frontmatter edge plus one receipts/edges/*.zettel-edge.json receipt. It is not a bulk connection importer, exposes no MCP write tool, calls no providers, reads no real exports, writes no candidate records, updates no object manifests, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.

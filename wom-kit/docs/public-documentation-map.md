@@ -138,6 +138,7 @@ Onboarding and setup plans:
 - [Connection Import Plan](connection-import-plan.md)
 - [Connection Evidence Parser Contract](connection-evidence-parser-contract.md)
 - [Connection Evidence Fixture Parser](connection-evidence-fixture-parser.md)
+- [Connection Edge Intelligence Plan](connection-edge-intelligence-plan.md)
 - [Zettel Edge Write](zettel-edge-write.md)
 - [Object Storage Recommendations](object-storage-recommendations.md)
 - [Object Storage Adapter Readiness Plan](object-storage-adapter-readiness-plan.md)

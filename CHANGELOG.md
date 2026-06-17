@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.87 - 2026-06-17
+
+- Added read-only CLI `archive connection-edge-intelligence-plan
+  --evidence <archive-relative-json> --source notion --dry-run`, with alias
+  `connection-edge-classification-plan`, for reviewing sanitized connection
+  fixture candidates before durable edge writes.
+- The plan separates source mechanism from relationship meaning, keeps current
+  active edge types conservative, and surfaces provisional meaning labels such
+  as `format_variant`, `responds_to`, `fulfills`, `enabling`, and `sequence`
+  as review labels rather than active link types.
+- Added ambiguity, parsimony, and human-review queue signals so vague
+  `semantic` links can be named more specifically or dropped before
+  `zettel-edge` writes.
+- Kept the command read-only: it reads no real exports, source bodies,
+  derived-text bodies, or comment bodies, calls no providers or LLMs, runs no
+  multi-lens AI classifier, writes no candidates, zets, edges, receipts, or
+  manifests, and echoes no provider URLs, local paths, page titles, comment
+  bodies, source body text, derived-text body text, account ids, emails,
+  tokens, or secret values.
+
 ## v0.3.86 - 2026-06-17
 
 - Added read-only CLI `archive object-storage-upload-evidence-audit
