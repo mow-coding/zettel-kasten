@@ -6,6 +6,18 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.106 - 2026-06-17
+
+- Added machine-readable AI guide handoff fields to `runtime-context`
+  `canonical_entrypoints`: `ai_runtime_order`, `recommended_first_commands`,
+  and `material_link_routes`.
+- The handoff tells terminal-capable AI runtimes to run `runtime-context`, read
+  canonical entrypoints and `AGENTS.md`, then run
+  `ai-response-concept-guide` before choosing Notion material-link routes.
+- Kept the surface read-only: it reads no file bodies, writes nothing, calls no
+  providers, reads no secrets, and only returns archive-relative commands and
+  safe routing labels.
+
 ## v0.3.105 - 2026-06-17
 
 - Updated approved `archive import-external` writes so a manifest item with an

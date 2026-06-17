@@ -1014,6 +1014,31 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(entrypoints["source_truths"]["canonical_zets"], "zettels/")
             self.assertEqual(entrypoints["source_truths"]["draft_inbox"], "inbox/")
             self.assertEqual(entrypoints["source_truths"]["objet_manifest"], "objects/manifests/files.jsonl")
+            self.assertEqual(
+                entrypoints["recommended_first_commands"][0]["command"],
+                "archive runtime-context <archive-root> --format json",
+            )
+            self.assertEqual(
+                entrypoints["recommended_first_commands"][1]["command"],
+                "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
+            )
+            self.assertEqual(
+                [step["action"] for step in entrypoints["ai_runtime_order"]],
+                [
+                    "run_runtime_context",
+                    "read_canonical_entrypoints",
+                    "read_local_agent_instructions",
+                    "run_ai_response_concept_guide",
+                    "choose_material_link_route",
+                ],
+            )
+            material_commands = [route["command"] for route in entrypoints["material_link_routes"]]
+            self.assertTrue(any("notion-objet-import-clue-audit" in command for command in material_commands))
+            self.assertTrue(any("notion-objet-source-map-link-plan" in command for command in material_commands))
+            self.assertTrue(any("notion-objet-link-index" in command for command in material_commands))
+            self.assertTrue(any("notion-objet-link-plan" in command for command in material_commands))
+            self.assertTrue(all(route["writes"] is False for route in entrypoints["material_link_routes"]))
+            self.assertTrue(all(route["provider_api_called"] is False for route in entrypoints["material_link_routes"]))
             self.assertFalse(entrypoints["closed_actions"]["file_bodies_read"])
             self.assertFalse(entrypoints["closed_actions"]["files_written"])
             self.assertFalse(entrypoints["closed_actions"]["provider_api_called"])
@@ -1035,6 +1060,7 @@ class ArchiveCliTests(unittest.TestCase):
                 with self.subTest(relative=relative):
                     self.assertEqual(entrypoint_statuses[relative]["status"], "present")
                     self.assertTrue(entrypoint_statuses[relative]["exists"])
+            self.assertIn("run ai-response-concept-guide dry-run", result["available_safe_actions"])
             self.assertIn("create draft in inbox", result["available_safe_actions"])
             self.assertIn("mint only through CLI approve path", result["available_safe_actions"])
 

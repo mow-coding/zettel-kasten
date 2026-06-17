@@ -1,10 +1,11 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.105 external import source-ref preservation checkpoint
+Status: v0.3.106 runtime AI guide handoff checkpoint
 Date: 2026-06-17
-Version: v0.3.105, release candidate
+Version: v0.3.106, release candidate
 
-Previous checkpoint: Status: v0.3.104 Notion import material clue audit checkpoint
+Previous checkpoint: Status: v0.3.105 external import source-ref preservation checkpoint
+Earlier import audit checkpoint: Status: v0.3.104 Notion import material clue audit checkpoint
 Earlier source-map checkpoint: Status: v0.3.103 Notion source-map material link checkpoint
 Earlier terminology checkpoint: Status: v0.3.102 operational terminology and batch ergonomics checkpoint
 Earlier conversion checkpoint: Status: v0.3.101 Notion objet link convert checkpoint
@@ -59,7 +60,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Block header preview | `read-only preview` | none | Derives a header preview for an existing draft or canonical zet and now returns a top-level `first_read` card with gist, facets, tie counts, and safe edge preview before body reading. `first_read` is outside `header_preview`, so the shareable header hash boundary remains tied to the sanitized header projection. It does not modify the zet. |
 | Runtime context | `read-only preview` | none | AI runtimes can confirm archive id, type, paths, policy, and safe next actions. |
 | WOM-kit version truth source | `read-only preview` | none | CLI `archive --version` prints the running CLI version. CLI `archive version [root] --format json` and runtime-context field `wom_kit_version` report `wom_kit.__version__`, source-checkout consistency, and an optional project installed-version pin. When the inspected root is an archive root, the pin check also looks at the parent project root and reports safe logical checked locations such as `parent_of_archive/.zettel-kasten/installed-version.txt` without echoing local absolute paths. It writes no files, calls no providers, and reads no secrets. |
-| Runtime canonical entrypoints | `read-only preview` | none | Runtime-context field `canonical_entrypoints` names `archive.yml` as the start-here file and lists archive-relative authoritative files/directories such as `AGENTS.md`, `source-bindings.yml`, `provider-bindings.yml`, `zettels/`, `inbox/`, object and derived-text manifests, views, and schema context. It reads no file bodies, writes nothing, calls no providers, reads no secrets, and echoes no local absolute paths by default. |
+| Runtime canonical entrypoints | `read-only preview` | none | Runtime-context field `canonical_entrypoints` names `archive.yml` as the start-here file and lists archive-relative authoritative files/directories such as `AGENTS.md`, `source-bindings.yml`, `provider-bindings.yml`, `zettels/`, `inbox/`, object and derived-text manifests, views, and schema context. It also returns `ai_runtime_order`, `recommended_first_commands`, and `material_link_routes` so AI runtimes can discover the `runtime-context` -> `AGENTS.md` -> `ai-response-concept-guide` handoff and choose read-only Notion material-link routes without inventing provider calls. It reads no file bodies, writes nothing, calls no providers, reads no secrets, and echoes no local absolute paths by default. |
 | Profile registry list/resolve | `read-only preview` | none | Resolves the intended WOM profile before runtime-context or draft work. |
 | Profile wallet preview | `read-only preview` | none | Wallet-ready identity model only. No keys, signing, or blockchain calls. |
 | GitHub repository setup plan | `approval-gated write` | CLI approve writes local provider metadata/receipt only | Does not create a repository, configure remotes, push, call GitHub APIs, or run OAuth. |
