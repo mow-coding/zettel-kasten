@@ -2105,6 +2105,91 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_connection_edge_intelligence_plan_classifies_fixture_candidates_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "connection-edge-intelligence-plan",
+                    str(archive_root),
+                    "--evidence",
+                    "workbench/connection-evidence.sample.json",
+                    "--source",
+                    "notion",
+                    "--connection-kind",
+                    "all",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "connection_edge_intelligence_plan")
+            self.assertEqual(result["classification_state"], "fixture_edge_intelligence_ready")
+            self.assertEqual(result["input_summary"]["candidate_count"], 9)
+            self.assertEqual(result["classification_summary"]["candidate_count"], 9)
+            self.assertGreater(result["classification_summary"]["ambiguous_count"], 0)
+            self.assertIn("format_variant", result["classification_summary"]["provisional_meaning_candidate_ids"])
+            self.assertIn("responds_to", result["classification_summary"]["provisional_meaning_candidate_ids"])
+            self.assertTrue(result["edge_intelligence_contract"]["relationship_meaning_axis_is_separate_from_source_mechanism_axis"])
+            self.assertTrue(result["edge_intelligence_contract"]["type_must_be_judged_from_edge_content_not_node_category"])
+            self.assertTrue(result["edge_intelligence_contract"]["parsimony_first"])
+            self.assertFalse(result["multi_lens_gate"]["implemented_now"])
+            self.assertFalse(result["current_capability"]["llm_or_provider_classification_implemented"])
+            self.assertFalse(result["current_capability"]["source_body_reader_implemented"])
+            self.assertFalse(result["closed_actions"]["llm_called"])
+            self.assertFalse(result["closed_actions"]["source_bodies_read"])
+            self.assertFalse(result["closed_actions"]["edges_written"])
+            self.assertFalse(result["privacy_guards"]["source_body_text_echoed"])
+            self.assertFalse(result["privacy_guards"]["comment_bodies_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn("https://", serialized)
+
+            by_kind_code, by_kind_output = self.run_cli(
+                [
+                    "connection-edge-classification-plan",
+                    str(archive_root),
+                    "--evidence",
+                    "workbench/connection-evidence.sample.json",
+                    "--source",
+                    "notion",
+                    "--connection-kind",
+                    "internal_url_hyperlink",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            by_kind = json.loads(by_kind_output)
+            self.assertEqual(by_kind_code, 0, by_kind_output)
+            self.assertEqual(by_kind["connection_kind"], "internal_url_hyperlink")
+            self.assertEqual(by_kind["classification_summary"]["candidate_count"], 1)
+            self.assertEqual(by_kind["classification_suggestions"][0]["current_edge_type"], "semantic")
+            self.assertTrue(by_kind["classification_suggestions"][0]["human_review_required"])
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "connection-edge-intelligence-plan",
+                    str(archive_root),
+                    "--evidence",
+                    "workbench/connection-evidence.sample.json",
+                    "--source",
+                    "notion",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_zettel_edge_preview_and_approval_write_frontmatter_edge_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

@@ -272,6 +272,98 @@ CONNECTION_IMPORT_RECOMMENDED_EDGE_TYPES = {
     "view_query",
     "comment_context",
 }
+CONNECTION_EDGE_RELATIONSHIP_VOCABULARY = [
+    {
+        "meaning_id": "source_material",
+        "status": "active_mapping",
+        "active_edge_type": "material",
+        "meaning": "The target is concrete source material used by the current zet.",
+    },
+    {
+        "meaning_id": "derived_output",
+        "status": "active_mapping",
+        "active_edge_type": "derived",
+        "meaning": "The target is a later product, follow-up, or output of the current zet.",
+    },
+    {
+        "meaning_id": "weak_semantic",
+        "status": "active_mapping",
+        "active_edge_type": "semantic",
+        "meaning": "The target is meaningfully related, but the specific relation still needs human wording.",
+    },
+    {
+        "meaning_id": "embedded_objet",
+        "status": "active_mapping",
+        "active_edge_type": "embed",
+        "meaning": "The current zet explicitly embeds or uses an objet.",
+    },
+    {
+        "meaning_id": "explicit_mention",
+        "status": "active_mapping",
+        "active_edge_type": "mention",
+        "meaning": "The current zet explicitly mentions another page or zet.",
+    },
+    {
+        "meaning_id": "view_snapshot_context",
+        "status": "active_mapping",
+        "active_edge_type": "view_query",
+        "meaning": "The relation comes from a reviewed static database view/filter snapshot.",
+    },
+    {
+        "meaning_id": "comment_context",
+        "status": "active_mapping",
+        "active_edge_type": "comment_context",
+        "meaning": "The relation came from comment or discussion context and stays separate from the zet body.",
+    },
+    {
+        "meaning_id": "format_variant",
+        "status": "provisional_collect_under_neither_fits",
+        "active_edge_type": None,
+        "meaning": "The source and target are the same intellectual content in another format or rendition.",
+    },
+    {
+        "meaning_id": "responds_to",
+        "status": "provisional_collect_under_neither_fits",
+        "active_edge_type": None,
+        "meaning": "The source answers, responds to, or is shaped by the target prompt/question.",
+    },
+    {
+        "meaning_id": "fulfills",
+        "status": "provisional_collect_under_neither_fits",
+        "active_edge_type": None,
+        "meaning": "The source fulfills a task, assignment, request, or obligation represented by the target.",
+    },
+    {
+        "meaning_id": "enabling",
+        "status": "provisional_collect_under_neither_fits",
+        "active_edge_type": None,
+        "meaning": "The target made the source possible without being source material or a topical reference.",
+    },
+    {
+        "meaning_id": "sequence",
+        "status": "provisional_collect_under_neither_fits",
+        "active_edge_type": None,
+        "meaning": "The source and target are ordered steps in a process or life/event sequence.",
+    },
+]
+CONNECTION_EDGE_MECHANISM_AXIS = {
+    "relation_property": "notion_relation_property",
+    "synced_block_reference": "notion_synced_block_reference",
+    "database_view_filter": "notion_database_view_or_filter_snapshot",
+    "internal_url_hyperlink": "notion_internal_page_link",
+    "mention_page": "notion_page_mention",
+    "comment_context": "notion_comment_context_snapshot",
+    "objet_embed": "notion_or_archive_objet_embed",
+}
+CONNECTION_EDGE_ACTIVE_MEANING_BY_EDGE_TYPE = {
+    "material": "source_material",
+    "derived": "derived_output",
+    "semantic": "weak_semantic",
+    "embed": "embedded_objet",
+    "mention": "explicit_mention",
+    "view_query": "view_snapshot_context",
+    "comment_context": "comment_context",
+}
 EXTERNAL_IMPORT_EXTENSIONS = {".md", ".markdown", ".txt"}
 SOURCE_TYPES = {"local_folder", "external_ssd", "notion_export", "google_drive_export", "object_manifest", "imap_mailbox"}
 IMAP_MAILBOX_SOURCE_TYPE = "imap_mailbox"
@@ -11836,6 +11928,252 @@ def connection_evidence_parse_fixture(
         "warnings": unique_preserve_order(warnings),
         "blockers": unique_preserve_order(blockers),
     }
+
+
+def connection_edge_intelligence_plan(
+    archive_root: Path | str,
+    *,
+    evidence_path: str,
+    source: str = "notion",
+    connection_kind: str = "all",
+    dry_run: bool = True,
+    max_items: int = 100,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("connection-edge-intelligence-plan is read-only and requires --dry-run.")
+
+    parse_result = connection_evidence_parse_fixture(
+        root,
+        evidence_path=evidence_path,
+        source=source,
+        connection_kind=connection_kind,
+        dry_run=True,
+        max_items=max_items,
+    )
+    blockers.extend(str(item) for item in parse_result.get("blockers") or [])
+    warnings.extend(str(item) for item in parse_result.get("warnings") or [])
+
+    candidate_edges = parse_result.get("candidate_edges") if isinstance(parse_result.get("candidate_edges"), list) else []
+    suggestions = [] if blockers else [connection_edge_intelligence_suggestion(item) for item in candidate_edges if isinstance(item, dict)]
+    ambiguous_count = sum(1 for item in suggestions if item.get("ambiguity_flag"))
+    parsimony_review_count = sum(
+        1
+        for item in suggestions
+        if item.get("parsimony_signal") in {"human_must_name_specific_meaning_or_drop", "keep_as_snapshot_context_not_general_edge"}
+    )
+    provisional_candidates = sorted(
+        {
+            candidate
+            for item in suggestions
+            for candidate in item.get("relationship_meaning", {}).get("provisional_candidate_ids", [])
+        }
+    )
+    active_edge_types = sorted(
+        {
+            str(item.get("active_edge_type"))
+            for item in CONNECTION_EDGE_RELATIONSHIP_VOCABULARY
+            if item.get("active_edge_type")
+        }
+    )
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "connection_edge_intelligence_plan",
+        "archive_id": archive_id,
+        "classification_state": "fixture_edge_intelligence_ready" if not blockers else "blocked",
+        "source": parse_result.get("source") or source,
+        "connection_kind": parse_result.get("connection_kind") or connection_kind,
+        "input_summary": {
+            "fixture_parser_lifecycle_action": parse_result.get("lifecycle_action"),
+            "evidence_summary": parse_result.get("evidence_summary"),
+            "candidate_count": len(candidate_edges) if not blockers else 0,
+            "classification_basis": "sanitized_fixture_metadata_only_no_body_or_llm_lens_run",
+        },
+        "edge_intelligence_contract": {
+            "relationship_meaning_axis_is_separate_from_source_mechanism_axis": True,
+            "type_must_be_judged_from_edge_content_not_node_category": True,
+            "ai_suggestions_require_human_approval": True,
+            "ambiguous_edges_get_review_flags": True,
+            "parsimony_first": True,
+            "do_not_precreate_too_many_active_edge_types": True,
+            "provisional_meanings_collect_under_neither_fits_until_repeated": True,
+        },
+        "relationship_meaning_vocabulary": copy.deepcopy(CONNECTION_EDGE_RELATIONSHIP_VOCABULARY),
+        "source_mechanism_axis": copy.deepcopy(CONNECTION_EDGE_MECHANISM_AXIS),
+        "archive_edge_type_status": {
+            "active_edge_types_checked": True,
+            "active_edge_types_from_current_archive_model": active_edge_types,
+            "provisional_meanings_not_active_edge_types": [
+                item["meaning_id"]
+                for item in CONNECTION_EDGE_RELATIONSHIP_VOCABULARY
+                if item.get("status") == "provisional_collect_under_neither_fits"
+            ],
+        },
+        "classification_summary": {
+            "candidate_count": len(suggestions),
+            "ambiguous_count": ambiguous_count,
+            "parsimony_review_count": parsimony_review_count,
+            "provisional_meaning_candidate_ids": provisional_candidates,
+        },
+        "classification_suggestions": suggestions,
+        "human_review_queue": [
+            {
+                "candidate_id": item.get("candidate_id"),
+                "review_reason": item.get("review_reason"),
+                "current_edge_type": item.get("current_edge_type"),
+                "suggested_relationship_meaning": item.get("relationship_meaning", {}).get("suggested_id"),
+            }
+            for item in suggestions
+            if item.get("human_review_required")
+        ],
+        "multi_lens_gate": {
+            "implemented_now": False,
+            "planned_lenses": ["mechanism_lens", "meaning_lens", "strict_zettelkasten_lens"],
+            "future_rule": "agreement_can_mark_confidence; divergence_marks_human_review",
+            "current_demo_scope": "fixture_candidate_metadata_only",
+        },
+        "current_capability": {
+            "sanitized_fixture_parser_reused": True,
+            "relationship_meaning_axis_available": True,
+            "source_mechanism_axis_available": True,
+            "heuristic_review_flags_available": True,
+            "multi_lens_ai_classification_implemented": False,
+            "llm_or_provider_classification_implemented": False,
+            "source_body_reader_implemented": False,
+            "candidate_record_writer_implemented": False,
+            "bulk_edge_writer_implemented": False,
+            "single_edge_writer_available_after_human_review": True,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "real_source_export_files_read": False,
+            "source_bodies_read": False,
+            "derived_text_bodies_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "llm_called": False,
+            "multi_lens_ai_run": False,
+            "fixture_file_read": bool(parse_result.get("closed_actions", {}).get("fixture_file_read")),
+            "fixture_parser_executed": bool(parse_result.get("closed_actions", {}).get("fixture_parser_executed")),
+            "candidate_records_written": False,
+            "zettels_written": False,
+            "edges_written": False,
+            "receipts_written": False,
+            "object_manifest_updated": False,
+        },
+        "privacy_guards": {
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "raw_export_paths_echoed": False,
+            "page_titles_echoed": False,
+            "comment_bodies_echoed": False,
+            "source_body_text_echoed": False,
+            "derived_text_body_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "secret_values_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": [
+            "Review the human queue before turning any suggestion into a durable zettel-edge write.",
+            "Keep provisional meanings as review labels until repeated client data justifies adding active link types.",
+            "Add a future body-grounded multi-lens classifier only after redaction and approval rules are specified.",
+            "Treat vague semantic links as drop-or-name decisions, not automatic edges.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def connection_edge_intelligence_suggestion(candidate: dict[str, Any]) -> dict[str, Any]:
+    edge_type = str(candidate.get("edge_type") or "").strip().lower().replace("-", "_")
+    connection_kind = str(candidate.get("connection_kind") or "").strip().lower().replace("-", "_")
+    confidence = str(candidate.get("confidence") or "").strip().lower()
+    relationship_meaning = CONNECTION_EDGE_ACTIVE_MEANING_BY_EDGE_TYPE.get(edge_type, "neither_fits")
+    provisional = connection_edge_provisional_meaning_candidates(edge_type=edge_type, connection_kind=connection_kind)
+    ambiguity_flag = edge_type == "semantic" or confidence in {"medium", "snapshot_required"} or confidence.startswith("medium")
+    human_review_required = ambiguity_flag or bool(provisional)
+    parsimony_signal = connection_edge_parsimony_signal(edge_type=edge_type, connection_kind=connection_kind)
+    return {
+        "candidate_id": candidate.get("candidate_id"),
+        "connection_kind": connection_kind,
+        "source_mechanism": CONNECTION_EDGE_MECHANISM_AXIS.get(connection_kind, "unknown_mechanism"),
+        "current_edge_type": edge_type,
+        "relationship_meaning": {
+            "suggested_id": relationship_meaning,
+            "active_edge_type": edge_type if relationship_meaning != "neither_fits" else None,
+            "provisional_candidate_ids": provisional,
+        },
+        "confidence": candidate.get("confidence"),
+        "review_status": candidate.get("review_status"),
+        "ambiguity_flag": ambiguity_flag,
+        "human_review_required": human_review_required,
+        "review_reason": connection_edge_review_reason(
+            edge_type=edge_type,
+            connection_kind=connection_kind,
+            confidence=confidence,
+            provisional=provisional,
+        ),
+        "parsimony_signal": parsimony_signal,
+        "classification_basis": "candidate_metadata_only_no_node_category_inference",
+        "write_status": "not_written",
+    }
+
+
+def connection_edge_provisional_meaning_candidates(*, edge_type: str, connection_kind: str) -> list[str]:
+    if connection_kind == "relation_property" and edge_type == "material":
+        return ["responds_to", "fulfills"]
+    if connection_kind == "relation_property" and edge_type == "derived":
+        return ["format_variant", "fulfills"]
+    if edge_type == "semantic":
+        return ["enabling"]
+    if edge_type == "embed":
+        return ["format_variant"]
+    if edge_type == "view_query":
+        return ["sequence"]
+    return []
+
+
+def connection_edge_parsimony_signal(*, edge_type: str, connection_kind: str) -> str:
+    if edge_type == "semantic":
+        return "human_must_name_specific_meaning_or_drop"
+    if edge_type in {"view_query", "comment_context"}:
+        return "keep_as_snapshot_context_not_general_edge"
+    if edge_type == "mention":
+        return "drop_if_only_incidental_mention"
+    if edge_type == "embed":
+        return "keep_if_objet_is_evidence_for_zet"
+    if connection_kind == "relation_property":
+        return "likely_keep_after_human_batch_review"
+    return "review_before_writing"
+
+
+def connection_edge_review_reason(
+    *,
+    edge_type: str,
+    connection_kind: str,
+    confidence: str,
+    provisional: list[str],
+) -> str:
+    if edge_type == "semantic":
+        return "semantic is intentionally weak; a human should name the specific relation or drop it."
+    if confidence == "snapshot_required":
+        return "snapshot-derived edges need human review so dynamic context does not become a false durable edge."
+    if confidence.startswith("medium"):
+        return "medium-confidence fixture mapping should be checked before durable edge writing."
+    if provisional:
+        return "candidate may fit a richer relationship meaning, but the meaning is provisional and not an active edge type."
+    if connection_kind == "mention_page":
+        return "explicit mentions can be incidental; keep only if the mention carries durable meaning."
+    return "batch review is still required before any durable edge write."
 
 
 def connection_evidence_fixture_records(payload: Any, blockers: list[str]) -> list[dict[str, Any]]:
