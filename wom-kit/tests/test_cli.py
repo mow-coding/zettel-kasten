@@ -22344,6 +22344,102 @@ class ArchiveCliTests(unittest.TestCase):
             doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
             self.assertEqual(doctor_code, 0, doctor_output)
 
+    def test_import_external_manifest_preserves_safe_object_refs_in_source_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:notion-import-source-refs")
+            self.assertEqual(init_code, 0, init_output)
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            object_id = "sha256:" + "f" * 64
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "object_id": object_id,
+                        "sha256": "f" * 64,
+                        "logical_key": "objects/external/prehashed/notion_source_export/ff/" + "f" * 64,
+                        "locations": [{"provider": "external_prehashed", "store_kind": "notion_source_export"}],
+                        "provenance": {"source": "prehashed_external_objet_ledger"},
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-page-with-material",
+                                "title": "Notion Material Import",
+                                "content": "# Notion Material Import\n\nBody text imported from Notion.\n",
+                                "object_id": object_id,
+                                "source_refs": [{"type": "OBJECT_ID", "value": object_id.upper()}],
+                                "source_locator_omitted_count": 1,
+                            }
+                        ],
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(dry_code, 0, dry_output)
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_result["items"][0]["source_ref_count"], 1)
+            self.assertTrue(dry_result["items"][0]["source_refs_preserved"])
+            self.assertNotIn(object_id, dry_output)
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            draft_paths = [path for path in result["created_paths"] if path.startswith("inbox/")]
+            self.assertEqual(len(draft_paths), 1)
+            draft_text = (archive_root / draft_paths[0]).read_text(encoding="utf-8")
+            match = re.match(r"^---\n(.*?)\n---\n", draft_text, re.DOTALL)
+            self.assertIsNotNone(match)
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            self.assertEqual(
+                frontmatter["source_refs"],
+                [{"type": "object_id", "value": object_id, "role": "primary_source"}],
+            )
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
     def test_import_external_requires_explicit_mode_and_reviewer_for_apply(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "archive"

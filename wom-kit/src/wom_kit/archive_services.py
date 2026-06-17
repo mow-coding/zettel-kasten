@@ -30493,6 +30493,8 @@ def external_import_dry_run(
                 "source_path": item["source_path"],
                 "source_url": item.get("source_url"),
                 "sha256": item["sha256"],
+                "source_ref_count": len(item.get("source_refs") or []),
+                "source_refs_preserved": bool(item.get("source_refs")),
                 "zettel_id": zettel_id,
                 "target_path": target_path,
                 "action": "create_inbox_draft",
@@ -30795,6 +30797,7 @@ def external_import_item_from_file(
             "created_at": meta.get("created_at"),
             "updated_at": meta.get("updated_at"),
             "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "source_refs": external_import_source_refs_from_metadata(meta),
         }
     ]
 
@@ -30819,7 +30822,41 @@ def external_import_item_from_content(
         "created_at": metadata.get("created_at"),
         "updated_at": metadata.get("updated_at"),
         "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "source_refs": external_import_source_refs_from_metadata(metadata),
     }
+
+
+def external_import_source_refs_from_metadata(metadata: dict[str, Any]) -> list[dict[str, str]]:
+    refs: list[dict[str, str]] = []
+
+    def add_object_ref(raw: Any) -> None:
+        text = str(raw or "").strip().lower()
+        if not text:
+            return
+        blockers: list[str] = []
+        if text.startswith("objet:sha256:"):
+            normalized = object_id_from_objet_ref(text, blockers)
+        else:
+            normalized = normalize_object_id(text, blockers)
+        if normalized and not blockers:
+            refs.append({"type": "object_id", "value": normalized, "role": SOURCE_INTAKE_DEFAULT_ROLE})
+
+    for key in ("object_id", "source_object_id", "approved_object_id", "target_object_id", "objet_ref"):
+        if key in metadata:
+            add_object_ref(metadata.get(key))
+
+    raw_refs = metadata.get("source_refs")
+    if isinstance(raw_refs, list):
+        for item in raw_refs:
+            if not isinstance(item, dict):
+                continue
+            ref_type = str(item.get("type") or "").strip().lower()
+            value = str(item.get("value") or item.get("object_id") or item.get("objet_ref") or "").strip()
+            value_prefix = value.lower()
+            if ref_type in {"object_id", "objet_ref"} or value_prefix.startswith(("sha256:", "objet:sha256:")):
+                add_object_ref(value)
+
+    return unique_dicts(refs)
 
 
 def extract_external_import_title(text: str, path: Path) -> str:
@@ -30892,6 +30929,9 @@ def build_external_import_zettel_text(
             "sha256": item["sha256"],
         },
     }
+    source_refs = item.get("source_refs") if isinstance(item.get("source_refs"), list) else []
+    if source_refs:
+        frontmatter["source_refs"] = source_refs
     return "---\n" + dump_yaml(frontmatter) + "---\n\n" + item["body"].rstrip() + "\n"
 
 

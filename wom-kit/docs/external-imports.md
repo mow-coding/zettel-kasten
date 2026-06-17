@@ -89,9 +89,32 @@ external_id
 source_path
 source_url
 sha256
+source_refs, when the manifest supplies explicit safe object refs
 ```
 
 The receipt records the reviewed import batch and the paths created.
+
+## Source Ref Preservation
+
+From v0.3.105, approved imports preserve explicit safe object refs from manifest
+metadata into the imported draft's `source_refs`.
+
+Accepted manifest fields:
+
+```text
+object_id
+source_object_id
+approved_object_id
+target_object_id
+objet_ref
+source_refs[] with object_id or objet_ref values
+```
+
+Dry-run output reports `source_ref_count` and `source_refs_preserved`, but does
+not echo the object id values in the batch preview.
+
+The importer does not treat the imported text body hash as an object ref, does
+not turn provider URLs into object refs, reads no object bytes, and calls no providers.
 
 ## MCP Boundary
 

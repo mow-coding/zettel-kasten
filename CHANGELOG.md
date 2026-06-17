@@ -6,6 +6,19 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.105 - 2026-06-17
+
+- Updated approved `archive import-external` writes so a manifest item with an
+  explicit safe `object_id`, `objet_ref`, or object-valued `source_refs` entry
+  preserves that clue in the imported draft zettel's `source_refs`.
+- Added dry-run `source_ref_count` / `source_refs_preserved` preview fields so
+  operators can see that a safe material clue will be kept without echoing the
+  object id in the dry-run batch output.
+- Kept the preservation narrow: it does not treat the imported text body hash as
+  a source object id, does not preserve provider URLs as object refs, does not
+  read object bytes, call providers, upload files, write edges, or create
+  receipts beyond the existing approved external-import receipt.
+
 ## v0.3.104 - 2026-06-17
 
 - Added read-only CLI `archive notion-objet-import-clue-audit <archive-root>

@@ -511,10 +511,10 @@ import --dry-run
   Transitional compatibility alias for admit.
 
 import-external --dry-run
-  Preview a Notion or Google Drive export import without mutating the target archive.
+  Preview a Notion or Google Drive export import without mutating the target archive. Manifest items that contain explicit safe object refs report source_ref_count without echoing the values.
 
 import-external --approve --reviewed-by
-  Import Notion or Google Drive export items as inbox drafts and write an import receipt.
+  Import Notion or Google Drive export items as inbox drafts and write an import receipt. Explicit safe object refs from manifest metadata are preserved in draft source_refs.
 
 share --dry-run
   Legacy-compatible dry-run for the older share language. Product language should prefer delegate.
@@ -919,7 +919,7 @@ Real minting reuses the dry-run checks as a gate. Blockers always stop the comma
 
 `archive admit --dry-run` previews target inbox writes, object manifest merges, conflicts, and an admit/import receipt. Real parcel/workpack admit remains unavailable until the dry-run path is proven safer. `archive import --dry-run` remains a v0.2 compatibility alias.
 
-`archive import-external --source notion --export <folder> --dry-run` previews a Notion Markdown export import. `archive import-external --source google_drive --export <manifest.json> --dry-run` does the same for Google Drive exports. Approved imports write inbox drafts and `receipts/import/*.external-import.json`; they do not call Notion or Google Drive APIs or store OAuth secrets.
+`archive import-external --source notion --export <folder> --dry-run` previews a Notion Markdown export import. `archive import-external --source google_drive --export <manifest.json> --dry-run` does the same for Google Drive exports. Approved imports write inbox drafts and `receipts/import/*.external-import.json`; when manifest metadata includes explicit safe object refs, those refs are preserved in draft `source_refs`. The command does not call Notion or Google Drive APIs or store OAuth secrets.
 
 `archive share --dry-run` is the legacy dry-run for the older share language. It previews a GitHub-like archive share from a saved view, shows which zettels are included or excluded, blocks sensitive categories by default, verifies the target counterparty fingerprint against `archive-identity.yml`, and writes nothing. Product design should prefer `delegate-zet`.
 
@@ -1054,6 +1054,9 @@ v0.3.104 adds a read-only Notion import material-clue audit that checks whether
 omitted-locator imports preserved an object ref, have a source-map candidate,
 or need future import-time preservation repair, while keeping reads and writes
 body-safe.
+v0.3.105 preserves explicit safe manifest object refs into approved external
+import draft `source_refs`, while keeping dry-run object id values hidden in
+counts and avoiding provider calls, object byte reads, uploads, and edge writes.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 
