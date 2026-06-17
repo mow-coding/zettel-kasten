@@ -44,6 +44,7 @@
 - [Derived Text Capture](derived-text.md)
 - [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md)
 - [Notion Objet Link Index](notion-objet-link-index.md)
+- [View Recommendation Plan](view-recommendation-plan.md)
 
 이 문서들이 다루는 내용:
 
@@ -172,6 +173,7 @@
 - [Release Readiness Gate](release-readiness-gate.md)
 - [Main Branch Protection Readiness](main-branch-protection-readiness.md)
 - [WOM-kit Capability Matrix](capability-matrix.md)
+- [View Recommendation Plan](view-recommendation-plan.md)
 - [Version Truth Source](version-truth-source.md)
 - [Runtime Canonical Entry Points](runtime-canonical-entrypoints.md)
 - [한국어 제품 언어 기준선](concepts/korean-product-language-baseline.ko.md)

@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.97 - 2026-06-17
+
+- Added read-only `archive view-recommendation-plan <archive-root> --dry-run`
+  and MCP `view_recommendation_plan`.
+- The new planner reuses `view-health` facet role diagnostics to propose
+  candidate single-facet saved views from likely navigation axes and actual
+  indexed top values.
+- Recommendations include suggested `view.ai.<axis>.<value>` ids,
+  `facets.<key>` filters, match counts, and whether a key/value pair is already
+  used by an existing saved view filter.
+- Kept the feature read-only: it writes no `views/*.yml`, rebuilds no index,
+  rewrites no zettel facets, reads no zettel bodies or object bytes, calls no
+  providers, and echoes no zettel titles, absolute local paths, provider URLs,
+  credentials, or secrets.
+
 ## v0.3.96 - 2026-06-17
 
 - Added read-only `archive notion-objet-link-index <archive-root> --dry-run`

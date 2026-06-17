@@ -24537,6 +24537,53 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(result["views"][0]["state"], "blocked")
             self.assertIn("Run archive index", " ".join(result["next_safe_actions"]))
 
+    def test_view_recommendation_plan_uses_navigation_facets_without_writing_views(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._facet_archive(tmp)
+            before = {
+                path.relative_to(archive_root).as_posix(): path.read_bytes()
+                for path in sorted(archive_root.rglob("*"))
+                if path.is_file()
+            }
+            code, output = self.run_cli(
+                ["view-recommendation-plan", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "view_recommendation_plan")
+            self.assertGreaterEqual(result["summary"]["recommendation_count"], 1)
+            self.assertGreaterEqual(result["summary"]["navigation_key_count"], 2)
+            self.assertEqual(result["summary"]["classification_basis"], "static_key_heuristics_no_body_read")
+            recommendations = result["recommendations"]
+            self.assertTrue(any(item["facet_key"] == "domain" for item in recommendations))
+            self.assertTrue(any(item["filters"].get("facets.domain") == "education" for item in recommendations))
+            self.assertTrue(any(item["match_count"] == 2 for item in recommendations))
+            for recommendation in recommendations:
+                self.assertEqual(recommendation["recommendation_kind"], "single_navigation_facet_view")
+                self.assertTrue(recommendation["view_id_suggestion"].startswith("view.ai."))
+                self.assertIn("facets.", next(iter(recommendation["filters"])))
+            self.assertFalse(result["privacy_guards"]["zettel_body_text_echoed"])
+            self.assertFalse(result["privacy_guards"]["zettel_titles_echoed"])
+            self.assertFalse(result["privacy_guards"]["absolute_local_paths_echoed"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["view_files_written"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            self.assertIn("Review suggested filters", " ".join(result["next_safe_actions"]))
+            self.assertNotIn("Body.", output)
+            self.assertNotIn("Title zet_", output)
+            self.assertNotIn(str(archive_root), output)
+            after = {
+                path.relative_to(archive_root).as_posix(): path.read_bytes()
+                for path in sorted(archive_root.rglob("*"))
+                if path.is_file()
+            }
+            self.assertEqual(after, before)
+
+            no_dry_code, no_dry_output = self.run_cli(["view-recommendation-plan", str(archive_root)])
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+
     def test_index_health_detects_stale_generated_index_without_reading_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self._facet_archive(tmp)

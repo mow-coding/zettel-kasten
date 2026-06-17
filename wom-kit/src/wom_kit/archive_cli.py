@@ -137,6 +137,8 @@ Commands:
           Plan Notion provider locator to manifested objet links without echoing URLs.
   notion-objet-link-index
           Index Notion provider locator to manifested objet link candidates across zettels.
+  view-recommendation-plan
+          Plan saved view recommendations from navigation facets without writing views.
   block-header
           Preview the derived block header for one draft or canonical zet.
   projection-plan
@@ -5200,6 +5202,46 @@ def command_view_health(args: argparse.Namespace) -> int:
             if not isinstance(view, dict):
                 continue
             print(f"- {view.get('id')}: {view.get('state')} ({view.get('count', 0)} zet(s))")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+        for warning in result.get("warnings", []):
+            print(f"WARNING: {warning}")
+        for action in result.get("next_safe_actions", []):
+            print(f"NEXT: {action}")
+        print("Writes: none")
+    return 0 if result.get("ok") else 1
+
+
+def command_view_recommendation_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("view-recommendation-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.view_recommendation_plan(
+            Path(args.archive_root),
+            dry_run=True,
+            max_values=args.max_values,
+            max_recommendations=args.max_recommendations,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print("View recommendation plan:")
+        print(f"- recommendations: {summary.get('recommendation_count', 0)}")
+        print(f"- navigation facet keys: {summary.get('navigation_key_count', 0)}")
+        print(f"- empty saved views: {summary.get('empty_view_count', 0)}")
+        for recommendation in result.get("recommendations", []):
+            if not isinstance(recommendation, dict):
+                continue
+            print(
+                f"* {recommendation.get('view_id_suggestion')}: "
+                f"{recommendation.get('facet_key')}={recommendation.get('facet_value')} "
+                f"({recommendation.get('match_count', 0)} zet(s))"
+            )
         for blocker in result.get("blockers", []):
             print(f"BLOCKED: {blocker}")
         for warning in result.get("warnings", []):
@@ -10674,6 +10716,17 @@ def build_parser() -> argparse.ArgumentParser:
     view_health_parser.add_argument("--max-values", type=int, default=10, help="Maximum observed values to show per facet key.")
     view_health_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     view_health_parser.set_defaults(func=command_view_health)
+
+    view_recommendation_parser = subcommands.add_parser(
+        "view-recommendation-plan",
+        help="Plan saved view recommendations from navigation facets without writing views.",
+    )
+    view_recommendation_parser.add_argument("archive_root", help="Archive root to inspect.")
+    view_recommendation_parser.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    view_recommendation_parser.add_argument("--max-values", type=int, default=5, help="Maximum top values to consider per navigation facet key.")
+    view_recommendation_parser.add_argument("--max-recommendations", type=int, default=12, help="Maximum recommendations to return.")
+    view_recommendation_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    view_recommendation_parser.set_defaults(func=command_view_recommendation_plan)
 
     related = subcommands.add_parser(
         "related-zets",

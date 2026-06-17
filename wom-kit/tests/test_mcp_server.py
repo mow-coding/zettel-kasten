@@ -670,6 +670,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("zettel_objet_links", tool_names)
             self.assertIn("notion_objet_link_plan", tool_names)
             self.assertIn("notion_objet_link_index", tool_names)
+            self.assertIn("view_recommendation_plan", tool_names)
             self.assertIn("project_intake_plan", tool_names)
             self.assertIn("project_intake_unpack_queue", tool_names)
             self.assertIn("project_intake_unpack_choice", tool_names)

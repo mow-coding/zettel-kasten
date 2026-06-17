@@ -51,6 +51,7 @@ Supporting philosophy and model docs:
 - [Notion Objet Link Plan](notion-objet-link-plan.md)
 - [Notion Objet Link Index](notion-objet-link-index.md)
 - [View Health](view-health.md)
+- [View Recommendation Plan](view-recommendation-plan.md)
 - [Index Health](index-health.md)
 
 These documents cover:
@@ -185,6 +186,7 @@ Onboarding and setup plans:
 - [Release Readiness Gate](release-readiness-gate.md)
 - [Main Branch Protection Readiness](main-branch-protection-readiness.md)
 - [WOM-kit Capability Matrix](capability-matrix.md)
+- [View Recommendation Plan](view-recommendation-plan.md)
 - [Version Truth Source](version-truth-source.md)
 - [Runtime Canonical Entry Points](runtime-canonical-entrypoints.md)
 - [ZET Publication Surface Baseline](zet-publication-surface-baseline.md)
