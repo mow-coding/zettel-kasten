@@ -25,10 +25,10 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.94 pre-release
+v0.3.95 pre-release
 ```
 
-Previous public baseline: v0.3.93 pre-release.
+Previous public baseline: v0.3.94 pre-release.
 Earlier compatibility checkpoint: v0.3.87 pre-release.
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -39,7 +39,7 @@ What exists today:
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
 - read-only WOM-kit version truth-source checks through `archive --version`, `archive version --format json`, parent project installed-version pin discovery from archive roots, and runtime-context version metadata,
 - runtime-context canonical entrypoint metadata so AI runtimes can see which archive-relative files/directories to treat as start-here and authoritative sources,
-- private archive lifecycle tools for doctor checks, draft creation, minting, delegation, receipts, search, and metadata review,
+- private archive lifecycle tools for doctor checks, draft creation, minting with dry-run checklist guidance, delegation, receipts, search, and metadata review,
 - read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading, block headers with first-read summaries, generated index health checks, saved view health and facet role diagnostics, prompt boundaries, foreign block review, projection planning with supported-surface help, shared update review/index, shared update route pointers, and ZET would-transport planning,
 - read-only derived-text coverage/toolchain/doctor/agent-contract gates, manifest-scoped completeness signals, manifest-quality checks that block false complete claims when `tool_version` or required extraction metadata is missing, including existing derived-text records as a fallback textual signal for older prehashed manifests, non-echoed tool-hint paths for PATH-missing local extractors, plus approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
 - read-only `archive ai-response-concept-guide --dry-run` for beginner-facing AI explanation cards about sha256 object identity vs location, manifests vs zets, and the objet -> derived text -> zet layer split without overclaiming upload or availability,
@@ -286,6 +286,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.95
 v0.3.94
 v0.3.93
 v0.3.92

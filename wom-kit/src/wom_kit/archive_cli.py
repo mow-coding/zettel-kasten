@@ -4931,6 +4931,12 @@ def command_promote(args: argparse.Namespace) -> int:
                 print("Checklist:")
                 for item in result["checklist"]:
                     print(f"- {item['id']}: {item['status']} ({item['source']})")
+            guidance = result.get("mint_checklist_guidance") if isinstance(result.get("mint_checklist_guidance"), dict) else {}
+            if guidance.get("missing_required_item_ids"):
+                print("Checklist guidance:")
+                print(f"- Preferred frontmatter path: {guidance.get('preferred_frontmatter_path')}")
+                print("- Missing required item ids: " + ", ".join(guidance.get("missing_required_item_ids") or []))
+                print("- Rerun mint-zet --dry-run after human review marks those items true.")
             if result.get("near_duplicates"):
                 print("Near duplicates:")
                 for item in result["near_duplicates"]:
