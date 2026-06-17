@@ -24278,6 +24278,54 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(result["views"][0]["state"], "blocked")
             self.assertIn("Run archive index", " ".join(result["next_safe_actions"]))
 
+    def test_index_health_detects_stale_generated_index_without_reading_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._facet_archive(tmp)
+            current = archive_services.index_health(archive_root, dry_run=True)
+            self.assertTrue(current["ok"], current)
+            self.assertEqual(current["index_state"], "current")
+
+            new_path = archive_root / "zettels" / "zet_20260610_new.md"
+            frontmatter = {
+                "id": "zet_20260610_new",
+                "title": "Title that must not be echoed",
+                "status": "canonical",
+                "kind": "note",
+                "facets": {"domain": "education"},
+            }
+            new_path.write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\nSensitive body must not be echoed.\n",
+                encoding="utf-8",
+            )
+            stale = archive_services.index_health(archive_root, dry_run=True)
+            self.assertFalse(stale["ok"], stale)
+            self.assertEqual(stale["index_state"], "stale_or_incomplete")
+            self.assertEqual(stale["summary"]["missing_from_index_count"], 1)
+            self.assertIn("live_zettels_missing_from_index", stale["stale_reasons"])
+            self.assertIn("zettels/zet_20260610_new.md", stale["samples"]["missing_from_index"])
+            serialized = json.dumps(stale, ensure_ascii=False)
+            self.assertNotIn("Title that must not be echoed", serialized)
+            self.assertNotIn("Sensitive body must not be echoed", serialized)
+            self.assertNotIn(str(archive_root), serialized)
+            self.assertFalse(stale["privacy_guards"]["zettel_body_text_echoed"])
+            self.assertFalse(stale["privacy_guards"]["zettel_titles_echoed"])
+            self.assertFalse(stale["privacy_guards"]["absolute_local_paths_echoed"])
+
+            code, output = self.run_cli(
+                ["index-health", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertEqual(json.loads(output)["summary"]["missing_from_index_count"], 1)
+            no_dry_code, no_dry_output = self.run_cli(["index-health", str(archive_root)])
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+
+            rebuild_code, rebuild_output = self.run_cli(["index", str(archive_root), "--format", "json"])
+            self.assertEqual(rebuild_code, 0, rebuild_output)
+            rebuilt = archive_services.index_health(archive_root, dry_run=True)
+            self.assertTrue(rebuilt["ok"], rebuilt)
+            self.assertEqual(rebuilt["index_state"], "current")
+
     def test_staged_cleanup_check_fails_closed_on_unenumerable_tree(self) -> None:
         # A deletion-safety verifier must NEVER report safe when it cannot fully enumerate
         # the staged tree (Windows MAX_PATH, permission denied). os.walk's onerror -> blocker.

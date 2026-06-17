@@ -1715,6 +1715,19 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "index_health",
+        "description": "Check whether the generated local SQLite index matches live zettel paths and basic frontmatter metadata. Read-only; writes nothing.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+                "max_items": {"type": "integer", "minimum": 1, "maximum": 500, "default": 50},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "notion_objet_link_plan",
         "description": "Plan Notion provider locator to manifested objet link candidates for one zettel. Read-only; never echoes provider URLs, body text, frontmatter values, absolute paths, presigned URLs, object bytes, or writes files.",
         "inputSchema": {
@@ -2548,6 +2561,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_zettel_objet_links(arguments)
     if name == "view_health":
         return tool_view_health(arguments)
+    if name == "index_health":
+        return tool_index_health(arguments)
     if name == "notion_objet_link_plan":
         return tool_notion_objet_link_plan(arguments)
     if name == "block_header_check":
@@ -4062,6 +4077,20 @@ def tool_view_health(arguments: dict[str, Any]) -> dict[str, Any]:
         f"{summary.get('empty_view_count', 0)} empty.",
         result,
     )
+
+
+def tool_index_health(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("index_health is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.index_health,
+        archive_root,
+        dry_run=True,
+        max_items=int(arguments.get("max_items", 50)),
+    )
+    state = "passed" if result.get("ok") else "blocked"
+    return tool_success_result(f"index_health: {state}, {result.get('index_state')}.", result)
 
 
 def tool_block_header_check(arguments: dict[str, Any]) -> dict[str, Any]:

@@ -39753,6 +39753,147 @@ def view_health(
     }
 
 
+def live_zettel_index_entries(root: Path, *, db_mtime: float | None = None) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for path in iter_zettel_paths(root):
+        try:
+            text = path.read_text(encoding="utf-8")
+            frontmatter, _body = split_zettel_text(text)
+            stat = path.stat()
+        except (OSError, UnicodeError, ArchiveServiceError):
+            continue
+        relative = archive_relative_path(path, root)
+        entries.append(
+            {
+                "path": relative,
+                "zettel_id": str(frontmatter.get("id") or ""),
+                "status": str(frontmatter.get("status") or ""),
+                "kind": str(frontmatter.get("kind") or ""),
+                "modified_after_index": bool(db_mtime is not None and stat.st_mtime > db_mtime),
+            }
+        )
+    return entries
+
+
+def index_health(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = True,
+    max_items: int = 50,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("index-health is read-only; pass --dry-run.")
+    db_path = root / INDEX_RELATIVE_PATH
+    if not db_path.is_file():
+        blockers.append("archive_index_missing")
+
+    max_items = max(1, min(int(max_items), 500))
+    db_mtime = db_path.stat().st_mtime if db_path.is_file() else None
+    live_entries = live_zettel_index_entries(root, db_mtime=db_mtime)
+    live_by_path = {entry["path"]: entry for entry in live_entries}
+    indexed_entries: list[dict[str, Any]] = []
+
+    if db_path.is_file():
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            indexed_entries = [
+                {
+                    "path": row["path"],
+                    "zettel_id": row["zettel_id"],
+                    "status": row["status"],
+                    "kind": row["kind"],
+                }
+                for row in conn.execute("SELECT path, zettel_id, status, kind FROM zettels ORDER BY path").fetchall()
+            ]
+        finally:
+            conn.close()
+    indexed_by_path = {str(entry.get("path") or ""): entry for entry in indexed_entries}
+
+    live_paths = set(live_by_path)
+    indexed_paths = set(indexed_by_path)
+    missing_from_index = sorted(live_paths - indexed_paths)
+    extra_in_index = sorted(indexed_paths - live_paths)
+    changed_metadata: list[dict[str, Any]] = []
+    for path in sorted(live_paths & indexed_paths):
+        live = live_by_path[path]
+        indexed = indexed_by_path[path]
+        changed_fields = [
+            field
+            for field in ("zettel_id", "status", "kind")
+            if str(live.get(field) or "") != str(indexed.get(field) or "")
+        ]
+        if changed_fields:
+            changed_metadata.append({"path": path, "changed_fields": changed_fields})
+    modified_after_index = sorted(entry["path"] for entry in live_entries if entry.get("modified_after_index"))
+
+    stale_reasons: list[str] = []
+    if missing_from_index:
+        stale_reasons.append("live_zettels_missing_from_index")
+    if extra_in_index:
+        stale_reasons.append("index_has_paths_missing_from_live_zettels")
+    if changed_metadata:
+        stale_reasons.append("indexed_zettel_metadata_differs_from_live_frontmatter")
+    if modified_after_index:
+        stale_reasons.append("live_zettel_modified_after_index")
+    if blockers:
+        stale_reasons.append("index_health_blocked")
+
+    index_state = "blocked" if blockers else ("stale_or_incomplete" if stale_reasons else "current")
+    next_safe_actions: list[str] = []
+    if "archive_index_missing" in blockers:
+        next_safe_actions.append("Run archive index before view-zets, related-zets, search, or view-health.")
+    elif stale_reasons:
+        next_safe_actions.append("Run archive index to rebuild the generated local SQLite index from current archive files.")
+    else:
+        next_safe_actions.append("Generated index matches the live zettel path/id/status/kind snapshot checked here.")
+
+    return {
+        "ok": not blockers and not stale_reasons,
+        "dry_run": True,
+        "lifecycle_action": "index_health",
+        "archive_id": archive_id,
+        "index_path": INDEX_RELATIVE_PATH,
+        "index_state": index_state,
+        "summary": {
+            "live_zettel_count": len(live_entries),
+            "indexed_zettel_count": len(indexed_entries),
+            "missing_from_index_count": len(missing_from_index),
+            "extra_in_index_count": len(extra_in_index),
+            "changed_metadata_count": len(changed_metadata),
+            "modified_after_index_count": len(modified_after_index),
+        },
+        "samples": {
+            "missing_from_index": missing_from_index[:max_items],
+            "extra_in_index": extra_in_index[:max_items],
+            "changed_metadata": changed_metadata[:max_items],
+            "modified_after_index": modified_after_index[:max_items],
+            "truncated": any(
+                len(items) > max_items
+                for items in (missing_from_index, extra_in_index, changed_metadata, modified_after_index)
+            ),
+        },
+        "stale_reasons": unique_preserve_order(stale_reasons),
+        "privacy_guards": {
+            "zettel_body_text_echoed": False,
+            "zettel_titles_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "provider_api_called": False,
+            "object_file_bytes_read": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": unique_preserve_order(next_safe_actions),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
 def get_related_zets(
     archive_root: Path | str,
     zettel_id: str,

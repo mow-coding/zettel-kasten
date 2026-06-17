@@ -5135,6 +5135,39 @@ def command_view_health(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_index_health(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("index-health is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.index_health(
+            Path(args.archive_root),
+            dry_run=True,
+            max_items=args.max_items,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(f"Index health: {result.get('index_state')}")
+        print(
+            "Zettels: "
+            f"{summary.get('live_zettel_count', 0)} live, "
+            f"{summary.get('indexed_zettel_count', 0)} indexed"
+        )
+        for reason in result.get("stale_reasons", []):
+            print(f"STALE: {reason}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+        for action in result.get("next_safe_actions", []):
+            print(f"NEXT: {action}")
+        print("Writes: none")
+    return 0 if result.get("ok") else 1
+
+
 def command_related_zets(args: argparse.Namespace) -> int:
     try:
         result = archive_services.get_related_zets(
@@ -10521,6 +10554,16 @@ def build_parser() -> argparse.ArgumentParser:
     index.add_argument("archive_root", help="Archive root to index.")
     index.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     index.set_defaults(func=command_index)
+
+    index_health_parser = subcommands.add_parser(
+        "index-health",
+        help="Check whether the generated local SQLite index matches live zettel files.",
+    )
+    index_health_parser.add_argument("archive_root", help="Archive root to inspect.")
+    index_health_parser.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    index_health_parser.add_argument("--max-items", type=int, default=50, help="Maximum sample paths to return per drift bucket.")
+    index_health_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    index_health_parser.set_defaults(func=command_index_health)
 
     view_zets_parser = subcommands.add_parser(
         "view-zets",

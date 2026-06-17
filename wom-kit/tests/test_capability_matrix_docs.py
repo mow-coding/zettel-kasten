@@ -71,6 +71,7 @@ OBJET_REF_RESOLUTION_PATH = KIT_ROOT / "docs" / "objet-ref-resolution.md"
 ZETTEL_OBJET_LINKS_PATH = KIT_ROOT / "docs" / "zettel-objet-links.md"
 NOTION_OBJET_LINK_PLAN_PATH = KIT_ROOT / "docs" / "notion-objet-link-plan.md"
 VIEW_HEALTH_PATH = KIT_ROOT / "docs" / "view-health.md"
+INDEX_HEALTH_PATH = KIT_ROOT / "docs" / "index-health.md"
 SOURCE_OBJECT_STORAGE_POLICY_PATH = KIT_ROOT / "docs" / "source-object-storage-policy.md"
 TEXT_PROVENANCE_HIERARCHY_PATH = KIT_ROOT / "docs" / "text-provenance-hierarchy.md"
 AI_RESPONSE_CONCEPT_GUIDE_PATH = KIT_ROOT / "docs" / "ai-response-concept-guide.md"
@@ -1108,6 +1109,41 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         self.assertIn("[View Health](view-health.md)", public_map_text)
+
+    def test_index_health_doc_and_matrix_explain_generated_index_drift(self) -> None:
+        index_health_text = INDEX_HEALTH_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.91 read-only generated index drift check",
+            "archive index-health <archive-root> --dry-run",
+            "index_health",
+            "live_zettels_missing_from_index",
+            "live_zettel_modified_after_index",
+            "rebuild the index",
+            "echo zettel body text",
+            "echo zettel titles",
+            "Relationship To `archive index`",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, index_health_text)
+        for phrase in (
+            "Generated index health",
+            "archive index-health --dry-run",
+            "MCP `index_health`",
+            "modified after the index",
+            "echo no zettel body text",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "[Index Health](wom-kit/docs/index-health.md)",
+            "generated index health checks",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        self.assertIn("[Index Health](index-health.md)", public_map_text)
 
     def test_derived_text_coverage_doc_and_matrix_expose_agent_contract(self) -> None:
         coverage_text = DERIVED_TEXT_COVERAGE_PATH.read_text(encoding="utf-8")
