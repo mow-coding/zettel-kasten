@@ -7086,6 +7086,156 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(receipt["ledger_path_included"])
             self.assertFalse(receipt["privacy_guards"]["row_values_echoed"])
 
+    def test_object_storage_upload_evidence_preview_updates_no_files_or_private_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+            ledger = Path(tmp) / "r2-upload-ledger.jsonl"
+            sha_a = "acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            sha_b = "9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647"
+            ledger.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "sha256": sha_a,
+                                "bytes": 151,
+                                "status": "uploaded",
+                                "filename": "private-notion-export-name.pdf",
+                                "url": "https://example.com/private/r2/object",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "sha256": f"sha256:{sha_b}",
+                                "bytes": "162",
+                                "status": "verified",
+                                "path": "LOCAL_DEVICE_PLACEHOLDER\\private\\r2\\object.bin",
+                            }
+                        ),
+                        json.dumps({"sha256": "f" * 64, "bytes": 99, "status": "failed"}),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "object-storage-upload-evidence",
+                    str(archive_root),
+                    "--ledger",
+                    str(ledger),
+                    "--provider-kind",
+                    "cloudflare-r2",
+                    "--store-ref",
+                    "r2-upload-20260616",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "object_storage_upload_evidence_preview")
+            self.assertEqual(result["provider_kind"], "cloudflare-r2")
+            self.assertEqual(result["evidence"]["row_count"], 3)
+            self.assertEqual(result["evidence"]["successful_upload_count"], 2)
+            self.assertEqual(result["evidence"]["skipped_row_count"], 1)
+            self.assertEqual(result["manifest_update"]["matched_manifest_records"], 2)
+            self.assertEqual(result["manifest_update"]["would_add_locations"], 2)
+            self.assertFalse(result["current_capability"]["live_object_upload_adapter_implemented"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["upload_performed"])
+            self.assertFalse(result["closed_actions"]["source_bytes_read"])
+            self.assertFalse(result["privacy_guards"]["ledger_paths_echoed"])
+            self.assertFalse(result["privacy_guards"]["row_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(ledger), output)
+            self.assertNotIn("private-notion-export-name.pdf", output)
+            self.assertNotIn("https://example.com/private", output)
+            self.assertNotIn("LOCAL_DEVICE_PLACEHOLDER", output)
+
+    def test_object_storage_upload_evidence_approve_writes_receipt_and_manifest_locations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            ledger = Path(tmp) / "r2-upload-ledger.jsonl"
+            sha_a = "acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+            sha_b = "9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647"
+            ledger.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"sha256": sha_a, "bytes": 151, "status": "uploaded"}),
+                        json.dumps({"sha256": sha_b, "bytes": 162, "status": "already_present"}),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "object-storage-upload-evidence",
+                    str(archive_root),
+                    "--ledger",
+                    str(ledger),
+                    "--provider-kind",
+                    "cloudflare-r2",
+                    "--store-ref",
+                    "r2-upload-20260616",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "object_storage_upload_evidence_register")
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["manifest_update"]["added_locations"], 2)
+            self.assertFalse(result["manifest_update"]["object_ids_echoed"])
+            self.assertTrue(result["receipt"]["receipt_written"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["upload_performed"])
+            self.assertTrue(result["closed_actions"]["files_written"])
+            self.assertNotIn(str(ledger), output)
+
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [json.loads(line) for line in manifest_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            by_id = {record["object_id"]: record for record in records}
+            for digest in (sha_a, sha_b):
+                record = by_id[f"sha256:{digest}"]
+                matches = [
+                    location
+                    for location in record["locations"]
+                    if location.get("provider") == "object_storage"
+                    and location.get("provider_kind") == "cloudflare-r2"
+                    and location.get("store_ref") == "r2-upload-20260616"
+                ]
+                self.assertEqual(len(matches), 1)
+                location = matches[0]
+                self.assertEqual(location["availability"], "declared_uploaded")
+                self.assertEqual(location["key_strategy"], "sha256_content_addressed")
+                self.assertEqual(location["key_hint"], f"sha256/{digest[:2]}/{digest}")
+                self.assertFalse(location["byte_verification_by_wom_kit"])
+                self.assertFalse(location["provider_confirmation_by_wom_kit"])
+
+            receipt_path = archive_root / Path(result["receipt"]["receipt_path"])
+            self.assertTrue(receipt_path.is_file())
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["schema"], archive_services.OBJECT_STORAGE_UPLOAD_EVIDENCE_RECEIPT_SCHEMA)
+            self.assertEqual(receipt["summary"]["matched_manifest_records"], 2)
+            self.assertEqual(receipt["summary"]["added_locations"], 2)
+            self.assertFalse(receipt["ledger_path_included"])
+            self.assertFalse(receipt["privacy_guards"]["row_values_echoed"])
+            self.assertFalse(receipt["manifest_update"]["provider_confirmation_by_wom_kit"])
+            self.assertTrue(receipt["manifest_update"]["manifest_update_completed"])
+
     def test_resolve_objet_ref_reports_local_and_external_candidates_without_paths_or_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

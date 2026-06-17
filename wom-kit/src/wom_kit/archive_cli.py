@@ -59,6 +59,8 @@ Commands:
           Plan a future provider presigned URL request without creating URLs.
   object-storage-operation-request-plan
           Compose the read-only approval request package before any future object storage operation.
+  object-storage-upload-evidence
+          Record reviewed external upload evidence and update manifest locations without provider calls.
   imap-mailbox-operation-request-plan
           Compose the read-only approval request package before any future IMAP mailbox operation.
   imap-mailbox-plan
@@ -2274,6 +2276,35 @@ def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_object_storage_upload_evidence(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print("object-storage-upload-evidence requires exactly one of --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("object-storage-upload-evidence requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.object_storage_upload_evidence_register(
+            Path(args.archive_root),
+            [Path(item) for item in args.ledger],
+            provider_kind=args.provider_kind,
+            store_ref=args.store_ref,
+            sha256_field=args.sha256_field,
+            size_field=args.size_field,
+            status_field=args.status_field,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+            max_rows=args.max_rows,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_object_storage_upload_evidence_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
 def command_resolve_objet_ref(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("resolve-objet-ref is read-only and requires --dry-run.", file=sys.stderr)
@@ -3375,6 +3406,38 @@ def print_prehashed_objet_ledger_result(result: dict[str, Any], output_format: s
     else:
         print(f"Appended manifest records: {registration.get('appended_manifest_records', 0)}")
         print(f"Receipt: {registration.get('receipt_path') or '-'}")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+
+
+def print_object_storage_upload_evidence_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    state = "passed" if result.get("ok") else "blocked"
+    evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+    update = result.get("manifest_update") if isinstance(result.get("manifest_update"), dict) else {}
+    receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
+    print(f"Object-storage upload evidence {state}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Provider: {result.get('provider_kind') or '-'}")
+    print(f"Store ref: {result.get('store_ref') or '-'}")
+    print(f"Ledger files: {evidence.get('ledger_file_count', 0)}")
+    print(f"Rows: {evidence.get('row_count', 0)}")
+    print(f"Successful evidence rows: {evidence.get('successful_upload_count', 0)}")
+    print(f"Matched manifest records: {update.get('matched_manifest_records', 0)}")
+    if result.get("dry_run"):
+        print(f"Would add locations: {update.get('would_add_locations', 0)}")
+        print("Writes: none")
+    else:
+        print(f"Added locations: {update.get('added_locations', 0)}")
+        print(f"Receipt: {receipt.get('receipt_path') or '-'}")
     if result.get("blockers"):
         print("Blockers:")
         for blocker in result["blockers"]:
@@ -8574,6 +8637,42 @@ def build_parser() -> argparse.ArgumentParser:
     prehashed_objet_ledger.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
     prehashed_objet_ledger.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     prehashed_objet_ledger.set_defaults(func=command_prehashed_objet_ledger)
+
+    object_storage_upload_evidence = subcommands.add_parser(
+        "object-storage-upload-evidence",
+        aliases=["object-storage-external-upload-evidence", "objet-storage-upload-evidence"],
+        help="Record reviewed external object-storage upload evidence without calling providers.",
+    )
+    object_storage_upload_evidence.add_argument("archive_root", help="Archive root to update.")
+    object_storage_upload_evidence.add_argument(
+        "--ledger",
+        action="append",
+        required=True,
+        help="UTF-8 JSONL upload evidence ledger. May be repeated. Paths are not echoed.",
+    )
+    object_storage_upload_evidence.add_argument(
+        "--provider-kind",
+        choices=sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS),
+        default="cloudflare-r2",
+        help="Object-storage provider kind label.",
+    )
+    object_storage_upload_evidence.add_argument(
+        "--store-ref",
+        help="Safe store label/ref. Required with --approve. Do not pass URLs, bucket names, paths, tokens, or secrets.",
+    )
+    object_storage_upload_evidence.add_argument("--sha256-field", default="sha256", help="JSONL field containing sha256 or sha256:<hex>.")
+    object_storage_upload_evidence.add_argument("--size-field", default="bytes", help="Optional JSONL field containing byte size.")
+    object_storage_upload_evidence.add_argument(
+        "--status-field",
+        default="status",
+        help="JSONL field whose value must be uploaded, verified, succeeded, already_present, or ok.",
+    )
+    object_storage_upload_evidence.add_argument("--max-rows", type=int, default=100000, help="Maximum rows to inspect.")
+    object_storage_upload_evidence.add_argument("--dry-run", action="store_true", help="Preview manifest location updates without writing.")
+    object_storage_upload_evidence.add_argument("--approve", action="store_true", help="Write reviewed upload evidence receipt and manifest locations.")
+    object_storage_upload_evidence.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
+    object_storage_upload_evidence.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    object_storage_upload_evidence.set_defaults(func=command_object_storage_upload_evidence)
 
     resolve_objet_ref = subcommands.add_parser(
         "resolve-objet-ref",
