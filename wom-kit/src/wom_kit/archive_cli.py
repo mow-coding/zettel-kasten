@@ -2306,6 +2306,52 @@ def command_zettel_edge(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_zettel_edge_batch(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.zettel_edge_batch_write(
+            Path(args.archive_root),
+            plan_path=Path(args.plan),
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+            max_edges=args.max_edges,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("write_status") or ("passed" if result.get("ok") else "blocked")
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        policy = result.get("policy") if isinstance(result.get("policy"), dict) else {}
+        print(f"Zettel edge batch: {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Policy: {policy.get('policy_id') or '-'}")
+        print(f"Policy-writable edges: {summary.get('policy_writable_edge_count', 0)}")
+        print(f"Human review queue: {summary.get('review_queue_count', 0)}")
+        print(f"Written edges: {summary.get('written_edge_count', 0)}")
+        print(f"Receipt: {result.get('receipt_path') or '-'}")
+        if result.get("files_written"):
+            print("Files written:")
+            for path in result["files_written"]:
+                print(f"- {path}")
+        elif result.get("would_change"):
+            print("Would change:")
+            for path in result["would_change"]:
+                print(f"- {path}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
     if args.dry_run == args.approve:
         print("prehashed-objet-ledger requires exactly one of --dry-run or --approve.", file=sys.stderr)
@@ -11172,6 +11218,20 @@ def build_parser() -> argparse.ArgumentParser:
     zettel_edge.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
     zettel_edge.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     zettel_edge.set_defaults(func=command_zettel_edge)
+
+    zettel_edge_batch = subcommands.add_parser(
+        "zettel-edge-batch",
+        aliases=["bulk-zettel-edge", "batch-zettel-edge"],
+        help="Preview or approve policy-gated bulk typed edge writes from a reviewed JSON plan.",
+    )
+    zettel_edge_batch.add_argument("archive_root", help="Archive root to update.")
+    zettel_edge_batch.add_argument("--plan", required=True, help="JSON batch plan with policy and edges.")
+    zettel_edge_batch.add_argument("--dry-run", action="store_true", help="Preview all policy-writable edges without writing files.")
+    zettel_edge_batch.add_argument("--approve", action="store_true", help="Write policy-writable edges and a batch receipt.")
+    zettel_edge_batch.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
+    zettel_edge_batch.add_argument("--max-edges", type=int, default=200, help="Maximum edge rows accepted from the batch plan.")
+    zettel_edge_batch.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    zettel_edge_batch.set_defaults(func=command_zettel_edge_batch)
 
     import_external = subcommands.add_parser("import-external", help="Import Notion or Google Drive exports as inbox drafts.")
     import_external.add_argument("archive_root", help="Target archive root.")

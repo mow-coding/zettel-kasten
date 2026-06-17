@@ -750,6 +750,7 @@ PROJECT_INTAKE_MAX_STRING_LENGTH = 4000
 MINT_RECEIPTS_DIR = "receipts/mint"
 MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
 ZETTEL_EDGE_RECEIPTS_DIR = "receipts/edges"
+ZETTEL_EDGE_BATCH_RECEIPTS_DIR = "receipts/edges/batches"
 DELEGATE_RECEIPTS_DIR = "receipts/delegate"
 ATTESTATION_RECEIPTS_DIR = "receipts/attest"
 FOREIGN_BLOCK_QUARANTINE_RECEIPTS_DIR = "receipts/quarantine"
@@ -13120,7 +13121,8 @@ def connection_edge_intelligence_plan(
             "llm_or_provider_classification_implemented": False,
             "source_body_reader_implemented": False,
             "candidate_record_writer_implemented": False,
-            "bulk_edge_writer_implemented": False,
+            "bulk_edge_writer_implemented": True,
+            "policy_batch_edge_writer_command": "zettel-edge-batch",
             "single_edge_writer_available_after_human_review": True,
         },
         "closed_actions": {
@@ -13932,6 +13934,471 @@ def zettel_edge_write(
         reviewed_by=reviewed_by,
         would_change=would_change,
         files_written=[source_summary["path"], receipt_relative],
+        blockers=[],
+        warnings=warnings,
+    )
+
+
+def zettel_edge_batch_confidence_rank(value: Any) -> int:
+    if isinstance(value, (int, float)):
+        if float(value) >= 0.9:
+            return 3
+        if float(value) >= 0.6:
+            return 2
+        return 1
+    text = str(value or "").strip().lower()
+    try:
+        numeric = float(text)
+    except ValueError:
+        numeric = None
+    if numeric is not None:
+        if numeric >= 0.9:
+            return 3
+        if numeric >= 0.6:
+            return 2
+        return 1
+    if text.startswith("high"):
+        return 3
+    if text.startswith("medium") or text == "snapshot_required":
+        return 2
+    if text.startswith("low"):
+        return 1
+    return 0
+
+
+def safe_zettel_edge_batch_scalar(value: Any, blockers: list[str], label: str) -> str:
+    text = str(value or "").strip()
+    if not safe_source_intake_plan_scalar(text):
+        blockers.append(f"{label} must be a safe non-secret scalar.")
+        return ""
+    return text
+
+
+def zettel_edge_batch_policy(plan: dict[str, Any], blockers: list[str]) -> dict[str, Any]:
+    raw_policy = plan.get("policy")
+    if not isinstance(raw_policy, dict):
+        blockers.append("batch edge plan must include a policy object.")
+        return {}
+    policy_id = safe_zettel_edge_batch_scalar(raw_policy.get("policy_id") or "policy:batch-zettel-edge", blockers, "policy.policy_id")
+    raw_edge_types = raw_policy.get("auto_write_edge_types") or raw_policy.get("allowed_edge_types")
+    if not isinstance(raw_edge_types, list) or not raw_edge_types:
+        blockers.append("policy.auto_write_edge_types must be a non-empty list.")
+        auto_write_edge_types: list[str] = []
+    else:
+        auto_write_edge_types = []
+        for index, value in enumerate(raw_edge_types, start=1):
+            edge_type = str(value or "").strip().lower().replace("-", "_")
+            if not edge_type or not safe_source_intake_plan_scalar(edge_type):
+                blockers.append(f"policy.auto_write_edge_types[{index}] must be a safe edge type.")
+                continue
+            auto_write_edge_types.append(edge_type)
+    minimum_confidence = safe_zettel_edge_batch_scalar(
+        raw_policy.get("minimum_confidence") or "high",
+        blockers,
+        "policy.minimum_confidence",
+    ).lower()
+    if zettel_edge_batch_confidence_rank(minimum_confidence) < 1:
+        blockers.append("policy.minimum_confidence must be low, medium, high, or a numeric confidence value.")
+    return {
+        "policy_id": policy_id,
+        "policy_label": safe_manifest_label(raw_policy.get("policy_label"), fallback=None),
+        "auto_write_edge_types": sorted(set(auto_write_edge_types)),
+        "minimum_confidence": minimum_confidence,
+        "minimum_confidence_rank": zettel_edge_batch_confidence_rank(minimum_confidence),
+        "ambiguous_edges_to_review_queue": raw_policy.get("ambiguous_edges_to_review_queue") is not False,
+    }
+
+
+def zettel_edge_batch_candidate_rows(plan: dict[str, Any], blockers: list[str]) -> list[dict[str, Any]]:
+    rows = plan.get("edges") or plan.get("candidate_edges")
+    if not isinstance(rows, list) or not rows:
+        blockers.append("batch edge plan must include a non-empty edges list.")
+        return []
+    normalized: list[dict[str, Any]] = []
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            blockers.append(f"edges[{index}] must be an object.")
+            continue
+        candidate_id = row.get("candidate_id")
+        evidence_ref = row.get("evidence_ref")
+        confidence = safe_zettel_edge_batch_scalar(
+            row.get("confidence", "unknown"),
+            blockers,
+            f"edges[{index}].confidence",
+        )
+        normalized.append(
+            {
+                "index": index,
+                "candidate_id": safe_zettel_edge_batch_scalar(candidate_id or f"candidate:{index:04d}", blockers, f"edges[{index}].candidate_id"),
+                "from_zettel": safe_zettel_edge_batch_scalar(row.get("from_zettel"), blockers, f"edges[{index}].from_zettel")
+                if row.get("from_zettel")
+                else None,
+                "from_path": safe_zettel_edge_batch_scalar(row.get("from_path"), blockers, f"edges[{index}].from_path")
+                if row.get("from_path")
+                else None,
+                "target": safe_zettel_edge_batch_scalar(row.get("target"), blockers, f"edges[{index}].target"),
+                "edge_type": safe_zettel_edge_batch_scalar(row.get("edge_type"), blockers, f"edges[{index}].edge_type").lower().replace("-", "_"),
+                "visibility": safe_zettel_edge_batch_scalar(row.get("visibility") or "private", blockers, f"edges[{index}].visibility").lower().replace("-", "_"),
+                "confidence": confidence,
+                "confidence_rank": zettel_edge_batch_confidence_rank(confidence),
+                "review_status": safe_zettel_edge_batch_scalar(row.get("review_status") or "policy_candidate", blockers, f"edges[{index}].review_status"),
+                "requires_human_review": bool(row.get("requires_human_review")),
+                "evidence_ref": safe_zettel_edge_batch_scalar(evidence_ref, blockers, f"edges[{index}].evidence_ref") if evidence_ref else None,
+            }
+        )
+        if bool(row.get("from_zettel")) == bool(row.get("from_path")):
+            blockers.append(f"edges[{index}] must include exactly one of from_zettel or from_path.")
+    return normalized
+
+
+def zettel_edge_batch_item_policy_state(item: dict[str, Any], policy: dict[str, Any]) -> tuple[str, str]:
+    if item.get("requires_human_review"):
+        return "review_queue", "candidate_requires_human_review"
+    review_status = str(item.get("review_status") or "").strip().lower()
+    if review_status in {"needs_review", "human_review_required", "ambiguous", "blocked"}:
+        return "review_queue", "review_status_requires_human_review"
+    if item.get("edge_type") not in set(policy.get("auto_write_edge_types") or []):
+        return "review_queue", "edge_type_not_allowed_by_policy"
+    if int(item.get("confidence_rank") or 0) < int(policy.get("minimum_confidence_rank") or 3):
+        return "review_queue", "confidence_below_policy_threshold"
+    return "policy_writable", "matches_policy"
+
+
+def zettel_edge_batch_receipt_relative_path(batch_id: str) -> str:
+    digest = batch_id.removeprefix("edge-batch:")
+    return f"{ZETTEL_EDGE_BATCH_RECEIPTS_DIR}/{digest[:24]}.zettel-edge-batch.json"
+
+
+def zettel_edge_batch_result(
+    *,
+    archive_id: str,
+    dry_run: bool,
+    approve: bool,
+    reviewed_by: str | None,
+    policy: dict[str, Any],
+    batch_id: str | None,
+    receipt_path: str | None,
+    item_results: list[dict[str, Any]],
+    review_queue: list[dict[str, Any]],
+    would_change: list[str],
+    files_written: list[str],
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    policy_writable_count = len(item_results)
+    written_edge_count = sum(1 for item in item_results if item.get("write_status") == "written")
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "zettel_edge_batch_plan" if dry_run else "zettel_edge_batch_write",
+        "archive_id": archive_id,
+        "batch_id": batch_id,
+        "write_status": "blocked" if blockers else "would_write" if dry_run else "written",
+        "policy": {
+            "policy_id": policy.get("policy_id"),
+            "policy_label": policy.get("policy_label"),
+            "auto_write_edge_types": policy.get("auto_write_edge_types", []),
+            "minimum_confidence": policy.get("minimum_confidence"),
+            "ambiguous_edges_to_review_queue": policy.get("ambiguous_edges_to_review_queue", True),
+        },
+        "summary": {
+            "policy_writable_edge_count": policy_writable_count,
+            "review_queue_count": len(review_queue),
+            "written_edge_count": written_edge_count,
+            "batch_receipt_written": bool(receipt_path and receipt_path in files_written),
+        },
+        "policy_writable_edges": item_results,
+        "human_review_queue": review_queue,
+        "receipt_path": receipt_path,
+        "reviewed_by": reviewed_by if approve else None,
+        "current_capability": {
+            "policy_batch_approval_implemented": True,
+            "bulk_edge_writer_implemented": True,
+            "uses_single_zettel_edge_gate_per_item": True,
+            "mcp_write_tool_implemented": False,
+            "real_export_parser_implemented": False,
+            "llm_classifier_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "real_source_export_files_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "candidate_records_written": False,
+            "object_manifest_updated": False,
+            "zettel_frontmatter_written": bool(written_edge_count),
+            "individual_edge_receipts_written": written_edge_count,
+            "batch_receipt_written": bool(receipt_path and receipt_path in files_written),
+            "rollback_on_failure": True,
+        },
+        "privacy_guards": {
+            "body_text_echoed": False,
+            "zettel_title_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "page_titles_echoed": False,
+            "comment_bodies_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "secret_values_echoed": False,
+        },
+        "would_change": unique_preserve_order(would_change),
+        "files_written": unique_preserve_order(files_written),
+        "next_safe_actions": [
+            "Run archive index before relying on related-zets backlinks." if not blockers else "Fix blockers before batch edge writing.",
+            "Review human_review_queue rows separately; they were intentionally not written by the batch policy.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def restore_zettel_edge_batch_snapshots(snapshots: dict[str, str | None], root: Path) -> None:
+    for relative, original in snapshots.items():
+        path = archive_internal_path(root, relative)
+        if original is None:
+            if path.exists():
+                path.unlink()
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(original, encoding="utf-8")
+
+
+def zettel_edge_batch_write(
+    archive_root: Path | str,
+    *,
+    plan_path: Path | str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    max_edges: int = 200,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run and approve:
+        blockers.append("Use either --dry-run or --approve, not both.")
+    if not dry_run and not approve:
+        blockers.append("zettel-edge-batch requires --dry-run or --approve.")
+    if approve and not reviewed_by:
+        blockers.append("zettel-edge-batch --approve requires --reviewed-by.")
+    if reviewed_by and not safe_source_intake_plan_scalar(str(reviewed_by)):
+        blockers.append("reviewed_by must be a safe non-secret scalar.")
+
+    plan = load_json_file(Path(plan_path))
+    schema = str(plan.get("schema") or plan.get("schema_version") or "").strip()
+    if schema and schema not in {"wom-kit/zettel-edge-batch/v0.1", "wom-kit/zettel-edge-batch-plan/v0.1"}:
+        blockers.append("batch edge plan schema must be wom-kit/zettel-edge-batch/v0.1.")
+    policy = zettel_edge_batch_policy(plan, blockers)
+    rows = zettel_edge_batch_candidate_rows(plan, blockers)
+    if len(rows) > max(1, min(int(max_edges), 1000)):
+        blockers.append("batch edge plan exceeds max_edges.")
+
+    seen_edges: set[tuple[str, str, str, str]] = set()
+    policy_writable_rows: list[dict[str, Any]] = []
+    review_queue: list[dict[str, Any]] = []
+    for row in rows:
+        source_key = str(row.get("from_zettel") or row.get("from_path") or "")
+        edge_key = (source_key, str(row.get("edge_type") or ""), str(row.get("target") or ""), str(row.get("visibility") or "private"))
+        if edge_key in seen_edges:
+            blockers.append(f"edges[{row.get('index')}] duplicates another batch edge.")
+            continue
+        seen_edges.add(edge_key)
+        state, reason = zettel_edge_batch_item_policy_state(row, policy)
+        row_summary = {
+            "index": row.get("index"),
+            "candidate_id": row.get("candidate_id"),
+            "from_zettel": row.get("from_zettel"),
+            "from_path": row.get("from_path"),
+            "target": row.get("target"),
+            "edge_type": row.get("edge_type"),
+            "visibility": row.get("visibility"),
+            "confidence": row.get("confidence"),
+            "review_status": row.get("review_status"),
+            "policy_state": state,
+            "policy_reason": reason,
+            "evidence_ref": row.get("evidence_ref"),
+        }
+        if state == "policy_writable":
+            policy_writable_rows.append({**row, "policy_reason": reason})
+        else:
+            review_queue.append(drop_none_values(row_summary))
+
+    batch_seed = {
+        "archive_id": archive_id,
+        "policy": policy,
+        "edges": [
+            {
+                "candidate_id": row.get("candidate_id"),
+                "from_zettel": row.get("from_zettel"),
+                "from_path": row.get("from_path"),
+                "target": row.get("target"),
+                "edge_type": row.get("edge_type"),
+                "visibility": row.get("visibility"),
+            }
+            for row in policy_writable_rows
+        ],
+    }
+    batch_id = "edge-batch:" + sha256_json_hex(batch_seed)
+    batch_receipt_relative = zettel_edge_batch_receipt_relative_path(batch_id)
+    batch_receipt_path = archive_internal_path(root, batch_receipt_relative)
+    if batch_receipt_path.exists():
+        blockers.append("batch edge receipt already exists.")
+
+    item_results: list[dict[str, Any]] = []
+    would_change: list[str] = []
+    if not blockers:
+        for row in policy_writable_rows:
+            dry_result = zettel_edge_write(
+                root,
+                from_zettel=row.get("from_zettel"),
+                from_path=row.get("from_path"),
+                target_ref=str(row.get("target") or ""),
+                edge_type=str(row.get("edge_type") or ""),
+                visibility=str(row.get("visibility") or "private"),
+                dry_run=True,
+                approve=False,
+            )
+            if not dry_result.get("ok"):
+                blockers.extend(f"edges[{row.get('index')}]: {blocker}" for blocker in dry_result.get("blockers", []))
+            item_results.append(
+                {
+                    "index": row.get("index"),
+                    "candidate_id": row.get("candidate_id"),
+                    "policy_reason": row.get("policy_reason"),
+                    "write_status": dry_result.get("write_status"),
+                    "source": dry_result.get("source"),
+                    "target": dry_result.get("target"),
+                    "edge_type": dry_result.get("edge_type"),
+                    "visibility": dry_result.get("visibility"),
+                    "edge_id": dry_result.get("edge_id"),
+                    "receipt_path": dry_result.get("receipt_path"),
+                    "would_change": dry_result.get("would_change", []),
+                    "blockers": dry_result.get("blockers", []),
+                }
+            )
+            would_change.extend(str(item) for item in dry_result.get("would_change", []) if isinstance(item, str))
+        if policy_writable_rows:
+            would_change.append(batch_receipt_relative)
+        elif approve:
+            blockers.append("No policy-writable edges are available to approve.")
+
+    if blockers or dry_run:
+        return zettel_edge_batch_result(
+            archive_id=archive_id,
+            dry_run=bool(dry_run),
+            approve=bool(approve),
+            reviewed_by=reviewed_by,
+            policy=policy,
+            batch_id=batch_id,
+            receipt_path=batch_receipt_relative,
+            item_results=item_results,
+            review_queue=review_queue,
+            would_change=would_change,
+            files_written=[],
+            blockers=blockers,
+            warnings=warnings,
+        )
+
+    assert reviewed_by is not None
+    snapshots: dict[str, str | None] = {}
+    for item in item_results:
+        source = item.get("source") if isinstance(item.get("source"), dict) else {}
+        for relative in (source.get("path"), item.get("receipt_path"), batch_receipt_relative):
+            if not isinstance(relative, str) or not relative:
+                continue
+            if relative in snapshots:
+                continue
+            path = archive_internal_path(root, relative)
+            snapshots[relative] = path.read_text(encoding="utf-8") if path.exists() else None
+
+    files_written: list[str] = []
+    written_results: list[dict[str, Any]] = []
+    try:
+        for row in policy_writable_rows:
+            write_result = zettel_edge_write(
+                root,
+                from_zettel=row.get("from_zettel"),
+                from_path=row.get("from_path"),
+                target_ref=str(row.get("target") or ""),
+                edge_type=str(row.get("edge_type") or ""),
+                visibility=str(row.get("visibility") or "private"),
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewed_by,
+            )
+            if not write_result.get("ok"):
+                raise ArchiveServiceError("; ".join(str(blocker) for blocker in write_result.get("blockers", [])) or "batch edge item write failed.")
+            written_results.append(
+                {
+                    "index": row.get("index"),
+                    "candidate_id": row.get("candidate_id"),
+                    "policy_reason": row.get("policy_reason"),
+                    "write_status": write_result.get("write_status"),
+                    "source": write_result.get("source"),
+                    "target": write_result.get("target"),
+                    "edge_type": write_result.get("edge_type"),
+                    "visibility": write_result.get("visibility"),
+                    "edge_id": write_result.get("edge_id"),
+                    "receipt_path": write_result.get("receipt_path"),
+                    "files_written": write_result.get("files_written", []),
+                    "blockers": [],
+                }
+            )
+            files_written.extend(str(item) for item in write_result.get("files_written", []) if isinstance(item, str))
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        batch_receipt = {
+            "schema_version": "wom-kit/zettel-edge-batch-receipt/v0.1",
+            "lifecycle_action": "zettel_edge_batch_write",
+            "receipt_kind": "zettel_edge_batch_write",
+            "created_at": now,
+            "archive_id": archive_id,
+            "batch_id": batch_id,
+            "policy": {
+                "policy_id": policy.get("policy_id"),
+                "policy_label": policy.get("policy_label"),
+                "auto_write_edge_types": policy.get("auto_write_edge_types", []),
+                "minimum_confidence": policy.get("minimum_confidence"),
+            },
+            "reviewed_by": reviewed_by,
+            "written_edge_count": len(written_results),
+            "review_queue_count": len(review_queue),
+            "edge_receipts": [item.get("receipt_path") for item in written_results],
+            "closed_actions": {
+                "provider_api_called": False,
+                "oauth_started": False,
+                "notion_connection_opened": False,
+                "real_source_export_files_read": False,
+                "comments_read": False,
+                "media_downloaded": False,
+                "candidate_records_written": False,
+                "object_manifest_updated": False,
+                "rollback_on_failure": True,
+            },
+        }
+        batch_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_new_file(batch_receipt_path, batch_receipt)
+        files_written.append(batch_receipt_relative)
+    except (ArchiveServiceError, OSError):
+        restore_zettel_edge_batch_snapshots(snapshots, root)
+        raise
+
+    return zettel_edge_batch_result(
+        archive_id=archive_id,
+        dry_run=False,
+        approve=True,
+        reviewed_by=reviewed_by,
+        policy=policy,
+        batch_id=batch_id,
+        receipt_path=batch_receipt_relative,
+        item_results=written_results,
+        review_queue=review_queue,
+        would_change=would_change,
+        files_written=files_written,
         blockers=[],
         warnings=warnings,
     )

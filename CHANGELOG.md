@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.99 - 2026-06-17
+
+- Added approval-gated CLI `archive zettel-edge-batch <archive-root>
+  --plan <json> --dry-run|--approve` with aliases `archive bulk-zettel-edge`
+  and `archive batch-zettel-edge`.
+- The batch writer reads a reviewed JSON policy plan, routes only policy-
+  matching high-confidence rows through the existing single-edge
+  `zettel-edge` preflight/write gate, and leaves ambiguous, low-confidence, or
+  policy-mismatched rows in `human_review_queue`.
+- Approved batches write individual `receipts/edges/*.zettel-edge.json`
+  receipts plus one `receipts/edges/batches/*.zettel-edge-batch.json` receipt,
+  and restore touched zettel/receipt files if a batch write fails partway.
+- Kept the feature CLI-only and bounded: it does not parse real exports, call
+  providers, start OAuth, open Notion, call an LLM, write candidate records,
+  update object manifests, expose an MCP write tool, or echo zettel body text,
+  zettel titles, provider URLs, local paths, credentials, or secrets.
+
 ## v0.3.98 - 2026-06-17
 
 - Added read-only `archive notion-objet-link-rewrite-plan <archive-root>

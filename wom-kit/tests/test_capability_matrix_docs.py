@@ -45,6 +45,7 @@ CONNECTION_EVIDENCE_PARSER_CONTRACT_PATH = KIT_ROOT / "docs" / "connection-evide
 CONNECTION_EVIDENCE_FIXTURE_PARSER_PATH = KIT_ROOT / "docs" / "connection-evidence-fixture-parser.md"
 CONNECTION_EDGE_INTELLIGENCE_PATH = KIT_ROOT / "docs" / "connection-edge-intelligence-plan.md"
 ZETTEL_EDGE_WRITE_PATH = KIT_ROOT / "docs" / "zettel-edge-write.md"
+ZETTEL_EDGE_BATCH_PATH = KIT_ROOT / "docs" / "zettel-edge-batch.md"
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
 ZET_PROJECTION_PLAN_PATH = KIT_ROOT / "docs" / "zet-projection-plan-preview.md"
 IMAP_MAILBOX_SOURCE_PATH = KIT_ROOT / "docs" / "imap-mailbox-source.md"
@@ -729,8 +730,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         for phrase in (
             "Status: v0.3.87 read-only connection edge intelligence checkpoint",
-            "Status: v0.3.92 read-only connection edge review summary checkpoint",
+            "Status: v0.3.99 read-only connection edge review summary checkpoint",
             "archive connection-edge-intelligence-plan",
+            "archive zettel-edge-batch",
             "connection-edge-classification-plan",
             "source_mechanism",
             "relationship_meaning",
@@ -787,59 +789,85 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in release_text or phrase in changelog_text)
 
-    def test_zettel_edge_write_is_documented_as_approval_gated_single_edge_writer(self) -> None:
+    def test_zettel_edge_write_and_batch_are_documented_as_approval_gated_writers(self) -> None:
         text = ZETTEL_EDGE_WRITE_PATH.read_text(encoding="utf-8")
+        batch_text = ZETTEL_EDGE_BATCH_PATH.read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
-        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.82.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.99.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.82 approval-gated zettel edge write checkpoint",
+            "Status: v0.3.99 approval-gated zettel edge write checkpoint",
             "archive zettel-edge <archive-root>",
             "link-zettel-edge",
             "write-zettel-edge",
             "--approve",
             "--reviewed-by person:reviewer",
             "receipts/edges/*.zettel-edge.json",
-            "not a bulk connection importer",
+            "single-edge safety gate",
             "MCP does not expose a write tool",
             "echo zettel body text",
             "echo zettel titles",
+            "[Zettel Edge Batch](zettel-edge-batch.md)",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)
         for phrase in (
-            "Status: v0.3.87 connection edge intelligence checkpoint",
+            "Status: v0.3.99 approval-gated policy batch zettel edge write checkpoint",
+            "archive zettel-edge-batch <archive-root>",
+            "bulk-zettel-edge",
+            "batch-zettel-edge",
+            "human_review_queue",
+            "receipts/edges/batches/*.zettel-edge-batch.json",
+            "policy.auto_write_edge_types",
+            "policy.minimum_confidence",
+            "expose a matching MCP write tool",
+            "Relationship To Connection Intelligence",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, batch_text)
+        for phrase in (
+            "Status: v0.3.99 policy batch zettel edge write checkpoint",
             "Zettel edge write",
             "archive zettel-edge --from-zettel <zet> --target <zet-or-objet> --edge-type <type> --dry-run|--approve",
+            "archive zettel-edge-batch --plan <json> --dry-run|--approve",
             "receipts/edges/*.zettel-edge.json",
+            "receipts/edges/batches/*.zettel-edge-batch.json",
+            "human_review_queue",
             "MCP exposes no write tool",
-            "echoes no zettel body text",
+            "echo no zettel body text",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.87 pre-release",
+            "v0.3.99 pre-release",
             "[Zettel Edge Write](wom-kit/docs/zettel-edge-write.md)",
+            "[Zettel Edge Batch](wom-kit/docs/zettel-edge-batch.md)",
             "approval-gated single-edge zettel edge writes",
+            "approval-gated policy batch zettel edge writes",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
             "docs/zettel-edge-write.md",
+            "docs/zettel-edge-batch.md",
             "zettel-edge",
+            "zettel-edge-batch",
             "Preview or approve one typed edge",
+            "Preview or approve policy-gated typed edge batches",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, kit_readme_text)
         for phrase in (
             "[Zettel Edge Write](zettel-edge-write.md)",
-            "v0.3.82 - Zettel Edge Write",
+            "[Zettel Edge Batch](zettel-edge-batch.md)",
+            "v0.3.99 - Policy Batch Zettel Edge Write",
             "archive zettel-edge",
-            "no Notion call",
+            "archive zettel-edge-batch",
+            "MCP exposes no matching write tool",
         ):
             with self.subTest(phrase=phrase):
                 self.assertTrue(

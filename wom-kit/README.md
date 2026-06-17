@@ -91,6 +91,7 @@ docs/connection-evidence-parser-contract.md
 docs/connection-evidence-fixture-parser.md
 docs/connection-edge-intelligence-plan.md
 docs/zettel-edge-write.md
+docs/zettel-edge-batch.md
 docs/project-intake-session.md
 docs/project-intake-cookbook.md
 docs/derived-text-coverage-and-toolchain.md
@@ -219,6 +220,9 @@ connection-edge-intelligence-plan
 
 zettel-edge
   Preview or approve one typed edge from a source zet to one verified target zet or manifested objet. Dry-run previews first; approve requires --reviewed-by and writes only one source zettel frontmatter edge plus one receipts/edges/*.zettel-edge.json receipt. It is not a bulk connection importer, exposes no MCP write tool, calls no providers, reads no real exports, writes no candidate records, updates no object manifests, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
+
+zettel-edge-batch
+  Preview or approve policy-gated typed edge batches from a reviewed JSON plan. Dry-run validates policy-writable rows through the single-edge gate without writing. Approve requires --reviewed-by, writes only policy-matching edges, writes receipts/edges/*.zettel-edge.json plus one receipts/edges/batches/*.zettel-edge-batch.json receipt, and returns low-confidence or policy-mismatched rows in human_review_queue. It is not a real export parser, exposes no MCP write tool, calls no providers, reads no real exports, writes no candidate records, updates no object manifests, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
 
 imap-mailbox-plan
   Plan a Gmail, Naver, or generic IMAP mailbox source with safe account, username, mailbox, and credential refs. Dry-run only; opens no connection, logs into nothing, reads no headers/bodies/attachments, sends no mail, changes no flags, stores no secrets, and writes no files.
@@ -1013,7 +1017,9 @@ v0.3.96 adds a read-only archive-wide Notion objet link index for provider
 locator fingerprints. v0.3.97 adds read-only saved view recommendations from
 indexed navigation facets. v0.3.98 adds a read-only Notion objet link rewrite
 plan that validates one reviewed locator/object pair before any future approved
-rewrite or `embed` edge write.
+rewrite or `embed` edge write. v0.3.99 adds approval-gated policy batch zettel
+edge writes through `zettel-edge-batch`, while keeping real export parsing and
+MCP write tools closed.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

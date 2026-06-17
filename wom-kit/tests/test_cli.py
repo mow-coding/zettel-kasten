@@ -2443,6 +2443,204 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(object_result["target"]["verified"])
             self.assertEqual(object_result["target"]["manifest_path"], "objects/manifests/files.jsonl")
 
+    def test_zettel_edge_batch_policy_dry_run_and_approval_write_receipts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+            plan_path = Path(tmp) / "zettel-edge-batch.plan.json"
+            source_id = "zet_20240504_fake_lunch_thought"
+            material_target_id = "zet_20240505_fake_company_onboarding_insight"
+            derived_target_id = "zet_20260519_fake_family_memory"
+            review_target_id = "zet_20110228_fake_school_record"
+            plan = {
+                "schema": "wom-kit/zettel-edge-batch/v0.1",
+                "policy": {
+                    "policy_id": "policy:fixture-high-confidence-material-derived",
+                    "policy_label": "Fixture high confidence material and derived",
+                    "auto_write_edge_types": ["material", "derived"],
+                    "minimum_confidence": "high",
+                    "ambiguous_edges_to_review_queue": True,
+                },
+                "edges": [
+                    {
+                        "candidate_id": "candidate:fixture-material",
+                        "from_zettel": source_id,
+                        "target": material_target_id,
+                        "edge_type": "material",
+                        "visibility": "private",
+                        "confidence": "high",
+                        "review_status": "policy_candidate",
+                        "evidence_ref": "fixture:relation-row-1",
+                    },
+                    {
+                        "candidate_id": "candidate:fixture-derived",
+                        "from_zettel": source_id,
+                        "target": derived_target_id,
+                        "edge_type": "derived",
+                        "visibility": "private",
+                        "confidence": "0.96",
+                        "review_status": "policy_candidate",
+                        "evidence_ref": "fixture:relation-row-2",
+                    },
+                    {
+                        "candidate_id": "candidate:fixture-review",
+                        "from_zettel": source_id,
+                        "target": review_target_id,
+                        "edge_type": "material",
+                        "visibility": "private",
+                        "confidence": "medium",
+                        "review_status": "policy_candidate",
+                        "evidence_ref": "fixture:relation-row-3",
+                    },
+                ],
+            }
+            plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "zettel-edge-batch",
+                    str(archive_root),
+                    "--plan",
+                    str(plan_path),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            dry_result = json.loads(dry_output)
+            serialized_dry = json.dumps(dry_result, ensure_ascii=False)
+
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertTrue(dry_result["ok"])
+            self.assertEqual(dry_result["lifecycle_action"], "zettel_edge_batch_plan")
+            self.assertEqual(dry_result["write_status"], "would_write")
+            self.assertEqual(dry_result["summary"]["policy_writable_edge_count"], 2)
+            self.assertEqual(dry_result["summary"]["review_queue_count"], 1)
+            self.assertEqual(dry_result["summary"]["written_edge_count"], 0)
+            self.assertFalse(dry_result["summary"]["batch_receipt_written"])
+            self.assertEqual(dry_result["policy"]["minimum_confidence"], "high")
+            self.assertTrue(dry_result["current_capability"]["policy_batch_approval_implemented"])
+            self.assertTrue(dry_result["current_capability"]["bulk_edge_writer_implemented"])
+            self.assertTrue(dry_result["current_capability"]["uses_single_zettel_edge_gate_per_item"])
+            self.assertFalse(dry_result["current_capability"]["mcp_write_tool_implemented"])
+            self.assertFalse(dry_result["closed_actions"]["zettel_frontmatter_written"])
+            self.assertEqual(dry_result["closed_actions"]["individual_edge_receipts_written"], 0)
+            self.assertFalse(dry_result["closed_actions"]["batch_receipt_written"])
+            self.assertFalse(dry_result["privacy_guards"]["body_text_echoed"])
+            self.assertFalse(dry_result["privacy_guards"]["zettel_title_echoed"])
+            self.assertFalse(dry_result["privacy_guards"]["provider_urls_echoed"])
+            self.assertEqual(dry_result["files_written"], [])
+            self.assertTrue(dry_result["receipt_path"].startswith("receipts/edges/batches/"))
+            self.assertTrue(
+                any(
+                    item.startswith("zettels/zet_20240504_fake_lunch_thought.md")
+                    for item in dry_result["would_change"]
+                )
+            )
+            self.assertIn(dry_result["receipt_path"], dry_result["would_change"])
+            self.assertEqual(dry_result["human_review_queue"][0]["candidate_id"], "candidate:fixture-review")
+            self.assertEqual(dry_result["human_review_queue"][0]["policy_reason"], "confidence_below_policy_threshold")
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), serialized_dry)
+            self.assertNotIn("https://", serialized_dry)
+            self.assertNotIn("Fake thought while eating alone", serialized_dry)
+
+            missing_review_code, missing_review_output = self.run_cli(
+                [
+                    "zettel-edge-batch",
+                    str(archive_root),
+                    "--plan",
+                    str(plan_path),
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            missing_review = json.loads(missing_review_output)
+            self.assertEqual(missing_review_code, 1)
+            self.assertIn("requires --reviewed-by", "\n".join(missing_review["blockers"]))
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "zettel-edge-batch",
+                    str(archive_root),
+                    "--plan",
+                    str(plan_path),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:fixture-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            approve_result = json.loads(approve_output)
+            serialized_approve = json.dumps(approve_result, ensure_ascii=False)
+
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"])
+            self.assertEqual(approve_result["lifecycle_action"], "zettel_edge_batch_write")
+            self.assertEqual(approve_result["write_status"], "written")
+            self.assertEqual(approve_result["summary"]["policy_writable_edge_count"], 2)
+            self.assertEqual(approve_result["summary"]["review_queue_count"], 1)
+            self.assertEqual(approve_result["summary"]["written_edge_count"], 2)
+            self.assertTrue(approve_result["summary"]["batch_receipt_written"])
+            self.assertEqual(approve_result["reviewed_by"], "person:fixture-reviewer")
+            self.assertTrue(approve_result["closed_actions"]["zettel_frontmatter_written"])
+            self.assertEqual(approve_result["closed_actions"]["individual_edge_receipts_written"], 2)
+            self.assertTrue(approve_result["closed_actions"]["batch_receipt_written"])
+            self.assertIn("zettels/zet_20240504_fake_lunch_thought.md", approve_result["files_written"])
+            self.assertIn(approve_result["receipt_path"], approve_result["files_written"])
+            self.assertNotIn(str(archive_root.resolve()), serialized_approve)
+            self.assertNotIn("https://", serialized_approve)
+            self.assertNotIn("Fake thought while eating alone", serialized_approve)
+
+            source_path = archive_root / "zettels" / "zet_20240504_fake_lunch_thought.md"
+            source_frontmatter, _source_body = archive_services.split_zettel_text(source_path.read_text(encoding="utf-8"))
+            edge_pairs = {
+                (item.get("type"), item.get("target"))
+                for item in source_frontmatter["edges"]
+                if isinstance(item, dict)
+            }
+            self.assertIn(("material", material_target_id), edge_pairs)
+            self.assertIn(("derived", derived_target_id), edge_pairs)
+            self.assertNotIn(("material", review_target_id), edge_pairs)
+
+            for item in approve_result["policy_writable_edges"]:
+                self.assertEqual(item["write_status"], "written")
+                self.assertIn(item["receipt_path"], approve_result["files_written"])
+                item_receipt = archive_root / item["receipt_path"]
+                self.assertTrue(item_receipt.is_file())
+
+            batch_receipt_path = archive_root / approve_result["receipt_path"]
+            self.assertTrue(batch_receipt_path.is_file())
+            receipt_text = batch_receipt_path.read_text(encoding="utf-8")
+            batch_receipt = json.loads(receipt_text)
+            self.assertEqual(batch_receipt["schema_version"], "wom-kit/zettel-edge-batch-receipt/v0.1")
+            self.assertEqual(batch_receipt["lifecycle_action"], "zettel_edge_batch_write")
+            self.assertEqual(batch_receipt["written_edge_count"], 2)
+            self.assertEqual(batch_receipt["review_queue_count"], 1)
+            self.assertEqual(len(batch_receipt["edge_receipts"]), 2)
+            self.assertFalse(batch_receipt["closed_actions"]["provider_api_called"])
+            self.assertFalse(batch_receipt["closed_actions"]["real_source_export_files_read"])
+            self.assertNotIn("Fake thought while eating alone", receipt_text)
+
+            duplicate_code, duplicate_output = self.run_cli(
+                [
+                    "zettel-edge-batch",
+                    str(archive_root),
+                    "--plan",
+                    str(plan_path),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:fixture-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            duplicate = json.loads(duplicate_output)
+            self.assertEqual(duplicate_code, 1)
+            self.assertIn("batch edge receipt already exists", "\n".join(duplicate["blockers"]))
+
     def test_imap_mailbox_plan_is_read_only_and_blocks_secret_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

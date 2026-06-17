@@ -1,6 +1,6 @@
 # Connection Edge Intelligence Plan
 
-Status: v0.3.92 read-only connection edge review summary checkpoint
+Status: v0.3.99 read-only connection edge review summary checkpoint
 Original checkpoint: Status: v0.3.87 read-only connection edge intelligence checkpoint
 
 `archive connection-edge-intelligence-plan` is a read-only review layer on top
@@ -34,6 +34,7 @@ The earlier connection commands cover the mechanical path:
 
 ```text
 connection-import-plan -> connection-evidence-parse-fixture -> zettel-edge
+connection-import-plan -> connection-evidence-parse-fixture -> zettel-edge-batch
 ```
 
 This command adds the review intelligence layer between a candidate and a
@@ -41,6 +42,7 @@ durable edge write:
 
 ```text
 candidate edge -> meaning/mechanism review -> human approval -> zettel-edge
+candidate edge set -> reviewed policy -> zettel-edge-batch
 ```
 
 It keeps two axes separate:
@@ -62,11 +64,15 @@ The output separates ambiguity from review need:
   review flags such as provisional relationship meanings.
 - `review_summary.durable_write_human_approval_required_count` counts every
   candidate that would still need human approval before a durable edge write.
-- `review_summary.auto_writable_count` remains `0`.
+- `review_summary.auto_writable_count` remains `0` for this read-only command.
 
 This means `ambiguous_count: 0` does not mean the edge candidates are ready to
 write. For example, a clean Notion relation can still require review because
 it may fit a richer provisional meaning such as `responds_to` or `fulfills`.
+
+For high-confidence sets, a human can now prepare a separate reviewed JSON plan
+for `archive zettel-edge-batch`. That later command writes only candidates
+matching the approved policy and returns the rest in `human_review_queue`.
 
 ## Current Active Meanings
 
