@@ -1797,6 +1797,31 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "notion_objet_import_clue_audit",
+        "description": "Audit imported Notion zettels for preserved material clues after provider locator omission. Read-only; never reads zettel bodies, echoes provider URLs, page titles, frontmatter values, absolute paths, object bytes, or writes files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "source_maps": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Archive-relative source-map JSON/JSONL/YAML files. Defaults to source-maps/*.jsonl.",
+                },
+                "ledgers": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Archive-relative download/retrieval ledger JSON/JSONL/YAML files.",
+                },
+                "dry_run": {"type": "boolean", "default": True},
+                "max_rows": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 10000},
+                "max_zettels": {"type": "integer", "minimum": 1, "maximum": 5000, "default": 500},
+                "max_candidates": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 1000},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "notion_objet_link_rewrite_plan",
         "description": "Validate one reviewed Notion locator to objet conversion plan before any approval-gated rewrite or embed edge write. Read-only; never echoes provider URLs, body text, page titles, absolute paths, object bytes, or writes files.",
         "inputSchema": {
@@ -2646,6 +2671,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_notion_objet_link_index(arguments)
     if name == "notion_objet_source_map_link_plan":
         return tool_notion_objet_source_map_link_plan(arguments)
+    if name == "notion_objet_import_clue_audit":
+        return tool_notion_objet_import_clue_audit(arguments)
     if name == "notion_objet_link_rewrite_plan":
         return tool_notion_objet_link_rewrite_plan(arguments)
     if name == "block_header_check":
@@ -4189,6 +4216,36 @@ def tool_notion_objet_source_map_link_plan(arguments: dict[str, Any]) -> dict[st
         "notion_objet_source_map_link_plan: "
         f"{state}, {summary.get('candidate_count', 0)} candidate(s), "
         f"{summary.get('source_map_record_count', 0)} source-map row(s).",
+        result,
+    )
+
+
+def tool_notion_objet_import_clue_audit(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("notion_objet_import_clue_audit is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    source_maps = arguments.get("source_maps")
+    ledgers = arguments.get("ledgers")
+    if source_maps is not None and not isinstance(source_maps, list):
+        raise ToolError("source_maps must be an array when provided.")
+    if ledgers is not None and not isinstance(ledgers, list):
+        raise ToolError("ledgers must be an array when provided.")
+    result = call_service(
+        archive_services.notion_objet_import_clue_audit,
+        archive_root,
+        source_maps=[str(item) for item in source_maps or []],
+        ledgers=[str(item) for item in ledgers or []],
+        dry_run=True,
+        max_rows=int(arguments.get("max_rows", 10000)),
+        max_zettels=int(arguments.get("max_zettels", 500)),
+        max_candidates=int(arguments.get("max_candidates", 1000)),
+    )
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    state = "passed" if result.get("ok") else "blocked"
+    return tool_success_result(
+        "notion_objet_import_clue_audit: "
+        f"{state}, {summary.get('notion_import_zettel_count', 0)} Notion import zettel(s), "
+        f"{summary.get('missing_material_clue_after_locator_omission_count', 0)} missing material clue(s).",
         result,
     )
 

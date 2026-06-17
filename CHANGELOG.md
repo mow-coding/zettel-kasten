@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.104 - 2026-06-17
+
+- Added read-only CLI `archive notion-objet-import-clue-audit <archive-root>
+  --source-map <archive-relative-jsonl> --ledger <archive-relative-jsonl>
+  --dry-run` and MCP `notion_objet_import_clue_audit`.
+- The audit checks imported Notion zettels whose provider locators may have
+  been omitted from bodies, then classifies each zettel as having a preserved
+  object ref/edge, a source-map join candidate, a missing material clue after
+  locator omission, or no omission signal.
+- Updated `ai-response-concept-guide` routing so AI runtimes can audit import
+  clue preservation before deciding between source-map linking and older
+  body-locator tools.
+- Kept the feature local and bounded: no zettel body reads, provider calls,
+  object byte reads, body rewrites, edge writes, receipt writes, provider URL
+  echoes, page title echoes, frontmatter value echoes, account ids, emails,
+  tokens, or secret values were added.
+
 ## v0.3.103 - 2026-06-17
 
 - Added read-only CLI `archive notion-objet-source-map-link-plan <archive-root>

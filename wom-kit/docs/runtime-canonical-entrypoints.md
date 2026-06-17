@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.103 read-only runtime canonical entrypoint and material-link routing checkpoint
+Status: v0.3.104 read-only runtime canonical entrypoint and material-clue routing checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -26,9 +26,10 @@ anything:
 3. Run `archive ai-response-concept-guide <archive-root> --topic all --dry-run`
    when the human is asking what to do next.
 4. For Notion material links, choose the route from that guide:
-   `notion-objet-source-map-link-plan` when provider locators were already
-   omitted from zettel bodies, or `notion-objet-link-index` /
-   `notion-objet-link-plan` when body locators still exist.
+   `notion-objet-import-clue-audit` to check omitted-locator imports,
+   `notion-objet-source-map-link-plan` when source maps or ledgers can recover
+   a candidate, or `notion-objet-link-index` / `notion-objet-link-plan` when
+   body locators still exist.
 
 This order keeps archive identity, local instructions, beginner-facing wording,
 and material-link safety gates aligned before any later approval-gated write.
@@ -76,7 +77,7 @@ Use `runtime-context --no-redact-local-paths` only for trusted local debugging.
 
 ## Not Implemented
 
-v0.3.103 does not enforce migration, auto-upgrade project folders, scan file
+v0.3.104 does not enforce migration, auto-upgrade project folders, scan file
 contents, choose between competing exports, synchronize providers, write
 material links, or run IMAP adapters. It only gives AI runtimes a deterministic
 archive-relative map of what to consult first.

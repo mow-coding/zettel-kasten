@@ -98,14 +98,17 @@ Use this order:
 1. `runtime-context` to confirm the archive and entrypoints.
 2. `ai-response-concept-guide` when an AI runtime needs the current routing
    vocabulary.
-3. `notion-objet-source-map-link-plan` when provider locators are already absent
+3. `notion-objet-import-clue-audit` to see which imported Notion zettels already
+   have a preserved material clue, have a recoverable source-map clue, or are
+   missing the clue after locator omission.
+4. `notion-objet-source-map-link-plan` when provider locators are already absent
    from zettel bodies but source maps or ledgers still carry page/file/object
    join evidence.
-4. `notion-objet-link-index` and `notion-objet-link-plan` only when imported
+5. `notion-objet-link-index` and `notion-objet-link-plan` only when imported
    zettels still contain provider locators.
-5. `notion-objet-link-rewrite-plan` and `notion-objet-link-convert` for the
+6. `notion-objet-link-rewrite-plan` and `notion-objet-link-convert` for the
    older body-locator review path.
-6. `zettel-objet-links` after reviewed object refs or embed edges exist.
+7. `zettel-objet-links` after reviewed object refs or embed edges exist.
 
 ## Import-Time Contract
 

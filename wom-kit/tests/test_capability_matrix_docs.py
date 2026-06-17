@@ -77,6 +77,7 @@ NOTION_OBJET_LINK_INDEX_PATH = KIT_ROOT / "docs" / "notion-objet-link-index.md"
 NOTION_OBJET_LINK_REWRITE_PLAN_PATH = KIT_ROOT / "docs" / "notion-objet-link-rewrite-plan.md"
 NOTION_OBJET_LINK_CONVERT_PATH = KIT_ROOT / "docs" / "notion-objet-link-convert.md"
 NOTION_OBJET_MANIFEST_LOCATOR_LABEL_PATH = KIT_ROOT / "docs" / "notion-objet-manifest-locator-label.md"
+NOTION_OBJET_IMPORT_CLUE_AUDIT_PATH = KIT_ROOT / "docs" / "notion-objet-import-clue-audit.md"
 NOTION_OBJET_SOURCE_MAP_LINK_PLAN_PATH = KIT_ROOT / "docs" / "notion-objet-source-map-link-plan.md"
 VIEW_HEALTH_PATH = KIT_ROOT / "docs" / "view-health.md"
 VIEW_RECOMMENDATION_PLAN_PATH = KIT_ROOT / "docs" / "view-recommendation-plan.md"
@@ -314,13 +315,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.58.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.103 read-only runtime canonical entrypoint and material-link routing checkpoint",
+            "Status: v0.3.104 read-only runtime canonical entrypoint and material-clue routing checkpoint",
             "archive runtime-context <archive-root> --format json",
             "canonical_entrypoints",
             "AI Runtime Order",
             "archive.yml",
             "AGENTS.md",
             "archive ai-response-concept-guide <archive-root> --topic all --dry-run",
+            "notion-objet-import-clue-audit",
             "notion-objet-source-map-link-plan",
             "notion-objet-link-index",
             "source-bindings.yml",
@@ -859,7 +861,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.102 pre-release",
+            "v0.3.104 pre-release",
             "[Zettel Edge Write](wom-kit/docs/zettel-edge-write.md)",
             "[Zettel Edge Batch](wom-kit/docs/zettel-edge-batch.md)",
             "approval-gated single-edge zettel edge writes",
@@ -1005,7 +1007,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
 
         for phrase in (
-            "Status: v0.3.103 read-only concept, operational terminology, and material-link routing checkpoint",
+            "Status: v0.3.104 read-only concept, operational terminology, and material-clue routing checkpoint",
             "archive ai-response-concept-guide <archive-root> --topic all --locale ko-KR --dry-run --format json",
             "ai-concept-guide",
             "wom-concept-guide",
@@ -1013,7 +1015,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "manifest vs zet",
             "objet -> derived text -> zet",
             "operational terminology translation layer",
-            "material-link routing after body locator omission",
+            "material-clue routing after body locator omission",
             "derived_from",
             "supersedes",
             "WOM identifies source objets by content fingerprint",
@@ -1024,11 +1026,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Do not say:",
             "The manifest proves the remote file is definitely online.",
             "The AI must not say:",
+            "notion-objet-import-clue-audit",
             "notion-objet-source-map-link-plan",
             "notion-objet-link-index",
             "Upload/sync bytes: future work unless a later release explicitly adds",
             "[Source Object Storage Policy](source-object-storage-policy.md)",
             "[Text Provenance Hierarchy](text-provenance-hierarchy.md)",
+            "[Notion Objet Import Clue Audit](notion-objet-import-clue-audit.md)",
             "[Notion Objet Source Map Link Plan](notion-objet-source-map-link-plan.md)",
         ):
             with self.subTest(phrase=phrase):
@@ -1040,6 +1044,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "operational terminology translation layer",
             "`read-only preview`",
             "CLI `archive ai-response-concept-guide --topic all --locale ko-KR --dry-run`",
+            "`notion-objet-import-clue-audit`",
             "`notion-objet-source-map-link-plan`",
             "writes nothing, adds no MCP tool, calls no providers",
         ):
@@ -1151,6 +1156,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         notion_rewrite_text = NOTION_OBJET_LINK_REWRITE_PLAN_PATH.read_text(encoding="utf-8")
         notion_convert_text = NOTION_OBJET_LINK_CONVERT_PATH.read_text(encoding="utf-8")
         notion_label_text = NOTION_OBJET_MANIFEST_LOCATOR_LABEL_PATH.read_text(encoding="utf-8")
+        notion_import_audit_text = NOTION_OBJET_IMPORT_CLUE_AUDIT_PATH.read_text(encoding="utf-8")
         notion_source_map_text = NOTION_OBJET_SOURCE_MAP_LINK_PLAN_PATH.read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
@@ -1253,6 +1259,21 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, notion_label_text)
         for phrase in (
+            "Status: v0.3.104 read-only import material-clue audit",
+            "archive notion-objet-import-clue-audit",
+            "notion_objet_import_clue_audit",
+            "preserved_object_ref_or_edge",
+            "source_map_join_available",
+            "missing_material_clue_after_locator_omission",
+            "no_omission_signal_or_body_locator_path_needed",
+            "reads no zettel body text",
+            "provider URLs",
+            "frontmatter values",
+            "source_locator_omitted_count",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, notion_import_audit_text)
+        for phrase in (
             "Status: v0.3.103 read-only source-map material-link planner",
             "archive notion-objet-source-map-link-plan",
             "notion_objet_source_map_link_plan",
@@ -1279,6 +1300,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "MCP `notion_objet_link_plan`",
             "archive notion-objet-link-index <archive-root> --dry-run",
             "MCP `notion_objet_link_index`",
+            "Notion objet import material-clue audit",
+            "archive notion-objet-import-clue-audit <archive-root> --source-map <archive-relative-jsonl> --ledger <archive-relative-jsonl> --dry-run",
+            "MCP `notion_objet_import_clue_audit`",
+            "missing_material_clue_after_locator_omission",
             "Notion objet source-map material bridge",
             "archive notion-objet-source-map-link-plan <archive-root> --source-map <archive-relative-jsonl> --ledger <archive-relative-jsonl> --dry-run",
             "MCP `notion_objet_source_map_link_plan`",
@@ -1303,11 +1328,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "[Zettel Objet Links](wom-kit/docs/zettel-objet-links.md)",
             "[Notion Objet Link Plan](wom-kit/docs/notion-objet-link-plan.md)",
             "[Notion Objet Link Index](wom-kit/docs/notion-objet-link-index.md)",
+            "[Notion Objet Import Clue Audit](wom-kit/docs/notion-objet-import-clue-audit.md)",
             "[Notion Objet Source Map Link Plan](wom-kit/docs/notion-objet-source-map-link-plan.md)",
             "[Notion Objet Link Rewrite Plan](wom-kit/docs/notion-objet-link-rewrite-plan.md)",
             "[Notion Objet Link Convert](wom-kit/docs/notion-objet-link-convert.md)",
             "[Notion Objet Manifest Locator Label](wom-kit/docs/notion-objet-manifest-locator-label.md)",
             "zettel objet link previews",
+            "import material-clue auditing",
             "source-map/ledger based Notion material-link planning",
             "approval-gated Notion objet manifest locator fingerprint labels",
             "approval-gated Notion locator conversion to reviewed `embed` edges",
@@ -1317,6 +1344,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("[Zettel Objet Links](zettel-objet-links.md)", public_map_text)
         self.assertIn("[Notion Objet Link Plan](notion-objet-link-plan.md)", public_map_text)
         self.assertIn("[Notion Objet Link Index](notion-objet-link-index.md)", public_map_text)
+        self.assertIn("[Notion Objet Import Clue Audit](notion-objet-import-clue-audit.md)", public_map_text)
+        self.assertIn("[Notion Objet Import Clue Audit](notion-objet-import-clue-audit.md)", public_map_ko_text)
         self.assertIn("[Notion Objet Source Map Link Plan](notion-objet-source-map-link-plan.md)", public_map_text)
         self.assertIn("[Notion Objet Source Map Link Plan](notion-objet-source-map-link-plan.md)", public_map_ko_text)
         self.assertIn("[Notion Objet Link Rewrite Plan](notion-objet-link-rewrite-plan.md)", public_map_text)

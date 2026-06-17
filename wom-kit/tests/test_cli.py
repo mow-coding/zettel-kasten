@@ -5932,6 +5932,7 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertTrue(any("derive-text-coverage" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-objet-source-map-link-plan" in route["command"] for route in result["safe_routing"]))
+            self.assertTrue(any("notion-objet-import-clue-audit" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-objet-link-index" in route["command"] for route in result["safe_routing"]))
             self.assertFalse(result["closed_actions"]["source_bytes_read"])
             self.assertFalse(result["closed_actions"]["provider_api_called"])
@@ -5943,6 +5944,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["current_capability"]["operational_term_translation_available"])
             self.assertTrue(result["current_capability"]["locale_aware_korean_available"])
             self.assertTrue(result["current_capability"]["source_map_material_link_routing_available"])
+            self.assertTrue(result["current_capability"]["notion_import_material_clue_audit_available"])
             self.assertFalse(result["current_capability"]["object_upload_adapter_implemented"])
             self.assertEqual(result["would_change"], [])
             self.assertNotIn("C:\\", serialized)
@@ -9000,6 +9002,148 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
             no_dry_code, no_dry_output = self.run_cli(["notion-objet-source-map-link-plan", str(archive_root)])
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+
+    def test_notion_objet_import_clue_audit_flags_omitted_locators_without_material_clue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            source_map_path = archive_root / "source-maps" / "notion-import-clues.jsonl"
+            ledger_path = archive_root / "receipts" / "import" / "notion-import-clues-ledger.jsonl"
+            source_map_path.parent.mkdir(parents=True, exist_ok=True)
+            ledger_path.parent.mkdir(parents=True, exist_ok=True)
+
+            object_digest = "c" * 64
+            object_id = f"sha256:{object_digest}"
+            page_id = "audit-private-page"
+            private_download_name = "private/audit-material.pdf"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "object_id": object_id,
+                        "sha256": object_digest,
+                        "logical_key": f"objects/external/prehashed/notion_source_export/{object_digest[:2]}/{object_digest}",
+                        "locations": [{"provider": "external_prehashed", "store_kind": "notion_source_export"}],
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            source_map_path.write_text(
+                json.dumps({"external_id": page_id, "download_path": private_download_name, "title": "Audit Private Title"}, sort_keys=True)
+                + "\n",
+                encoding="utf-8",
+            )
+            ledger_path.write_text(
+                json.dumps({"key": private_download_name, "sha256": object_digest, "name": "Audit Private Attachment"}, sort_keys=True)
+                + "\n",
+                encoding="utf-8",
+            )
+            (archive_root / "inbox" / "zet_notion_preserved_clue.md").write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_preserved_clue",
+                        "status: draft",
+                        "external_import:",
+                        "  source_system: notion",
+                        "  source_locator_omitted_count: 1",
+                        "source_refs:",
+                        "  - type: object_id",
+                        f"    value: {object_id}",
+                        "---",
+                        "",
+                        "Private preserved body must not echo.",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (archive_root / "inbox" / "zet_notion_source_map_clue.md").write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_source_map_clue",
+                        "status: draft",
+                        "external_import:",
+                        "  source_system: notion",
+                        f"  external_id: {page_id}",
+                        "  source_locator_omitted_count: 1",
+                        "---",
+                        "",
+                        "Private source-map body must not echo.",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (archive_root / "inbox" / "zet_notion_missing_clue.md").write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_missing_clue",
+                        "status: draft",
+                        "external_import:",
+                        "  source_system: notion",
+                        "  external_id: audit-private-missing-page",
+                        "  source_locator_omitted_count: 2",
+                        "---",
+                        "",
+                        "Private missing body must not echo.",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "notion-objet-import-clue-audit",
+                    str(archive_root),
+                    "--source-map",
+                    "source-maps/notion-import-clues.jsonl",
+                    "--ledger",
+                    "receipts/import/notion-import-clues-ledger.jsonl",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "notion_objet_import_clue_audit")
+            self.assertEqual(result["summary"]["notion_import_zettel_count"], 3)
+            self.assertEqual(result["summary"]["preserved_object_ref_or_edge_count"], 1)
+            self.assertEqual(result["summary"]["source_map_join_available_count"], 1)
+            self.assertEqual(result["summary"]["missing_material_clue_after_locator_omission_count"], 1)
+            states = {item["zettel"]["id"]: item["material_clue_state"] for item in result["zettels"]}
+            self.assertEqual(states["zet_notion_preserved_clue"], "preserved_object_ref_or_edge")
+            self.assertEqual(states["zet_notion_source_map_clue"], "source_map_join_available")
+            self.assertEqual(states["zet_notion_missing_clue"], "missing_material_clue_after_locator_omission")
+            self.assertFalse(result["privacy_guards"]["zettel_body_text_read"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["frontmatter_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            for forbidden in (
+                private_download_name,
+                "Audit Private Title",
+                "Audit Private Attachment",
+                "Private preserved body",
+                "Private source-map body",
+                "Private missing body",
+                str(archive_root),
+            ):
+                with self.subTest(forbidden=forbidden):
+                    self.assertNotIn(forbidden, serialized)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            no_dry_code, no_dry_output = self.run_cli(["notion-objet-import-clue-audit", str(archive_root)])
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
 

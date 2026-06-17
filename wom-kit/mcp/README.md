@@ -128,6 +128,9 @@ notion_objet_link_plan
 notion_objet_link_index
   Index Notion provider locator to manifested objet candidates across zettels while locators still exist. This is read-only and never echoes provider URLs, body text, frontmatter values, page titles, absolute paths, object bytes, or writes files.
 
+notion_objet_import_clue_audit
+  Audit imported Notion zettels for preserved material clues after provider locator omission. This is read-only and never reads zettel bodies, echoes provider URLs, provider locator text, page titles, frontmatter values, absolute paths, object bytes, or writes files.
+
 notion_objet_source_map_link_plan
   Plan zettel-to-objet material-link candidates from source maps and optional download/retrieval ledgers when imported zettel bodies no longer contain provider locators. This is read-only and never echoes provider URLs, provider locator text, page titles, zettel body text, frontmatter values, absolute paths, object bytes, or writes files.
 
@@ -282,7 +285,7 @@ ownership_transfer_check
 - `github_repository_setup_plan` is read-only and writes nothing. MCP exposes no GitHub apply/create/connect/push/sync tool.
 - `object_storage_setup_plan` is read-only and writes nothing. MCP exposes no object storage apply/create/connect/upload/sync tool.
 - `source_intake_plan` is read-only and writes nothing. MCP exposes no source intake apply, objet capture, object storage upload, source scan apply, provider API call, automatic draft creation, or mint tool.
-- `notion_objet_source_map_link_plan` is read-only and writes nothing. MCP exposes no source-map link apply/write, zettel-edge write, body rewrite, receipt write, provider call, object byte read, or full-auto material-link tool.
+- `notion_objet_import_clue_audit` and `notion_objet_source_map_link_plan` are read-only and write nothing. MCP exposes no import clue repair, source-map link apply/write, zettel-edge write, body rewrite, receipt write, provider call, object byte read, or full-auto material-link tool.
 - `block_header_check` is read-only and writes nothing. MCP exposes no block header apply, block mint, token, coin, NFT, staking, transport, relay, or provider apply tool.
 - `foreign_block_intake_check` is read-only and writes nothing. MCP exposes no foreign block apply, import, trust, attest, auto-accept, auto-import, transport, or full-auto tool.
 - `foreign_block_attestation_packet_check` is read-only and writes nothing. MCP exposes no foreign block attestation apply, receipt write, import, trust, attest, auto-accept, auto-import, transport, or full-auto tool.

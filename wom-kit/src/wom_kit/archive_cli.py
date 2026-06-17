@@ -4162,6 +4162,57 @@ def command_notion_objet_source_map_link_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_notion_objet_import_clue_audit(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("notion-objet-import-clue-audit is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.notion_objet_import_clue_audit(
+            Path(args.archive_root),
+            source_maps=args.source_map,
+            ledgers=args.ledger,
+            dry_run=True,
+            max_rows=args.max_rows,
+            max_zettels=args.max_zettels,
+            max_candidates=args.max_candidates,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print("Notion objet import clue audit:")
+        print(f"- Notion import zettels: {summary.get('notion_import_zettel_count', 0)}")
+        print(f"- preserved object refs/edges: {summary.get('preserved_object_ref_or_edge_count', 0)}")
+        print(f"- source-map join available: {summary.get('source_map_join_available_count', 0)}")
+        print(f"- missing after locator omission: {summary.get('missing_material_clue_after_locator_omission_count', 0)}")
+        for item in result.get("zettels", []):
+            if not isinstance(item, dict):
+                continue
+            zettel = item.get("zettel") if isinstance(item.get("zettel"), dict) else {}
+            print(
+                f"* {zettel.get('id') or zettel.get('path') or '-'}: "
+                f"{item.get('material_clue_state') or '-'}"
+            )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+        print("Writes: none")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_notion_objet_link_rewrite_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("notion-objet-link-rewrite-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -10436,6 +10487,28 @@ def build_parser() -> argparse.ArgumentParser:
     notion_objet_source_map_link_plan.add_argument("--max-candidates", type=int, default=200, help="Maximum candidate links to return.")
     notion_objet_source_map_link_plan.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     notion_objet_source_map_link_plan.set_defaults(func=command_notion_objet_source_map_link_plan)
+
+    notion_objet_import_clue_audit = subcommands.add_parser(
+        "notion-objet-import-clue-audit",
+        help="Audit imported Notion zettels for preserved material clues after provider locator omission.",
+    )
+    notion_objet_import_clue_audit.add_argument("archive_root", help="Archive root to inspect.")
+    notion_objet_import_clue_audit.add_argument(
+        "--source-map",
+        action="append",
+        help="Archive-relative source-map JSON/JSONL/YAML file. Defaults to source-maps/*.jsonl.",
+    )
+    notion_objet_import_clue_audit.add_argument(
+        "--ledger",
+        action="append",
+        help="Archive-relative download/retrieval ledger JSON/JSONL/YAML file with sha256/object_id metadata.",
+    )
+    notion_objet_import_clue_audit.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    notion_objet_import_clue_audit.add_argument("--max-rows", type=int, default=10000, help="Maximum source-map or ledger rows to read.")
+    notion_objet_import_clue_audit.add_argument("--max-zettels", type=int, default=500, help="Maximum imported zettels to report.")
+    notion_objet_import_clue_audit.add_argument("--max-candidates", type=int, default=1000, help="Maximum source-map candidates to consider.")
+    notion_objet_import_clue_audit.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    notion_objet_import_clue_audit.set_defaults(func=command_notion_objet_import_clue_audit)
 
     notion_objet_link_rewrite_plan = subcommands.add_parser(
         "notion-objet-link-rewrite-plan",
