@@ -25,8 +25,10 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.87 pre-release
+v0.3.88 pre-release
 ```
+
+Previous public baseline: v0.3.87 pre-release.
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
 
@@ -37,13 +39,13 @@ What exists today:
 - read-only WOM-kit version truth-source checks through `archive --version`, `archive version --format json`, parent project installed-version pin discovery from archive roots, and runtime-context version metadata,
 - runtime-context canonical entrypoint metadata so AI runtimes can see which archive-relative files/directories to treat as start-here and authoritative sources,
 - private archive lifecycle tools for doctor checks, draft creation, minting, delegation, receipts, search, and metadata review,
-- read-only preview layers for runtime context, profiles, source/objet intake, block headers, prompt boundaries, foreign block review, projection, shared update review/index, shared update route pointers, and ZET would-transport planning,
+- read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading, block headers with first-read summaries, prompt boundaries, foreign block review, projection, shared update review/index, shared update route pointers, and ZET would-transport planning,
 - read-only derived-text coverage/toolchain/doctor/agent-contract gates, manifest-scoped completeness signals, manifest-quality checks that block false complete claims when `tool_version` or required extraction metadata is missing, including existing derived-text records as a fallback textual signal for older prehashed manifests, non-echoed tool-hint paths for PATH-missing local extractors, plus approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
 - read-only `archive ai-response-concept-guide --dry-run` for beginner-facing AI explanation cards about sha256 object identity vs location, manifests vs zets, and the objet -> derived text -> zet layer split without overclaiming upload or availability,
 - approval-gated `.gitignore` repair for missing WOM-kit safe defaults,
 - human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
 - read-only beginner setup manual with KeePassXC first-vault field walkthroughs, KeePassXC CSV bulk migration import/merge guidance, and Cloudflare R2 bucket/API-token field walkthroughs with Korean/English label hints and S3 credential-pair guidance, connected accounts bridge with separate credential-catalog status, plus read-only credential reference planning, inventory, external store recommendation, vault onboarding planning, credential semantic extraction recipe, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, CLI-only KeePassXC write execution with non-secret execution receipts, adapter readiness planning, adapter manifest preview, and adapter audit receipt preview for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
-- read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces, plus text-first external export planning with explicit large-media trap detection before broad workspace/database downloads, read-only Notion connection import planning for typed-edge candidates with base connection edge vocabulary, a read-only connection evidence parser contract before real export parsing, a sanitized fixture parser that emits candidate edge previews without writes, read-only connection edge intelligence planning that separates relationship meaning from source mechanism and flags ambiguous/provisional candidates before human approval, approval-gated single-edge zettel edge writes for reviewed zet-to-zet or zet-to-objet links, manifest-aware object-storage recommendation matching with surfaced bucket names, exact next commands, Cloudflare R2 setup field guidance, adapter readiness planning, operation request packaging, upload execution-contract planning, presigned URL planning, approval-gated external upload evidence registration, and read-only upload evidence auditing before live provider adapters,
+- read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces, plus text-first external export planning with explicit large-media trap detection before broad workspace/database downloads, read-only Notion connection import planning for typed-edge candidates with base connection edge vocabulary, approval-gated link type migration for stale archive-local `types.yml`, a read-only connection evidence parser contract before real export parsing, a sanitized fixture parser that emits candidate edge previews without writes, read-only connection edge intelligence planning that separates relationship meaning from source mechanism and flags ambiguous/provisional candidates before human approval, approval-gated single-edge zettel edge writes for reviewed zet-to-zet or zet-to-objet links including safe `zet:notion:<id>` target resolution, manifest-aware object-storage recommendation matching with surfaced bucket names, exact next commands, Cloudflare R2 setup field guidance, adapter readiness planning, operation request packaging, upload execution-contract planning, presigned URL planning, approval-gated external upload evidence registration, and read-only upload evidence auditing before live provider adapters,
 - read-only IMAP mailbox source planning, operation request packaging, schema-validated adapter manifest previews, approval-gated local adapter manifest writes, adapter readiness checks, mailbox selection planning, adapter audit receipt previews, approval-gated local adapter audit receipt writes, adapter preflight checks, adapter execution-contract planning, a first approval-gated local IMAP header metadata scan for Gmail, Naver, and generic IMAP account refs, an offline audit checkpoint for those header scan execution receipts, read-only material selection, capture request, capture execution-contract planning, and material capture approval audits, approval-gated non-secret material selection records, and approval-gated material capture approval receipts before future body/attachment/derived-text work,
 - documented Notion page snapshot and `store-ref` boundaries for page/block JSON exports,
 - read-only objet reference resolution, presigned URL planning, and zettel objet link previews for mapping `sha256:<hex>` refs to safe local/external candidates without creating provider URLs,
@@ -280,6 +282,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.88
 v0.3.87
 v0.3.86
 v0.3.85

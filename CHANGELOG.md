@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.88 - 2026-06-17
+
+- Added overview-first zet reading through `archive read-zettel --section
+  overview`, returning a cheap first-read card with gist, facets, tie counts,
+  and edge previews while omitting the full body and full frontmatter details.
+- Added `first_read` to `archive block-header --dry-run` output so AI runtimes
+  can inspect a zet's short meaning signal and tie summary before reading the
+  full body. The first-read card stays outside `header_preview`, so existing
+  header hash boundaries are not redefined.
+- Added approval-gated `archive migrate --target link-types-v0.3` to append
+  missing recommended connection edge vocabulary from the base
+  `zettel-kasten/types.yml` into stale archive-local `types.yml` files.
+- Extended `archive zettel-edge` target resolution so safe external refs such
+  as `zet:notion:ZET637` can resolve to archive-local zet ids such as
+  `zet_notion_db3_ZET0637` before the edge preview/write.
+- Hardened mint and draft safety checks so plain `https://` provider URLs in
+  zet bodies, including Notion page mentions, block `object_id_only` even when
+  legacy frontmatter checklist values claimed the item was already passed.
+- Kept the new paths local and privacy-bounded: they call no providers, start
+  no OAuth, read no source exports, read no object bytes, write no bulk edge
+  candidates, expose no provider URLs, and do not implement Notion
+  embed-to-objet sha256 conversion yet.
+
 ## v0.3.87 - 2026-06-17
 
 - Added read-only CLI `archive connection-edge-intelligence-plan

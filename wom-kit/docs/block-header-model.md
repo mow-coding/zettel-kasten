@@ -34,6 +34,7 @@ archive block-header <archive-root> --zettel-id <id> --dry-run --format json
 
 The preview derives:
 
+- `first_read` overview card,
 - `zet_body_sha256`,
 - `header_preview`,
 - `header_sha256`,
@@ -50,6 +51,11 @@ The preview derives:
 - Referenced objet/source files are never opened or hashed by this command.
 
 The header preview is sanitized before hashing. Local paths, private provider URLs, secret-like values, and other unsafe references are replaced with `<redacted-reference>`. This means `header_sha256` is a commitment to the public/shareable projection of the header, not a tamper-evident hash of the raw private frontmatter. Two zets that differ only in a redacted private field can intentionally produce the same `header_sha256`.
+
+`first_read` is intentionally outside `header_preview`. It is a cheap local
+navigation card for AI runtimes: gist, facets, tie counts, and a short safe
+edge preview before reading the whole zet body. It does not redefine the
+header hash boundary.
 
 `block_hash_preview` has the same boundary: it previews the identity of the shareable block projection. It should not be treated as a raw private archive integrity hash.
 

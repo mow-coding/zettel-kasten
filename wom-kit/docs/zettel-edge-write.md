@@ -1,6 +1,7 @@
 # Zettel Edge Write
 
-Status: v0.3.82 approval-gated zettel edge write checkpoint
+Status: v0.3.88 approval-gated zettel edge write checkpoint
+Original checkpoint: Status: v0.3.82 approval-gated zettel edge write checkpoint
 
 `archive zettel-edge` is the first durable typed-edge writer for WOM-kit. It
 writes exactly one reviewed edge from one source zet to one existing target zet
@@ -56,12 +57,17 @@ The target must already exist as one of:
 
 ```text
 zet_<id>
+zet:notion:<safe-import-id>
 sha256:<64 lowercase hex characters>
 objet:sha256:<64 lowercase hex characters>
 ```
 
-`zet_<id>` targets are resolved against the archive zettels and inbox. Object
-targets are resolved against `objects/manifests/files.jsonl`.
+`zet_<id>` targets are resolved against the archive zettels and inbox.
+`zet:notion:<safe-import-id>` is a local resolver alias for already-imported
+Notion zets, such as resolving `zet:notion:ZET637` to
+`zet_notion_db3_ZET0637` when exactly one archive-local zet matches. It does not
+open Notion or read an export. Object targets are resolved against
+`objects/manifests/files.jsonl`.
 
 `--edge-type` must already be defined in `zettel-kasten/types.yml`.
 
@@ -109,4 +115,4 @@ This command does not:
 - echo page titles, comment bodies, account ids, emails, tokens, or secret
   values.
 
-MCP does not expose a write tool for this surface in v0.3.82.
+MCP does not expose a write tool for this surface in v0.3.88.

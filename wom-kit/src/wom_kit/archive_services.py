@@ -1652,11 +1652,17 @@ REQUIRED_ZETTEL_FIELDS = [
     "visibility",
 ]
 FRONTMATTER_V03_TARGET = "frontmatter-v0.3"
+LINK_TYPES_V03_TARGET = "link-types-v0.3"
 FRONTMATTER_V03_MIGRATION_COMMAND = (
     "archive migrate <archive-root> --target frontmatter-v0.3 --dry-run"
 )
 FRONTMATTER_V03_LEGACY_REF_TYPE = "legacy_provenance_source"
 FRONTMATTER_V03_LEGACY_REF_ROLE = "legacy_provenance_source"
+ZETTEL_READ_SECTIONS = {"overview", "body", "details", "all"}
+ZETTEL_OVERVIEW_GIST_CHAR_LIMIT = 360
+ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("gist", "summary", "abstract", "description", "overview")
+ZETTEL_EDGE_EXTERNAL_REF_RE = re.compile(r"^zet:(?P<source>[A-Za-z0-9_-]+):(?P<external_id>[A-Za-z0-9_-]+)$")
+MACHINE_ENFORCED_CHECKLIST_ITEMS = {"object_id_only", "allowed_edges"}
 
 
 class ArchiveServiceError(Exception):
@@ -1774,15 +1780,186 @@ def zettel_summary(path: Path, archive_root: Path, expected_status: str) -> dict
     }
 
 
+def compact_zettel_overview_text(value: str, *, max_chars: int = ZETTEL_OVERVIEW_GIST_CHAR_LIMIT) -> str:
+    text = re.sub(r"\s+", " ", value).strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3].rstrip() + "..."
+
+
+def safe_zettel_overview_string(value: Any, warnings: list[str], field_path: str) -> str | None:
+    if value is None:
+        return None
+    text = compact_zettel_overview_text(str(value))
+    if not text:
+        return None
+    if header_string_is_private_or_unsafe(text) or source_intake_has_provider_url(text) or source_intake_secret_like(text):
+        warnings.append(f"Redacted private or unsafe first-read value in {field_path}.")
+        return None
+    return text
+
+
+def markdown_body_overview_candidates(body: str) -> list[str]:
+    candidates: list[str] = []
+    in_fence = False
+    current: list[str] = []
+    for raw_line in normalize_text_for_block_hash(body).splitlines():
+        stripped = raw_line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if not stripped:
+            if current:
+                candidates.append(" ".join(current))
+                current = []
+            continue
+        if stripped.startswith("#"):
+            continue
+        if stripped.startswith(("|", ">", "![", "<")):
+            continue
+        cleaned = re.sub(r"^\s*[-*+]\s+", "", stripped)
+        cleaned = re.sub(r"^\s*\d+[.)]\s+", "", cleaned)
+        cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
+        cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cleaned)
+        if cleaned:
+            current.append(cleaned)
+    if current:
+        candidates.append(" ".join(current))
+    return candidates
+
+
+def zettel_gist(frontmatter: dict[str, Any], body: str, warnings: list[str]) -> tuple[str | None, str]:
+    for field in ZETTEL_OVERVIEW_FRONTMATTER_FIELDS:
+        value = frontmatter.get(field)
+        if isinstance(value, str):
+            gist = safe_zettel_overview_string(value, warnings, f"$.frontmatter.{field}")
+            if gist:
+                return gist, f"frontmatter.{field}"
+    for paragraph in markdown_body_overview_candidates(body):
+        gist = safe_zettel_overview_string(paragraph, warnings, "$.body")
+        if gist:
+            return gist, "body.first_safe_paragraph"
+    return None, "unavailable"
+
+
+def safe_overview_facets(frontmatter: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
+    facets = frontmatter.get("facets")
+    if not isinstance(facets, dict):
+        return {}
+    sanitized = sanitize_block_header_value(facets, warnings, "$.first_read.facets")
+    return sanitized if isinstance(sanitized, dict) else {}
+
+
+def safe_overview_edge_preview(edge: dict[str, Any], warnings: list[str], index: int) -> dict[str, Any]:
+    edge_type = safe_zettel_overview_string(edge.get("type"), warnings, f"$.first_read.edges_preview[{index}].type")
+    target = safe_zettel_overview_string(edge.get("target") or edge.get("zettel_id") or edge.get("target_id"), warnings, f"$.first_read.edges_preview[{index}].target")
+    if target is None and any(edge.get(key) for key in ("target", "zettel_id", "target_id")):
+        target = "<redacted-reference>"
+    target_kind = None
+    if isinstance(target, str):
+        if target.startswith("zet_"):
+            target_kind = "zettel"
+        elif target.startswith("objet:sha256:") or target.startswith("sha256:"):
+            target_kind = "objet"
+    return drop_none_values({"type": edge_type, "target": target, "target_kind": target_kind})
+
+
+def zettel_first_read_summary(frontmatter: dict[str, Any], body: str, *, redacted: bool = False) -> tuple[dict[str, Any], list[str]]:
+    warnings: list[str] = []
+    zettel_id = frontmatter.get("id")
+    status = frontmatter.get("status")
+    if redacted:
+        return (
+            {
+                "zettel_id": zettel_id,
+                "title": None,
+                "status": "redacted",
+                "kind": None,
+                "gist": None,
+                "gist_source": "redacted",
+                "gist_char_limit": ZETTEL_OVERVIEW_GIST_CHAR_LIMIT,
+                "facets": {},
+                "tie_summary": {
+                    "edge_count": 0,
+                    "edge_types": [],
+                    "referenced_zets_count": 0,
+                    "referenced_objets_count": 0,
+                    "referenced_receipts_count": 0,
+                },
+                "edges_preview": [],
+                "redacted": True,
+                "body_omitted": True,
+            },
+            warnings,
+        )
+
+    title = safe_zettel_overview_string(frontmatter.get("title"), warnings, "$.frontmatter.title")
+    kind = safe_zettel_overview_string(frontmatter.get("kind"), warnings, "$.frontmatter.kind")
+    gist, gist_source = zettel_gist(frontmatter, body, warnings)
+    edges = frontmatter.get("edges") if isinstance(frontmatter.get("edges"), list) else []
+    edge_dicts = [edge for edge in edges if isinstance(edge, dict)]
+    edge_types = sorted(
+        {
+            str(edge.get("type")).strip()
+            for edge in edge_dicts
+            if edge.get("type") and not header_string_is_private_or_unsafe(str(edge.get("type")))
+        }
+    )
+    referenced_zets = collect_referenced_zets(frontmatter)
+    referenced_objets = collect_referenced_objets(frontmatter)
+    referenced_receipts = collect_referenced_receipts(frontmatter)
+    return (
+        {
+            "zettel_id": zettel_id,
+            "title": title,
+            "status": status,
+            "kind": kind,
+            "gist": gist,
+            "gist_source": gist_source,
+            "gist_char_limit": ZETTEL_OVERVIEW_GIST_CHAR_LIMIT,
+            "facets": safe_overview_facets(frontmatter, warnings),
+            "tie_summary": {
+                "edge_count": len(edge_dicts),
+                "edge_types": edge_types,
+                "referenced_zets_count": len(referenced_zets),
+                "referenced_objets_count": len(referenced_objets),
+                "referenced_receipts_count": len(referenced_receipts),
+            },
+            "edges_preview": [safe_overview_edge_preview(edge, warnings, index) for index, edge in enumerate(edge_dicts[:10])],
+            "redacted": False,
+            "body_omitted": True,
+        },
+        warnings,
+    )
+
+
+def zettel_overview_frontmatter(frontmatter: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": frontmatter.get("id"),
+        "title": frontmatter.get("title"),
+        "status": frontmatter.get("status"),
+        "kind": frontmatter.get("kind"),
+        "created_at": frontmatter.get("created_at"),
+        "updated_at": frontmatter.get("updated_at"),
+        "facets": frontmatter.get("facets") if isinstance(frontmatter.get("facets"), dict) else {},
+        "visibility": frontmatter.get("visibility") if isinstance(frontmatter.get("visibility"), dict) else {},
+    }
+
+
 def read_zettel(
     archive_root: Path | str,
     *,
     zettel_id: str | None = None,
     relative_path: str | None = None,
+    section: str = "body",
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     if not zettel_id and not relative_path:
         raise ArchiveServiceError("Provide zettel_id or path.")
+    if section not in ZETTEL_READ_SECTIONS:
+        raise ArchiveServiceError("section must be one of: overview, body, details, all")
 
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
     frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
@@ -1790,16 +1967,29 @@ def read_zettel(
     if frontmatter.get("status") == "redacted":
         # Privacy: a redacted zettel's body and frontmatter are suppressed on read; only its id and
         # redacted status are returned so callers can see it exists without exposing the content.
+        overview, overview_warnings = zettel_first_read_summary(frontmatter, "", redacted=True)
         return {
             "path": archive_relative_path(path, root),
             "frontmatter": {"id": frontmatter.get("id"), "status": "redacted"},
             "body": "",
+            "section": section,
+            "overview": overview,
             "redacted": True,
+            "warnings": overview_warnings,
         }
+    overview, overview_warnings = zettel_first_read_summary(frontmatter, body)
+    include_body = section in {"body", "all"}
+    include_full_frontmatter = section in {"body", "details", "all"}
     return {
         "path": archive_relative_path(path, root),
-        "frontmatter": frontmatter,
-        "body": body,
+        "frontmatter": frontmatter if include_full_frontmatter else zettel_overview_frontmatter(frontmatter),
+        "body": body if include_body else "",
+        "section": section,
+        "overview": overview,
+        "body_omitted": not include_body,
+        "details_omitted": not include_full_frontmatter,
+        "redacted": False,
+        "warnings": unique_preserve_order(overview_warnings),
     }
 
 
@@ -2656,7 +2846,7 @@ def create_draft_zettel(
         elif expected_hash != body_sha256:
             blockers.append("Expected body SHA-256 does not match the draft body.")
 
-    if contains_forbidden_location_reference(body):
+    if contains_forbidden_location_reference(body) or source_intake_has_provider_url(body):
         blockers.append("Draft body appears to contain a provider URL or local absolute path.")
     if DRAFT_SECRET_VALUE_RE.search(body):
         blockers.append("Draft body appears to contain a secret-like value.")
@@ -2885,7 +3075,7 @@ def promote_zettel_dry_run(
         blockers.append("Title must be present.")
     if not body.strip():
         blockers.append("Body must be present.")
-    if contains_forbidden_location_reference(body):
+    if contains_forbidden_location_reference(body) or source_intake_has_provider_url(body):
         blockers.append("Body appears to contain a provider URL or local absolute path.")
 
     provenance = frontmatter.get("provenance")
@@ -3386,8 +3576,13 @@ def build_promotion_checklist(
             continue
         item_id = raw_item["id"]
         required = bool(raw_item.get("required", False))
+        machine_status, machine_message = infer_promotion_checklist_item(item_id, frontmatter, body, allowed_link_types)
         explicit = promotion_checklist_decision(promotion, item_id)
-        if explicit is True:
+        if item_id in MACHINE_ENFORCED_CHECKLIST_ITEMS and machine_status == "blocked":
+            status = machine_status
+            message = machine_message
+            source = "machine"
+        elif explicit is True:
             status = "passed"
             message = "Marked as passed in frontmatter."
             source = "frontmatter"
@@ -3396,7 +3591,7 @@ def build_promotion_checklist(
             message = "Marked as not passed in frontmatter."
             source = "frontmatter"
         else:
-            status, message = infer_promotion_checklist_item(item_id, frontmatter, body, allowed_link_types)
+            status, message = machine_status, machine_message
             source = "machine"
         results.append(
             {
@@ -3438,12 +3633,17 @@ def build_lifecycle_checklist(
             continue
         item_id = raw_item["id"]
         required = bool(raw_item.get("required", False))
+        machine_status, machine_message = infer_promotion_checklist_item(item_id, frontmatter, body, allowed_link_types)
         explicit = lifecycle_checklist_decision(mint, item_id)
         source_label = "mint_frontmatter"
         if explicit is None:
             explicit = promotion_checklist_decision(promotion, item_id)
             source_label = "legacy_promotion_frontmatter"
-        if explicit is True:
+        if item_id in MACHINE_ENFORCED_CHECKLIST_ITEMS and machine_status == "blocked":
+            status = machine_status
+            message = machine_message
+            source = "machine"
+        elif explicit is True:
             status = "passed"
             message = "Marked as passed in frontmatter."
             source = source_label
@@ -3452,7 +3652,7 @@ def build_lifecycle_checklist(
             message = "Marked as not passed in frontmatter."
             source = source_label
         else:
-            status, message = infer_promotion_checklist_item(item_id, frontmatter, body, allowed_link_types)
+            status, message = machine_status, machine_message
             source = "machine"
         results.append(
             {
@@ -3535,7 +3735,7 @@ def infer_promotion_checklist_item(
             return "passed", "Provenance includes a source."
         return "blocked", "Provenance source is missing."
     if item_id == "object_id_only":
-        if contains_forbidden_location_reference(body):
+        if contains_forbidden_location_reference(body) or source_intake_has_provider_url(body):
             return "blocked", "Body contains a provider URL or local absolute path."
         return "passed", "No provider URL or local absolute path was detected."
     if item_id == "stable_facets":
@@ -10845,6 +11045,12 @@ def block_header_preview(
     referenced_zets = collect_referenced_zets(frontmatter)
     referenced_objets = collect_referenced_objets(frontmatter)
     referenced_receipts = collect_referenced_receipts(frontmatter)
+    first_read, first_read_warnings = zettel_first_read_summary(
+        frontmatter,
+        body,
+        redacted=frontmatter.get("status") == "redacted",
+    )
+    warnings.extend(first_read_warnings)
     header_preview = {
         "header_version": BLOCK_HEADER_VERSION,
         "zettel_id": resolved_zettel_id or None,
@@ -10887,6 +11093,7 @@ def block_header_preview(
             "sharing_layer_note": "ZET is the sharing layer, not the block itself",
         },
         "zet_body_sha256": zet_body_sha256,
+        "first_read": json_safe(first_read),
         "header_preview": json_safe(header_preview),
         "header_sha256": header_sha256,
         "block_hash_preview": block_hash_preview,
@@ -12399,11 +12606,94 @@ def zettel_edge_filename_segment(value: str) -> str:
     return (text or "edge")[:96]
 
 
+def zettel_external_ref_aliases(source: str, external_id: str) -> list[str]:
+    aliases = [external_id]
+    if source.lower() == "notion":
+        match = re.match(r"^([A-Za-z]+)(\d+)$", external_id)
+        if match:
+            prefix, digits = match.groups()
+            aliases.append(prefix + digits.zfill(max(4, len(digits))))
+    return unique_preserve_order([alias for alias in aliases if alias])
+
+
+def resolve_zettel_external_ref(root: Path, target_ref: str, blockers: list[str]) -> dict[str, Any] | None:
+    match = ZETTEL_EDGE_EXTERNAL_REF_RE.match(target_ref)
+    if not match:
+        return None
+
+    source = match.group("source").lower()
+    external_id = match.group("external_id")
+    aliases = [alias.casefold() for alias in zettel_external_ref_aliases(source, external_id)]
+    expected_prefix = f"zet_{source}_"
+    matches: list[dict[str, Any]] = []
+    for path in iter_zettel_paths(root):
+        try:
+            frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError):
+            continue
+        zettel_id = str(frontmatter.get("id") or "").strip()
+        folded_id = zettel_id.casefold()
+        if not folded_id.startswith(expected_prefix):
+            continue
+        if not any(folded_id.endswith(alias) for alias in aliases):
+            continue
+        matches.append(
+            {
+                "zettel_id": zettel_id,
+                "path": archive_relative_path(path, root),
+                "status": frontmatter.get("status") if isinstance(frontmatter.get("status"), str) else None,
+            }
+        )
+
+    if not matches:
+        blockers.append("target external zettel ref could not be resolved to an archive zet id.")
+        return {
+            "ref": target_ref,
+            "input_ref": target_ref,
+            "kind": "zettel",
+            "verified": False,
+            "resolver": {"source": source, "external_id": external_id, "aliases": zettel_external_ref_aliases(source, external_id)},
+        }
+    if len(matches) > 1:
+        blockers.append("target external zettel ref resolved to multiple archive zet ids.")
+        return {
+            "ref": target_ref,
+            "input_ref": target_ref,
+            "kind": "zettel",
+            "verified": False,
+            "resolver": {
+                "source": source,
+                "external_id": external_id,
+                "aliases": zettel_external_ref_aliases(source, external_id),
+                "match_count": len(matches),
+            },
+        }
+    matched = matches[0]
+    if matched.get("status") == "redacted":
+        blockers.append("target zettel is redacted.")
+    return {
+        "ref": matched["zettel_id"],
+        "input_ref": target_ref,
+        "kind": "zettel",
+        "verified": matched.get("status") != "redacted",
+        "resolver": {
+            "source": source,
+            "external_id": external_id,
+            "aliases": zettel_external_ref_aliases(source, external_id),
+            "resolved_path": matched["path"],
+        },
+    }
+
+
 def zettel_edge_target_summary(root: Path, target_ref: str, blockers: list[str]) -> dict[str, Any]:
     text = str(target_ref or "").strip()
     if not safe_source_intake_plan_scalar(text):
         blockers.append("target_ref must be a safe non-secret scalar.")
         return {"ref": text, "kind": "unknown", "verified": False}
+
+    external_summary = resolve_zettel_external_ref(root, text, blockers)
+    if external_summary is not None:
+        return external_summary
 
     if ZETTEL_EDGE_ZETTEL_ID_RE.match(text):
         try:
@@ -39126,6 +39416,126 @@ def read_archive_config(archive_root: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ArchiveServiceError("archive.yml is not a readable object.")
     return data
+
+
+def migrate_archive(
+    archive_root: Path | str,
+    *,
+    target: str,
+    dry_run: bool,
+    approve: bool,
+) -> dict[str, Any]:
+    if target == FRONTMATTER_V03_TARGET:
+        return migrate_frontmatter_v03(archive_root, target=target, dry_run=dry_run, approve=approve)
+    if target == LINK_TYPES_V03_TARGET:
+        return migrate_link_types_v03(archive_root, target=target, dry_run=dry_run, approve=approve)
+    raise ArchiveServiceError(f"Unsupported migration target: {target}")
+
+
+def migrate_link_types_v03(
+    archive_root: Path | str,
+    *,
+    target: str,
+    dry_run: bool,
+    approve: bool,
+) -> dict[str, Any]:
+    if target != LINK_TYPES_V03_TARGET:
+        raise ArchiveServiceError(f"Unsupported migration target: {target}")
+    if dry_run == approve:
+        raise ArchiveServiceError("archive migrate requires exactly one of --dry-run or --approve.")
+
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    types_relative = "zettel-kasten/types.yml"
+    types_path = archive_internal_path(root, types_relative)
+    if not types_path.is_file():
+        raise ArchiveServiceError("zettel-kasten/types.yml is missing; initialize or restore archive type metadata first.")
+
+    archive_types = load_yaml(types_path.read_text(encoding="utf-8"))
+    base_types = load_yaml((KIT_ROOT / "zettel-kasten" / "types.yml").read_text(encoding="utf-8"))
+    if not isinstance(archive_types, dict) or not isinstance(archive_types.get("link_types"), list):
+        raise ArchiveServiceError("zettel-kasten/types.yml must be a YAML object with link_types.")
+    if not isinstance(base_types, dict) or not isinstance(base_types.get("link_types"), list):
+        raise ArchiveServiceError("Base zettel-kasten/types.yml must be a YAML object with link_types.")
+
+    archive_link_types = archive_types["link_types"]
+    present_ids = {
+        item.get("id")
+        for item in archive_link_types
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item.get("id")
+    }
+    base_by_id = {
+        item.get("id"): item
+        for item in base_types["link_types"]
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item.get("id")
+    }
+    recommended = sorted(CONNECTION_IMPORT_RECOMMENDED_EDGE_TYPES)
+    missing = [edge_type for edge_type in recommended if edge_type not in present_ids]
+    missing_records = [copy.deepcopy(base_by_id[edge_type]) for edge_type in missing if edge_type in base_by_id]
+    missing_without_base = [edge_type for edge_type in missing if edge_type not in base_by_id]
+    blockers = [
+        {
+            "path": types_relative,
+            "field": "link_types",
+            "code": "missing_base_link_type",
+            "message": f"Base template does not define recommended edge type: {edge_type}",
+        }
+        for edge_type in missing_without_base
+    ]
+
+    files_written: list[str] = []
+    new_text = types_path.read_text(encoding="utf-8")
+    if missing_records and not blockers:
+        new_types = copy.deepcopy(archive_types)
+        new_link_types = copy.deepcopy(archive_link_types)
+        new_link_types.extend(missing_records)
+        new_types["link_types"] = new_link_types
+        new_types.setdefault("schema_version", archive_types.get("schema_version") or "wom-kit/zettel-kasten-types/v0.2-draft")
+        new_text = dump_yaml(new_types)
+        if approve:
+            write_text_atomic(types_path, new_text)
+            files_written.append(types_relative)
+
+    changes = [
+        {
+            "action": "append_link_type",
+            "field": "link_types",
+            "id": item.get("id"),
+            "source": "wom-kit/zettel-kasten/types.yml",
+        }
+        for item in missing_records
+    ]
+    return {
+        "ok": not blockers,
+        "lifecycle_action": "link_types_v03_migration",
+        "target": LINK_TYPES_V03_TARGET,
+        "dry_run": bool(dry_run),
+        "approved": bool(approve),
+        "archive_id": archive_id,
+        "files_scanned": 1,
+        "files_with_changes": 1 if changes else 0,
+        "files_written": files_written,
+        "blocked": bool(blockers),
+        "blockers": blockers,
+        "warnings": [],
+        "archive_link_type_status": {
+            "source": types_relative,
+            "recommended_edge_types": recommended,
+            "present_recommended_edge_types": sorted(edge_type for edge_type in recommended if edge_type in present_ids),
+            "missing_recommended_edge_types": missing,
+        },
+        "would_change": [
+            {
+                "path": types_relative,
+                "changes": changes,
+                "manual_review_required": bool(blockers),
+                "blockers": blockers,
+            }
+        ]
+        if changes or blockers
+        else [],
+        "new_text": new_text if dry_run and changes and not blockers else None,
+    }
 
 
 def migrate_frontmatter_v03(

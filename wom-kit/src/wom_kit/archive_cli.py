@@ -1688,7 +1688,7 @@ def command_repair_gitignore(args: argparse.Namespace) -> int:
 
 def command_migrate(args: argparse.Namespace) -> int:
     try:
-        result = archive_services.migrate_frontmatter_v03(
+        result = archive_services.migrate_archive(
             Path(args.archive_root),
             target=args.target,
             dry_run=bool(args.dry_run),
@@ -1702,7 +1702,7 @@ def command_migrate(args: argparse.Namespace) -> int:
         print_json(result)
     else:
         action = "dry-run" if result["dry_run"] else "approved write"
-        print(f"Frontmatter migration {action}: {result['target']}")
+        print(f"Migration {action}: {result['target']}")
         print(f"Archive: {result['archive_id']}")
         print(f"Files scanned: {result['files_scanned']}")
         print(f"Files with planned changes: {result['files_with_changes']}")
@@ -1721,7 +1721,7 @@ def command_migrate(args: argparse.Namespace) -> int:
             for path in result["files_written"]:
                 print(f"- {path}")
         if not result["would_change"]:
-            print("No frontmatter changes needed.")
+            print("No migration changes needed.")
 
     return 0 if result["ok"] else 1
 
@@ -3844,6 +3844,7 @@ def command_read_zettel(args: argparse.Namespace) -> int:
             Path(args.archive_root),
             zettel_id=args.zettel_id,
             relative_path=args.path,
+            section=args.section,
         )
     except archive_services.ArchiveServiceError as exc:
         print(str(exc), file=sys.stderr)
@@ -3858,8 +3859,24 @@ def command_read_zettel(args: argparse.Namespace) -> int:
             print(f"ID: {frontmatter.get('id', '-')}")
             print(f"Title: {frontmatter.get('title', '-')}")
             print(f"Status: {frontmatter.get('status', '-')}")
+        overview = result.get("overview") if isinstance(result.get("overview"), dict) else {}
+        if overview:
+            print(f"Section: {result.get('section', 'body')}")
+            print(f"Kind: {overview.get('kind') or '-'}")
+            print(f"Gist: {overview.get('gist') or '-'}")
+            tie_summary = overview.get("tie_summary") if isinstance(overview.get("tie_summary"), dict) else {}
+            if tie_summary:
+                print(
+                    "Ties: "
+                    f"{tie_summary.get('edge_count', 0)} edge(s), "
+                    f"{tie_summary.get('referenced_zets_count', 0)} zet ref(s), "
+                    f"{tie_summary.get('referenced_objets_count', 0)} objet ref(s)"
+                )
         print()
-        print(result["body"].rstrip())
+        if result.get("body_omitted"):
+            print("(body omitted)")
+        else:
+            print(result["body"].rstrip())
     return 0
 
 
@@ -8473,11 +8490,16 @@ def build_parser() -> argparse.ArgumentParser:
     repair_gitignore.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     repair_gitignore.set_defaults(func=command_repair_gitignore)
 
-    migrate = subcommands.add_parser("migrate", help="Dry-run or approve a frontmatter compatibility migration.")
+    migrate = subcommands.add_parser("migrate", help="Dry-run or approve a compatibility migration.")
     migrate.add_argument("archive_root", help="Archive root to migrate.")
-    migrate.add_argument("--target", required=True, choices=[archive_services.FRONTMATTER_V03_TARGET], help="Migration target.")
-    migrate.add_argument("--dry-run", action="store_true", help="Preview frontmatter changes without writing files.")
-    migrate.add_argument("--approve", action="store_true", help="Apply the reviewed frontmatter changes.")
+    migrate.add_argument(
+        "--target",
+        required=True,
+        choices=[archive_services.FRONTMATTER_V03_TARGET, archive_services.LINK_TYPES_V03_TARGET],
+        help="Migration target.",
+    )
+    migrate.add_argument("--dry-run", action="store_true", help="Preview migration changes without writing files.")
+    migrate.add_argument("--approve", action="store_true", help="Apply the reviewed migration changes.")
     migrate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     migrate.set_defaults(func=command_migrate)
 
@@ -9832,6 +9854,12 @@ def build_parser() -> argparse.ArgumentParser:
     read_target = read_zettel.add_mutually_exclusive_group(required=True)
     read_target.add_argument("--zettel-id", help="Zettel id to read.")
     read_target.add_argument("--path", help="Archive-relative zettel path to read.")
+    read_zettel.add_argument(
+        "--section",
+        choices=["overview", "body", "details", "all"],
+        default="body",
+        help="Read only the cheap first-read overview, the body, frontmatter details, or all sections.",
+    )
     read_zettel.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     read_zettel.set_defaults(func=command_read_zettel)
 

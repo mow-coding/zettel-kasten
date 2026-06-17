@@ -2190,6 +2190,59 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_zettel_edge_resolves_notion_external_ref_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            target_path = archive_root / "inbox" / "zet_notion_db3_ZET0637.md"
+            target_frontmatter = {
+                "id": "zet_notion_db3_ZET0637",
+                "title": "Imported Notion target",
+                "created_at": "2026-06-17T10:00:00+09:00",
+                "updated_at": "2026-06-17T10:00:00+09:00",
+                "archive_id": "archive:personal:fake-life",
+                "status": "draft",
+                "kind": "source_note",
+                "facets": {},
+                "assets": [],
+                "edges": [],
+                "provenance": {
+                    "created_by": "ai_runtime:codex",
+                    "created_in": "archive:personal:fake-life",
+                    "source": "notion_export",
+                    "derived_from": [],
+                },
+                "visibility": {"scope": "private", "allowed_archives": [], "source_visibility": "private"},
+            }
+            target_path.write_text(
+                "---\n" + archive_cli.dump_yaml(target_frontmatter) + "---\n\nImported Notion target body.\n",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "zettel-edge",
+                    str(archive_root),
+                    "--from-zettel",
+                    "zet_20240504_fake_lunch_thought",
+                    "--target",
+                    "zet:notion:ZET637",
+                    "--edge-type",
+                    "material",
+                    "--visibility",
+                    "private",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["target"]["input_ref"], "zet:notion:ZET637")
+            self.assertEqual(result["target"]["ref"], "zet_notion_db3_ZET0637")
+            self.assertEqual(result["target"]["resolver"]["resolved_path"], "inbox/zet_notion_db3_ZET0637.md")
+            self.assertEqual(result["proposed_edge"]["target"], "zet_notion_db3_ZET0637")
+
     def test_zettel_edge_preview_and_approval_write_frontmatter_edge_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -11020,6 +11073,11 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(first["zet_body_sha256"], second["zet_body_sha256"])
             self.assertEqual(first["header_sha256"], second["header_sha256"])
             self.assertEqual(first["block_hash_preview"], second["block_hash_preview"])
+            self.assertNotIn("first_read", first["header_preview"])
+            self.assertEqual(first["first_read"]["gist"], "This body is the only zet text hashed by block-header.")
+            self.assertEqual(first["first_read"]["facets"], {})
+            self.assertEqual(first["first_read"]["tie_summary"]["edge_count"], 1)
+            self.assertEqual(first["first_read"]["tie_summary"]["referenced_zets_count"], 1)
             self.assertIn({"id": "zet_20240504_fake_lunch_thought", "edge_type": "references"}, first["referenced_zets"])
             self.assertTrue(any(ref["value"] == object_id and ref["source"] == "assets" for ref in first["referenced_objets"]))
             self.assertTrue(any(ref["value"] == intake_object_id and ref["source"] == "source_intake" for ref in first["referenced_objets"]))
@@ -16996,6 +17054,67 @@ class ArchiveCliTests(unittest.TestCase):
         path_result = json.loads(path_output)
         self.assertEqual(path_result["path"], result["path"])
 
+    def test_read_zettel_overview_section_returns_first_read_without_body(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        zettel_id = "zet_20240504_fake_lunch_thought"
+        code, output = self.run_cli(
+            [
+                "read-zettel",
+                str(archive_root),
+                "--zettel-id",
+                zettel_id,
+                "--section",
+                "overview",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertEqual(result["section"], "overview")
+        self.assertEqual(result["body"], "")
+        self.assertTrue(result["body_omitted"])
+        self.assertTrue(result["details_omitted"])
+        self.assertEqual(result["overview"]["zettel_id"], zettel_id)
+        self.assertEqual(result["overview"]["gist"], "This zettel represents a private personal reflection.")
+        self.assertEqual(result["overview"]["gist_source"], "body.first_safe_paragraph")
+        self.assertEqual(result["overview"]["facets"]["domain"], "personal")
+        self.assertEqual(result["overview"]["tie_summary"]["edge_count"], 0)
+
+    def test_read_zettel_overview_skips_unsafe_url_paragraph(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            zettel_path = archive_root / "inbox" / "zet_20260617_overview_url_fixture.md"
+            frontmatter = {
+                "id": "zet_20260617_overview_url_fixture",
+                "title": "Overview URL fixture",
+                "status": "draft",
+                "kind": "fleeting_capture",
+                "facets": {"domain": "test"},
+                "visibility": {"scope": "private"},
+            }
+            body = "# Overview URL fixture\n\nhttps://app.notion.com/private-page\n\nSafe fallback paragraph for first-read."
+            zettel_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "read-zettel",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260617_overview_url_fixture.md",
+                    "--section",
+                    "overview",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(result["overview"]["gist"], "Safe fallback paragraph for first-read.")
+            self.assertNotIn("app.notion.com", serialized)
+            self.assertTrue(any("Redacted private or unsafe first-read value" in warning for warning in result["warnings"]))
+
     def test_read_zettel_rejects_non_zettel_path(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         code, output = self.run_cli(["read-zettel", str(archive_root), "--path", "archive.yml"])
@@ -17445,6 +17564,55 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("Note kind cannot be promoted to canonical memory: fleeting_capture.", result["blockers"])
         self.assertTrue(any(item["status"] == "needs_human_review" for item in result["checklist"]))
         self.assertEqual(result["receipt_preview"]["receipt_path"], result["proposed_receipt_path"])
+
+    def test_mint_zet_blocks_plain_https_provider_url_in_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path = archive_root / "inbox" / "zet_20260617_provider_url_fixture.md"
+            frontmatter = {
+                "id": "zet_20260617_provider_url_fixture",
+                "title": "Provider URL fixture",
+                "created_at": "2026-06-17T10:00:00+09:00",
+                "updated_at": "2026-06-17T10:00:00+09:00",
+                "archive_id": "archive:personal:fake-life",
+                "status": "draft",
+                "kind": "permanent_note",
+                "facets": {"domain": "test"},
+                "assets": [],
+                "edges": [],
+                "provenance": {
+                    "created_by": "person:test",
+                    "created_in": "archive:personal:fake-life",
+                    "source": "manual_test",
+                    "derived_from": [],
+                },
+                "visibility": {"scope": "private", "allowed_archives": [], "source_visibility": "private"},
+                "promotion": {
+                    "stage": "promotion_candidate",
+                    "ready_for_promotion": True,
+                    "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
+                },
+            }
+            body = "# Provider URL fixture\n\nSafe text plus <mention-page url=\"https://app.notion.com/p/1d5fake\"/>.\n"
+            draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260617_provider_url_fixture.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 1, output)
+            object_id_only = next(item for item in result["checklist"] if item["id"] == "object_id_only")
+            self.assertEqual(object_id_only["status"], "blocked")
+            self.assertNotIn("app.notion.com", serialized)
 
     def test_promote_real_requires_approval_and_reviewer(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
@@ -22206,6 +22374,40 @@ class ArchiveCliTests(unittest.TestCase):
             result = json.loads(output)
             self.assertTrue(result["blocked"])
             self.assertEqual(zettel_path.read_text(encoding="utf-8"), original_text)
+
+    def test_migrate_link_types_v03_appends_missing_connection_edge_vocabulary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            types_data = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
+            self.assertIsInstance(types_data, dict)
+            types_data["link_types"] = [
+                item
+                for item in types_data["link_types"]
+                if isinstance(item, dict) and item.get("id") not in {"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"}
+            ]
+            types_path.write_text(archive_cli.dump_yaml(types_data), encoding="utf-8")
+            original_text = types_path.read_text(encoding="utf-8")
+
+            dry_code, dry_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "link-types-v0.3", "--dry-run", "--format", "json"]
+            )
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertEqual(dry_result["lifecycle_action"], "link_types_v03_migration")
+            self.assertEqual(set(dry_result["archive_link_type_status"]["missing_recommended_edge_types"]), {"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"})
+            self.assertEqual(dry_result["files_written"], [])
+            self.assertEqual(types_path.read_text(encoding="utf-8"), original_text)
+
+            approve_code, approve_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "link-types-v0.3", "--approve", "--format", "json"]
+            )
+            approve_result = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertEqual(approve_result["files_written"], ["zettel-kasten/types.yml"])
+            migrated_types = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
+            migrated_ids = {item["id"] for item in migrated_types["link_types"] if isinstance(item, dict)}
+            self.assertTrue({"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"} <= migrated_ids)
 
     def test_doctor_legacy_frontmatter_json_includes_migration_hint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
