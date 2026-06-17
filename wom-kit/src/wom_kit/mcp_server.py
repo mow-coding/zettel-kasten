@@ -1773,6 +1773,28 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "notion_objet_link_rewrite_plan",
+        "description": "Validate one reviewed Notion locator to objet conversion plan before any approval-gated rewrite or embed edge write. Read-only; never echoes provider URLs, body text, page titles, absolute paths, object bytes, or writes files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "zettel_id": {"type": "string"},
+                "path": {"type": "string"},
+                "locator_fingerprint": {"type": "string"},
+                "object_id": {"type": "string"},
+                "target_mode": {
+                    "type": "string",
+                    "enum": ["objet_ref_rewrite", "embed_edge"],
+                    "default": "objet_ref_rewrite",
+                },
+                "expected_occurrence_count": {"type": "integer", "minimum": 1},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "locator_fingerprint", "object_id"],
+        },
+    },
+    {
         "name": "block_header_check",
         "description": "Dry-run preview of the derived block header for one draft or canonical zet.",
         "inputSchema": {
@@ -2598,6 +2620,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_notion_objet_link_plan(arguments)
     if name == "notion_objet_link_index":
         return tool_notion_objet_link_index(arguments)
+    if name == "notion_objet_link_rewrite_plan":
+        return tool_notion_objet_link_rewrite_plan(arguments)
     if name == "block_header_check":
         return tool_block_header_check(arguments)
     if name == "zet_projection_plan_check":
@@ -4110,6 +4134,34 @@ def tool_notion_objet_link_index(arguments: dict[str, Any]) -> dict[str, Any]:
         "notion_objet_link_index: "
         f"{state}, {summary.get('zettels_with_locator_count', 0)} zettel(s), "
         f"{summary.get('zettel_locator_rows_with_manifest_candidate_count', 0)} matched locator row(s).",
+        result,
+    )
+
+
+def tool_notion_objet_link_rewrite_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("notion_objet_link_rewrite_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    zettel_id = optional_string_arg(arguments, "zettel_id")
+    relative_path = optional_string_arg(arguments, "path")
+    expected_occurrence_count = arguments.get("expected_occurrence_count")
+    result = call_service(
+        archive_services.notion_objet_link_rewrite_plan,
+        archive_root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        locator_fingerprint=require_string_arg(arguments, "locator_fingerprint"),
+        object_id=require_string_arg(arguments, "object_id"),
+        target_mode=str(arguments.get("target_mode") or "objet_ref_rewrite"),
+        expected_occurrence_count=int(expected_occurrence_count) if expected_occurrence_count is not None else None,
+        dry_run=True,
+    )
+    state = "passed" if result.get("ok") else "blocked"
+    locator = result.get("selected_locator") if isinstance(result.get("selected_locator"), dict) else {}
+    return tool_success_result(
+        "notion_objet_link_rewrite_plan: "
+        f"{state}, {locator.get('occurrence_count', 0)} selected occurrence(s), "
+        f"{len(result.get('would_change') or [])} planned change(s).",
         result,
     )
 

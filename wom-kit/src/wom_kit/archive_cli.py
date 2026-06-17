@@ -4052,6 +4052,57 @@ def command_notion_objet_link_index(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_notion_objet_link_rewrite_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("notion-objet-link-rewrite-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.notion_objet_link_rewrite_plan(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            relative_path=args.path,
+            locator_fingerprint=args.locator_fingerprint,
+            object_id=args.object_id,
+            target_mode=args.target_mode,
+            expected_occurrence_count=args.expected_occurrence_count,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        zettel = result.get("zettel") if isinstance(result.get("zettel"), dict) else {}
+        locator = result.get("selected_locator") if isinstance(result.get("selected_locator"), dict) else {}
+        candidate = result.get("selected_candidate") if isinstance(result.get("selected_candidate"), dict) else {}
+        print("Notion objet link rewrite plan:")
+        print(f"- target mode: {result.get('target_mode') or '-'}")
+        print(f"- zettel: {zettel.get('id') or zettel.get('path') or '-'}")
+        print(f"- locator: {result.get('locator_fingerprint') or '-'}")
+        print(f"- occurrence count: {locator.get('occurrence_count', 0)}")
+        print(f"- object: {result.get('selected_object_id') or '-'} ({candidate.get('resolution_state') or '-'})")
+        for change in result.get("would_change", []):
+            if not isinstance(change, dict):
+                continue
+            print(f"* would {change.get('change_kind')}: {change.get('target_objet_ref') or change.get('replacement_objet_ref') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+        print("Writes: none")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_create_draft(args: argparse.Namespace) -> int:
     try:
         body = read_body_arg(args)
@@ -10144,6 +10195,31 @@ def build_parser() -> argparse.ArgumentParser:
     notion_objet_link_index.add_argument("--max-candidates", type=int, default=5, help="Maximum manifest candidates per locator.")
     notion_objet_link_index.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     notion_objet_link_index.set_defaults(func=command_notion_objet_link_index)
+
+    notion_objet_link_rewrite_plan = subcommands.add_parser(
+        "notion-objet-link-rewrite-plan",
+        help="Validate one reviewed Notion locator to objet conversion plan without writing.",
+    )
+    notion_objet_link_rewrite_plan.add_argument("archive_root", help="Archive root to inspect.")
+    notion_objet_link_rewrite_target = notion_objet_link_rewrite_plan.add_mutually_exclusive_group(required=True)
+    notion_objet_link_rewrite_target.add_argument("--zettel-id", help="Zettel id to inspect.")
+    notion_objet_link_rewrite_target.add_argument("--path", help="Archive-relative zettel path to inspect.")
+    notion_objet_link_rewrite_plan.add_argument("--locator-fingerprint", required=True, help="Selected sha256 locator fingerprint from notion-objet-link-plan.")
+    notion_objet_link_rewrite_plan.add_argument("--object-id", required=True, help="Selected manifested object id, sha256:<64 hex>.")
+    notion_objet_link_rewrite_plan.add_argument(
+        "--target-mode",
+        choices=["objet_ref_rewrite", "embed_edge"],
+        default="objet_ref_rewrite",
+        help="Future approved conversion mode to validate.",
+    )
+    notion_objet_link_rewrite_plan.add_argument(
+        "--expected-occurrence-count",
+        type=int,
+        help="Optional drift guard copied from the reviewed one-zettel plan.",
+    )
+    notion_objet_link_rewrite_plan.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing and open nothing.")
+    notion_objet_link_rewrite_plan.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    notion_objet_link_rewrite_plan.set_defaults(func=command_notion_objet_link_rewrite_plan)
 
     block_header = subcommands.add_parser("block-header", help="Preview the derived block header for one zet.")
     block_header.add_argument("archive_root", help="Archive root to inspect.")

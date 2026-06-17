@@ -2816,6 +2816,236 @@ def notion_objet_link_index(
     }
 
 
+NOTION_OBJET_LINK_REWRITE_TARGET_MODES = {
+    "objet_ref_rewrite",
+    "embed_edge",
+}
+
+
+def normalize_notion_locator_fingerprint(value: str | None, blockers: list[str]) -> str:
+    text = str(value or "").strip().lower()
+    if SHA256_RE.match(text):
+        text = f"sha256:{text}"
+    if not OBJECT_ID_RE.match(text):
+        blockers.append("locator_fingerprint must be formatted as sha256:<64 lowercase hex characters>.")
+        return ""
+    return text
+
+
+def empty_notion_objet_link_rewrite_plan_result(
+    archive_id: str,
+    *,
+    blockers: list[str],
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "dry_run": True,
+        "lifecycle_action": "notion_objet_link_rewrite_plan",
+        "archive_id": archive_id,
+        "target_mode": None,
+        "zettel": {"path": None, "redacted": False},
+        "locator_fingerprint": None,
+        "selected_object_id": None,
+        "selected_objet_ref": None,
+        "selected_locator": None,
+        "selected_candidate": None,
+        "approval_checklist": [],
+        "privacy_guards": {
+            "provider_urls_echoed": False,
+            "zettel_body_text_echoed": False,
+            "frontmatter_values_echoed": False,
+            "page_titles_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_api_called": False,
+            "presigned_url_created": False,
+            "download_performed": False,
+            "object_file_bytes_read": False,
+            "zettel_body_rewritten": False,
+            "edges_written": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": ["Fix blockers before planning a reviewed Notion locator conversion."],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings or []),
+    }
+
+
+def notion_objet_link_rewrite_plan(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    locator_fingerprint: str | None = None,
+    object_id: str | None = None,
+    target_mode: str = "objet_ref_rewrite",
+    expected_occurrence_count: int | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("notion-objet-link-rewrite-plan is read-only; pass --dry-run.")
+    if not zettel_id and not relative_path:
+        blockers.append("Provide zettel_id or path.")
+    selected_fingerprint = normalize_notion_locator_fingerprint(locator_fingerprint, blockers)
+    selected_object_id = normalize_object_id(str(object_id or ""), blockers)
+    mode = str(target_mode or "").strip()
+    if mode not in NOTION_OBJET_LINK_REWRITE_TARGET_MODES:
+        blockers.append("target_mode must be one of: objet_ref_rewrite, embed_edge.")
+    if expected_occurrence_count is not None and int(expected_occurrence_count) < 1:
+        blockers.append("expected_occurrence_count must be greater than zero when provided.")
+    if blockers and (not zettel_id and not relative_path):
+        return empty_notion_objet_link_rewrite_plan_result(archive_id, blockers=blockers, warnings=warnings)
+
+    base_plan = notion_objet_link_plan(
+        root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        dry_run=True,
+        max_locators=500,
+        max_candidates=100,
+    )
+    blockers.extend(base_plan.get("blockers") if isinstance(base_plan.get("blockers"), list) else [])
+    warnings.extend(base_plan.get("warnings") if isinstance(base_plan.get("warnings"), list) else [])
+
+    selected_locator: dict[str, Any] | None = None
+    for locator in base_plan.get("locators", []):
+        if isinstance(locator, dict) and locator.get("locator_fingerprint") == selected_fingerprint:
+            selected_locator = locator
+            break
+    if selected_fingerprint and selected_locator is None:
+        blockers.append("locator_fingerprint was not found in the current zettel plan.")
+
+    selected_candidate: dict[str, Any] | None = None
+    if selected_locator is not None:
+        for candidate in selected_locator.get("candidates", []):
+            if isinstance(candidate, dict) and candidate.get("object_id") == selected_object_id:
+                selected_candidate = candidate
+                break
+        if selected_candidate is None and selected_object_id:
+            blockers.append("object_id is not a reviewed manifest candidate for the selected locator.")
+        occurrence_count = int(selected_locator.get("occurrence_count") or 0)
+        if expected_occurrence_count is not None and occurrence_count != int(expected_occurrence_count):
+            blockers.append("expected_occurrence_count does not match the current selected locator occurrence count.")
+    else:
+        occurrence_count = 0
+
+    if selected_candidate is not None:
+        candidate_blockers = selected_candidate.get("candidate_blockers")
+        if isinstance(candidate_blockers, list):
+            blockers.extend(str(blocker) for blocker in candidate_blockers if str(blocker).strip())
+
+    selected_objet_ref = f"objet:{selected_object_id}" if selected_object_id else None
+    zettel_summary = base_plan.get("zettel") if isinstance(base_plan.get("zettel"), dict) else {"path": None, "redacted": False}
+    safe_occurrences: list[dict[str, Any]] = []
+    if selected_locator is not None:
+        for occurrence in selected_locator.get("occurrences", []):
+            if not isinstance(occurrence, dict):
+                continue
+            safe_occurrences.append(
+                drop_none_values(
+                    {
+                        "source": occurrence.get("source"),
+                        "line": occurrence.get("line"),
+                        "field": occurrence.get("field"),
+                        "locator_kind": occurrence.get("locator_kind"),
+                    }
+                )
+            )
+
+    approval_checklist = [
+        "Human confirmed the selected locator fingerprint came from the intended imported Notion mention or embed.",
+        "Human confirmed the selected object_id is the intended manifested objet.",
+        "Future write command must re-run this dry-run plan and compare expected occurrence count before writing.",
+        "Future write command must keep provider locator text out of receipts and terminal output.",
+    ]
+    if mode == "embed_edge":
+        approval_checklist.append("Human confirmed an embed edge is preferred over replacing body text.")
+    else:
+        approval_checklist.append("Human confirmed replacing the provider locator with an objet ref is preferred.")
+
+    would_change: list[dict[str, Any]] = []
+    if not blockers and selected_locator is not None and selected_candidate is not None:
+        if mode == "embed_edge":
+            would_change.append(
+                {
+                    "change_kind": "write_reviewed_embed_edge",
+                    "zettel_path": zettel_summary.get("path"),
+                    "edge_type": "embed",
+                    "target_object_id": selected_object_id,
+                    "target_objet_ref": selected_objet_ref,
+                    "locator_fingerprint": selected_fingerprint,
+                    "occurrence_count": occurrence_count,
+                    "requires_approval": True,
+                }
+            )
+        else:
+            would_change.append(
+                {
+                    "change_kind": "replace_provider_locator_with_objet_ref",
+                    "zettel_path": zettel_summary.get("path"),
+                    "locator_fingerprint": selected_fingerprint,
+                    "replacement_objet_ref": selected_objet_ref,
+                    "occurrence_count": occurrence_count,
+                    "requires_approval": True,
+                }
+            )
+
+    next_safe_actions: list[str] = []
+    if blockers:
+        next_safe_actions.append("Fix blockers before planning a reviewed Notion locator conversion.")
+    else:
+        next_safe_actions.append("Have a human review this exact locator_fingerprint, object_id, target_mode, and occurrence_count before any write command exists.")
+        next_safe_actions.append("A future approved conversion command should require this plan shape plus --approve and --reviewed-by, then re-run the same checks before writing.")
+        next_safe_actions.append("Run zettel-objet-links after a reviewed conversion writes stable objet refs or embed edges.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "notion_objet_link_rewrite_plan",
+        "archive_id": archive_id,
+        "target_mode": mode,
+        "zettel": zettel_summary,
+        "locator_fingerprint": selected_fingerprint or None,
+        "selected_object_id": selected_object_id or None,
+        "selected_objet_ref": selected_objet_ref,
+        "selected_locator": None
+        if selected_locator is None
+        else {
+            "locator_fingerprint": selected_fingerprint,
+            "occurrence_count": occurrence_count,
+            "occurrences": safe_occurrences,
+            "occurrences_truncated": bool(selected_locator.get("occurrences_truncated")),
+            "candidate_state": selected_locator.get("candidate_state"),
+            "candidate_count": selected_locator.get("candidate_count", 0),
+        },
+        "selected_candidate": selected_candidate,
+        "approval_checklist": approval_checklist,
+        "privacy_guards": {
+            "provider_urls_echoed": False,
+            "zettel_body_text_echoed": False,
+            "frontmatter_values_echoed": False,
+            "page_titles_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_api_called": False,
+            "presigned_url_created": False,
+            "download_performed": False,
+            "object_file_bytes_read": False,
+            "zettel_body_rewritten": False,
+            "edges_written": False,
+            "writes": False,
+        },
+        "would_change": would_change,
+        "next_safe_actions": unique_preserve_order(next_safe_actions),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
 def resolve_zettel_path(archive_root: Path, zettel_id: str | None, relative_path: str | None) -> Path:
     if relative_path:
         zettel_path_hint = "unsafe zettel path. Zettel path must be archive-relative inside inbox/ or zettels/ (for example: inbox/foo.md). Use --zettel-id if you are unsure."

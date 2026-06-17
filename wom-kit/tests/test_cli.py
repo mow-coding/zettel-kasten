@@ -8457,6 +8457,142 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
 
+    def test_notion_objet_link_rewrite_plan_validates_selected_candidate_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+            notion_url = "https://www.notion.so/private-workspace/Rewrite-Page-abcdef1234567890"
+            locator_fingerprint = "sha256:" + hashlib.sha256(notion_url.lower().encode("utf-8")).hexdigest()
+            object_digest = "d" * 64
+            manifest_record = {
+                "object_id": f"sha256:{object_digest}",
+                "sha256": object_digest,
+                "logical_key": f"objects/external/prehashed/notion_source_export/{object_digest[:2]}/{object_digest}",
+                "mime": "application/json",
+                "size_bytes": 987,
+                "locations": [
+                    {
+                        "provider": "external_prehashed",
+                        "store_kind": "notion_source_export",
+                        "store_ref": "notion-export-20260617",
+                        "availability": "declared_external",
+                        "content_addressed": True,
+                        "byte_verification_by_wom_kit": False,
+                    }
+                ],
+                "provenance": {
+                    "source": "prehashed_external_objet_ledger",
+                    "provider_locator_sha256": locator_fingerprint.removeprefix("sha256:"),
+                },
+            }
+            with manifest_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(manifest_record, ensure_ascii=False, sort_keys=True) + "\n")
+
+            zettel_path = archive_root / "inbox" / "zet_notion_rewrite_plan.md"
+            zettel_path.write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_rewrite_plan",
+                        "status: draft",
+                        "title: Rewrite private title must not echo",
+                        "---",
+                        "",
+                        "Rewrite private body must not echo.",
+                        f'<mention-page url="{notion_url}">Rewrite private page title</mention-page>',
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "notion-objet-link-rewrite-plan",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_notion_rewrite_plan.md",
+                    "--locator-fingerprint",
+                    locator_fingerprint,
+                    "--object-id",
+                    f"sha256:{object_digest}",
+                    "--expected-occurrence-count",
+                    "1",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "notion_objet_link_rewrite_plan")
+            self.assertEqual(result["target_mode"], "objet_ref_rewrite")
+            self.assertEqual(result["selected_object_id"], f"sha256:{object_digest}")
+            self.assertEqual(result["selected_objet_ref"], f"objet:sha256:{object_digest}")
+            self.assertEqual(result["selected_locator"]["occurrence_count"], 1)
+            self.assertEqual(result["would_change"][0]["change_kind"], "replace_provider_locator_with_objet_ref")
+            self.assertEqual(result["would_change"][0]["replacement_objet_ref"], f"objet:sha256:{object_digest}")
+            self.assertTrue(result["approval_checklist"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["zettel_body_text_echoed"])
+            self.assertFalse(result["privacy_guards"]["frontmatter_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["page_titles_echoed"])
+            self.assertFalse(result["privacy_guards"]["zettel_body_rewritten"])
+            self.assertFalse(result["privacy_guards"]["edges_written"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            for forbidden in (
+                notion_url,
+                "Rewrite private title",
+                "Rewrite private body",
+                "Rewrite private page title",
+                str(archive_root),
+            ):
+                with self.subTest(forbidden=forbidden):
+                    self.assertNotIn(forbidden, output)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            mismatch_code, mismatch_output = self.run_cli(
+                [
+                    "notion-objet-link-rewrite-plan",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_notion_rewrite_plan.md",
+                    "--locator-fingerprint",
+                    locator_fingerprint,
+                    "--object-id",
+                    f"sha256:{object_digest}",
+                    "--expected-occurrence-count",
+                    "2",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            mismatch = json.loads(mismatch_output)
+            self.assertEqual(mismatch_code, 1, mismatch_output)
+            self.assertFalse(mismatch["ok"])
+            self.assertEqual(mismatch["would_change"], [])
+            self.assertIn("expected_occurrence_count", " ".join(mismatch["blockers"]))
+
+            no_dry_code, no_dry_output = self.run_cli(
+                [
+                    "notion-objet-link-rewrite-plan",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_notion_rewrite_plan.md",
+                    "--locator-fingerprint",
+                    locator_fingerprint,
+                    "--object-id",
+                    f"sha256:{object_digest}",
+                ]
+            )
+            self.assertEqual(no_dry_code, 1, no_dry_output)
+            self.assertIn("requires --dry-run", no_dry_output)
+
     def test_prehashed_objet_ledger_approve_blocks_invalid_rows_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
