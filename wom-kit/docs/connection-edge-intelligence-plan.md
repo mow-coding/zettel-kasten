@@ -1,6 +1,6 @@
 # Connection Edge Intelligence Plan
 
-Status: v0.3.99 read-only connection edge review summary checkpoint
+Status: v0.3.102 read-only connection edge review summary and supersedes heuristic checkpoint
 Original checkpoint: Status: v0.3.87 read-only connection edge intelligence checkpoint
 
 `archive connection-edge-intelligence-plan` is a read-only review layer on top
@@ -84,13 +84,36 @@ derived
 semantic
 embed
 mention
+supersedes
 view_query
 comment_context
 ```
 
 The command maps those active edge types to meaning labels such as
 `source_material`, `derived_output`, `weak_semantic`, `embedded_objet`,
-`explicit_mention`, `view_snapshot_context`, and `comment_context`.
+`explicit_mention`, `version_replacement`, `view_snapshot_context`, and
+`comment_context`.
+
+## Version Chain Heuristic
+
+v0.3.102 adds a narrow version-chain heuristic. When sanitized fixture metadata
+contains a safe hint such as:
+
+```json
+{"relationship_hint": "version_chain"}
+```
+
+the planner can recommend:
+
+```text
+recommended_edge_type: supersedes
+relationship_meaning.suggested_id: version_replacement
+```
+
+This does not read source bodies and does not write the edge. It only helps the
+reviewer see that a newer plan, correction, or revision may replace an older
+zet. Durable writes still require a later human-approved `zettel-edge` or
+`zettel-edge-batch` step.
 
 ## Provisional Meanings
 
@@ -139,6 +162,7 @@ The command is intentionally cautious:
 
 - edge type must be judged from edge content, not from node category,
 - source mechanism and relationship meaning are separate axes,
+- version-chain hints can recommend `supersedes`,
 - AI suggestions require human approval,
 - ambiguous edges get review flags,
 - vague `semantic` links should be named more specifically or dropped,

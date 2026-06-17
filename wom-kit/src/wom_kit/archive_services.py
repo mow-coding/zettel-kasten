@@ -269,6 +269,7 @@ CONNECTION_IMPORT_RECOMMENDED_EDGE_TYPES = {
     "semantic",
     "embed",
     "mention",
+    "supersedes",
     "view_query",
     "comment_context",
 }
@@ -316,6 +317,12 @@ CONNECTION_EDGE_RELATIONSHIP_VOCABULARY = [
         "meaning": "The relation came from comment or discussion context and stays separate from the zet body.",
     },
     {
+        "meaning_id": "version_replacement",
+        "status": "active_mapping",
+        "active_edge_type": "supersedes",
+        "meaning": "The source is a newer version, correction, or replacement for the target.",
+    },
+    {
         "meaning_id": "format_variant",
         "status": "provisional_collect_under_neither_fits",
         "active_edge_type": None,
@@ -361,6 +368,7 @@ CONNECTION_EDGE_ACTIVE_MEANING_BY_EDGE_TYPE = {
     "semantic": "weak_semantic",
     "embed": "embedded_objet",
     "mention": "explicit_mention",
+    "supersedes": "version_replacement",
     "view_query": "view_snapshot_context",
     "comment_context": "comment_context",
 }
@@ -1503,10 +1511,292 @@ BEGINNER_SETUP_MANUAL_TOPICS = {
 }
 AI_RESPONSE_CONCEPT_GUIDE_TOPICS = {
     "all",
+    "operational_terms",
     "sha256_identity",
     "manifest_vs_zet",
     "three_layers",
 }
+AI_RESPONSE_CONCEPT_GUIDE_LOCALE_ALIASES = {
+    "ko": "ko-KR",
+    "ko-kr": "ko-KR",
+    "ko_kr": "ko-KR",
+    "korean": "ko-KR",
+    "en": "en-US",
+    "en-us": "en-US",
+    "en_us": "en-US",
+    "english": "en-US",
+}
+AI_OPERATIONAL_EDGE_TYPE_TRANSLATIONS = [
+    {
+        "term": "references",
+        "plain_meaning": "The source zet points to the target as a topical or contextual reference.",
+        "phrases": {
+            "ko-KR": "이 메모가 저것을 가리킨다 / 참고한다.",
+            "en-US": "This note points to or refers to that one.",
+        },
+        "metaphor": "footnote or hyperlink",
+        "confusion_guardrail": "It is a pointer, not proof that the target was used as source material.",
+    },
+    {
+        "term": "derived_from",
+        "plain_meaning": "The source zet was made from the target, such as a summary, transcript, or translation.",
+        "phrases": {
+            "ko-KR": "이 메모는 저것으로 만들어졌다. 요약, 전사, 번역 같은 관계다.",
+            "en-US": "This note was made from that source, such as a summary, transcript, or translation.",
+        },
+        "metaphor": "recipe ingredient",
+        "confusion_guardrail": "Use when the target materially produced the source, not merely when the topics overlap.",
+    },
+    {
+        "term": "material",
+        "plain_meaning": "The target is input material for the source zet.",
+        "phrases": {
+            "ko-KR": "저것이 이 메모의 재료다.",
+            "en-US": "That item is material for this note.",
+        },
+        "metaphor": "raw ingredient",
+        "confusion_guardrail": "Often overlaps with derived_from in plain language; prefer one user-facing bundle called source material.",
+    },
+    {
+        "term": "derived",
+        "plain_meaning": "The target is a later output or follow-up from the source zet.",
+        "phrases": {
+            "ko-KR": "이 메모에서 저 결과물이 나왔다.",
+            "en-US": "That output came from this note.",
+        },
+        "metaphor": "next result from a recipe",
+        "confusion_guardrail": "This is the opposite direction of material/source-material wording.",
+    },
+    {
+        "term": "semantic",
+        "plain_meaning": "The source and target are meaningfully related, but the exact relationship still needs human wording.",
+        "phrases": {
+            "ko-KR": "뜻으로 이어져 있지만, 어떤 관계인지는 사람이 더 이름 붙여야 한다.",
+            "en-US": "These are meaningfully related, but the exact relation still needs a human name.",
+        },
+        "metaphor": "thread of meaning",
+        "confusion_guardrail": "Synced blocks and internal URLs can both land here; keep source_mechanism separate from relationship meaning.",
+    },
+    {
+        "term": "embed",
+        "plain_meaning": "The source zet embeds or directly uses an objet.",
+        "phrases": {
+            "ko-KR": "이 메모 안에 저 파일/객체를 끼워 넣어 쓴다.",
+            "en-US": "This note embeds or directly uses that object.",
+        },
+        "metaphor": "attached exhibit",
+        "confusion_guardrail": "Use for object evidence, not for ordinary page-to-page references.",
+    },
+    {
+        "term": "mention",
+        "plain_meaning": "The source explicitly mentions another page or zet.",
+        "phrases": {
+            "ko-KR": "이 메모가 저 메모를 이름으로 언급한다.",
+            "en-US": "This note explicitly mentions that note.",
+        },
+        "metaphor": "name-drop",
+        "confusion_guardrail": "A mention can be incidental; keep it only when it carries durable meaning.",
+    },
+    {
+        "term": "view_query",
+        "plain_meaning": "The relation came from a reviewed static database view or filter snapshot.",
+        "phrases": {
+            "ko-KR": "필터/보기 결과로 같이 잡힌 관계다.",
+            "en-US": "This relation came from a reviewed filter or view result.",
+        },
+        "metaphor": "snapshot of a filtered table",
+        "confusion_guardrail": "Do not turn dynamic view membership into a permanent semantic claim without review.",
+    },
+    {
+        "term": "comment_context",
+        "plain_meaning": "The relation came from comment or discussion context.",
+        "phrases": {
+            "ko-KR": "댓글이나 논의 맥락에서 생긴 관계다.",
+            "en-US": "This relation came from comment or discussion context.",
+        },
+        "metaphor": "margin note",
+        "confusion_guardrail": "Keep comment evidence separate from the zet body.",
+    },
+    {
+        "term": "shared_with",
+        "plain_meaning": "The item was shared with another archive, person, or scope.",
+        "phrases": {
+            "ko-KR": "이것을 다른 사람이나 아카이브와 공유했다.",
+            "en-US": "This was shared with another person or archive.",
+        },
+        "metaphor": "handing over a folder copy",
+        "confusion_guardrail": "Sharing is not the same as transferring ownership.",
+    },
+    {
+        "term": "copied_to",
+        "plain_meaning": "A copy was made to another place while the original remains.",
+        "phrases": {
+            "ko-KR": "다른 곳에 사본을 만들었다.",
+            "en-US": "A copy was made somewhere else.",
+        },
+        "metaphor": "photocopy",
+        "confusion_guardrail": "Copying does not imply replacement or authority transfer.",
+    },
+    {
+        "term": "mounted_by",
+        "plain_meaning": "Another archive or profile mounts this one as a connected source.",
+        "phrases": {
+            "ko-KR": "다른 아카이브가 이것을 연결해 가져다 쓴다.",
+            "en-US": "Another archive mounts this as a connected source.",
+        },
+        "metaphor": "mounted drive",
+        "confusion_guardrail": "This is system-facing wording; explain only when mount behavior matters.",
+    },
+    {
+        "term": "transferred_to",
+        "plain_meaning": "Custody, ownership, or responsibility moved to another archive or person.",
+        "phrases": {
+            "ko-KR": "소유나 책임이 다른 곳으로 넘어갔다.",
+            "en-US": "Custody or responsibility moved somewhere else.",
+        },
+        "metaphor": "title transfer",
+        "confusion_guardrail": "Do not use for simple copy/share events.",
+    },
+    {
+        "term": "inherited_by",
+        "plain_meaning": "A child or successor archive inherited this item.",
+        "phrases": {
+            "ko-KR": "후속/자식 아카이브가 이것을 물려받았다.",
+            "en-US": "A child or successor archive inherited this.",
+        },
+        "metaphor": "inheritance",
+        "confusion_guardrail": "Inheritance is lineage, not just a topical relation.",
+    },
+    {
+        "term": "supersedes",
+        "plain_meaning": "The source zet replaces an older target zet.",
+        "phrases": {
+            "ko-KR": "이 새 메모가 옛 메모를 대체한다.",
+            "en-US": "This newer note replaces the older one.",
+        },
+        "metaphor": "v2 replacing v1",
+        "confusion_guardrail": "Use for version chains or corrected replacements, not for ordinary follow-up notes.",
+    },
+    {
+        "term": "redacts",
+        "plain_meaning": "The source is a safer redacted version of the target.",
+        "phrases": {
+            "ko-KR": "이것은 저것의 민감한 부분을 가린 안전본이다.",
+            "en-US": "This is a safer redacted version of that item.",
+        },
+        "metaphor": "masked copy",
+        "confusion_guardrail": "Redaction is about safety/privacy, not summary.",
+    },
+    {
+        "term": "summarizes",
+        "plain_meaning": "The source summarizes the target.",
+        "phrases": {
+            "ko-KR": "이 메모가 저 긴 내용을 요약한다.",
+            "en-US": "This note summarizes that longer item.",
+        },
+        "metaphor": "abstract",
+        "confusion_guardrail": "A summary can also be derived_from, but this term says the operation plainly.",
+    },
+    {
+        "term": "applies_to",
+        "plain_meaning": "A rule, policy, or view applies to the target.",
+        "phrases": {
+            "ko-KR": "이 규칙이나 보기가 저 대상에 적용된다.",
+            "en-US": "This rule, policy, or view applies to that target.",
+        },
+        "metaphor": "rule attached to a case",
+        "confusion_guardrail": "Use for applicability, not source lineage.",
+    },
+    {
+        "term": "handover_to",
+        "plain_meaning": "The source prepares or records a handoff to another person, archive, or role.",
+        "phrases": {
+            "ko-KR": "다른 사람이나 역할로 넘겨주기 위한 인수인계 관계다.",
+            "en-US": "This prepares or records a handoff to another person, archive, or role.",
+        },
+        "metaphor": "handoff note",
+        "confusion_guardrail": "Handoff is operational responsibility, not just a reference.",
+    },
+]
+AI_OPERATIONAL_CONNECTION_KIND_TRANSLATIONS = [
+    {
+        "term": "relation_property",
+        "phrases": {"ko-KR": "Notion 관계형 속성에서 온 연결", "en-US": "connection from a Notion relation property"},
+        "recommended_wording": "pre/post evidence needs relationship review before final edge type.",
+    },
+    {
+        "term": "synced_block_reference",
+        "phrases": {"ko-KR": "동기화 블록으로 이어진 연결", "en-US": "connection from a synced block"},
+        "recommended_wording": "currently maps to semantic unless a human names the meaning.",
+    },
+    {
+        "term": "database_view_filter",
+        "phrases": {"ko-KR": "데이터베이스 보기/필터 결과로 잡힌 연결", "en-US": "connection from a database view or filter"},
+        "recommended_wording": "treat as view_query snapshot context, not permanent meaning by default.",
+    },
+    {
+        "term": "internal_url_hyperlink",
+        "phrases": {"ko-KR": "Notion 내부 링크로 이어진 연결", "en-US": "connection from an internal Notion link"},
+        "recommended_wording": "currently maps to semantic unless a human names the meaning.",
+    },
+    {
+        "term": "mention_page",
+        "phrases": {"ko-KR": "@멘션으로 언급된 연결", "en-US": "connection from a page mention"},
+        "recommended_wording": "keep only when the mention carries durable meaning.",
+    },
+    {
+        "term": "comment_context",
+        "phrases": {"ko-KR": "댓글/논의 맥락에서 온 연결", "en-US": "connection from comment context"},
+        "recommended_wording": "keep as comment_context evidence, separate from body text.",
+    },
+    {
+        "term": "objet_embed",
+        "phrases": {"ko-KR": "파일/객체 삽입에서 온 연결", "en-US": "connection from an embedded object"},
+        "recommended_wording": "maps to embed when the object is evidence for the zet.",
+    },
+]
+AI_OPERATIONAL_LIFECYCLE_TRANSLATIONS = [
+    {
+        "term": "dry_run",
+        "phrases": {"ko-KR": "미리보기만 하고 쓰지는 않음", "en-US": "preview only; write nothing"},
+    },
+    {
+        "term": "approve",
+        "phrases": {"ko-KR": "사람이 승인해서 실제 기록함", "en-US": "human approved; perform the write"},
+    },
+    {
+        "term": "reviewed_by",
+        "phrases": {"ko-KR": "누가 승인했는지 남기는 안전한 라벨", "en-US": "safe label for who approved it"},
+    },
+    {
+        "term": "human_review_queue",
+        "phrases": {"ko-KR": "사람이 다시 봐야 해서 보류된 묶음", "en-US": "items held for human review"},
+    },
+    {
+        "term": "policy_writable",
+        "phrases": {"ko-KR": "정책에 맞아서 쓸 수 있는 후보", "en-US": "candidate matching the approved write policy"},
+    },
+    {
+        "term": "skip_existing",
+        "phrases": {"ko-KR": "이미 있는 연결은 건너뛰고 나머지만 진행", "en-US": "skip existing edges and continue with the rest"},
+    },
+    {
+        "term": "receipt",
+        "phrases": {"ko-KR": "나중에 확인할 수 있게 남기는 작업 영수증", "en-US": "audit receipt for what happened"},
+    },
+    {
+        "term": "source_mechanism",
+        "phrases": {"ko-KR": "연결이 발견된 방식", "en-US": "how the connection was found"},
+    },
+    {
+        "term": "relationship_meaning",
+        "phrases": {"ko-KR": "그 연결이 사람에게 무슨 뜻인지", "en-US": "what the connection means to a person"},
+    },
+    {
+        "term": "provisional_meaning",
+        "phrases": {"ko-KR": "아직 정식 edge type은 아니고 모아보는 의미 후보", "en-US": "meaning candidate collected before becoming an active edge type"},
+    },
+]
 CONNECTED_ACCOUNT_SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 CREDENTIAL_ACCESS_BROKER_ACTIONS = {
     "mail_source_read",
@@ -13666,6 +13956,7 @@ def connection_edge_intelligence_plan(
     suggestions = [] if blockers else [connection_edge_intelligence_suggestion(item) for item in candidate_edges if isinstance(item, dict)]
     ambiguous_count = sum(1 for item in suggestions if item.get("ambiguity_flag"))
     human_review_required_count = sum(1 for item in suggestions if item.get("human_review_required"))
+    version_chain_suggestion_count = sum(1 for item in suggestions if item.get("version_chain_signal"))
     parsimony_review_count = sum(
         1
         for item in suggestions
@@ -13690,6 +13981,7 @@ def connection_edge_intelligence_plan(
             "candidate_id": item.get("candidate_id"),
             "review_reason": item.get("review_reason"),
             "current_edge_type": item.get("current_edge_type"),
+            "recommended_edge_type": item.get("recommended_edge_type"),
             "suggested_relationship_meaning": item.get("relationship_meaning", {}).get("suggested_id"),
             "ambiguity_flag": bool(item.get("ambiguity_flag")),
             "parsimony_signal": item.get("parsimony_signal"),
@@ -13715,6 +14007,7 @@ def connection_edge_intelligence_plan(
         "edge_intelligence_contract": {
             "relationship_meaning_axis_is_separate_from_source_mechanism_axis": True,
             "type_must_be_judged_from_edge_content_not_node_category": True,
+            "version_chain_hint_can_recommend_supersedes": True,
             "ai_suggestions_require_human_approval": True,
             "ambiguous_edges_get_review_flags": True,
             "parsimony_first": True,
@@ -13737,6 +14030,7 @@ def connection_edge_intelligence_plan(
             "ambiguous_count": ambiguous_count,
             "human_review_required_count": human_review_required_count,
             "parsimony_review_count": parsimony_review_count,
+            "version_chain_suggestion_count": version_chain_suggestion_count,
             "provisional_meaning_candidate_ids": provisional_candidates,
         },
         "review_summary": {
@@ -13763,6 +14057,7 @@ def connection_edge_intelligence_plan(
             "relationship_meaning_axis_available": True,
             "source_mechanism_axis_available": True,
             "heuristic_review_flags_available": True,
+            "version_chain_supersedes_heuristic_available": True,
             "multi_lens_ai_classification_implemented": False,
             "llm_or_provider_classification_implemented": False,
             "source_body_reader_implemented": False,
@@ -13819,8 +14114,10 @@ def connection_edge_intelligence_suggestion(candidate: dict[str, Any]) -> dict[s
     edge_type = str(candidate.get("edge_type") or "").strip().lower().replace("-", "_")
     connection_kind = str(candidate.get("connection_kind") or "").strip().lower().replace("-", "_")
     confidence = str(candidate.get("confidence") or "").strip().lower()
-    relationship_meaning = CONNECTION_EDGE_ACTIVE_MEANING_BY_EDGE_TYPE.get(edge_type, "neither_fits")
-    provisional = connection_edge_provisional_meaning_candidates(edge_type=edge_type, connection_kind=connection_kind)
+    version_chain_signal = connection_edge_version_chain_signal(candidate)
+    recommended_edge_type = "supersedes" if version_chain_signal else edge_type
+    relationship_meaning = CONNECTION_EDGE_ACTIVE_MEANING_BY_EDGE_TYPE.get(recommended_edge_type, "neither_fits")
+    provisional = [] if version_chain_signal else connection_edge_provisional_meaning_candidates(edge_type=edge_type, connection_kind=connection_kind)
     ambiguity_flag = edge_type == "semantic" or confidence in {"medium", "snapshot_required"} or confidence.startswith("medium")
     human_review_required = ambiguity_flag or bool(provisional)
     parsimony_signal = connection_edge_parsimony_signal(edge_type=edge_type, connection_kind=connection_kind)
@@ -13829,9 +14126,12 @@ def connection_edge_intelligence_suggestion(candidate: dict[str, Any]) -> dict[s
         "connection_kind": connection_kind,
         "source_mechanism": CONNECTION_EDGE_MECHANISM_AXIS.get(connection_kind, "unknown_mechanism"),
         "current_edge_type": edge_type,
+        "recommended_edge_type": recommended_edge_type,
+        "version_chain_signal": version_chain_signal,
+        "relationship_hint": candidate.get("relationship_hint"),
         "relationship_meaning": {
             "suggested_id": relationship_meaning,
-            "active_edge_type": edge_type if relationship_meaning != "neither_fits" else None,
+            "active_edge_type": recommended_edge_type if relationship_meaning != "neither_fits" else None,
             "provisional_candidate_ids": provisional,
         },
         "confidence": candidate.get("confidence"),
@@ -13843,11 +14143,23 @@ def connection_edge_intelligence_suggestion(candidate: dict[str, Any]) -> dict[s
             connection_kind=connection_kind,
             confidence=confidence,
             provisional=provisional,
+            version_chain_signal=version_chain_signal,
         ),
         "parsimony_signal": parsimony_signal,
         "classification_basis": "candidate_metadata_only_no_node_category_inference",
         "write_status": "not_written",
     }
+
+
+def connection_edge_version_chain_signal(candidate: dict[str, Any]) -> bool:
+    hint = str(candidate.get("relationship_hint") or candidate.get("relationship_meaning_hint") or "").strip().lower().replace("-", "_")
+    if hint in {"version_chain", "revision_chain", "supersedes", "replaces", "replacement", "version_replacement"}:
+        return True
+    text = " ".join(
+        str(candidate.get(key) or "")
+        for key in ("candidate_id", "evidence_ref", "review_status")
+    ).lower().replace("-", "_")
+    return any(token in text for token in ("version_chain", "revision_chain", "supersedes", "replaces", "replacement"))
 
 
 def connection_edge_provisional_meaning_candidates(*, edge_type: str, connection_kind: str) -> list[str]:
@@ -13884,7 +14196,10 @@ def connection_edge_review_reason(
     connection_kind: str,
     confidence: str,
     provisional: list[str],
+    version_chain_signal: bool = False,
 ) -> str:
+    if version_chain_signal:
+        return "version-chain hint maps to active supersedes, but durable writes still require human batch approval."
     if edge_type == "semantic":
         return "semantic is intentionally weak; a human should name the specific relation or drop it."
     if confidence == "snapshot_required":
@@ -14060,6 +14375,9 @@ def build_connection_evidence_candidate(
     evidence_ref: str,
 ) -> dict[str, Any]:
     review_status = safe_connection_evidence_field(record, "review_status", index, blockers)
+    relationship_hint = None
+    if record.get("relationship_hint") is not None:
+        relationship_hint = safe_connection_evidence_field(record, "relationship_hint", index, blockers).lower().replace("-", "_")
     seed = {
         "connection_kind": connection_kind,
         "edge_type": edge_type,
@@ -14067,8 +14385,9 @@ def build_connection_evidence_candidate(
         "target_ref": target_ref,
         "snapshot_ref": snapshot_ref,
         "evidence_ref": evidence_ref,
+        "relationship_hint": relationship_hint,
     }
-    return {
+    candidate = {
         "candidate_id": "candidate:" + sha256_json_value(seed).removeprefix("sha256:"),
         "connection_kind": connection_kind,
         "edge_type": edge_type,
@@ -14080,6 +14399,9 @@ def build_connection_evidence_candidate(
         "evidence_ref": evidence_ref,
         "write_status": "not_written",
     }
+    if relationship_hint:
+        candidate["relationship_hint"] = relationship_hint
+    return candidate
 
 
 def safe_connection_evidence_field(
@@ -14612,6 +14934,79 @@ def zettel_edge_batch_confidence_rank(value: Any) -> int:
     return 0
 
 
+def resolve_zettel_edge_batch_plan_path(
+    root: Path,
+    plan_path: Path | str,
+    blockers: list[str],
+) -> tuple[Path | None, dict[str, Any]]:
+    raw = str(plan_path or "").strip()
+    resolution = {
+        "requested_path_kind": "empty" if not raw else "relative",
+        "resolved_as": None,
+        "path_echoed": False,
+        "archive_relative_path": None,
+        "resolution_order": ["archive_relative", "cwd_relative"],
+    }
+    if not raw:
+        blockers.append("batch edge plan path is required.")
+        return None, resolution
+
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute():
+        resolution["requested_path_kind"] = "absolute"
+        resolution["resolution_order"] = ["absolute"]
+        if candidate.is_file():
+            resolution["resolved_as"] = "absolute"
+            return candidate.resolve(), resolution
+        blockers.append("batch edge plan path not found. Use an archive-relative path like workbench/zettel-edge-batch.plan.json or an absolute path.")
+        return None, resolution
+
+    try:
+        archive_candidate = resolve_archive_relative_path(root, raw)
+        normalized = normalize_archive_relative_path(raw)
+    except ArchivePathError:
+        archive_candidate = None
+        normalized = None
+    if archive_candidate is not None and archive_candidate.is_file():
+        resolution["resolved_as"] = "archive_relative"
+        resolution["archive_relative_path"] = normalized
+        return archive_candidate, resolution
+
+    cwd_candidate = candidate.resolve()
+    if cwd_candidate.is_file():
+        resolution["resolved_as"] = "cwd_relative"
+        resolution["resolution_order"] = ["archive_relative", "cwd_relative"]
+        return cwd_candidate, resolution
+
+    blockers.append(
+        "batch edge plan path not found. --plan is resolved archive-relative first "
+        "(for example workbench/zettel-edge-batch.plan.json), then CWD-relative; pass an absolute path if needed."
+    )
+    return None, resolution
+
+
+def load_zettel_edge_batch_plan(path: Path, blockers: list[str]) -> dict[str, Any] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        blockers.append("batch edge plan JSON is invalid.")
+        return None
+    except OSError:
+        blockers.append("batch edge plan file could not be read.")
+        return None
+    if not isinstance(data, dict):
+        blockers.append("batch edge plan JSON must contain an object.")
+        return None
+    return json_safe(data)
+
+
+def zettel_edge_batch_existing_edge_blockers(blockers: Any) -> bool:
+    if not isinstance(blockers, list) or not blockers:
+        return False
+    allowed = {"edge already exists on the source zettel.", "edge receipt already exists."}
+    return all(str(item) in allowed for item in blockers)
+
+
 def safe_zettel_edge_batch_scalar(value: Any, blockers: list[str], label: str) -> str:
     text = str(value or "").strip()
     if not safe_source_intake_plan_scalar(text):
@@ -14726,6 +15121,9 @@ def zettel_edge_batch_result(
     receipt_path: str | None,
     item_results: list[dict[str, Any]],
     review_queue: list[dict[str, Any]],
+    skipped_existing_edges: list[dict[str, Any]],
+    skip_existing: bool,
+    plan_path_resolution: dict[str, Any],
     would_change: list[str],
     files_written: list[str],
     blockers: list[str],
@@ -14733,13 +15131,27 @@ def zettel_edge_batch_result(
 ) -> dict[str, Any]:
     policy_writable_count = len(item_results)
     written_edge_count = sum(1 for item in item_results if item.get("write_status") == "written")
+    skipped_existing_count = len(skipped_existing_edges)
+    if blockers:
+        write_status = "blocked"
+    elif dry_run and item_results:
+        write_status = "would_write"
+    elif dry_run and skipped_existing_edges:
+        write_status = "would_skip_existing"
+    elif approve and item_results:
+        write_status = "written"
+    elif approve and skipped_existing_edges:
+        write_status = "nothing_to_write"
+    else:
+        write_status = "would_write" if dry_run else "written"
     return {
         "ok": not blockers,
         "dry_run": bool(dry_run),
         "lifecycle_action": "zettel_edge_batch_plan" if dry_run else "zettel_edge_batch_write",
         "archive_id": archive_id,
         "batch_id": batch_id,
-        "write_status": "blocked" if blockers else "would_write" if dry_run else "written",
+        "write_status": write_status,
+        "plan_path_resolution": plan_path_resolution,
         "policy": {
             "policy_id": policy.get("policy_id"),
             "policy_label": policy.get("policy_label"),
@@ -14749,17 +15161,23 @@ def zettel_edge_batch_result(
         },
         "summary": {
             "policy_writable_edge_count": policy_writable_count,
+            "policy_matched_edge_count": policy_writable_count + skipped_existing_count,
             "review_queue_count": len(review_queue),
+            "skipped_existing_edge_count": skipped_existing_count,
             "written_edge_count": written_edge_count,
             "batch_receipt_written": bool(receipt_path and receipt_path in files_written),
+            "skip_existing_requested": bool(skip_existing),
         },
         "policy_writable_edges": item_results,
+        "skipped_existing_edges": skipped_existing_edges,
         "human_review_queue": review_queue,
         "receipt_path": receipt_path,
         "reviewed_by": reviewed_by if approve else None,
         "current_capability": {
             "policy_batch_approval_implemented": True,
             "bulk_edge_writer_implemented": True,
+            "archive_relative_plan_path_resolution": True,
+            "skip_existing_edges_implemented": True,
             "uses_single_zettel_edge_gate_per_item": True,
             "mcp_write_tool_implemented": False,
             "real_export_parser_implemented": False,
@@ -14777,6 +15195,7 @@ def zettel_edge_batch_result(
             "zettel_frontmatter_written": bool(written_edge_count),
             "individual_edge_receipts_written": written_edge_count,
             "batch_receipt_written": bool(receipt_path and receipt_path in files_written),
+            "existing_edges_skipped": skipped_existing_count,
             "rollback_on_failure": True,
         },
         "privacy_guards": {
@@ -14820,6 +15239,7 @@ def zettel_edge_batch_write(
     approve: bool = False,
     reviewed_by: str | None = None,
     max_edges: int = 200,
+    skip_existing: bool = False,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -14835,67 +15255,79 @@ def zettel_edge_batch_write(
     if reviewed_by and not safe_source_intake_plan_scalar(str(reviewed_by)):
         blockers.append("reviewed_by must be a safe non-secret scalar.")
 
-    plan = load_json_file(Path(plan_path))
-    schema = str(plan.get("schema") or plan.get("schema_version") or "").strip()
-    if schema and schema not in {"wom-kit/zettel-edge-batch/v0.1", "wom-kit/zettel-edge-batch-plan/v0.1"}:
-        blockers.append("batch edge plan schema must be wom-kit/zettel-edge-batch/v0.1.")
-    policy = zettel_edge_batch_policy(plan, blockers)
-    rows = zettel_edge_batch_candidate_rows(plan, blockers)
-    if len(rows) > max(1, min(int(max_edges), 1000)):
-        blockers.append("batch edge plan exceeds max_edges.")
+    resolved_plan_path, plan_path_resolution = resolve_zettel_edge_batch_plan_path(root, plan_path, blockers)
+    plan = load_zettel_edge_batch_plan(resolved_plan_path, blockers) if resolved_plan_path is not None else None
+    policy: dict[str, Any] = {}
+    rows: list[dict[str, Any]] = []
+    if plan is not None:
+        schema = str(plan.get("schema") or plan.get("schema_version") or "").strip()
+        if schema and schema not in {"wom-kit/zettel-edge-batch/v0.1", "wom-kit/zettel-edge-batch-plan/v0.1"}:
+            blockers.append("batch edge plan schema must be wom-kit/zettel-edge-batch/v0.1.")
+        policy = zettel_edge_batch_policy(plan, blockers)
+        rows = zettel_edge_batch_candidate_rows(plan, blockers)
+        if len(rows) > max(1, min(int(max_edges), 1000)):
+            blockers.append("batch edge plan exceeds max_edges.")
 
     seen_edges: set[tuple[str, str, str, str]] = set()
     policy_writable_rows: list[dict[str, Any]] = []
     review_queue: list[dict[str, Any]] = []
-    for row in rows:
-        source_key = str(row.get("from_zettel") or row.get("from_path") or "")
-        edge_key = (source_key, str(row.get("edge_type") or ""), str(row.get("target") or ""), str(row.get("visibility") or "private"))
-        if edge_key in seen_edges:
-            blockers.append(f"edges[{row.get('index')}] duplicates another batch edge.")
-            continue
-        seen_edges.add(edge_key)
-        state, reason = zettel_edge_batch_item_policy_state(row, policy)
-        row_summary = {
-            "index": row.get("index"),
-            "candidate_id": row.get("candidate_id"),
-            "from_zettel": row.get("from_zettel"),
-            "from_path": row.get("from_path"),
-            "target": row.get("target"),
-            "edge_type": row.get("edge_type"),
-            "visibility": row.get("visibility"),
-            "confidence": row.get("confidence"),
-            "review_status": row.get("review_status"),
-            "policy_state": state,
-            "policy_reason": reason,
-            "evidence_ref": row.get("evidence_ref"),
-        }
-        if state == "policy_writable":
-            policy_writable_rows.append({**row, "policy_reason": reason})
-        else:
-            review_queue.append(drop_none_values(row_summary))
-
-    batch_seed = {
-        "archive_id": archive_id,
-        "policy": policy,
-        "edges": [
-            {
+    if not blockers:
+        for row in rows:
+            source_key = str(row.get("from_zettel") or row.get("from_path") or "")
+            edge_key = (source_key, str(row.get("edge_type") or ""), str(row.get("target") or ""), str(row.get("visibility") or "private"))
+            if edge_key in seen_edges:
+                blockers.append(f"edges[{row.get('index')}] duplicates another batch edge.")
+                continue
+            seen_edges.add(edge_key)
+            state, reason = zettel_edge_batch_item_policy_state(row, policy)
+            row_summary = {
+                "index": row.get("index"),
                 "candidate_id": row.get("candidate_id"),
                 "from_zettel": row.get("from_zettel"),
                 "from_path": row.get("from_path"),
                 "target": row.get("target"),
                 "edge_type": row.get("edge_type"),
                 "visibility": row.get("visibility"),
+                "confidence": row.get("confidence"),
+                "review_status": row.get("review_status"),
+                "policy_state": state,
+                "policy_reason": reason,
+                "evidence_ref": row.get("evidence_ref"),
             }
-            for row in policy_writable_rows
-        ],
-    }
-    batch_id = "edge-batch:" + sha256_json_hex(batch_seed)
-    batch_receipt_relative = zettel_edge_batch_receipt_relative_path(batch_id)
-    batch_receipt_path = archive_internal_path(root, batch_receipt_relative)
-    if batch_receipt_path.exists():
-        blockers.append("batch edge receipt already exists.")
+            if state == "policy_writable":
+                policy_writable_rows.append({**row, "policy_reason": reason})
+            else:
+                review_queue.append(drop_none_values(row_summary))
+
+    batch_id: str | None = None
+    batch_receipt_relative: str | None = None
+    if policy_writable_rows:
+        initial_batch_id = "edge-batch:" + sha256_json_hex(
+            {
+                "archive_id": archive_id,
+                "policy": policy,
+                "edges": [
+                    {
+                        "candidate_id": row.get("candidate_id"),
+                        "from_zettel": row.get("from_zettel"),
+                        "from_path": row.get("from_path"),
+                        "target": row.get("target"),
+                        "edge_type": row.get("edge_type"),
+                        "visibility": row.get("visibility"),
+                    }
+                    for row in policy_writable_rows
+                ],
+            }
+        )
+        initial_receipt_relative = zettel_edge_batch_receipt_relative_path(initial_batch_id)
+        if not skip_existing and archive_internal_path(root, initial_receipt_relative).exists():
+            blockers.append("batch edge receipt already exists.")
+        batch_id = initial_batch_id
+        batch_receipt_relative = initial_receipt_relative
 
     item_results: list[dict[str, Any]] = []
+    effective_writable_rows: list[dict[str, Any]] = []
+    skipped_existing_edges: list[dict[str, Any]] = []
     would_change: list[str] = []
     if not blockers:
         for row in policy_writable_rows:
@@ -14909,8 +15341,27 @@ def zettel_edge_batch_write(
                 dry_run=True,
                 approve=False,
             )
+            if not dry_result.get("ok") and skip_existing and zettel_edge_batch_existing_edge_blockers(dry_result.get("blockers")):
+                skipped_existing_edges.append(
+                    {
+                        "index": row.get("index"),
+                        "candidate_id": row.get("candidate_id"),
+                        "policy_reason": row.get("policy_reason"),
+                        "write_status": "skipped_existing",
+                        "source": dry_result.get("source"),
+                        "target": dry_result.get("target"),
+                        "edge_type": dry_result.get("edge_type"),
+                        "visibility": dry_result.get("visibility"),
+                        "edge_id": dry_result.get("edge_id"),
+                        "receipt_path": dry_result.get("receipt_path"),
+                        "skip_reason": "edge_or_receipt_already_exists",
+                    }
+                )
+                continue
             if not dry_result.get("ok"):
                 blockers.extend(f"edges[{row.get('index')}]: {blocker}" for blocker in dry_result.get("blockers", []))
+            else:
+                effective_writable_rows.append(row)
             item_results.append(
                 {
                     "index": row.get("index"),
@@ -14928,9 +15379,29 @@ def zettel_edge_batch_write(
                 }
             )
             would_change.extend(str(item) for item in dry_result.get("would_change", []) if isinstance(item, str))
-        if policy_writable_rows:
+        if effective_writable_rows:
+            batch_id = "edge-batch:" + sha256_json_hex(
+                {
+                    "archive_id": archive_id,
+                    "policy": policy,
+                    "edges": [
+                        {
+                            "candidate_id": row.get("candidate_id"),
+                            "from_zettel": row.get("from_zettel"),
+                            "from_path": row.get("from_path"),
+                            "target": row.get("target"),
+                            "edge_type": row.get("edge_type"),
+                            "visibility": row.get("visibility"),
+                        }
+                        for row in effective_writable_rows
+                    ],
+                }
+            )
+            batch_receipt_relative = zettel_edge_batch_receipt_relative_path(batch_id)
+            if archive_internal_path(root, batch_receipt_relative).exists():
+                blockers.append("batch edge receipt already exists.")
             would_change.append(batch_receipt_relative)
-        elif approve:
+        elif approve and not skipped_existing_edges:
             blockers.append("No policy-writable edges are available to approve.")
 
     if blockers or dry_run:
@@ -14944,6 +15415,9 @@ def zettel_edge_batch_write(
             receipt_path=batch_receipt_relative,
             item_results=item_results,
             review_queue=review_queue,
+            skipped_existing_edges=skipped_existing_edges,
+            skip_existing=skip_existing,
+            plan_path_resolution=plan_path_resolution,
             would_change=would_change,
             files_written=[],
             blockers=blockers,
@@ -14951,6 +15425,27 @@ def zettel_edge_batch_write(
         )
 
     assert reviewed_by is not None
+    if not effective_writable_rows:
+        return zettel_edge_batch_result(
+            archive_id=archive_id,
+            dry_run=False,
+            approve=True,
+            reviewed_by=reviewed_by,
+            policy=policy,
+            batch_id=None,
+            receipt_path=None,
+            item_results=[],
+            review_queue=review_queue,
+            skipped_existing_edges=skipped_existing_edges,
+            skip_existing=skip_existing,
+            plan_path_resolution=plan_path_resolution,
+            would_change=would_change,
+            files_written=[],
+            blockers=[],
+            warnings=warnings,
+        )
+
+    assert batch_receipt_relative is not None
     snapshots: dict[str, str | None] = {}
     for item in item_results:
         source = item.get("source") if isinstance(item.get("source"), dict) else {}
@@ -14965,7 +15460,7 @@ def zettel_edge_batch_write(
     files_written: list[str] = []
     written_results: list[dict[str, Any]] = []
     try:
-        for row in policy_writable_rows:
+        for row in effective_writable_rows:
             write_result = zettel_edge_write(
                 root,
                 from_zettel=row.get("from_zettel"),
@@ -15013,6 +15508,7 @@ def zettel_edge_batch_write(
             "reviewed_by": reviewed_by,
             "written_edge_count": len(written_results),
             "review_queue_count": len(review_queue),
+            "skipped_existing_edge_count": len(skipped_existing_edges),
             "edge_receipts": [item.get("receipt_path") for item in written_results],
             "closed_actions": {
                 "provider_api_called": False,
@@ -15026,6 +15522,7 @@ def zettel_edge_batch_write(
                 "rollback_on_failure": True,
             },
         }
+        batch_receipt_path = archive_internal_path(root, batch_receipt_relative)
         batch_receipt_path.parent.mkdir(parents=True, exist_ok=True)
         write_json_new_file(batch_receipt_path, batch_receipt)
         files_written.append(batch_receipt_relative)
@@ -15043,6 +15540,9 @@ def zettel_edge_batch_write(
         receipt_path=batch_receipt_relative,
         item_results=written_results,
         review_queue=review_queue,
+        skipped_existing_edges=skipped_existing_edges,
+        skip_existing=skip_existing,
+        plan_path_resolution=plan_path_resolution,
         would_change=would_change,
         files_written=files_written,
         blockers=[],
@@ -22069,6 +22569,7 @@ def ai_response_concept_guide(
     archive_root: Path | str,
     *,
     topic: str = "all",
+    locale: str = "ko-KR",
     dry_run: bool = True,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
@@ -22084,9 +22585,11 @@ def ai_response_concept_guide(
         blockers.append("topic must be one of: " + ", ".join(sorted(AI_RESPONSE_CONCEPT_GUIDE_TOPICS)) + ".")
         resolved_topic = "all"
 
+    resolved_locale = ai_response_concept_guide_locale(locale, blockers, warnings)
     include_identity = resolved_topic in {"all", "sha256_identity"}
     include_manifest = resolved_topic in {"all", "manifest_vs_zet"}
     include_layers = resolved_topic in {"all", "three_layers"}
+    include_operational_terms = resolved_topic in {"all", "operational_terms"}
 
     sections: list[dict[str, Any]] = []
     if include_identity:
@@ -22159,15 +22662,20 @@ def ai_response_concept_guide(
             }
         )
 
+    if include_operational_terms:
+        sections.append(ai_response_operational_terms_section(resolved_locale))
+
     return {
         "ok": not blockers,
         "dry_run": True,
         "lifecycle_action": "ai_response_concept_guide",
         "archive_id": archive_id,
         "topic": resolved_topic,
+        "locale": resolved_locale,
         "guide_contract": {
             "beginner_first": True,
             "answer_before_jargon": True,
+            "translate_operational_terms_before_asking_user_to_choose": True,
             "use_analogy_without_overclaiming": True,
             "separate_identity_from_location": True,
             "separate_evidence_from_interpretation": True,
@@ -22218,6 +22726,10 @@ def ai_response_concept_guide(
         },
         "current_capability": {
             "cli_read_only_preview_available": True,
+            "operational_term_translation_available": True,
+            "locale_aware_korean_available": True,
+            "edge_type_translation_available": True,
+            "connection_kind_translation_available": True,
             "mcp_tool_available": False,
             "object_upload_adapter_implemented": False,
             "provider_availability_probe_implemented": False,
@@ -22257,6 +22769,88 @@ def ai_response_concept_guide(
         "would_change": [],
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
+    }
+
+
+def ai_response_concept_guide_locale(locale: str, blockers: list[str], warnings: list[str]) -> str:
+    raw = str(locale or "ko-KR").strip()
+    if not safe_source_intake_plan_scalar(raw):
+        blockers.append("locale must be a safe non-secret scalar.")
+        return "ko-KR"
+    resolved = AI_RESPONSE_CONCEPT_GUIDE_LOCALE_ALIASES.get(raw.lower())
+    if resolved:
+        return resolved
+    warnings.append("Unsupported locale; falling back to ko-KR.")
+    return "ko-KR"
+
+
+def ai_response_localized_phrase(entry: dict[str, Any], locale: str) -> str:
+    phrases = entry.get("phrases") if isinstance(entry.get("phrases"), dict) else {}
+    value = phrases.get(locale) or phrases.get("ko-KR") or phrases.get("en-US") or ""
+    return str(value)
+
+
+def ai_response_operational_terms_section(locale: str) -> dict[str, Any]:
+    edge_terms = []
+    for entry in AI_OPERATIONAL_EDGE_TYPE_TRANSLATIONS:
+        edge_terms.append(
+            {
+                "term": entry["term"],
+                "plain_meaning": entry["plain_meaning"],
+                "selected_user_phrase": ai_response_localized_phrase(entry, locale),
+                "phrases": copy.deepcopy(entry["phrases"]),
+                "metaphor": entry["metaphor"],
+                "confusion_guardrail": entry["confusion_guardrail"],
+            }
+        )
+    connection_terms = []
+    for entry in AI_OPERATIONAL_CONNECTION_KIND_TRANSLATIONS:
+        connection_terms.append(
+            {
+                "term": entry["term"],
+                "selected_user_phrase": ai_response_localized_phrase(entry, locale),
+                "phrases": copy.deepcopy(entry["phrases"]),
+                "recommended_wording": entry["recommended_wording"],
+            }
+        )
+    lifecycle_terms = []
+    for entry in AI_OPERATIONAL_LIFECYCLE_TRANSLATIONS:
+        lifecycle_terms.append(
+            {
+                "term": entry["term"],
+                "selected_user_phrase": ai_response_localized_phrase(entry, locale),
+                "phrases": copy.deepcopy(entry["phrases"]),
+            }
+        )
+    return {
+        "section_id": "operational_terms",
+        "title": "operational terminology translation layer",
+        "locale": locale,
+        "beginner_explanation": "WOM keeps stable internal terms for machines, but AI responses should translate them into plain user language before asking a human to decide.",
+        "answer_order": [
+            "Name the human-facing meaning first.",
+            "Show the internal WOM term in backticks only after the plain meaning is clear.",
+            "Separate source_mechanism from relationship_meaning.",
+            "When the relation is weak or broad, ask the human to name it or drop it instead of inventing a stronger tie.",
+        ],
+        "edge_type_terms": edge_terms,
+        "connection_kind_terms": connection_terms,
+        "lifecycle_terms": lifecycle_terms,
+        "semantic_source_mechanism_note": {
+            "synced_block_reference": "Currently translates through semantic unless the human names a more specific meaning.",
+            "internal_url_hyperlink": "Currently translates through semantic unless the human names a more specific meaning.",
+            "decision": "Do not add new edge types only to preserve provider mechanisms; keep source_mechanism metadata separate.",
+        },
+        "bundling_guidance": [
+            "For beginners, material and derived_from can be explained as source material before exposing direction details.",
+            "For beginners, semantic and references can be explained as meaning/reference links before asking for a precise name.",
+            "Use supersedes for version chains where a newer zet replaces an older one.",
+        ],
+        "do_not_say": [
+            "This semantic edge proves the pages are the same thing.",
+            "A Notion internal URL needs its own durable WOM edge type by default.",
+            "A synced block source mechanism is already a final relationship meaning.",
+        ],
     }
 
 

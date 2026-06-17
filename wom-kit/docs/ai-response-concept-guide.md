@@ -1,24 +1,27 @@
 # AI Response Concept Guide
 
-Status: v0.3.84 read-only concept guide CLI checkpoint
+Status: v0.3.102 read-only concept and operational terminology guide checkpoint
 Date: 2026-06-17
 
-This guide tells an AI runtime how to explain three WOM ideas when a beginner
-gets stuck during intake or object-storage setup:
+This guide tells an AI runtime how to explain core WOM ideas when a beginner
+gets stuck during intake, object-storage setup, or connection review:
 
 ```text
 sha256 identity vs location URL
 manifest vs zet
 objet -> derived text -> zet
+operational terminology translation layer
 ```
 
 It is not a new adapter, importer, uploader, or proof system. It is a read-only
-language guide for safer human-facing answers.
+language guide for safer human-facing answers. v0.3.102 adds an operational
+term dictionary so AI responses can translate terms such as `derived_from`,
+`references`, and `supersedes` before asking a human to decide.
 
 ## Command
 
 ```bash
-archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json
+archive ai-response-concept-guide <archive-root> --topic all --locale ko-KR --dry-run --format json
 ```
 
 Aliases:
@@ -35,11 +38,16 @@ all
 sha256_identity
 manifest_vs_zet
 three_layers
+operational_terms
 ```
 
 The command writes nothing and reads no source bodies. It returns structured
 explanation cards, safe routing hints, and overclaim guardrails an AI runtime
 can use while helping a beginner.
+
+`--locale` currently supports Korean and English human-facing phrases through
+`ko-KR` and `en-US`. The internal WOM identifiers stay stable in English; the
+selected phrase is what the AI should say first.
 
 ## 1. First Answer Pattern
 
@@ -163,7 +171,47 @@ This is the human's durable note or conclusion, and it cites its evidence.
 A `zet` should cite objets and derived-text records. It should not become the
 only copy of the evidence.
 
-## 4. What The AI Should Ask Next
+## 4. Operational Terms
+
+When the AI discusses reviewed connections, it should translate operational
+terms before showing the internal identifier.
+
+Examples:
+
+| WOM term | Beginner phrase |
+| --- | --- |
+| `derived_from` | "This note was made from that source." |
+| `references` | "This note points to or refers to that one." |
+| `supersedes` | "This newer note replaces the older one." |
+| `semantic` | "These are meaningfully related, but the exact relation still needs a human name." |
+
+In Korean locale, the same entries return phrases such as:
+
+```text
+이 메모는 저것으로 만들어졌다.
+이 메모가 저것을 가리킨다 / 참고한다.
+이 새 메모가 옛 메모를 대체한다.
+```
+
+The guide also separates:
+
+- `source_mechanism`: how a connection was found, such as a Notion synced block
+  or internal URL;
+- `relationship_meaning`: what the connection means to the human archive.
+
+This matters because both synced blocks and internal URLs can currently map to
+`semantic`. That does not mean the source mechanisms are identical. It means
+WOM is deliberately keeping provider mechanics separate from durable
+relationship meaning until a human names the tie.
+
+For beginner-facing answers, the guide recommends bundling near-overlaps:
+
+- `material` and `derived_from` can be explained first as source material;
+- `semantic` and `references` can be explained first as meaning/reference links;
+- `supersedes` should be used for version chains where a newer zet replaces an
+  older one.
+
+## 5. What The AI Should Ask Next
 
 When the human is unsure about order, ask one small question:
 
@@ -187,7 +235,7 @@ Then route safely:
 The CLI returns the same routing in `safe_routing` so a terminal-capable AI can
 pick the next safe command without inventing a live upload or provider action.
 
-## 5. Overclaim Guardrails
+## 6. Overclaim Guardrails
 
 The AI must not say:
 
@@ -206,7 +254,7 @@ The AI may say:
 - "A store label is safe to show; raw paths, provider URLs, account ids, and
   tokens are not."
 
-## 6. Relation To Existing Docs
+## 7. Relation To Existing Docs
 
 This guide rephrases existing model documents for AI-human conversation:
 
@@ -215,6 +263,8 @@ This guide rephrases existing model documents for AI-human conversation:
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)
 - [Derived Text Capture](derived-text.md)
 - [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md)
+- [Connection Edge Intelligence Plan](connection-edge-intelligence-plan.md)
+- [Zettel Edge Batch](zettel-edge-batch.md)
 
 It does not change those underlying implementation boundaries.
 
@@ -227,6 +277,7 @@ It does not change those underlying implementation boundaries.
 - write object manifests,
 - write derived-text records,
 - write receipts,
+- write edges,
 - draft zets,
 - mint zets,
 - upload objects,

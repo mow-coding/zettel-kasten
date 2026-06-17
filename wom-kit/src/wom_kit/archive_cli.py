@@ -2317,6 +2317,7 @@ def command_zettel_edge_batch(args: argparse.Namespace) -> int:
             approve=args.approve,
             reviewed_by=args.reviewed_by,
             max_edges=args.max_edges,
+            skip_existing=args.skip_existing,
         )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
@@ -2333,6 +2334,7 @@ def command_zettel_edge_batch(args: argparse.Namespace) -> int:
         print(f"Policy: {policy.get('policy_id') or '-'}")
         print(f"Policy-writable edges: {summary.get('policy_writable_edge_count', 0)}")
         print(f"Human review queue: {summary.get('review_queue_count', 0)}")
+        print(f"Skipped existing edges: {summary.get('skipped_existing_edge_count', 0)}")
         print(f"Written edges: {summary.get('written_edge_count', 0)}")
         print(f"Receipt: {result.get('receipt_path') or '-'}")
         if result.get("files_written"):
@@ -2880,6 +2882,7 @@ def command_ai_response_concept_guide(args: argparse.Namespace) -> int:
         result = archive_services.ai_response_concept_guide(
             Path(args.archive_root),
             topic=args.topic,
+            locale=args.locale,
             dry_run=True,
         )
     except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
@@ -2893,6 +2896,7 @@ def command_ai_response_concept_guide(args: argparse.Namespace) -> int:
         print(f"AI response concept guide {state}.")
         print(f"Archive: {result.get('archive_id') or '-'}")
         print(f"Topic: {result.get('topic') or '-'}")
+        print(f"Locale: {result.get('locale') or '-'}")
         for section in result.get("sections", []):
             if not isinstance(section, dict):
                 continue
@@ -2905,6 +2909,11 @@ def command_ai_response_concept_guide(args: argparse.Namespace) -> int:
                 print(f"Korean script: {section['korean_script']}")
             if section.get("safe_warning"):
                 print(f"Warning: {section['safe_warning']}")
+            if section.get("edge_type_terms"):
+                print("Edge type terms:")
+                for term in section["edge_type_terms"]:
+                    if isinstance(term, dict):
+                        print(f"- {term.get('term') or '-'}: {term.get('selected_user_phrase') or '-'}")
         if result.get("next_safe_question"):
             print("\nNext safe question:")
             print(str(result["next_safe_question"]))
@@ -9709,6 +9718,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="all",
         help="Explanation topic.",
     )
+    ai_response_concept_guide.add_argument(
+        "--locale",
+        default="ko-KR",
+        help="Human-facing language for operational term translations. Supports ko-KR and en-US.",
+    )
     ai_response_concept_guide.add_argument("--dry-run", action="store_true", help="Required; read-only guide.")
     ai_response_concept_guide.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     ai_response_concept_guide.set_defaults(func=command_ai_response_concept_guide)
@@ -11383,6 +11397,7 @@ def build_parser() -> argparse.ArgumentParser:
     zettel_edge_batch.add_argument("--approve", action="store_true", help="Write policy-writable edges and a batch receipt.")
     zettel_edge_batch.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
     zettel_edge_batch.add_argument("--max-edges", type=int, default=200, help="Maximum edge rows accepted from the batch plan.")
+    zettel_edge_batch.add_argument("--skip-existing", action="store_true", help="Skip already-written edges or receipts instead of blocking the whole batch.")
     zettel_edge_batch.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     zettel_edge_batch.set_defaults(func=command_zettel_edge_batch)
 

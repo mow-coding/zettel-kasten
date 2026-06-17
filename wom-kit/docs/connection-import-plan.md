@@ -55,12 +55,15 @@ derived
 semantic
 embed
 mention
+supersedes
 view_query
 comment_context
 ```
 
 This still does not write edges. It only means WOM can now name the connection
 types before a future evidence parser or approval-gated edge writer exists.
+`supersedes` is especially for reviewed version-chain evidence where a newer
+zet replaces an older one.
 
 For the next pre-parser safety gate, see
 [Connection Evidence Parser Contract](connection-evidence-parser-contract.md).
