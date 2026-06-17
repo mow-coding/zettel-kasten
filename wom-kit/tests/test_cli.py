@@ -10157,6 +10157,12 @@ class ArchiveCliTests(unittest.TestCase):
     def test_projection_plan_requires_dry_run_and_rejects_invalid_surface(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            help_code, help_output = self.run_cli(["projection-plan", "--help"])
+            self.assertEqual(help_code, 0, help_output)
+            self.assertIn("generic_surface", help_output)
+            self.assertIn("static_site", help_output)
+            self.assertIn("metadata_only", help_output)
+
             missing_dry_run_code, missing_dry_run_output = self.run_cli(
                 [
                     "projection-plan",
@@ -10189,6 +10195,34 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(invalid_surface_code, 1, invalid_surface_output)
             self.assertFalse(result["ok"])
             self.assertTrue(result["blockers"])
+            self.assertIn("surface must be one of:", result["blockers"][0])
+            self.assertEqual(result["surface"]["requested_surface_kind"], "publish_now")
+            self.assertIsNone(result["surface"]["surface_kind"])
+            self.assertEqual(result["surface"]["surface_status"], "unsupported")
+            self.assertEqual(result["zet"]["zettel_id"], "zet_20240504_fake_lunch_thought")
+            self.assertEqual(result["zet"]["source_path"], "zettels/zet_20240504_fake_lunch_thought.md")
+            self.assertRegex(result["zet"]["body_sha256"], r"^[0-9a-f]{64}$")
+            self.assertIn("generic_surface", result["projection_contract"]["supported_surface_kinds"])
+            self.assertIn("notion", result["projection_contract"]["surface_prototype_kinds"])
+
+            notion_surface_code, notion_surface_output = self.run_cli(
+                [
+                    "projection-plan",
+                    str(archive_root),
+                    "--zet",
+                    "zet_20240504_fake_lunch_thought",
+                    "--surface",
+                    "notion",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            notion_result = json.loads(notion_surface_output)
+            self.assertEqual(notion_surface_code, 1, notion_surface_output)
+            self.assertEqual(notion_result["surface"]["requested_surface_kind"], "notion")
+            self.assertIn("zet-surface-prototype", " ".join(notion_result["blockers"]))
+            self.assertIn("notion", notion_result["projection_contract"]["notion_hint"])
 
     def test_projection_plan_blocks_missing_and_unsafe_refs_without_echoing_raw_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -6049,6 +6049,7 @@ class McpServerTests(unittest.TestCase):
                 self.assertTrue(structured["ok"])
                 self.assertEqual(structured["lifecycle_action"], "zet_projection_plan_preview")
                 self.assertEqual(structured["projection_status"], "planned_not_recorded")
+                self.assertIn("wordpress_private_blog", structured["projection_contract"]["supported_surface_kinds"])
                 self.assertEqual(structured["would_change"], [])
                 self.assertFalse(structured["provider_api_called"])
                 self.assertFalse(structured["wordpress_published"])

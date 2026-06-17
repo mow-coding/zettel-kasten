@@ -45,6 +45,7 @@ CONNECTION_EVIDENCE_FIXTURE_PARSER_PATH = KIT_ROOT / "docs" / "connection-eviden
 CONNECTION_EDGE_INTELLIGENCE_PATH = KIT_ROOT / "docs" / "connection-edge-intelligence-plan.md"
 ZETTEL_EDGE_WRITE_PATH = KIT_ROOT / "docs" / "zettel-edge-write.md"
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
+ZET_PROJECTION_PLAN_PATH = KIT_ROOT / "docs" / "zet-projection-plan-preview.md"
 IMAP_MAILBOX_SOURCE_PATH = KIT_ROOT / "docs" / "imap-mailbox-source.md"
 IMAP_MAILBOX_OPERATION_REQUEST_PATH = KIT_ROOT / "docs" / "imap-mailbox-operation-request-plan.md"
 IMAP_MAILBOX_ADAPTER_READINESS_PATH = KIT_ROOT / "docs" / "imap-mailbox-adapter-readiness-plan.md"
@@ -168,6 +169,40 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for row in required_rows:
             with self.subTest(row=row):
                 self.assertIn(row, text)
+
+    def test_projection_plan_docs_surface_supported_values_and_notion_boundary(self) -> None:
+        text = ZET_PROJECTION_PLAN_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        for phrase in (
+            "v0.3.94 improves the dry-run help",
+            "`generic_surface`",
+            "`private_workspace`",
+            "`rss_feed`",
+            "`static_site`",
+            "`wordpress_private_blog`",
+            "`notion` is not a `projection-plan` surface kind",
+            "`projection_contract.supported_surface_kinds`",
+            "--projection-format metadata_only|safe_html_summary|plain_text_summary",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+        for phrase in (
+            "Projection plan",
+            "supported projection surfaces",
+            "zet-surface-prototype --surface-kind notion",
+            "No rendering, receipt, provider call, publication",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "projection planning with supported-surface help",
+            "v0.3.94 - 2026-06-17",
+            "projection_contract",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(phrase in readme_text or phrase in changelog_text)
 
     def test_version_truth_source_doc_and_matrix_make_current_cli_explicit(self) -> None:
         version_text = VERSION_TRUTH_SOURCE_PATH.read_text(encoding="utf-8")

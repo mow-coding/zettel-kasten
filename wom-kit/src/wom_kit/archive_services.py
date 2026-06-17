@@ -422,6 +422,7 @@ ZET_PROJECTION_SURFACE_KINDS = {
 ZET_SURFACE_PROTOTYPE_KINDS = {"wordpress", "joplin", "notion", "obsidian"}
 ZET_PROJECTION_VISIBILITIES = {"private", "team", "public", "unknown"}
 ZET_PROJECTION_FORMATS = {"metadata_only", "safe_html_summary", "plain_text_summary"}
+SAFE_PROJECTION_SURFACE_TOKEN_RE = re.compile(r"^[a-z0-9_]{1,80}$")
 HUMAN_ARTIFACT_SURFACE_KINDS = {
     "wordpress",
     "joplin",
@@ -11509,9 +11510,10 @@ def zet_projection_plan_preview(
 
     if not dry_run:
         blockers.append("projection-plan is dry-run only; pass --dry-run.")
-    surface_kind = str(surface or "").strip()
+    requested_surface_kind = safe_projection_surface_token(surface)
+    surface_kind = requested_surface_kind
     if surface_kind not in ZET_PROJECTION_SURFACE_KINDS:
-        blockers.append("surface must be one of the supported projection surface kinds.")
+        blockers.append(projection_surface_blocker(surface_kind))
         surface_kind = None
     visibility_value = str(visibility or "unknown").strip()
     if visibility_value not in ZET_PROJECTION_VISIBILITIES:
@@ -11532,7 +11534,7 @@ def zet_projection_plan_preview(
         blockers.append("zet reference is required.")
     elif not safe_projection_zet_ref(raw_ref):
         blockers.append("zet reference must be a safe zet id or archive-relative path under inbox/ or zettels/.")
-    elif not blockers:
+    else:
         try:
             path = resolve_projection_zet_ref(root, raw_ref)
             source_path = archive_relative_path(path, root)
@@ -11585,12 +11587,21 @@ def zet_projection_plan_preview(
             "body_included": False,
         },
         "surface": {
+            "requested_surface_kind": requested_surface_kind,
             "surface_kind": surface_kind,
+            "surface_status": "supported" if surface_kind else "unsupported",
             "visibility": visibility_value,
             "visibility_status": "operator_declared_not_verified",
             "projection_format": projection_format_value,
             "format_status": "planned_not_rendered",
             "locator_status": "not_created",
+        },
+        "projection_contract": {
+            "supported_surface_kinds": sorted(ZET_PROJECTION_SURFACE_KINDS),
+            "surface_prototype_kinds": sorted(ZET_SURFACE_PROTOTYPE_KINDS),
+            "supported_visibilities": sorted(ZET_PROJECTION_VISIBILITIES),
+            "supported_projection_formats": sorted(ZET_PROJECTION_FORMATS),
+            "notion_hint": "Use zet-surface-prototype --surface-kind notion for a Notion surface prototype; projection-plan does not support Notion publishing.",
         },
         "future_projection_steps": [
             "review selected zet scope",
@@ -26994,6 +27005,24 @@ def safe_projection_zet_ref(value: str) -> bool:
             return False
         return normalized.startswith(VALID_ZETTEL_FOLDERS) and normalized.lower().endswith(".md")
     return valid_draft_zettel_id(text)
+
+
+def safe_projection_surface_token(value: str | None) -> str | None:
+    token = str(value or "").strip().lower().replace("-", "_")
+    if not token or not SAFE_PROJECTION_SURFACE_TOKEN_RE.match(token):
+        return None
+    return token
+
+
+def projection_surface_blocker(surface_kind: str | None) -> str:
+    supported = ", ".join(sorted(ZET_PROJECTION_SURFACE_KINDS))
+    if surface_kind in ZET_SURFACE_PROTOTYPE_KINDS:
+        return (
+            f"surface '{surface_kind}' is a ZET surface prototype, not a projection-plan surface; "
+            "use zet-surface-prototype for that preview or choose one of: "
+            f"{supported}."
+        )
+    return f"surface must be one of: {supported}."
 
 
 def resolve_projection_zet_ref(archive_root: Path, value: str) -> Path:
