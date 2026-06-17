@@ -131,6 +131,9 @@ attestation-statement-draft-decision --dry-run
 source-intake --dry-run
   Classify one source/objet locator and return safe `source_refs_for_draft` before draft creation. This never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, extracts, or calls provider APIs.
 
+notion-objet-source-map-link-plan --dry-run
+  Plan zettel-to-objet material-link candidates from source maps and optional download/retrieval ledgers when imported zettel bodies no longer contain provider locators. This writes nothing, rewrites no body text, writes no edges or receipts, reads no object bytes, calls no providers, and echoes no provider URLs, provider locator text, page titles, zettel body text, frontmatter values, absolute local paths, account ids, emails, tokens, or secret values.
+
 derive-text capture --dry-run
   Preview registering an already extracted UTF-8 text file as a derived text record for an existing source object. This writes nothing and does not run OCR, ASR, parsers, LLM vision, provider APIs, drafting, or minting.
 

@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.103 - 2026-06-17
+
+- Added read-only CLI `archive notion-objet-source-map-link-plan <archive-root>
+  --source-map <archive-relative-jsonl> --ledger <archive-relative-jsonl>
+  --dry-run` and MCP `notion_objet_source_map_link_plan` for planning
+  zet-to-objet material-link candidates after provider locators have already
+  been removed from imported zettel bodies.
+- The planner joins source maps, optional download/retrieval ledgers, zettel
+  frontmatter metadata, and `objects/manifests/files.jsonl` rows by
+  private-value fingerprints, then returns candidate `embed` edges with
+  `candidate_id`, `join_basis`, `write_status`, and
+  `human_review_required`.
+- Updated AI runtime routing docs so `runtime-context` and
+  `ai-response-concept-guide` point agents to the source-map material bridge
+  before falling back to body-locator based Notion objet link tools.
+- Kept the feature local and bounded: no provider calls, object byte reads,
+  zettel body reads, body rewrites, edge writes, receipt writes, presigned URLs,
+  source value echoes, local path echoes, account ids, emails, tokens, or secret
+  values were added.
+
 ## v0.3.102 - 2026-06-17
 
 - Extended read-only CLI `archive ai-response-concept-guide <archive-root>

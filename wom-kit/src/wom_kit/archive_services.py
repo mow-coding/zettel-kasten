@@ -3109,6 +3109,717 @@ def notion_objet_link_index(
     }
 
 
+NOTION_SOURCE_MAP_ZETTEL_KEYS = {
+    "zettel_id",
+    "zet_id",
+    "from_zettel",
+    "source_zettel",
+    "source_zet",
+    "imported_zettel_id",
+}
+NOTION_SOURCE_MAP_ZETTEL_PATH_KEYS = {
+    "zettel_path",
+    "zet_path",
+    "from_path",
+    "target_path",
+    "imported_zettel_path",
+}
+NOTION_SOURCE_MAP_PAGE_REF_KEYS = {
+    "page_id",
+    "notion_page_id",
+    "provider_page_id",
+    "provider_object_id",
+    "external_id",
+    "external_ref",
+    "page_ref",
+    "source_page_ref",
+    "source_item_id",
+    "item_id",
+    "block_id",
+}
+NOTION_SOURCE_MAP_LOCATOR_REF_KEYS = {
+    "url",
+    "source_url",
+    "provider_url",
+    "external_url",
+    "locator",
+    "provider_locator",
+    "notion_url",
+}
+NOTION_SOURCE_MAP_FILE_REF_KEYS = {
+    "relative_path",
+    "source_path",
+    "download_path",
+    "export_path",
+    "file",
+    "file_path",
+    "path",
+    "key",
+    "name",
+    "logical_key",
+    "store_key",
+}
+NOTION_SOURCE_MAP_OBJECT_KEYS = {
+    "object_id",
+    "approved_object_id",
+    "source_object_id",
+    "target_object_id",
+    "objet_ref",
+    "sha256",
+}
+
+
+def notion_source_map_normalized_key(key: Any) -> str:
+    return str(key or "").strip().lower().replace("-", "_")
+
+
+def notion_source_map_value_fingerprint(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text or "\x00" in text:
+        return None
+    if source_intake_secret_like(text):
+        return None
+    normalized = normalize_notion_provider_locator(text)
+    if not normalized:
+        return None
+    return "sha256:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def notion_source_map_add_hashes(target: dict[str, list[str]], family: str, value: Any) -> None:
+    if isinstance(value, dict):
+        for child in value.values():
+            notion_source_map_add_hashes(target, family, child)
+        return
+    if isinstance(value, list):
+        for child in value:
+            notion_source_map_add_hashes(target, family, child)
+        return
+    fingerprint = notion_source_map_value_fingerprint(value)
+    if fingerprint:
+        target.setdefault(family, []).append(fingerprint)
+
+
+def notion_source_map_ref_family_for_key(key: Any) -> str | None:
+    normalized = notion_source_map_normalized_key(key)
+    if normalized in NOTION_SOURCE_MAP_PAGE_REF_KEYS or normalized.endswith("_page_id"):
+        return "page_refs"
+    if normalized in NOTION_SOURCE_MAP_LOCATOR_REF_KEYS or normalized.endswith("_url"):
+        return "locator_refs"
+    if normalized in NOTION_SOURCE_MAP_FILE_REF_KEYS:
+        return "file_refs"
+    return None
+
+
+def notion_source_map_hashes_from_value(value: Any) -> dict[str, list[str]]:
+    hashes: dict[str, list[str]] = {"page_refs": [], "file_refs": [], "locator_refs": []}
+
+    def walk(item: Any) -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                family = notion_source_map_ref_family_for_key(key)
+                if family:
+                    notion_source_map_add_hashes(hashes, family, child)
+                if isinstance(child, (dict, list)):
+                    walk(child)
+            return
+        if isinstance(item, list):
+            for child in item:
+                walk(child)
+
+    walk(value)
+    return {key: unique_preserve_order(values) for key, values in hashes.items()}
+
+
+def notion_source_map_add_object_values(value: Any, add_object_id: Any) -> None:
+    if isinstance(value, dict):
+        for child in value.values():
+            notion_source_map_add_object_values(child, add_object_id)
+        return
+    if isinstance(value, list):
+        for child in value:
+            notion_source_map_add_object_values(child, add_object_id)
+        return
+    add_object_id(value)
+
+
+def notion_source_map_object_ids_from_value(value: Any) -> list[str]:
+    object_ids: list[str] = []
+
+    def add_object_id(raw: Any) -> None:
+        text = str(raw or "").strip().lower()
+        if not text:
+            return
+        blockers: list[str] = []
+        if text.startswith("objet:sha256:"):
+            normalized = object_id_from_objet_ref(text, blockers)
+        else:
+            normalized = normalize_object_id(text, blockers)
+        if normalized and not blockers:
+            object_ids.append(normalized)
+
+    def walk(item: Any) -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if notion_source_map_normalized_key(key) in NOTION_SOURCE_MAP_OBJECT_KEYS:
+                    notion_source_map_add_object_values(child, add_object_id)
+                if isinstance(child, (dict, list)):
+                    walk(child)
+            return
+        if isinstance(item, list):
+            for child in item:
+                walk(child)
+
+    walk(value)
+    return unique_preserve_order(object_ids)
+
+
+def notion_source_map_safe_zettel_id(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text or not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$", text):
+        return None
+    if contains_forbidden_location_reference(text) or source_intake_has_provider_url(text) or source_intake_secret_like(text):
+        return None
+    return text
+
+
+def notion_source_map_safe_zettel_path(root: Path, value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text or Path(text).expanduser().is_absolute():
+        return None
+    try:
+        candidate = resolve_archive_relative_path(root, text)
+        relative = archive_relative_path(candidate, root)
+    except (ArchivePathError, OSError, ValueError):
+        return None
+    if not relative.startswith(VALID_ZETTEL_FOLDERS) or candidate.suffix.lower() != ".md":
+        return None
+    return relative
+
+
+def notion_source_map_zettel_ref_from_record(root: Path, record: dict[str, Any]) -> tuple[str | None, str | None]:
+    zettel_id: str | None = None
+    zettel_path: str | None = None
+    for key, value in record.items():
+        normalized = notion_source_map_normalized_key(key)
+        if zettel_id is None and normalized in NOTION_SOURCE_MAP_ZETTEL_KEYS:
+            zettel_id = notion_source_map_safe_zettel_id(value)
+        if zettel_path is None and normalized in NOTION_SOURCE_MAP_ZETTEL_PATH_KEYS:
+            zettel_path = notion_source_map_safe_zettel_path(root, value)
+        if isinstance(value, dict):
+            nested_id, nested_path = notion_source_map_zettel_ref_from_record(root, value)
+            zettel_id = zettel_id or nested_id
+            zettel_path = zettel_path or nested_path
+    return zettel_id, zettel_path
+
+
+def read_zettel_frontmatter_only(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            first = handle.readline()
+            if first.strip() != "---":
+                return {}
+            lines: list[str] = []
+            for line in handle:
+                if line.strip() == "---":
+                    break
+                lines.append(line)
+    except OSError:
+        return {}
+    try:
+        data = load_yaml("".join(lines))
+    except Exception:
+        return {}
+    return json_safe(data) if isinstance(data, dict) else {}
+
+
+def notion_source_map_archive_json_records(
+    root: Path,
+    relative_path: str,
+    *,
+    role: str,
+    max_rows: int,
+    blockers: list[str],
+    warnings: list[str],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    summary = {"path": None, "role": role, "record_count": 0, "truncated": False, "status": "not_read"}
+    try:
+        normalized = normalize_archive_relative_path(relative_path)
+    except ArchivePathError:
+        blockers.append(f"{role} path must be archive-relative and safe.")
+        summary["status"] = "unsafe_path"
+        return [], summary
+    summary["path"] = normalized
+    try:
+        path = resolve_archive_relative_path(root, normalized)
+    except ArchivePathError:
+        blockers.append(f"{role} path must stay inside the archive root.")
+        summary["status"] = "unsafe_path"
+        return [], summary
+    if not path.is_file():
+        blockers.append(f"{role} file is missing: {normalized}")
+        summary["status"] = "missing"
+        return [], summary
+    suffix = path.suffix.lower()
+    if suffix not in {".json", ".jsonl", ".yaml", ".yml"}:
+        blockers.append(f"{role} file must be JSON, JSONL, YAML, or YML: {normalized}")
+        summary["status"] = "unsupported_extension"
+        return [], summary
+
+    records: list[dict[str, Any]] = []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        blockers.append(f"{role} file could not be read: {normalized}")
+        summary["status"] = "unreadable"
+        return [], summary
+
+    if suffix == ".jsonl":
+        for raw_line in text.splitlines():
+            if len(records) >= max_rows:
+                summary["truncated"] = True
+                break
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                warnings.append(f"{role} JSONL contains an invalid row: {normalized}")
+                continue
+            if isinstance(data, dict):
+                records.append(json_safe(data))
+        summary["status"] = "read"
+    else:
+        try:
+            data = json.loads(text) if suffix == ".json" else load_yaml(text)
+        except Exception:
+            blockers.append(f"{role} file must be JSON, JSONL, YAML, or YML: {normalized}")
+            summary["status"] = "invalid_json"
+            return [], summary
+        rows = data.get("items") if isinstance(data, dict) and isinstance(data.get("items"), list) else data
+        if isinstance(rows, dict):
+            rows = [rows]
+        if not isinstance(rows, list):
+            blockers.append(f"{role} file must contain an object or items list: {normalized}")
+            summary["status"] = "invalid_shape"
+            return [], summary
+        for row in rows[:max_rows]:
+            if isinstance(row, dict):
+                records.append(json_safe(row))
+        summary["truncated"] = len(rows) > max_rows
+        summary["status"] = "read"
+
+    summary["record_count"] = len(records)
+    return records, summary
+
+
+def notion_source_map_default_paths(root: Path) -> list[str]:
+    maps_root = root / SOURCE_MAPS_DIR
+    if not maps_root.is_dir():
+        return []
+    return [archive_relative_path(path, root) for path in safe_archive_glob(maps_root, "*.jsonl", root)]
+
+
+def notion_source_map_add_zettel_entry(
+    entries: dict[str, dict[str, Any]],
+    *,
+    zettel_id: str | None,
+    zettel_path: str | None,
+    hashes: dict[str, list[str]],
+    existing_object_ids: list[str] | None = None,
+    source: str,
+) -> None:
+    if not zettel_id and not zettel_path:
+        return
+    key = zettel_id or zettel_path or source
+    entry = entries.setdefault(
+        key,
+        {
+            "id": zettel_id,
+            "path": zettel_path,
+            "page_refs": [],
+            "file_refs": [],
+            "locator_refs": [],
+            "sources": [],
+            "existing_object_ids": [],
+        },
+    )
+    entry["id"] = entry.get("id") or zettel_id
+    entry["path"] = entry.get("path") or zettel_path
+    for family in ("page_refs", "file_refs", "locator_refs"):
+        entry[family] = unique_preserve_order([*entry.get(family, []), *hashes.get(family, [])])
+    entry["sources"] = unique_preserve_order([*entry.get("sources", []), source])
+    entry["existing_object_ids"] = unique_preserve_order(
+        [*entry.get("existing_object_ids", []), *(existing_object_ids or [])]
+    )
+
+
+def notion_source_map_existing_object_refs(frontmatter: dict[str, Any]) -> list[str]:
+    refs: list[str] = []
+    for item in collect_referenced_objets(frontmatter):
+        if not isinstance(item, dict):
+            continue
+        value = str(item.get("value") or "").strip().lower()
+        blockers: list[str] = []
+        if value.startswith("objet:sha256:"):
+            normalized = object_id_from_objet_ref(value, blockers)
+        else:
+            normalized = normalize_object_id(value, blockers)
+        if normalized and not blockers:
+            refs.append(normalized)
+    edges = frontmatter.get("edges") if isinstance(frontmatter.get("edges"), list) else []
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        target = str(edge.get("target") or edge.get("ref") or "").strip().lower()
+        blockers = []
+        normalized = normalize_object_id(target, blockers)
+        if normalized and not blockers:
+            refs.append(normalized)
+    return unique_preserve_order(refs)
+
+
+def notion_source_map_object_entry(
+    root: Path,
+    object_id: str,
+    *,
+    hashes: dict[str, list[str]],
+    source: str,
+) -> dict[str, Any]:
+    resolution = resolve_objet_ref(root, object_id=object_id, dry_run=True)
+    return {
+        "object_id": object_id,
+        "page_refs": hashes.get("page_refs", []),
+        "file_refs": hashes.get("file_refs", []),
+        "locator_refs": hashes.get("locator_refs", []),
+        "sources": [source],
+        "resolution_state": resolution.get("resolution_state"),
+        "manifest_record_count": resolution.get("manifest_record_count"),
+        "local_openable": bool(resolution.get("local_openable")),
+        "external_declared": bool(resolution.get("external_declared")),
+        "resolver_blockers": resolution.get("blockers", []),
+    }
+
+
+def notion_source_map_candidate_id(zettel_entry: dict[str, Any], object_id: str, join_basis: list[dict[str, Any]]) -> str:
+    payload = {
+        "zettel": zettel_entry.get("id") or zettel_entry.get("path"),
+        "object_id": object_id,
+        "join_basis": join_basis,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return f"notion-source-map-link:{digest[:20]}"
+
+
+def notion_source_map_candidate(
+    zettel_entry: dict[str, Any],
+    object_entry: dict[str, Any],
+    *,
+    join_basis: list[dict[str, Any]],
+    confidence: str,
+) -> dict[str, Any]:
+    object_id = str(object_entry.get("object_id") or "")
+    already_referenced = object_id in set(zettel_entry.get("existing_object_ids") or [])
+    if already_referenced:
+        write_status = "already_referenced"
+    elif object_entry.get("resolver_blockers"):
+        write_status = "blocked_until_manifest_review"
+    else:
+        write_status = "not_written"
+    return {
+        "candidate_id": notion_source_map_candidate_id(zettel_entry, object_id, join_basis),
+        "from_zettel": drop_none_values({"id": zettel_entry.get("id"), "path": zettel_entry.get("path")}),
+        "target_object_id": object_id,
+        "suggested_objet_ref": f"objet:{object_id}",
+        "target_mode": "embed_edge",
+        "edge_type": "embed",
+        "confidence": confidence,
+        "join_basis": join_basis,
+        "resolution_state": object_entry.get("resolution_state"),
+        "manifest_record_count": object_entry.get("manifest_record_count"),
+        "local_openable": bool(object_entry.get("local_openable")),
+        "external_declared": bool(object_entry.get("external_declared")),
+        "write_status": write_status,
+        "human_review_required": True,
+        "review_note": "Review the source-map or ledger evidence before writing an embed edge.",
+    }
+
+
+def notion_objet_source_map_link_plan(
+    archive_root: Path | str,
+    *,
+    source_maps: list[str] | None = None,
+    ledgers: list[str] | None = None,
+    dry_run: bool = True,
+    max_rows: int = 10000,
+    max_candidates: int = 200,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("notion-objet-source-map-link-plan is read-only; pass --dry-run.")
+
+    max_rows = max(1, min(int(max_rows), 100000))
+    max_candidates = max(1, min(int(max_candidates), 1000))
+    source_map_paths = [str(item).strip() for item in source_maps or [] if str(item).strip()]
+    if not source_map_paths:
+        source_map_paths = notion_source_map_default_paths(root)
+    ledger_paths = [str(item).strip() for item in ledgers or [] if str(item).strip()]
+
+    source_records: list[tuple[dict[str, Any], str]] = []
+    ledger_records: list[tuple[dict[str, Any], str]] = []
+    input_summaries: list[dict[str, Any]] = []
+    rows_remaining = max_rows
+    for relative in source_map_paths:
+        records, summary = notion_source_map_archive_json_records(
+            root,
+            relative,
+            role="source_map",
+            max_rows=rows_remaining,
+            blockers=blockers,
+            warnings=warnings,
+        )
+        input_summaries.append(summary)
+        source_records.extend((record, str(summary.get("path") or "source-map")) for record in records)
+        rows_remaining = max(0, rows_remaining - len(records))
+        if rows_remaining <= 0:
+            warnings.append("notion_source_map_link_plan_row_limit_reached")
+            break
+    for relative in ledger_paths:
+        records, summary = notion_source_map_archive_json_records(
+            root,
+            relative,
+            role="ledger",
+            max_rows=max_rows,
+            blockers=blockers,
+            warnings=warnings,
+        )
+        input_summaries.append(summary)
+        ledger_records.extend((record, str(summary.get("path") or "ledger")) for record in records)
+
+    if not source_map_paths:
+        warnings.append("No source-maps/*.jsonl files were found; pass --source-map with an archive-relative file.")
+
+    zettel_entries: dict[str, dict[str, Any]] = {}
+    redacted_zettel_count = 0
+    for path in iter_zettel_paths(root):
+        frontmatter = read_zettel_frontmatter_only(path)
+        if frontmatter.get("status") == "redacted":
+            redacted_zettel_count += 1
+            continue
+        zettel_id = notion_source_map_safe_zettel_id(frontmatter.get("id"))
+        zettel_path = archive_relative_path(path, root)
+        hashes = notion_source_map_hashes_from_value(frontmatter)
+        notion_source_map_add_zettel_entry(
+            zettel_entries,
+            zettel_id=zettel_id,
+            zettel_path=zettel_path,
+            hashes=hashes,
+            existing_object_ids=notion_source_map_existing_object_refs(frontmatter),
+            source="zettel_frontmatter",
+        )
+
+    for record, record_source in source_records:
+        zettel_id, zettel_path = notion_source_map_zettel_ref_from_record(root, record)
+        if zettel_id or zettel_path:
+            notion_source_map_add_zettel_entry(
+                zettel_entries,
+                zettel_id=zettel_id,
+                zettel_path=zettel_path,
+                hashes=notion_source_map_hashes_from_value(record),
+                source=f"source_map:{record_source}",
+            )
+
+    object_entries: list[dict[str, Any]] = []
+    page_to_files: dict[str, set[str]] = {}
+    records_with_page_ref = 0
+    records_with_file_ref = 0
+    records_with_object_ref = 0
+    for record, record_source in [*source_records, *ledger_records]:
+        hashes = notion_source_map_hashes_from_value(record)
+        page_refs = hashes.get("page_refs", [])
+        file_refs = hashes.get("file_refs", [])
+        object_ids = notion_source_map_object_ids_from_value(record)
+        if page_refs:
+            records_with_page_ref += 1
+        if file_refs:
+            records_with_file_ref += 1
+        if object_ids:
+            records_with_object_ref += 1
+        for page_ref in page_refs:
+            page_to_files.setdefault(page_ref, set()).update(file_refs)
+        for object_id in object_ids:
+            object_entries.append(
+                notion_source_map_object_entry(
+                    root,
+                    object_id,
+                    hashes=hashes,
+                    source=f"metadata:{record_source}",
+                )
+            )
+
+    manifest_records = load_manifest_records(root)
+    for record in manifest_records:
+        object_id_value = str(record.get("object_id") or "")
+        record_blockers: list[str] = []
+        object_id = normalize_object_id(object_id_value, record_blockers)
+        if not object_id:
+            continue
+        object_entries.append(
+            notion_source_map_object_entry(
+                root,
+                object_id,
+                hashes=notion_source_map_hashes_from_value(record),
+                source="objects/manifests/files.jsonl",
+            )
+        )
+
+    object_by_page: dict[str, list[dict[str, Any]]] = {}
+    object_by_file: dict[str, list[dict[str, Any]]] = {}
+    seen_object_entry_keys: set[tuple[str, str, str]] = set()
+    for entry in object_entries:
+        object_id = str(entry.get("object_id") or "")
+        for page_ref in entry.get("page_refs", []):
+            key = (object_id, "page", page_ref)
+            if key not in seen_object_entry_keys:
+                object_by_page.setdefault(page_ref, []).append(entry)
+                seen_object_entry_keys.add(key)
+        for file_ref in entry.get("file_refs", []):
+            key = (object_id, "file", file_ref)
+            if key not in seen_object_entry_keys:
+                object_by_file.setdefault(file_ref, []).append(entry)
+                seen_object_entry_keys.add(key)
+
+    candidates: list[dict[str, Any]] = []
+    seen_candidates: set[str] = set()
+
+    def add_candidate(entry: dict[str, Any], object_entry: dict[str, Any], join_basis: list[dict[str, Any]], confidence: str) -> None:
+        if len(candidates) >= max_candidates:
+            return
+        candidate = notion_source_map_candidate(entry, object_entry, join_basis=join_basis, confidence=confidence)
+        key = candidate["candidate_id"]
+        if key in seen_candidates:
+            return
+        seen_candidates.add(key)
+        candidates.append(candidate)
+
+    for zettel_entry in zettel_entries.values():
+        for page_ref in zettel_entry.get("page_refs", []):
+            for object_entry in object_by_page.get(page_ref, []):
+                add_candidate(
+                    zettel_entry,
+                    object_entry,
+                    [{"kind": "page_ref", "ref_fingerprint": page_ref, "join_path": "zettel_source_ref_to_object_ref"}],
+                    "high",
+                )
+            for file_ref in sorted(page_to_files.get(page_ref, set())):
+                for object_entry in object_by_file.get(file_ref, []):
+                    add_candidate(
+                        zettel_entry,
+                        object_entry,
+                        [
+                            {
+                                "kind": "page_to_file_to_object",
+                                "page_ref_fingerprint": page_ref,
+                                "file_ref_fingerprint": file_ref,
+                                "join_path": "source_map_page_to_file_then_ledger_file_to_sha256",
+                            }
+                        ],
+                        "medium",
+                    )
+        for file_ref in zettel_entry.get("file_refs", []):
+            for object_entry in object_by_file.get(file_ref, []):
+                add_candidate(
+                    zettel_entry,
+                    object_entry,
+                    [{"kind": "file_ref", "ref_fingerprint": file_ref, "join_path": "zettel_source_file_to_object_ref"}],
+                    "medium",
+                )
+        for locator_ref in zettel_entry.get("locator_refs", []):
+            for object_entry in object_by_page.get(locator_ref, []):
+                add_candidate(
+                    zettel_entry,
+                    object_entry,
+                    [{"kind": "locator_ref", "ref_fingerprint": locator_ref, "join_path": "redacted_locator_fingerprint_to_object_ref"}],
+                    "medium",
+                )
+
+    truncated = len(candidates) >= max_candidates
+    if truncated:
+        warnings.append("notion_objet_source_map_link_candidates_truncated")
+
+    next_safe_actions: list[str] = []
+    if blockers:
+        next_safe_actions.append("Fix blockers before planning source-map based material links.")
+    elif candidates:
+        next_safe_actions.append("Review candidate_id, from_zettel, target_object_id, and join_basis before writing any embed edge.")
+        next_safe_actions.append("After review, write edges through the existing zettel-edge or zettel-edge-batch approval gates.")
+        next_safe_actions.append("Keep provider locator body replacement separate; this planner does not rewrite zettel bodies.")
+    elif not object_entries:
+        next_safe_actions.append("Register or pass a download ledger with sha256/object_id metadata before planning material links.")
+    elif not zettel_entries:
+        next_safe_actions.append("Import or identify zettels with safe source_refs/external_import metadata before planning material links.")
+    else:
+        next_safe_actions.append("No source-map/ledger join matched a zettel to an objet; add a reviewed page/file/object bridge row.")
+    if records_with_file_ref and not records_with_page_ref:
+        warnings.append("source_map_or_ledger_rows_have_file_refs_but_no_page_refs")
+    if records_with_page_ref and not records_with_object_ref and not ledger_records:
+        warnings.append("source_maps_have_page_refs_but_no_object_hashes_pass_ledger_if_available")
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "notion_objet_source_map_link_plan",
+        "archive_id": archive_id,
+        "summary": {
+            "source_map_file_count": len(source_map_paths),
+            "ledger_file_count": len(ledger_paths),
+            "source_map_record_count": len(source_records),
+            "ledger_record_count": len(ledger_records),
+            "manifest_record_count": len(manifest_records),
+            "zettel_source_count": len(zettel_entries),
+            "redacted_zettel_count": redacted_zettel_count,
+            "object_ref_source_count": len(object_entries),
+            "records_with_page_ref": records_with_page_ref,
+            "records_with_file_ref": records_with_file_ref,
+            "records_with_object_ref": records_with_object_ref,
+            "candidate_count": len(candidates),
+            "candidates_truncated": truncated,
+        },
+        "inputs": input_summaries,
+        "candidates": candidates,
+        "current_capability": {
+            "body_locator_required": False,
+            "source_map_ledger_join_available": True,
+            "approved_write_performed_by_this_command": False,
+            "import_time_object_ref_preservation_required": True,
+            "provider_locator_body_rewrite_implemented": False,
+        },
+        "privacy_guards": {
+            "provider_urls_echoed": False,
+            "provider_locator_text_echoed": False,
+            "page_titles_echoed": False,
+            "zettel_body_text_read": False,
+            "zettel_body_text_echoed": False,
+            "frontmatter_values_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "tokens_echoed": False,
+            "secret_values_echoed": False,
+            "provider_api_called": False,
+            "object_file_bytes_read": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": unique_preserve_order(next_safe_actions),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
 NOTION_OBJET_LINK_REWRITE_TARGET_MODES = {
     "objet_ref_rewrite",
     "embed_edge",
@@ -22701,6 +23412,18 @@ def ai_response_concept_guide(
                 "command": "archive resolve-objet-ref <archive-root> --object-id sha256:<hex> --dry-run --format json",
             },
             {
+                "human_intent": "find zettel-to-objet candidates after provider locators were omitted from bodies",
+                "command": "archive notion-objet-source-map-link-plan <archive-root> --source-map source-maps/<source>.jsonl --ledger receipts/import/<ledger>.jsonl --dry-run --format json",
+            },
+            {
+                "human_intent": "index imported Notion zettels that still contain provider locators",
+                "command": "archive notion-objet-link-index <archive-root> --dry-run --format json",
+            },
+            {
+                "human_intent": "review one imported Notion zettel that still contains provider locators",
+                "command": "archive notion-objet-link-plan <archive-root> --path <zet.md> --dry-run --format json",
+            },
+            {
                 "human_intent": "upload or sync bytes",
                 "command": "future work until a later release explicitly adds an approval-gated adapter",
             },
@@ -22730,6 +23453,7 @@ def ai_response_concept_guide(
             "locale_aware_korean_available": True,
             "edge_type_translation_available": True,
             "connection_kind_translation_available": True,
+            "source_map_material_link_routing_available": True,
             "mcp_tool_available": False,
             "object_upload_adapter_implemented": False,
             "provider_availability_probe_implemented": False,
@@ -22740,6 +23464,9 @@ def ai_response_concept_guide(
             "derived-text",
             "derived-text-coverage-and-toolchain",
             "objet-ref-resolution",
+            "notion-objet-source-map-link-plan",
+            "notion-objet-link-index",
+            "notion-objet-link-plan",
             "beginner-setup-manual",
         ],
         "closed_actions": {
