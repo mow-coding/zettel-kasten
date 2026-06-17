@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.101 - 2026-06-17
+
+- Added approval-gated CLI `archive notion-objet-link-convert <archive-root>
+  --path <zet.md>|--zettel-id <id> --locator-fingerprint sha256:<hex>
+  --object-id sha256:<hex> --target-mode embed_edge
+  --expected-occurrence-count <n> --dry-run|--approve`.
+- The command re-runs `notion-objet-link-rewrite-plan`, requires
+  `--expected-occurrence-count` for approved writes, then routes the reviewed
+  object link through the existing single `zettel-edge` gate as one `embed`
+  edge.
+- Approved writes add one source zettel frontmatter edge, one normal
+  `receipts/edges/*.zettel-edge.json` receipt, and one
+  `receipts/objects/notion-link-conversions/*.notion-objet-link-convert.json`
+  conversion receipt, with rollback snapshots for touched paths.
+- Kept body rewrite closed: `target_mode=objet_ref_rewrite` remains blocked,
+  MCP exposes no write tool, and the command calls no providers, reads no
+  object bytes or real exports, rewrites no provider locator text, and echoes
+  no provider URLs, locator text, zettel body text, zettel titles, frontmatter
+  values, page titles, credentials, or secrets.
+
 ## v0.3.100 - 2026-06-17
 
 - Added approval-gated CLI `archive notion-objet-manifest-locator-label

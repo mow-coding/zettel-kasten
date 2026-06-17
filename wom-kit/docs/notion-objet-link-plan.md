@@ -128,10 +128,14 @@ use `notion-objet-manifest-locator-label` after human review to add a
 non-secret fingerprint label to the selected object manifest record. Then run
 this plan again.
 
-## Future Work
+## Current Write Path And Future Work
 
-An approval-gated manifest locator label command now exists. A later
-approval-gated command can still replace reviewed Notion provider locators with
-`objet:sha256:<hex>` refs or write reviewed `embed` edges.
+Approval-gated manifest locator labels now exist through
+`notion-objet-manifest-locator-label`.
 
-This release does not perform that body rewrite.
+Approval-gated reviewed `embed` edge conversion now exists through
+`notion-objet-link-convert --target-mode embed_edge`.
+
+Body replacement remains future work. A later command can still replace
+reviewed Notion provider locators with `objet:sha256:<hex>` refs after a
+separate replacement guard exists.

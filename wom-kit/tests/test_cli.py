@@ -8791,6 +8791,242 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
 
+    def test_notion_objet_link_convert_writes_reviewed_embed_edge_without_echoing_locator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+            notion_url = "https://www.notion.so/private-workspace/Convert-Page-abcdef1234567890"
+            locator_fingerprint = "sha256:" + hashlib.sha256(notion_url.lower().encode("utf-8")).hexdigest()
+            object_digest = "b" * 64
+            object_id = f"sha256:{object_digest}"
+            manifest_record = {
+                "object_id": object_id,
+                "sha256": object_digest,
+                "logical_key": f"objects/external/prehashed/notion_source_export/{object_digest[:2]}/{object_digest}",
+                "mime": "application/json",
+                "size_bytes": 2468,
+                "locations": [
+                    {
+                        "provider": "external_prehashed",
+                        "store_kind": "notion_source_export",
+                        "store_ref": "notion-export-20260617",
+                        "availability": "declared_external",
+                        "content_addressed": True,
+                        "byte_verification_by_wom_kit": False,
+                    }
+                ],
+                "provenance": {
+                    "source": "prehashed_external_objet_ledger",
+                    "provider_locator_sha256": locator_fingerprint.removeprefix("sha256:"),
+                },
+            }
+            with manifest_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(manifest_record, ensure_ascii=False, sort_keys=True) + "\n")
+
+            zettel_path = archive_root / "inbox" / "zet_notion_convert_embed.md"
+            zettel_path.write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_convert_embed",
+                        "status: draft",
+                        "title: Convert private title must not echo",
+                        "---",
+                        "",
+                        "Convert private body must not echo.",
+                        f'<embed url="{notion_url}">Convert private page title</embed>',
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            before = self.snapshot_archive_files(archive_root)
+            dry_code, dry_output = self.run_cli(
+                [
+                    "notion-objet-link-convert",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_notion_convert_embed.md",
+                    "--locator-fingerprint",
+                    locator_fingerprint,
+                    "--object-id",
+                    object_id,
+                    "--target-mode",
+                    "embed_edge",
+                    "--expected-occurrence-count",
+                    "1",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            dry_result = json.loads(dry_output)
+            serialized_dry = json.dumps(dry_result, ensure_ascii=False)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertTrue(dry_result["ok"], dry_result)
+            self.assertEqual(dry_result["lifecycle_action"], "notion_objet_link_convert_plan")
+            self.assertEqual(dry_result["write_status"], "would_write")
+            self.assertEqual(dry_result["target_mode"], "embed_edge")
+            self.assertEqual(dry_result["selected_object_id"], object_id)
+            self.assertEqual(dry_result["edge_write"]["edge_type"], "embed")
+            self.assertEqual(dry_result["edge_write"]["target"]["ref"], object_id)
+            self.assertTrue(dry_result["receipt"]["receipt_path"].startswith("receipts/objects/notion-link-conversions/"))
+            self.assertEqual(dry_result["files_written"], [])
+            self.assertFalse(dry_result["closed_actions"]["embed_edge_written"])
+            self.assertFalse(dry_result["closed_actions"]["conversion_receipt_written"])
+            self.assertFalse(dry_result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(dry_result["privacy_guards"]["provider_locator_text_echoed"])
+            self.assertFalse(dry_result["privacy_guards"]["zettel_body_text_echoed"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            for forbidden in (
+                notion_url,
+                "Convert private title",
+                "Convert private body",
+                "Convert private page title",
+                str(archive_root),
+            ):
+                with self.subTest(forbidden=forbidden):
+                    self.assertNotIn(forbidden, serialized_dry)
+
+            body_rewrite_code, body_rewrite_output = self.run_cli(
+                [
+                    "notion-objet-link-convert",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_notion_convert_embed.md",
+                    "--locator-fingerprint",
+                    locator_fingerprint,
+                    "--object-id",
+                    object_id,
+                    "--target-mode",
+                    "objet_ref_rewrite",
+                    "--expected-occurrence-count",
+                    "1",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            body_rewrite = json.loads(body_rewrite_output)
+            self.assertEqual(body_rewrite_code, 1, body_rewrite_output)
+            self.assertFalse(body_rewrite["ok"])
+            self.assertFalse(body_rewrite["current_capability"]["approval_gated_body_rewrite_implemented"])
+            self.assertIn("target_mode=embed_edge", "\n".join(body_rewrite["blockers"]))
+
+            missing_guard_code, missing_guard_output = self.run_cli(
+                [
+                    "notion-objet-link-convert",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_notion_convert_embed.md",
+                    "--locator-fingerprint",
+                    locator_fingerprint,
+                    "--object-id",
+                    object_id,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:fixture-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            missing_guard = json.loads(missing_guard_output)
+            self.assertEqual(missing_guard_code, 1, missing_guard_output)
+            self.assertIn("expected-occurrence-count", "\n".join(missing_guard["blockers"]))
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "notion-objet-link-convert",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_notion_convert_embed.md",
+                    "--locator-fingerprint",
+                    locator_fingerprint,
+                    "--object-id",
+                    object_id,
+                    "--target-mode",
+                    "embed_edge",
+                    "--expected-occurrence-count",
+                    "1",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:fixture-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            approve_result = json.loads(approve_output)
+            serialized_approve = json.dumps(approve_result, ensure_ascii=False)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"], approve_result)
+            self.assertEqual(approve_result["lifecycle_action"], "notion_objet_link_convert_write")
+            self.assertEqual(approve_result["write_status"], "written")
+            self.assertTrue(approve_result["closed_actions"]["embed_edge_written"])
+            self.assertTrue(approve_result["closed_actions"]["edge_receipt_written"])
+            self.assertTrue(approve_result["closed_actions"]["conversion_receipt_written"])
+            self.assertFalse(approve_result["closed_actions"]["zettel_body_rewritten"])
+            self.assertIn("inbox/zet_notion_convert_embed.md", approve_result["files_written"])
+            self.assertIn(approve_result["edge_write"]["receipt_path"], approve_result["files_written"])
+            self.assertIn(approve_result["receipt"]["receipt_path"], approve_result["files_written"])
+            self.assertNotIn(notion_url, serialized_approve)
+            self.assertNotIn("Convert private", serialized_approve)
+            self.assertNotIn(str(archive_root), serialized_approve)
+
+            source_frontmatter, source_body = archive_services.split_zettel_text(zettel_path.read_text(encoding="utf-8"))
+            matching_edges = [
+                item
+                for item in source_frontmatter["edges"]
+                if isinstance(item, dict) and item.get("type") == "embed" and item.get("target") == object_id
+            ]
+            self.assertEqual(len(matching_edges), 1)
+            self.assertEqual(matching_edges[0]["visibility"], "private")
+            self.assertIn(notion_url, source_body)
+
+            conversion_receipt_path = archive_root / approve_result["receipt"]["receipt_path"]
+            edge_receipt_path = archive_root / approve_result["edge_write"]["receipt_path"]
+            self.assertTrue(conversion_receipt_path.is_file())
+            self.assertTrue(edge_receipt_path.is_file())
+            conversion_receipt_text = conversion_receipt_path.read_text(encoding="utf-8")
+            edge_receipt_text = edge_receipt_path.read_text(encoding="utf-8")
+            self.assertNotIn(notion_url, conversion_receipt_text)
+            self.assertNotIn("Convert private", conversion_receipt_text)
+            self.assertNotIn(notion_url, edge_receipt_text)
+            self.assertNotIn("Convert private", edge_receipt_text)
+            conversion_receipt = json.loads(conversion_receipt_text)
+            self.assertEqual(conversion_receipt["lifecycle_action"], "notion_objet_link_convert_write")
+            self.assertEqual(conversion_receipt["target_mode"], "embed_edge")
+            self.assertEqual(conversion_receipt["edge_type"], "embed")
+            self.assertTrue(conversion_receipt["closed_actions"]["rollback_on_failure"])
+
+            duplicate_code, duplicate_output = self.run_cli(
+                [
+                    "notion-objet-link-convert",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_notion_convert_embed.md",
+                    "--locator-fingerprint",
+                    locator_fingerprint,
+                    "--object-id",
+                    object_id,
+                    "--target-mode",
+                    "embed_edge",
+                    "--expected-occurrence-count",
+                    "1",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:fixture-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+            duplicate = json.loads(duplicate_output)
+            self.assertEqual(duplicate_code, 1, duplicate_output)
+            self.assertFalse(duplicate["ok"])
+            self.assertIn("already exists", "\n".join(duplicate["blockers"]))
+
     def test_notion_objet_manifest_locator_label_write_enables_index_matching_without_echoing_locator(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

@@ -752,6 +752,7 @@ MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
 ZETTEL_EDGE_RECEIPTS_DIR = "receipts/edges"
 ZETTEL_EDGE_BATCH_RECEIPTS_DIR = "receipts/edges/batches"
 NOTION_OBJET_MANIFEST_LOCATOR_LABEL_RECEIPTS_DIR = "receipts/objects/notion-locator-labels"
+NOTION_OBJET_LINK_CONVERT_RECEIPTS_DIR = "receipts/objects/notion-link-conversions"
 DELEGATE_RECEIPTS_DIR = "receipts/delegate"
 ATTESTATION_RECEIPTS_DIR = "receipts/attest"
 FOREIGN_BLOCK_QUARANTINE_RECEIPTS_DIR = "receipts/quarantine"
@@ -3337,6 +3338,359 @@ def notion_objet_manifest_locator_label(
         "files_written": [manifest_relative, receipt_relative],
         "blockers": [],
     }
+
+
+def notion_objet_link_convert_receipt_relative_path(
+    *,
+    archive_id: str,
+    zettel_path: str,
+    locator_fingerprint: str,
+    object_id: str,
+    target_mode: str,
+    visibility: str,
+) -> str:
+    digest = sha256_json_hex(
+        {
+            "archive_id": archive_id,
+            "zettel_path": zettel_path,
+            "locator_fingerprint": locator_fingerprint,
+            "object_id": object_id,
+            "target_mode": target_mode,
+            "visibility": visibility,
+            "receipt_kind": "notion_objet_link_convert",
+        }
+    )
+    return f"{NOTION_OBJET_LINK_CONVERT_RECEIPTS_DIR}/{digest[:24]}.notion-objet-link-convert.json"
+
+
+def notion_objet_link_convert_result(
+    *,
+    archive_id: str,
+    dry_run: bool,
+    approve: bool,
+    target_mode: str,
+    visibility: str,
+    reviewed_by: str | None,
+    rewrite_plan: dict[str, Any] | None,
+    edge_result: dict[str, Any] | None,
+    conversion_receipt_path: str | None,
+    expected_occurrence_count: int | None,
+    would_change: list[str],
+    files_written: list[str],
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    selected_locator = rewrite_plan.get("selected_locator") if isinstance(rewrite_plan, dict) else None
+    observed_occurrence_count = (
+        int(selected_locator.get("occurrence_count") or 0)
+        if isinstance(selected_locator, dict)
+        else None
+    )
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "notion_objet_link_convert_plan" if dry_run else "notion_objet_link_convert_write",
+        "archive_id": archive_id,
+        "write_status": "blocked" if blockers else "would_write" if dry_run else "written",
+        "target_mode": target_mode,
+        "visibility": visibility,
+        "zettel": rewrite_plan.get("zettel") if isinstance(rewrite_plan, dict) else {"path": None, "redacted": False},
+        "locator_fingerprint": rewrite_plan.get("locator_fingerprint") if isinstance(rewrite_plan, dict) else None,
+        "selected_object_id": rewrite_plan.get("selected_object_id") if isinstance(rewrite_plan, dict) else None,
+        "selected_objet_ref": rewrite_plan.get("selected_objet_ref") if isinstance(rewrite_plan, dict) else None,
+        "selected_locator": selected_locator,
+        "selected_candidate": rewrite_plan.get("selected_candidate") if isinstance(rewrite_plan, dict) else None,
+        "expected_occurrence_count": expected_occurrence_count,
+        "observed_occurrence_count": observed_occurrence_count,
+        "edge_write": drop_none_values(
+            {
+                "write_status": edge_result.get("write_status") if isinstance(edge_result, dict) else None,
+                "edge_id": edge_result.get("edge_id") if isinstance(edge_result, dict) else None,
+                "edge_type": edge_result.get("edge_type") if isinstance(edge_result, dict) else None,
+                "source": edge_result.get("source") if isinstance(edge_result, dict) else None,
+                "target": edge_result.get("target") if isinstance(edge_result, dict) else None,
+                "receipt_path": edge_result.get("receipt_path") if isinstance(edge_result, dict) else None,
+                "files_written": edge_result.get("files_written") if isinstance(edge_result, dict) and not dry_run else None,
+            }
+        ),
+        "receipt": {
+            "schema": "wom-kit/notion-objet-link-convert-receipt/v0.1",
+            "receipt_path": conversion_receipt_path,
+            "receipt_written": bool(conversion_receipt_path and conversion_receipt_path in files_written),
+        },
+        "current_capability": {
+            "approval_gated_embed_edge_write_implemented": True,
+            "approval_gated_body_rewrite_implemented": False,
+            "uses_rewrite_plan_drift_guard": True,
+            "uses_single_zettel_edge_gate": True,
+            "mcp_write_tool_implemented": False,
+            "provider_api_call_implemented": False,
+            "real_export_parser_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "real_source_export_files_read": False,
+            "object_file_bytes_read": False,
+            "provider_locator_text_rewritten": False,
+            "zettel_body_rewritten": False,
+            "embed_edge_written": bool(edge_result and edge_result.get("write_status") == "written"),
+            "zettel_frontmatter_written": bool(edge_result and edge_result.get("closed_actions", {}).get("zettel_frontmatter_written")),
+            "edge_receipt_written": bool(edge_result and edge_result.get("closed_actions", {}).get("receipt_written")),
+            "conversion_receipt_written": bool(conversion_receipt_path and conversion_receipt_path in files_written),
+            "rollback_on_failure": True,
+        },
+        "privacy_guards": {
+            "provider_urls_echoed": False,
+            "provider_locator_text_echoed": False,
+            "zettel_body_text_echoed": False,
+            "zettel_title_echoed": False,
+            "frontmatter_values_echoed": False,
+            "page_titles_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "tokens_echoed": False,
+            "secret_values_echoed": False,
+        },
+        "would_change": unique_preserve_order(would_change),
+        "files_written": unique_preserve_order(files_written),
+        "next_safe_actions": [
+            "Run zettel-objet-links after the reviewed embed edge exists."
+            if not blockers
+            else "Fix blockers before converting a reviewed Notion locator link.",
+            "Keep provider locator body rewrites separate until a body rewrite command has its own reviewed replacement guard.",
+        ],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def notion_objet_link_convert(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    locator_fingerprint: str | None = None,
+    object_id: str | None = None,
+    target_mode: str = "embed_edge",
+    expected_occurrence_count: int | None = None,
+    visibility: str = "private",
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run and approve:
+        blockers.append("Use either --dry-run or --approve, not both.")
+    if not dry_run and not approve:
+        blockers.append("notion-objet-link-convert requires --dry-run or --approve.")
+    if approve and not reviewed_by:
+        blockers.append("notion-objet-link-convert --approve requires --reviewed-by.")
+    if approve and expected_occurrence_count is None:
+        blockers.append("notion-objet-link-convert --approve requires --expected-occurrence-count from the reviewed plan.")
+    if reviewed_by and not safe_source_intake_plan_scalar(str(reviewed_by)):
+        blockers.append("reviewed_by must be a safe non-secret scalar.")
+
+    mode = str(target_mode or "").strip()
+    if mode != "embed_edge":
+        blockers.append("notion-objet-link-convert currently supports only target_mode=embed_edge; body rewrite remains disabled.")
+    normalized_visibility = str(visibility or "private").strip().lower().replace("-", "_")
+    if not safe_source_intake_plan_scalar(normalized_visibility):
+        blockers.append("visibility must be a safe non-secret scalar.")
+
+    rewrite_plan = notion_objet_link_rewrite_plan(
+        root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        locator_fingerprint=locator_fingerprint,
+        object_id=object_id,
+        target_mode=mode if mode in NOTION_OBJET_LINK_REWRITE_TARGET_MODES else "embed_edge",
+        expected_occurrence_count=expected_occurrence_count,
+        dry_run=True,
+    )
+    plan_blockers = rewrite_plan.get("blockers") if isinstance(rewrite_plan.get("blockers"), list) else []
+    plan_warnings = rewrite_plan.get("warnings") if isinstance(rewrite_plan.get("warnings"), list) else []
+    blockers.extend(str(blocker) for blocker in plan_blockers if str(blocker).strip())
+    warnings.extend(str(warning) for warning in plan_warnings if str(warning).strip())
+
+    zettel = rewrite_plan.get("zettel") if isinstance(rewrite_plan.get("zettel"), dict) else {}
+    zettel_path = str(zettel.get("path") or "").strip()
+    selected_object_id = str(rewrite_plan.get("selected_object_id") or "").strip()
+    selected_fingerprint = str(rewrite_plan.get("locator_fingerprint") or "").strip()
+
+    edge_result: dict[str, Any] | None = None
+    conversion_receipt_relative: str | None = None
+    would_change: list[str] = []
+
+    if not blockers:
+        edge_result = zettel_edge_write(
+            root,
+            from_zettel=None,
+            from_path=zettel_path,
+            target_ref=selected_object_id,
+            edge_type="embed",
+            visibility=normalized_visibility,
+            dry_run=True,
+            approve=False,
+        )
+        edge_blockers = edge_result.get("blockers") if isinstance(edge_result.get("blockers"), list) else []
+        blockers.extend(f"embed edge: {blocker}" for blocker in edge_blockers if str(blocker).strip())
+        conversion_receipt_relative = notion_objet_link_convert_receipt_relative_path(
+            archive_id=archive_id,
+            zettel_path=zettel_path,
+            locator_fingerprint=selected_fingerprint,
+            object_id=selected_object_id,
+            target_mode=mode,
+            visibility=normalized_visibility,
+        )
+        conversion_receipt_path = archive_internal_path(root, conversion_receipt_relative)
+        if conversion_receipt_path.exists():
+            blockers.append("Notion objet link conversion receipt already exists.")
+        if not blockers:
+            would_change.extend(str(item) for item in edge_result.get("would_change", []) if isinstance(item, str))
+            would_change.append(conversion_receipt_relative)
+
+    if blockers or dry_run:
+        return notion_objet_link_convert_result(
+            archive_id=archive_id,
+            dry_run=bool(dry_run),
+            approve=bool(approve),
+            target_mode=mode,
+            visibility=normalized_visibility,
+            reviewed_by=reviewed_by,
+            rewrite_plan=rewrite_plan,
+            edge_result=edge_result,
+            conversion_receipt_path=conversion_receipt_relative,
+            expected_occurrence_count=expected_occurrence_count,
+            would_change=would_change,
+            files_written=[],
+            blockers=blockers,
+            warnings=warnings,
+        )
+
+    assert reviewed_by is not None
+    assert conversion_receipt_relative is not None
+    assert edge_result is not None
+    edge_receipt_relative = str(edge_result.get("receipt_path") or "")
+    snapshots: dict[str, str | None] = {}
+    for relative in (zettel_path, edge_receipt_relative, conversion_receipt_relative):
+        if not relative or relative in snapshots:
+            continue
+        path = archive_internal_path(root, relative)
+        snapshots[relative] = path.read_text(encoding="utf-8") if path.exists() else None
+
+    files_written: list[str] = []
+    written_edge_result: dict[str, Any] | None = None
+    conversion_receipt_path = archive_internal_path(root, conversion_receipt_relative)
+    try:
+        written_edge_result = zettel_edge_write(
+            root,
+            from_zettel=None,
+            from_path=zettel_path,
+            target_ref=selected_object_id,
+            edge_type="embed",
+            visibility=normalized_visibility,
+            dry_run=False,
+            approve=True,
+            reviewed_by=reviewed_by,
+        )
+        if not written_edge_result.get("ok"):
+            raise ArchiveServiceError(
+                "; ".join(str(blocker) for blocker in written_edge_result.get("blockers", []))
+                or "Notion objet link embed edge write failed."
+            )
+        files_written.extend(str(item) for item in written_edge_result.get("files_written", []) if isinstance(item, str))
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        receipt = {
+            "schema_version": "wom-kit/notion-objet-link-convert-receipt/v0.1",
+            "lifecycle_action": "notion_objet_link_convert_write",
+            "receipt_kind": "notion_objet_link_convert",
+            "created_at": now,
+            "archive_id": archive_id,
+            "target_mode": mode,
+            "source_zettel_path": zettel_path,
+            "source_zettel_id": written_edge_result.get("source", {}).get("zettel_id"),
+            "locator_fingerprint": selected_fingerprint,
+            "selected_object_id": selected_object_id,
+            "selected_objet_ref": rewrite_plan.get("selected_objet_ref"),
+            "expected_occurrence_count": expected_occurrence_count,
+            "observed_occurrence_count": notion_objet_link_convert_result(
+                archive_id=archive_id,
+                dry_run=True,
+                approve=False,
+                target_mode=mode,
+                visibility=normalized_visibility,
+                reviewed_by=None,
+                rewrite_plan=rewrite_plan,
+                edge_result=edge_result,
+                conversion_receipt_path=conversion_receipt_relative,
+                expected_occurrence_count=expected_occurrence_count,
+                would_change=[],
+                files_written=[],
+                blockers=[],
+                warnings=[],
+            ).get("observed_occurrence_count"),
+            "edge_type": "embed",
+            "edge_id": written_edge_result.get("edge_id"),
+            "edge_receipt_path": written_edge_result.get("receipt_path"),
+            "conversion_receipt_path": conversion_receipt_relative,
+            "reviewed_by": reviewed_by,
+            "closed_actions": {
+                "provider_api_called": False,
+                "oauth_started": False,
+                "notion_connection_opened": False,
+                "real_source_export_files_read": False,
+                "object_file_bytes_read": False,
+                "provider_locator_text_rewritten": False,
+                "zettel_body_rewritten": False,
+                "embed_edge_written": True,
+                "edge_receipt_written": True,
+                "conversion_receipt_written": True,
+                "rollback_on_failure": True,
+            },
+            "privacy_guards": {
+                "provider_urls_echoed": False,
+                "provider_locator_text_echoed": False,
+                "zettel_body_text_echoed": False,
+                "zettel_title_echoed": False,
+                "frontmatter_values_echoed": False,
+                "page_titles_echoed": False,
+                "absolute_local_paths_echoed": False,
+                "account_ids_echoed": False,
+                "emails_echoed": False,
+                "tokens_echoed": False,
+                "secret_values_echoed": False,
+            },
+        }
+        conversion_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_new_file(conversion_receipt_path, receipt)
+        files_written.append(conversion_receipt_relative)
+    except (ArchiveServiceError, OSError):
+        restore_zettel_edge_batch_snapshots(snapshots, root)
+        raise
+
+    return notion_objet_link_convert_result(
+        archive_id=archive_id,
+        dry_run=False,
+        approve=True,
+        target_mode=mode,
+        visibility=normalized_visibility,
+        reviewed_by=reviewed_by,
+        rewrite_plan=rewrite_plan,
+        edge_result=written_edge_result,
+        conversion_receipt_path=conversion_receipt_relative,
+        expected_occurrence_count=expected_occurrence_count,
+        would_change=[],
+        files_written=files_written,
+        blockers=[],
+        warnings=warnings,
+    )
 
 
 def resolve_zettel_path(archive_root: Path, zettel_id: str | None, relative_path: str | None) -> Path:

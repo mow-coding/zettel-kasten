@@ -1,6 +1,6 @@
 # Notion Objet Link Rewrite Plan
 
-Status: v0.3.98 read-only conversion checkpoint
+Status: v0.3.101 read-only conversion review checkpoint
 Date: 2026-06-17
 
 `notion-objet-link-rewrite-plan` is the review checkpoint after
@@ -80,7 +80,7 @@ The output includes:
 - selected locator occurrence count and safe line/field hints,
 - selected manifest candidate metadata,
 - an approval checklist,
-- `would_change` with the future approved write shape.
+- `would_change` with the selected approved write shape.
 
 The output does not include the provider locator itself.
 
@@ -121,14 +121,16 @@ If the one-zettel plan cannot find a manifest candidate because the manifest
 lacks the reviewed locator fingerprint, use
 `notion-objet-manifest-locator-label` first.
 
-After a future approved conversion writes stable refs or edges, use
+After an approved conversion writes stable refs or edges, use
 `zettel-objet-links` to inspect safe local-client objet link candidates.
+
+In v0.3.101, `notion-objet-link-convert` is that approved conversion path for
+`target_mode=embed_edge` only. It re-runs this plan, requires
+`--expected-occurrence-count`, and writes one reviewed `embed` edge plus
+receipts without rewriting body text.
 
 ## Future Work
 
-A later approval-gated command can perform the actual reviewed conversion. It
-should require `--approve`, `--reviewed-by`, this dry-run plan shape, and a
-fresh re-run of the same checks before writing.
-
-This release does not perform that body rewrite or edge write. The approved
-manifest locator label write is a separate earlier step.
+Body rewrite remains future work. A later approval-gated body rewrite command
+would need its own replacement guard and should stay separate from the
+v0.3.101 `embed_edge` conversion path.
