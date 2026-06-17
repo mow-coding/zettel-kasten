@@ -146,6 +146,7 @@ Onboarding and setup plans:
 - [Connection Evidence Fixture Parser](connection-evidence-fixture-parser.md)
 - [Connection Edge Intelligence Plan](connection-edge-intelligence-plan.md)
 - [Zettel Edge Write](zettel-edge-write.md)
+- [Zettel Edge Batch](zettel-edge-batch.md)
 - [Object Storage Recommendations](object-storage-recommendations.md)
 - [Object Storage Adapter Readiness Plan](object-storage-adapter-readiness-plan.md)
 - [Object Storage Operation Request Plan](object-storage-operation-request-plan.md)

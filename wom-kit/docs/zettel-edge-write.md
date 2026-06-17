@@ -1,14 +1,18 @@
 # Zettel Edge Write
 
-Status: v0.3.88 approval-gated zettel edge write checkpoint
+Status: v0.3.99 approval-gated zettel edge write checkpoint
 Original checkpoint: Status: v0.3.82 approval-gated zettel edge write checkpoint
 
 `archive zettel-edge` is the first durable typed-edge writer for WOM-kit. It
 writes exactly one reviewed edge from one source zet to one existing target zet
 or manifested objet.
 
-It is not a bulk connection importer and it does not consume real Notion
-exports or candidate fixture records automatically.
+It is still the single-edge safety gate. `archive zettel-edge-batch` reuses
+this gate for policy-approved batches, but the single command here remains the
+smallest approval path.
+
+It does not consume real Notion exports or candidate fixture records
+automatically.
 
 ## Command
 
@@ -115,4 +119,7 @@ This command does not:
 - echo page titles, comment bodies, account ids, emails, tokens, or secret
   values.
 
-MCP does not expose a write tool for this surface in v0.3.88.
+MCP does not expose a write tool for this surface in v0.3.99.
+
+For policy-level batch approval, see
+[Zettel Edge Batch](zettel-edge-batch.md).
