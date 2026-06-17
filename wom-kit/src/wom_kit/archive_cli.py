@@ -133,6 +133,8 @@ Commands:
           Build a next-question decision JSON template without writing files.
   project-intake-item-plan
           Preview the next dry-run commands for one selected intake item.
+  notion-objet-link-plan
+          Plan Notion provider locator to manifested objet links without echoing URLs.
   block-header
           Preview the derived block header for one draft or canonical zet.
   projection-plan
@@ -3919,6 +3921,60 @@ def command_zettel_objet_links(args: argparse.Namespace) -> int:
                         f"{candidate.get('store_kind') or '-'} "
                         f"{candidate.get('store_ref') or '-'}"
                     )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+        print("Writes: none")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_notion_objet_link_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("notion-objet-link-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.notion_objet_link_plan(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            relative_path=args.path,
+            dry_run=True,
+            max_locators=args.max_locators,
+            max_candidates=args.max_candidates,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        zettel = result.get("zettel") if isinstance(result.get("zettel"), dict) else {}
+        print(f"Notion objet link plan: {result.get('locator_count', 0)} locator(s)")
+        print(f"Zettel: {zettel.get('id') or zettel.get('path') or '-'}")
+        manifest_summary = result.get("manifest_summary") if isinstance(result.get("manifest_summary"), dict) else {}
+        print(f"Manifest records: {manifest_summary.get('record_count', 0)}")
+        print(f"Notion-labeled records: {manifest_summary.get('notion_labeled_record_count', 0)}")
+        for locator in result.get("locators", []):
+            if not isinstance(locator, dict):
+                continue
+            print(
+                f"- {locator.get('locator_fingerprint')}: "
+                f"{locator.get('candidate_state')} "
+                f"({locator.get('candidate_count', 0)} candidate(s))"
+            )
+            for candidate in locator.get("candidates", []):
+                if not isinstance(candidate, dict):
+                    continue
+                print(f"  object: {candidate.get('object_id') or '-'} ({candidate.get('resolution_state') or '-'})")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -9875,6 +9931,20 @@ def build_parser() -> argparse.ArgumentParser:
     zettel_objet_links.add_argument("--max-refs", type=int, default=100, help="Maximum distinct object refs to resolve.")
     zettel_objet_links.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     zettel_objet_links.set_defaults(func=command_zettel_objet_links)
+
+    notion_objet_link_plan = subcommands.add_parser(
+        "notion-objet-link-plan",
+        help="Plan Notion provider locator to manifested objet links without echoing URLs.",
+    )
+    notion_objet_link_plan.add_argument("archive_root", help="Archive root to inspect.")
+    notion_objet_link_target = notion_objet_link_plan.add_mutually_exclusive_group(required=True)
+    notion_objet_link_target.add_argument("--zettel-id", help="Zettel id to inspect.")
+    notion_objet_link_target.add_argument("--path", help="Archive-relative zettel path to inspect.")
+    notion_objet_link_plan.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing and open nothing.")
+    notion_objet_link_plan.add_argument("--max-locators", type=int, default=100, help="Maximum distinct Notion locators to inspect.")
+    notion_objet_link_plan.add_argument("--max-candidates", type=int, default=20, help="Maximum manifest candidates per locator.")
+    notion_objet_link_plan.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    notion_objet_link_plan.set_defaults(func=command_notion_objet_link_plan)
 
     block_header = subcommands.add_parser("block-header", help="Preview the derived block header for one zet.")
     block_header.add_argument("archive_root", help="Archive root to inspect.")

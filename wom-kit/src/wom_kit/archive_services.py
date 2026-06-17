@@ -766,6 +766,9 @@ SOURCE_SCAN_MODE = "metadata_only"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 OBJECT_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 OBJET_REF_TOKEN_RE = re.compile(r"\b(?P<prefix>objet:)?sha256:(?P<digest>[0-9a-fA-F]{64})\b")
+NOTION_PROVIDER_LOCATOR_RE = re.compile(
+    r"(?i)\b(?:https?://(?:www\.)?notion\.so|https?://app\.notion\.com|notion://)[^\s<>\")\]]+"
+)
 ZETTEL_EDGE_ZETTEL_ID_RE = re.compile(r"^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$")
 ZETTEL_EDGE_FILENAME_SEGMENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
 DRAFT_CREATION_MODES = {"human_written", "ai_assisted", "ai_generated", "imported", "derived"}
@@ -2231,6 +2234,390 @@ def zettel_objet_links(
         },
         "would_change": [],
         "next_safe_actions": next_safe_actions,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def normalize_notion_provider_locator(value: str) -> str:
+    text = str(value or "").strip()
+    text = text.rstrip(".,;")
+    if text.endswith("&quot;"):
+        text = text[:-6]
+    if text.endswith("&gt;"):
+        text = text[:-4]
+    return text.lower()
+
+
+def notion_provider_locator_fingerprint(locator: str) -> str:
+    return "sha256:" + hashlib.sha256(normalize_notion_provider_locator(locator).encode("utf-8")).hexdigest()
+
+
+def notion_provider_locator_occurrences_in_text(
+    text: str,
+    *,
+    source: str,
+    field: str | None = None,
+) -> list[dict[str, Any]]:
+    occurrences: list[dict[str, Any]] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        for match in NOTION_PROVIDER_LOCATOR_RE.finditer(line):
+            normalized = normalize_notion_provider_locator(match.group(0))
+            if not normalized:
+                continue
+            lower_line = line.lower()
+            if "<mention-page" in lower_line:
+                context_kind = "notion_mention_page_marker"
+            elif "embed" in lower_line or "<file" in lower_line:
+                context_kind = "notion_embed_or_file_marker"
+            else:
+                context_kind = "notion_provider_locator"
+            occurrences.append(
+                drop_none_values(
+                    {
+                        "source": source,
+                        "line": line_number,
+                        "field": field,
+                        "locator_kind": context_kind,
+                        "locator_fingerprint": notion_provider_locator_fingerprint(normalized),
+                        "_normalized_locator": normalized,
+                    }
+                )
+            )
+    return occurrences
+
+
+def notion_provider_locator_occurrences_in_value(value: Any, *, field: str) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        occurrences: list[dict[str, Any]] = []
+        for key, child in value.items():
+            key_text = safe_objet_ref_field_segment(key)
+            child_field = f"{field}.{key_text}" if field else key_text
+            occurrences.extend(notion_provider_locator_occurrences_in_value(child, field=child_field))
+        return occurrences
+    if isinstance(value, list):
+        occurrences = []
+        for index, child in enumerate(value):
+            child_field = f"{field}[{index}]"
+            occurrences.extend(notion_provider_locator_occurrences_in_value(child, field=child_field))
+        return occurrences
+    if isinstance(value, str):
+        return notion_provider_locator_occurrences_in_text(value, source="frontmatter", field=field)
+    return []
+
+
+def safe_manifest_label(value: Any, *, fallback: str | None = None) -> str | None:
+    if value is None:
+        return fallback
+    text = str(value).strip()
+    if not text:
+        return fallback
+    if contains_forbidden_location_reference(text) or source_intake_has_provider_url(text) or source_intake_secret_like(text):
+        return fallback
+    return text
+
+
+def manifest_record_has_notion_store_label(record: dict[str, Any]) -> bool:
+    labels: list[str] = []
+    provenance = record.get("provenance") if isinstance(record.get("provenance"), dict) else {}
+    for value in (
+        record.get("store_kind"),
+        record.get("store_ref"),
+        record.get("logical_key"),
+        provenance.get("source"),
+        provenance.get("store_kind"),
+        provenance.get("store_ref"),
+    ):
+        if isinstance(value, str):
+            labels.append(value.lower())
+    locations = record.get("locations") if isinstance(record.get("locations"), list) else []
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        for key in ("provider", "store_kind", "store_ref"):
+            value = location.get(key)
+            if isinstance(value, str):
+                labels.append(value.lower())
+    return any("notion" in label for label in labels)
+
+
+def notion_manifest_store_labels(record: dict[str, Any]) -> list[dict[str, Any]]:
+    labels: list[dict[str, Any]] = []
+    locations = record.get("locations") if isinstance(record.get("locations"), list) else []
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        labels.append(
+            drop_none_values(
+                {
+                    "provider": safe_manifest_label(location.get("provider"), fallback="redacted_provider"),
+                    "store_kind": safe_manifest_label(location.get("store_kind"), fallback="redacted_store_kind"),
+                    "store_ref": safe_manifest_label(location.get("store_ref"), fallback="redacted_store_ref"),
+                    "availability": safe_manifest_label(location.get("availability"), fallback="unknown"),
+                    "content_addressed": bool(location.get("content_addressed")),
+                    "byte_verification_by_wom_kit": bool(location.get("byte_verification_by_wom_kit")),
+                }
+            )
+        )
+    return labels
+
+
+def notion_locator_manifest_match_fields(
+    value: Any,
+    *,
+    normalized_locator: str,
+    locator_fingerprint: str,
+    field: str = "$",
+) -> list[dict[str, str]]:
+    matches: list[dict[str, str]] = []
+    fingerprint_hex = locator_fingerprint.removeprefix("sha256:")
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = safe_objet_ref_field_segment(key)
+            child_field = f"{field}.{key_text}" if field != "$" else f"$.{key_text}"
+            matches.extend(
+                notion_locator_manifest_match_fields(
+                    child,
+                    normalized_locator=normalized_locator,
+                    locator_fingerprint=locator_fingerprint,
+                    field=child_field,
+                )
+            )
+        return matches
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            matches.extend(
+                notion_locator_manifest_match_fields(
+                    child,
+                    normalized_locator=normalized_locator,
+                    locator_fingerprint=locator_fingerprint,
+                    field=f"{field}[{index}]",
+                )
+            )
+        return matches
+    if isinstance(value, str):
+        text = value.strip()
+        normalized_text = normalize_notion_provider_locator(text)
+        if normalized_locator and normalized_locator in normalized_text:
+            matches.append({"field": field, "match_kind": "exact_locator_redacted"})
+        elif text.lower() in {locator_fingerprint, fingerprint_hex}:
+            matches.append({"field": field, "match_kind": "locator_fingerprint"})
+    return matches
+
+
+def notion_objet_link_plan(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    dry_run: bool = True,
+    max_locators: int = 100,
+    max_candidates: int = 20,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("notion-objet-link-plan is read-only; pass --dry-run.")
+    if not zettel_id and not relative_path:
+        blockers.append("Provide zettel_id or path.")
+        return {
+            "ok": False,
+            "dry_run": True,
+            "lifecycle_action": "notion_objet_link_plan",
+            "archive_id": archive_id,
+            "zettel": {"path": None, "redacted": False},
+            "locator_count": 0,
+            "locators": [],
+            "manifest_summary": {"manifest_path": "objects/manifests/files.jsonl", "record_count": 0, "notion_labeled_record_count": 0},
+            "truncated": False,
+            "privacy_guards": {
+                "provider_urls_echoed": False,
+                "zettel_body_text_echoed": False,
+                "frontmatter_values_echoed": False,
+                "absolute_local_paths_echoed": False,
+                "provider_api_called": False,
+                "presigned_url_created": False,
+                "download_performed": False,
+                "object_file_bytes_read": False,
+                "writes": False,
+            },
+            "would_change": [],
+            "next_safe_actions": ["Fix blockers before planning Notion locator to objet links."],
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+        }
+
+    path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
+    text = path.read_text(encoding="utf-8")
+    frontmatter, body = split_zettel_text(text)
+    safe_frontmatter = json_safe(frontmatter)
+    zettel_summary_value = {
+        "path": archive_relative_path(path, root),
+        "redacted": safe_frontmatter.get("status") == "redacted",
+    }
+    if isinstance(safe_frontmatter.get("id"), str):
+        zettel_summary_value["id"] = safe_frontmatter.get("id")
+    if safe_frontmatter.get("status") == "redacted":
+        blockers.append("zettel_is_redacted")
+        return {
+            "ok": False,
+            "dry_run": True,
+            "lifecycle_action": "notion_objet_link_plan",
+            "archive_id": archive_id,
+            "zettel": zettel_summary_value,
+            "locator_count": 0,
+            "locators": [],
+            "manifest_summary": {"manifest_path": "objects/manifests/files.jsonl", "record_count": 0, "notion_labeled_record_count": 0},
+            "truncated": False,
+            "privacy_guards": {
+                "provider_urls_echoed": False,
+                "zettel_body_text_echoed": False,
+                "frontmatter_values_echoed": False,
+                "absolute_local_paths_echoed": False,
+                "provider_api_called": False,
+                "presigned_url_created": False,
+                "download_performed": False,
+                "object_file_bytes_read": False,
+                "writes": False,
+            },
+            "would_change": [],
+            "next_safe_actions": ["Redacted zettels do not expose Notion locator plans."],
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+        }
+
+    max_locators = max(1, min(int(max_locators), 500))
+    max_candidates = max(1, min(int(max_candidates), 100))
+    occurrences: list[dict[str, Any]] = []
+    occurrences.extend(notion_provider_locator_occurrences_in_value(safe_frontmatter, field="frontmatter"))
+    occurrences.extend(notion_provider_locator_occurrences_in_text(body, source="body"))
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    normalized_by_fingerprint: dict[str, str] = {}
+    order: list[str] = []
+    for occurrence in occurrences:
+        fingerprint = str(occurrence.get("locator_fingerprint") or "")
+        if not fingerprint:
+            continue
+        if fingerprint not in grouped:
+            grouped[fingerprint] = []
+            order.append(fingerprint)
+        grouped[fingerprint].append(occurrence)
+        normalized = str(occurrence.get("_normalized_locator") or "")
+        if normalized:
+            normalized_by_fingerprint.setdefault(fingerprint, normalized)
+
+    manifest_records = load_manifest_records(root)
+    notion_labeled_record_count = sum(1 for record in manifest_records if manifest_record_has_notion_store_label(record))
+    truncated = len(order) > max_locators
+    locators: list[dict[str, Any]] = []
+    for fingerprint in order[:max_locators]:
+        locator_occurrences = grouped[fingerprint]
+        normalized_locator = normalized_by_fingerprint.get(fingerprint, "")
+        candidates: list[dict[str, Any]] = []
+        for record in manifest_records:
+            if not isinstance(record, dict):
+                continue
+            match_fields = notion_locator_manifest_match_fields(
+                record,
+                normalized_locator=normalized_locator,
+                locator_fingerprint=fingerprint,
+            )
+            if not match_fields:
+                continue
+            object_id_value = str(record.get("object_id") or "")
+            candidate_blockers: list[str] = []
+            normalized_object_id = normalize_object_id(object_id_value, candidate_blockers)
+            resolution = resolve_objet_ref(root, object_id=normalized_object_id, dry_run=True) if normalized_object_id else {}
+            candidates.append(
+                {
+                    "object_id": normalized_object_id or None,
+                    "match_fields": match_fields[:10],
+                    "match_fields_truncated": len(match_fields) > 10,
+                    "store_labels": notion_manifest_store_labels(record),
+                    "resolution_state": resolution.get("resolution_state"),
+                    "manifest_record_count": resolution.get("manifest_record_count"),
+                    "local_openable": bool(resolution.get("local_openable")),
+                    "external_declared": bool(resolution.get("external_declared")),
+                    "suggested_objet_ref": f"objet:{normalized_object_id}" if normalized_object_id else None,
+                    "candidate_blockers": unique_preserve_order(candidate_blockers),
+                }
+            )
+            if len(candidates) >= max_candidates:
+                break
+        candidate_count = len(candidates)
+        if candidate_count:
+            state = "matched_manifest_object"
+        elif notion_labeled_record_count:
+            state = "notion_manifest_present_without_locator_binding"
+        else:
+            state = "no_notion_manifest_candidates"
+        locators.append(
+            {
+                "locator_fingerprint": fingerprint,
+                "occurrence_count": len(locator_occurrences),
+                "occurrences": [
+                    {
+                        "source": occurrence.get("source"),
+                        "line": occurrence.get("line"),
+                        "field": occurrence.get("field"),
+                        "locator_kind": occurrence.get("locator_kind"),
+                    }
+                    for occurrence in locator_occurrences[:10]
+                ],
+                "occurrences_truncated": len(locator_occurrences) > 10,
+                "candidate_state": state,
+                "candidate_count": candidate_count,
+                "candidates": candidates,
+                "candidates_truncated": candidate_count >= max_candidates,
+            }
+        )
+
+    if truncated:
+        warnings.append("notion_locator_plan_truncated")
+
+    next_safe_actions: list[str] = []
+    if locators and any(locator.get("candidate_count", 0) for locator in locators):
+        next_safe_actions.append("Review each matched object_id before replacing provider locators with objet:sha256 refs or writing a reviewed embed edge.")
+        next_safe_actions.append("Run zettel-objet-links again after reviewed refs exist in the zettel body or frontmatter.")
+    elif locators and notion_labeled_record_count:
+        next_safe_actions.append("Add a reviewed non-secret locator binding or manifest fingerprint before converting Notion provider locators to objet refs.")
+    elif locators:
+        next_safe_actions.append("Register the relevant Notion source-export objets in objects/manifests/files.jsonl before link conversion.")
+    else:
+        next_safe_actions.append("No Notion provider locators were found in this zettel.")
+    if blockers:
+        next_safe_actions.append("Fix blockers before planning Notion locator to objet links.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "notion_objet_link_plan",
+        "archive_id": archive_id,
+        "zettel": zettel_summary_value,
+        "locator_count": len(locators),
+        "locators": locators,
+        "manifest_summary": {
+            "manifest_path": "objects/manifests/files.jsonl",
+            "record_count": len(manifest_records),
+            "notion_labeled_record_count": notion_labeled_record_count,
+        },
+        "truncated": truncated,
+        "privacy_guards": {
+            "provider_urls_echoed": False,
+            "zettel_body_text_echoed": False,
+            "frontmatter_values_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_api_called": False,
+            "presigned_url_created": False,
+            "download_performed": False,
+            "object_file_bytes_read": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": unique_preserve_order(next_safe_actions),
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
     }

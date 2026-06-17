@@ -59,6 +59,11 @@ The preview looks for:
 - `sha256:<64 hex characters>`
 - `objet:sha256:<64 hex characters>`
 
+It does not treat provider locators as object refs. For imported Notion page
+mentions or embeds, first run `archive notion-objet-link-plan --dry-run` to
+match locator fingerprints against reviewed manifest metadata without echoing
+provider URLs.
+
 It scans zettel frontmatter and body text, but it does not echo the body text or
 frontmatter values back to the caller. Output locations are limited to safe
 position hints such as:
@@ -128,6 +133,15 @@ That means the link preview inherits the resolver boundary:
 ```text
 manifest metadata in, safe local/external candidates out, no provider action.
 ```
+
+## Relationship To `notion-objet-link-plan`
+
+`notion-objet-link-plan` is the earlier bridge for imported Notion zets whose
+body still contains provider locators instead of stable content refs.
+
+After human review adds `sha256:` or `objet:sha256:` refs, run
+`zettel-objet-links` to resolve those stable refs into safe local-client
+candidates.
 
 ## Future Work
 

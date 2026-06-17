@@ -48,6 +48,7 @@ Supporting philosophy and model docs:
 - [Objet Ref Resolution](objet-ref-resolution.md)
 - [Presigned URL Plan](presigned-url-plan.md)
 - [Zettel Objet Links](zettel-objet-links.md)
+- [Notion Objet Link Plan](notion-objet-link-plan.md)
 
 These documents cover:
 
