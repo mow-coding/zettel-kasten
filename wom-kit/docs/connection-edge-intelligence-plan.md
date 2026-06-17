@@ -1,6 +1,7 @@
 # Connection Edge Intelligence Plan
 
-Status: v0.3.87 read-only connection edge intelligence checkpoint
+Status: v0.3.92 read-only connection edge review summary checkpoint
+Original checkpoint: Status: v0.3.87 read-only connection edge intelligence checkpoint
 
 `archive connection-edge-intelligence-plan` is a read-only review layer on top
 of the sanitized connection fixture parser.
@@ -50,6 +51,22 @@ It keeps two axes separate:
 
 That distinction matters because a provider mechanism is not always the human
 meaning of the edge.
+
+## Review Counters
+
+The output separates ambiguity from review need:
+
+- `classification_summary.ambiguous_count` counts semantic or
+  medium-confidence candidates only.
+- `classification_summary.human_review_required_count` counts candidate-level
+  review flags such as provisional relationship meanings.
+- `review_summary.durable_write_human_approval_required_count` counts every
+  candidate that would still need human approval before a durable edge write.
+- `review_summary.auto_writable_count` remains `0`.
+
+This means `ambiguous_count: 0` does not mean the edge candidates are ready to
+write. For example, a clean Notion relation can still require review because
+it may fit a richer provisional meaning such as `responds_to` or `fulfills`.
 
 ## Current Active Meanings
 
