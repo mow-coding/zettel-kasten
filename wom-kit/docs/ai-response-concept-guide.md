@@ -1,6 +1,6 @@
 # AI Response Concept Guide
 
-Status: v0.3.103 read-only concept, operational terminology, and material-link routing checkpoint
+Status: v0.3.104 read-only concept, operational terminology, and material-clue routing checkpoint
 Date: 2026-06-17
 
 This guide tells an AI runtime how to explain core WOM ideas when a beginner
@@ -11,15 +11,17 @@ sha256 identity vs location URL
 manifest vs zet
 objet -> derived text -> zet
 operational terminology translation layer
-material-link routing after body locator omission
+material-clue routing after body locator omission
 ```
 
 It is not a new adapter, importer, uploader, or proof system. It is a read-only
 language guide for safer human-facing answers. v0.3.102 added an operational
 term dictionary so AI responses can translate terms such as `derived_from`,
-`references`, and `supersedes` before asking a human to decide. v0.3.103 adds
+`references`, and `supersedes` before asking a human to decide. v0.3.103 added
 safe routing for Notion material links when provider locators were already
-removed from imported zettel bodies.
+removed from imported zettel bodies. v0.3.104 adds an import material-clue audit
+route so an AI can check whether omitted-locator imports preserved or can
+recover a safe material clue.
 
 ## Command
 
@@ -229,6 +231,10 @@ Then route safely:
   no longer contain provider locators: use
   `notion-objet-source-map-link-plan` with source maps and optional
   download/retrieval ledgers.
+- Audit imported Notion zettels after provider locator omission: use
+  `notion-objet-import-clue-audit` before deciding whether a source-map
+  candidate, older body-locator route, or future import-time preservation fix
+  is needed.
 - Index or plan remaining body-locator matches: use `notion-objet-link-index`
   or `notion-objet-link-plan` only when imported zettels still contain
   provider locator text that can be fingerprinted.
@@ -275,6 +281,7 @@ This guide rephrases existing model documents for AI-human conversation:
 - [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md)
 - [Connection Edge Intelligence Plan](connection-edge-intelligence-plan.md)
 - [Zettel Edge Batch](zettel-edge-batch.md)
+- [Notion Objet Import Clue Audit](notion-objet-import-clue-audit.md)
 - [Notion Objet Source Map Link Plan](notion-objet-source-map-link-plan.md)
 
 It does not change those underlying implementation boundaries.

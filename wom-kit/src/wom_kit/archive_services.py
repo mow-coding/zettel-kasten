@@ -3820,6 +3820,247 @@ def notion_objet_source_map_link_plan(
     }
 
 
+NOTION_IMPORT_SOURCE_KEYS = {
+    "source",
+    "source_system",
+    "provider",
+    "provider_system",
+    "external_system",
+    "import_source",
+}
+NOTION_IMPORT_OMISSION_COUNT_KEYS = {
+    "source_locator_omitted_count",
+    "provider_locator_omitted_count",
+    "locator_omitted_count",
+    "omitted_locator_count",
+}
+
+
+def notion_import_source_text_is_notion(value: Any) -> bool:
+    text = str(value or "").strip().lower().replace("-", "_")
+    if not text:
+        return False
+    return text == "notion" or text.startswith("notion:") or text.endswith(":notion") or text.endswith("_notion")
+
+
+def notion_import_frontmatter_is_notion(frontmatter: dict[str, Any]) -> bool:
+    zettel_id = str(frontmatter.get("id") or "").strip().lower()
+    if zettel_id.startswith("zet_notion_") or zettel_id.startswith("zet_import_notion_"):
+        return True
+
+    def walk(value: Any) -> bool:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                normalized = notion_source_map_normalized_key(key)
+                if normalized in NOTION_IMPORT_SOURCE_KEYS and notion_import_source_text_is_notion(child):
+                    return True
+                if isinstance(child, (dict, list)) and walk(child):
+                    return True
+            return False
+        if isinstance(value, list):
+            return any(walk(child) for child in value)
+        return False
+
+    return walk(frontmatter)
+
+
+def notion_import_locator_omitted_count(value: Any) -> int:
+    total = 0
+
+    def add_count(raw: Any) -> None:
+        nonlocal total
+        if isinstance(raw, bool):
+            total += 1 if raw else 0
+            return
+        if isinstance(raw, int):
+            total += max(0, raw)
+            return
+        text = str(raw or "").strip()
+        if text.isdigit():
+            total += int(text)
+
+    def walk(item: Any) -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if notion_source_map_normalized_key(key) in NOTION_IMPORT_OMISSION_COUNT_KEYS:
+                    add_count(child)
+                if isinstance(child, (dict, list)):
+                    walk(child)
+            return
+        if isinstance(item, list):
+            for child in item:
+                walk(child)
+
+    walk(value)
+    return total
+
+
+def notion_import_candidate_keys(candidate: dict[str, Any]) -> list[str]:
+    from_zettel = candidate.get("from_zettel") if isinstance(candidate.get("from_zettel"), dict) else {}
+    keys = []
+    zettel_id = str(from_zettel.get("id") or "").strip()
+    path = str(from_zettel.get("path") or "").strip()
+    if zettel_id:
+        keys.append(f"id:{zettel_id}")
+    if path:
+        keys.append(f"path:{path}")
+    return keys
+
+
+def notion_objet_import_clue_audit(
+    archive_root: Path | str,
+    *,
+    source_maps: list[str] | None = None,
+    ledgers: list[str] | None = None,
+    dry_run: bool = True,
+    max_rows: int = 10000,
+    max_zettels: int = 500,
+    max_candidates: int = 1000,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("notion-objet-import-clue-audit is read-only; pass --dry-run.")
+
+    max_zettels = max(1, min(int(max_zettels), 5000))
+    source_map_plan = notion_objet_source_map_link_plan(
+        root,
+        source_maps=source_maps,
+        ledgers=ledgers,
+        dry_run=True,
+        max_rows=max_rows,
+        max_candidates=max_candidates,
+    )
+    if source_map_plan.get("blockers"):
+        blockers.extend(str(item) for item in source_map_plan.get("blockers") or [])
+    warnings.extend(str(item) for item in source_map_plan.get("warnings") or [])
+
+    candidate_ids_by_zettel: dict[str, set[str]] = {}
+    for candidate in source_map_plan.get("candidates", []):
+        if not isinstance(candidate, dict):
+            continue
+        candidate_id = str(candidate.get("candidate_id") or "")
+        for key in notion_import_candidate_keys(candidate):
+            candidate_ids_by_zettel.setdefault(key, set()).add(candidate_id)
+
+    zettels: list[dict[str, Any]] = []
+    redacted_zettel_count = 0
+    scanned_non_redacted_count = 0
+    truncated = False
+    for path in iter_zettel_paths(root):
+        if len(zettels) >= max_zettels:
+            truncated = True
+            warnings.append("notion_objet_import_clue_audit_zettel_limit_reached")
+            break
+        frontmatter = read_zettel_frontmatter_only(path)
+        if frontmatter.get("status") == "redacted":
+            redacted_zettel_count += 1
+            continue
+        scanned_non_redacted_count += 1
+        if not notion_import_frontmatter_is_notion(frontmatter):
+            continue
+        zettel_id = notion_source_map_safe_zettel_id(frontmatter.get("id"))
+        zettel_path = archive_relative_path(path, root)
+        object_ref_count = len(notion_source_map_existing_object_refs(frontmatter))
+        omitted_count = notion_import_locator_omitted_count(frontmatter)
+        matching_candidate_ids = set()
+        if zettel_id:
+            matching_candidate_ids.update(candidate_ids_by_zettel.get(f"id:{zettel_id}", set()))
+        matching_candidate_ids.update(candidate_ids_by_zettel.get(f"path:{zettel_path}", set()))
+        candidate_count = len(matching_candidate_ids)
+
+        if object_ref_count:
+            material_clue_state = "preserved_object_ref_or_edge"
+        elif candidate_count:
+            material_clue_state = "source_map_join_available"
+        elif omitted_count:
+            material_clue_state = "missing_material_clue_after_locator_omission"
+        else:
+            material_clue_state = "no_omission_signal_or_body_locator_path_needed"
+
+        zettels.append(
+            {
+                "zettel": drop_none_values({"id": zettel_id, "path": zettel_path}),
+                "source_locator_omitted_count": omitted_count,
+                "object_ref_or_edge_count": object_ref_count,
+                "source_map_candidate_count": candidate_count,
+                "material_clue_state": material_clue_state,
+                "needs_import_time_preservation_fix": material_clue_state == "missing_material_clue_after_locator_omission",
+                "body_locator_tools_may_be_required": material_clue_state == "no_omission_signal_or_body_locator_path_needed",
+            }
+        )
+
+    counts_by_state: dict[str, int] = {}
+    for item in zettels:
+        state = str(item.get("material_clue_state") or "unknown")
+        counts_by_state[state] = counts_by_state.get(state, 0) + 1
+
+    missing_count = counts_by_state.get("missing_material_clue_after_locator_omission", 0)
+    source_map_available_count = counts_by_state.get("source_map_join_available", 0)
+    preserved_count = counts_by_state.get("preserved_object_ref_or_edge", 0)
+    no_signal_count = counts_by_state.get("no_omission_signal_or_body_locator_path_needed", 0)
+
+    next_safe_actions: list[str] = []
+    if blockers:
+        next_safe_actions.append("Fix blockers before trusting the import material-clue audit.")
+    if missing_count:
+        next_safe_actions.append("Future import adapters should preserve a safe object_id, embed candidate, or source-map/ledger join row before omitting provider locators.")
+    if source_map_available_count:
+        next_safe_actions.append("Review source-map candidates with notion-objet-source-map-link-plan before any approved embed edge write.")
+    if no_signal_count:
+        next_safe_actions.append("If body locators still exist, use notion-objet-link-index before assuming material clues are missing.")
+    if preserved_count and not missing_count:
+        next_safe_actions.append("Imported zettels with preserved object refs or embed edges already have a durable material clue.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "notion_objet_import_clue_audit",
+        "archive_id": archive_id,
+        "summary": {
+            "scanned_non_redacted_zettel_count": scanned_non_redacted_count,
+            "redacted_zettel_count": redacted_zettel_count,
+            "notion_import_zettel_count": len(zettels),
+            "preserved_object_ref_or_edge_count": preserved_count,
+            "source_map_join_available_count": source_map_available_count,
+            "missing_material_clue_after_locator_omission_count": missing_count,
+            "no_omission_signal_or_body_locator_path_needed_count": no_signal_count,
+            "zettels_truncated": truncated,
+        },
+        "source_map_plan_summary": source_map_plan.get("summary", {}),
+        "zettels": zettels,
+        "current_capability": {
+            "audit_available": True,
+            "body_locator_required": False,
+            "import_time_object_ref_preservation_required": True,
+            "approved_write_performed_by_this_command": False,
+            "provider_locator_body_rewrite_implemented": False,
+        },
+        "privacy_guards": {
+            "zettel_body_text_read": False,
+            "zettel_body_text_echoed": False,
+            "frontmatter_values_echoed": False,
+            "provider_urls_echoed": False,
+            "provider_locator_text_echoed": False,
+            "page_titles_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "tokens_echoed": False,
+            "secret_values_echoed": False,
+            "provider_api_called": False,
+            "object_file_bytes_read": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": unique_preserve_order(next_safe_actions),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
 NOTION_OBJET_LINK_REWRITE_TARGET_MODES = {
     "objet_ref_rewrite",
     "embed_edge",
@@ -23416,6 +23657,10 @@ def ai_response_concept_guide(
                 "command": "archive notion-objet-source-map-link-plan <archive-root> --source-map source-maps/<source>.jsonl --ledger receipts/import/<ledger>.jsonl --dry-run --format json",
             },
             {
+                "human_intent": "audit imported Notion zettels for missing material clues after provider locator omission",
+                "command": "archive notion-objet-import-clue-audit <archive-root> --source-map source-maps/<source>.jsonl --ledger receipts/import/<ledger>.jsonl --dry-run --format json",
+            },
+            {
                 "human_intent": "index imported Notion zettels that still contain provider locators",
                 "command": "archive notion-objet-link-index <archive-root> --dry-run --format json",
             },
@@ -23454,6 +23699,7 @@ def ai_response_concept_guide(
             "edge_type_translation_available": True,
             "connection_kind_translation_available": True,
             "source_map_material_link_routing_available": True,
+            "notion_import_material_clue_audit_available": True,
             "mcp_tool_available": False,
             "object_upload_adapter_implemented": False,
             "provider_availability_probe_implemented": False,
@@ -23464,6 +23710,7 @@ def ai_response_concept_guide(
             "derived-text",
             "derived-text-coverage-and-toolchain",
             "objet-ref-resolution",
+            "notion-objet-import-clue-audit",
             "notion-objet-source-map-link-plan",
             "notion-objet-link-index",
             "notion-objet-link-plan",

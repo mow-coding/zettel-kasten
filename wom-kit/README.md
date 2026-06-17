@@ -135,6 +135,7 @@ docs/presigned-url-plan.md
 docs/zettel-objet-links.md
 docs/notion-objet-link-plan.md
 docs/notion-objet-link-index.md
+docs/notion-objet-import-clue-audit.md
 docs/notion-objet-source-map-link-plan.md
 docs/notion-objet-link-rewrite-plan.md
 docs/notion-objet-link-convert.md
@@ -307,6 +308,9 @@ notion-objet-link-plan
 
 notion-objet-link-index
   Index Notion provider locator to manifested objet link candidates across non-redacted zettels. Dry-run only; writes nothing, echoes no provider URLs, zettel body text, frontmatter values, page titles, absolute local paths, or object bytes, and calls no providers.
+
+notion-objet-import-clue-audit
+  Audit imported Notion zettels for preserved material clues after provider locator omission. Dry-run only; writes nothing, reads no zettel body text, rewrites no body text, writes no edges or receipts, reads no object bytes, calls no providers, and echoes no provider URLs, provider locator text, page titles, frontmatter values, absolute local paths, account ids, emails, tokens, or secret values.
 
 notion-objet-source-map-link-plan
   Plan zettel-to-objet material-link candidates from source maps and optional download/retrieval ledgers when imported zettel bodies no longer contain provider locators. Dry-run only; writes nothing, rewrites no body text, writes no edges or receipts, reads no object bytes, calls no providers, and echoes no provider URLs, provider locator text, page titles, zettel body text, frontmatter values, absolute local paths, account ids, emails, tokens, or secret values.
@@ -1046,6 +1050,10 @@ v0.3.103 adds read-only Notion source-map material-link planning for imported
 zets whose body provider locators were already omitted, while keeping provider
 calls, zettel body reads, object byte reads, edge writes, receipt writes, and
 private value echoes closed.
+v0.3.104 adds a read-only Notion import material-clue audit that checks whether
+omitted-locator imports preserved an object ref, have a source-map candidate,
+or need future import-time preservation repair, while keeping reads and writes
+body-safe.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.3.103 planning baseline with source-map material-link routing
+Status: v0.3.104 planning baseline with import material-clue routing
 
 ## Purpose
 
@@ -200,7 +200,20 @@ assume the zettel body still contains material locators. Public-safe imports may
 have removed those locators from the body.
 
 For Notion zets whose provider locators were already omitted, the next safe
-read-only route is:
+read-only audit route is:
+
+```bash
+archive notion-objet-import-clue-audit <archive-root> --dry-run --format json
+```
+
+MCP:
+
+```text
+notion_objet_import_clue_audit
+```
+
+When that audit reports `source_map_join_available`, the next safe candidate
+planner is:
 
 ```bash
 archive notion-objet-source-map-link-plan <archive-root> --dry-run --format json
@@ -212,11 +225,11 @@ MCP:
 notion_objet_source_map_link_plan
 ```
 
-The planner joins archive source maps, optional download/retrieval ledgers,
-zettel frontmatter metadata, and `objects/manifests/files.jsonl` rows by
-private-value fingerprints. It proposes human-review `embed` candidates without
-reading zettel bodies, echoing provider URLs, calling providers, reading object
-bytes, writing edges, or writing receipts.
+The audit and planner join archive source maps, optional download/retrieval
+ledgers, zettel frontmatter metadata, and `objects/manifests/files.jsonl` rows
+by private-value fingerprints. They propose or count human-review material clues
+without reading zettel bodies, echoing provider URLs, calling providers, reading
+object bytes, writing edges, or writing receipts.
 
 Use the older `notion-objet-link-index` and `notion-objet-link-plan` routes only
 when imported zettel bodies still contain provider locator text that can be

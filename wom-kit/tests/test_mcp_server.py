@@ -671,6 +671,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("notion_objet_link_plan", tool_names)
             self.assertIn("notion_objet_link_index", tool_names)
             self.assertIn("notion_objet_source_map_link_plan", tool_names)
+            self.assertIn("notion_objet_import_clue_audit", tool_names)
             self.assertIn("notion_objet_link_rewrite_plan", tool_names)
             self.assertIn("view_recommendation_plan", tool_names)
             self.assertIn("project_intake_plan", tool_names)
@@ -5003,6 +5004,145 @@ class McpServerTests(unittest.TestCase):
                         "method": "tools/call",
                         "params": {
                             "name": "notion_objet_source_map_link_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                self.assertTrue(dry_run_response["result"]["isError"])
+                self.assertIn("dry-run only", dry_run_response["result"]["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_notion_objet_import_clue_audit_tool_flags_missing_material_clues(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            manifest_path = allowed_archive / "objects" / "manifests" / "files.jsonl"
+            source_map_path = allowed_archive / "source-maps" / "mcp-import-clues.jsonl"
+            ledger_path = allowed_archive / "receipts" / "import" / "mcp-import-ledger.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            source_map_path.parent.mkdir(parents=True, exist_ok=True)
+            ledger_path.parent.mkdir(parents=True, exist_ok=True)
+            page_id = "mcp-audit-private-page"
+            private_download_name = "mcp-private/audit-material.pdf"
+            object_digest = "e" * 64
+            object_id = f"sha256:{object_digest}"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "object_id": object_id,
+                        "sha256": object_digest,
+                        "logical_key": f"objects/external/prehashed/notion_source_export/{object_digest[:2]}/{object_digest}",
+                        "locations": [{"provider": "external_prehashed", "store_kind": "notion_source_export"}],
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            source_map_path.write_text(
+                json.dumps({"external_id": page_id, "download_path": private_download_name, "title": "MCP Audit Title"}, sort_keys=True)
+                + "\n",
+                encoding="utf-8",
+            )
+            ledger_path.write_text(
+                json.dumps({"key": private_download_name, "sha256": object_digest, "name": "MCP Audit Attachment"}, sort_keys=True)
+                + "\n",
+                encoding="utf-8",
+            )
+            (allowed_archive / "inbox" / "zet_notion_mcp_source_map_clue.md").write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_mcp_source_map_clue",
+                        "status: draft",
+                        "external_import:",
+                        "  source_system: notion",
+                        f"  external_id: {page_id}",
+                        "  source_locator_omitted_count: 1",
+                        "---",
+                        "",
+                        "MCP source-map clue body must not echo.",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (allowed_archive / "inbox" / "zet_notion_mcp_missing_clue.md").write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "id: zet_notion_mcp_missing_clue",
+                        "status: draft",
+                        "external_import:",
+                        "  source_system: notion",
+                        "  external_id: mcp-audit-private-missing",
+                        "  source_locator_omitted_count: 1",
+                        "---",
+                        "",
+                        "MCP missing clue body must not echo.",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8", errors="ignore")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "notion_objet_import_clue_audit",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "source_maps": ["source-maps/mcp-import-clues.jsonl"],
+                                "ledgers": ["receipts/import/mcp-import-ledger.jsonl"],
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"], structured)
+                self.assertEqual(structured["lifecycle_action"], "notion_objet_import_clue_audit")
+                self.assertEqual(structured["summary"]["notion_import_zettel_count"], 2)
+                self.assertEqual(structured["summary"]["source_map_join_available_count"], 1)
+                self.assertEqual(structured["summary"]["missing_material_clue_after_locator_omission_count"], 1)
+                self.assertFalse(structured["privacy_guards"]["zettel_body_text_read"])
+                self.assertFalse(structured["privacy_guards"]["writes"])
+                structured_dump = json.dumps(structured)
+                self.assertNotIn("MCP Audit", structured_dump)
+                self.assertNotIn(private_download_name, structured_dump)
+                self.assertNotIn(str(allowed_archive), structured_dump)
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8", errors="ignore")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "notion_objet_import_clue_audit",
                             "arguments": {
                                 "archive_root": str(allowed_archive),
                                 "dry_run": False,
