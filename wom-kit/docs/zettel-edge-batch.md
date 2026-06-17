@@ -1,6 +1,6 @@
 # Zettel Edge Batch
 
-Status: v0.3.99 approval-gated policy batch zettel edge write checkpoint
+Status: v0.3.102 approval-gated policy batch zettel edge write ergonomics checkpoint
 
 `archive zettel-edge-batch` is the policy approval companion to
 `archive zettel-edge`.
@@ -34,6 +34,7 @@ archive zettel-edge-batch <archive-root> `
   --plan workbench/zettel-edge-batch.plan.json `
   --approve `
   --reviewed-by person:reviewer `
+  --skip-existing `
   --format json
 ```
 
@@ -43,6 +44,20 @@ Aliases:
 bulk-zettel-edge
 batch-zettel-edge
 ```
+
+## Plan Path Resolution
+
+`--plan` is resolved archive-relative first. This matches the connection
+commands, so a plan under the archive workbench can be passed as:
+
+```text
+workbench/zettel-edge-batch.plan.json
+```
+
+If that archive-relative path is not found, the command falls back to the
+current working directory for compatibility with older absolute/temp-file
+workflows. Missing-path blockers give a short hint and do not echo local
+absolute paths.
 
 ## Plan Shape
 
@@ -88,6 +103,20 @@ Policy-writable candidates must:
 - avoid review statuses such as `needs_review`, `ambiguous`, `blocked`, or
   `human_review_required`.
 
+## Existing Edge Handling
+
+By default, duplicate safety remains strict: an already-written edge, existing
+edge receipt, or existing batch receipt blocks the batch.
+
+When a human explicitly passes `--skip-existing`, already-written edge rows are
+returned in `skipped_existing_edges` instead of blocking the whole batch. The
+remaining policy-writable rows still pass through the same single-edge preflight
+and approval-gated write path.
+
+If every policy-writable row already exists and `--skip-existing` is used, the
+command writes nothing, returns `write_status: nothing_to_write`, and does not
+create a new batch receipt.
+
 ## Writes
 
 With `--approve --reviewed-by <safe-id>`, the command first dry-runs every
@@ -102,9 +131,9 @@ receipts/edges/batches/*.zettel-edge-batch.json
 ```
 
 The batch receipt records the policy id, reviewer id, written edge receipts,
-and review queue count. If an approved batch write fails partway through,
-WOM-kit restores the touched zettel and receipt files from in-process
-snapshots.
+skipped-existing count, and review queue count. If an approved batch write fails
+partway through, WOM-kit restores the touched zettel and receipt files from
+in-process snapshots.
 
 ## What It Does Not Do
 

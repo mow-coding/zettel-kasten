@@ -2208,6 +2208,57 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(relation["review_summary"]["durable_write_human_approval_required_count"], 2)
             self.assertEqual(len(relation["human_review_queue"]), 2)
 
+            version_fixture_path = archive_root / "workbench" / "connection-version-chain.sample.json"
+            version_fixture_path.write_text(
+                json.dumps(
+                    {
+                        "fixture_kind": "connection_evidence_fixture",
+                        "source": "notion",
+                        "evidence": [
+                            {
+                                "connection_kind": "relation_property",
+                                "source_export_ref": "notion-fixture-slice",
+                                "relation_source_ref": "zet:fake:new-plan",
+                                "target_ref": "zet:fake:old-plan",
+                                "relation_role": "post",
+                                "relationship_hint": "version_chain",
+                                "review_status": "fixture_reviewed",
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            version_code, version_output = self.run_cli(
+                [
+                    "connection-edge-intelligence-plan",
+                    str(archive_root),
+                    "--evidence",
+                    "workbench/connection-version-chain.sample.json",
+                    "--source",
+                    "notion",
+                    "--connection-kind",
+                    "all",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            version_result = json.loads(version_output)
+            self.assertEqual(version_code, 0, version_output)
+            self.assertEqual(version_result["classification_summary"]["candidate_count"], 1)
+            self.assertEqual(version_result["classification_summary"]["version_chain_suggestion_count"], 1)
+            self.assertIn("supersedes", version_result["archive_edge_type_status"]["active_edge_types_from_current_archive_model"])
+            version_suggestion = version_result["classification_suggestions"][0]
+            self.assertEqual(version_suggestion["current_edge_type"], "derived")
+            self.assertEqual(version_suggestion["recommended_edge_type"], "supersedes")
+            self.assertTrue(version_suggestion["version_chain_signal"])
+            self.assertEqual(version_suggestion["relationship_meaning"]["suggested_id"], "version_replacement")
+            self.assertEqual(version_suggestion["relationship_meaning"]["active_edge_type"], "supersedes")
+            self.assertFalse(version_suggestion["human_review_required"])
+            self.assertEqual(version_result["review_summary"]["durable_write_human_approval_required_count"], 1)
+
             no_dry_run_code, no_dry_run_output = self.run_cli(
                 [
                     "connection-edge-intelligence-plan",
@@ -2515,12 +2566,17 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(dry_result["lifecycle_action"], "zettel_edge_batch_plan")
             self.assertEqual(dry_result["write_status"], "would_write")
             self.assertEqual(dry_result["summary"]["policy_writable_edge_count"], 2)
+            self.assertEqual(dry_result["summary"]["policy_matched_edge_count"], 2)
             self.assertEqual(dry_result["summary"]["review_queue_count"], 1)
+            self.assertEqual(dry_result["summary"]["skipped_existing_edge_count"], 0)
             self.assertEqual(dry_result["summary"]["written_edge_count"], 0)
             self.assertFalse(dry_result["summary"]["batch_receipt_written"])
+            self.assertEqual(dry_result["plan_path_resolution"]["resolved_as"], "absolute")
             self.assertEqual(dry_result["policy"]["minimum_confidence"], "high")
             self.assertTrue(dry_result["current_capability"]["policy_batch_approval_implemented"])
             self.assertTrue(dry_result["current_capability"]["bulk_edge_writer_implemented"])
+            self.assertTrue(dry_result["current_capability"]["archive_relative_plan_path_resolution"])
+            self.assertTrue(dry_result["current_capability"]["skip_existing_edges_implemented"])
             self.assertTrue(dry_result["current_capability"]["uses_single_zettel_edge_gate_per_item"])
             self.assertFalse(dry_result["current_capability"]["mcp_write_tool_implemented"])
             self.assertFalse(dry_result["closed_actions"]["zettel_frontmatter_written"])
@@ -2581,7 +2637,9 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(approve_result["lifecycle_action"], "zettel_edge_batch_write")
             self.assertEqual(approve_result["write_status"], "written")
             self.assertEqual(approve_result["summary"]["policy_writable_edge_count"], 2)
+            self.assertEqual(approve_result["summary"]["policy_matched_edge_count"], 2)
             self.assertEqual(approve_result["summary"]["review_queue_count"], 1)
+            self.assertEqual(approve_result["summary"]["skipped_existing_edge_count"], 0)
             self.assertEqual(approve_result["summary"]["written_edge_count"], 2)
             self.assertTrue(approve_result["summary"]["batch_receipt_written"])
             self.assertEqual(approve_result["reviewed_by"], "person:fixture-reviewer")
@@ -2640,6 +2698,97 @@ class ArchiveCliTests(unittest.TestCase):
             duplicate = json.loads(duplicate_output)
             self.assertEqual(duplicate_code, 1)
             self.assertIn("batch edge receipt already exists", "\n".join(duplicate["blockers"]))
+
+            skip_existing_code, skip_existing_output = self.run_cli(
+                [
+                    "zettel-edge-batch",
+                    str(archive_root),
+                    "--plan",
+                    str(plan_path),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:fixture-reviewer",
+                    "--skip-existing",
+                    "--format",
+                    "json",
+                ]
+            )
+            skip_existing = json.loads(skip_existing_output)
+            serialized_skip_existing = json.dumps(skip_existing, ensure_ascii=False)
+            self.assertEqual(skip_existing_code, 0, skip_existing_output)
+            self.assertTrue(skip_existing["ok"])
+            self.assertEqual(skip_existing["write_status"], "nothing_to_write")
+            self.assertEqual(skip_existing["summary"]["policy_writable_edge_count"], 0)
+            self.assertEqual(skip_existing["summary"]["policy_matched_edge_count"], 2)
+            self.assertEqual(skip_existing["summary"]["skipped_existing_edge_count"], 2)
+            self.assertEqual(skip_existing["summary"]["written_edge_count"], 0)
+            self.assertFalse(skip_existing["summary"]["batch_receipt_written"])
+            self.assertEqual(len(skip_existing["skipped_existing_edges"]), 2)
+            self.assertEqual(skip_existing["closed_actions"]["existing_edges_skipped"], 2)
+            self.assertEqual(skip_existing["files_written"], [])
+            self.assertNotIn(str(archive_root.resolve()), serialized_skip_existing)
+
+    def test_zettel_edge_batch_plan_path_is_archive_relative_first(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path = archive_root / "workbench" / "zettel-edge-batch-relative.plan.json"
+            plan = {
+                "schema": "wom-kit/zettel-edge-batch/v0.1",
+                "policy": {
+                    "policy_id": "policy:fixture-relative-plan",
+                    "auto_write_edge_types": ["material"],
+                    "minimum_confidence": "high",
+                },
+                "edges": [
+                    {
+                        "candidate_id": "candidate:fixture-relative-plan-material",
+                        "from_zettel": "zet_20240504_fake_lunch_thought",
+                        "target": "zet_20240505_fake_company_onboarding_insight",
+                        "edge_type": "material",
+                        "visibility": "private",
+                        "confidence": "high",
+                        "review_status": "policy_candidate",
+                    }
+                ],
+            }
+            plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "zettel-edge-batch",
+                    str(archive_root),
+                    "--plan",
+                    "workbench/zettel-edge-batch-relative.plan.json",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["plan_path_resolution"]["resolved_as"], "archive_relative")
+            self.assertEqual(result["plan_path_resolution"]["archive_relative_path"], "workbench/zettel-edge-batch-relative.plan.json")
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            missing_code, missing_output = self.run_cli(
+                [
+                    "zettel-edge-batch",
+                    str(archive_root),
+                    "--plan",
+                    "workbench/missing-zettel-edge-batch.plan.json",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            missing = json.loads(missing_output)
+            self.assertEqual(missing_code, 1)
+            self.assertIn("archive-relative first", "\n".join(missing["blockers"]))
+            self.assertNotIn(str(archive_root.resolve()), missing_output)
 
     def test_imap_mailbox_plan_is_read_only_and_blocks_secret_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5760,8 +5909,10 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["topic"], "all")
             self.assertTrue(result["guide_contract"]["separate_identity_from_location"])
             self.assertTrue(result["guide_contract"]["requires_receipt_before_upload_or_availability_claim"])
+            self.assertTrue(result["guide_contract"]["translate_operational_terms_before_asking_user_to_choose"])
+            self.assertEqual(result["locale"], "ko-KR")
             section_ids = [section["section_id"] for section in result["sections"]]
-            self.assertEqual(section_ids, ["sha256_identity", "manifest_vs_zet", "three_layers"])
+            self.assertEqual(section_ids, ["sha256_identity", "manifest_vs_zet", "three_layers", "operational_terms"])
             identity_section = result["sections"][0]
             self.assertIn("sha256:<hex>", " ".join(identity_section["answer_order"]))
             self.assertIn("지문", identity_section["korean_script"])
@@ -5769,6 +5920,16 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(manifest_section["analogy"]["object_manifest"], "address book or catalog for known objects")
             layer_names = [layer["layer"] for layer in result["sections"][2]["layers"]]
             self.assertEqual(layer_names, ["objet", "derived_text", "zet"])
+            operational_section = result["sections"][3]
+            edge_terms = {term["term"]: term for term in operational_section["edge_type_terms"]}
+            self.assertEqual(len(edge_terms), 19)
+            self.assertIn("만들어졌다", edge_terms["derived_from"]["selected_user_phrase"])
+            self.assertIn("대체", edge_terms["supersedes"]["selected_user_phrase"])
+            self.assertIn("가리킨다", edge_terms["references"]["selected_user_phrase"])
+            self.assertEqual(
+                operational_section["semantic_source_mechanism_note"]["synced_block_reference"],
+                "Currently translates through semantic unless the human names a more specific meaning.",
+            )
             self.assertTrue(any("derive-text-coverage" in route["command"] for route in result["safe_routing"]))
             self.assertFalse(result["closed_actions"]["source_bytes_read"])
             self.assertFalse(result["closed_actions"]["provider_api_called"])
@@ -5777,6 +5938,8 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(result["privacy_guards"]["local_absolute_paths_echoed"])
             self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
             self.assertFalse(result["privacy_guards"]["secret_values_echoed"])
+            self.assertTrue(result["current_capability"]["operational_term_translation_available"])
+            self.assertTrue(result["current_capability"]["locale_aware_korean_available"])
             self.assertFalse(result["current_capability"]["object_upload_adapter_implemented"])
             self.assertEqual(result["would_change"], [])
             self.assertNotIn("C:\\", serialized)
@@ -5797,6 +5960,26 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(alias_code, 0, alias_output)
             self.assertIn("sha256 identity vs location URL", alias_output)
             self.assertIn("Next safe question", alias_output)
+
+            terms_code, terms_output = self.run_cli(
+                [
+                    "ai-response-concept-guide",
+                    str(archive_root),
+                    "--topic",
+                    "operational_terms",
+                    "--locale",
+                    "en-US",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            terms_result = json.loads(terms_output)
+            self.assertEqual(terms_code, 0, terms_output)
+            self.assertEqual(terms_result["locale"], "en-US")
+            self.assertEqual([section["section_id"] for section in terms_result["sections"]], ["operational_terms"])
+            supersedes_term = next(term for term in terms_result["sections"][0]["edge_type_terms"] if term["term"] == "supersedes")
+            self.assertEqual(supersedes_term["selected_user_phrase"], "This newer note replaces the older one.")
 
             no_dry_run_code, no_dry_run_output = self.run_cli(
                 [

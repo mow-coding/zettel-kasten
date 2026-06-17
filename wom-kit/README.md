@@ -224,7 +224,7 @@ zettel-edge
   Preview or approve one typed edge from a source zet to one verified target zet or manifested objet. Dry-run previews first; approve requires --reviewed-by and writes only one source zettel frontmatter edge plus one receipts/edges/*.zettel-edge.json receipt. It is not a bulk connection importer, exposes no MCP write tool, calls no providers, reads no real exports, writes no candidate records, updates no object manifests, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
 
 zettel-edge-batch
-  Preview or approve policy-gated typed edge batches from a reviewed JSON plan. Dry-run validates policy-writable rows through the single-edge gate without writing. Approve requires --reviewed-by, writes only policy-matching edges, writes receipts/edges/*.zettel-edge.json plus one receipts/edges/batches/*.zettel-edge-batch.json receipt, and returns low-confidence or policy-mismatched rows in human_review_queue. It is not a real export parser, exposes no MCP write tool, calls no providers, reads no real exports, writes no candidate records, updates no object manifests, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
+  Preview or approve policy-gated typed edge batches from a reviewed JSON plan. Dry-run validates policy-writable rows through the single-edge gate without writing. --plan resolves archive-relative first, then CWD-relative for compatibility. Approve requires --reviewed-by, writes only policy-matching new edges, writes receipts/edges/*.zettel-edge.json plus one receipts/edges/batches/*.zettel-edge-batch.json receipt when new rows are written, returns low-confidence or policy-mismatched rows in human_review_queue, and --skip-existing can separate already-written rows into skipped_existing_edges. It is not a real export parser, exposes no MCP write tool, calls no providers, reads no real exports, writes no candidate records, updates no object manifests, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
 
 imap-mailbox-plan
   Plan a Gmail, Naver, or generic IMAP mailbox source with safe account, username, mailbox, and credential refs. Dry-run only; opens no connection, logs into nothing, reads no headers/bodies/attachments, sends no mail, changes no flags, stores no secrets, and writes no files.
@@ -1033,6 +1033,11 @@ know the Notion source but lack the reviewed locator fingerprint.
 v0.3.101 adds approval-gated Notion objet link conversion for reviewed
 `embed` edges, while keeping body replacement, provider calls, and MCP write
 tools closed.
+v0.3.102 adds the read-only operational terminology translation layer,
+archive-relative batch plan resolution, explicit `--skip-existing` batch
+reruns, and a sanitized version-chain `supersedes` recommendation while
+keeping source bodies, provider calls, LLM classification, and MCP write tools
+closed.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

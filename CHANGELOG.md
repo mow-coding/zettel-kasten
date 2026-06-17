@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.102 - 2026-06-17
+
+- Extended read-only CLI `archive ai-response-concept-guide <archive-root>
+  --topic all|operational_terms --locale ko-KR|en-US --dry-run` with an
+  operational terminology translation layer for edge types, lifecycle terms,
+  and connection kinds.
+- Added a sanitized version-chain heuristic to
+  `connection-edge-intelligence-plan` so reviewed metadata hints can recommend
+  the existing `supersedes` / `version_replacement` meaning without reading
+  source bodies or writing edges.
+- Improved `archive zettel-edge-batch`: `--plan workbench/...` now resolves
+  archive-relative first with a safe missing-path hint, and explicit
+  `--skip-existing` separates already-written rows into `skipped_existing_edges`
+  so the rest of a reviewed batch can continue.
+- Kept the feature local and bounded: no provider calls, OAuth, real export
+  parsing, source body reads, derived-text body reads, LLM classification,
+  candidate record writes, MCP write tools, or secret/local-path/provider URL
+  echoing were added.
+
 ## v0.3.101 - 2026-06-17
 
 - Added approval-gated CLI `archive notion-objet-link-convert <archive-root>

@@ -543,7 +543,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Connection import plan",
             "archive connection-import-plan --source notion --connection-kind all --dry-run",
             "MCP `connection_import_plan`",
-            "`material`, `derived`, `semantic`, `embed`, `mention`, `view_query`, `comment_context`",
+            "`material`, `derived`, `semantic`, `embed`, `mention`, `supersedes`, `view_query`, `comment_context`",
             "The base `zettel-kasten/types.yml` now defines the recommended connection edge vocabulary",
             "write no edges",
             "comment bodies",
@@ -732,12 +732,15 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         for phrase in (
             "Status: v0.3.87 read-only connection edge intelligence checkpoint",
-            "Status: v0.3.99 read-only connection edge review summary checkpoint",
+            "Status: v0.3.102 read-only connection edge review summary and supersedes heuristic checkpoint",
             "archive connection-edge-intelligence-plan",
             "archive zettel-edge-batch",
             "connection-edge-classification-plan",
             "source_mechanism",
             "relationship_meaning",
+            "Version Chain Heuristic",
+            "version_replacement",
+            "supersedes",
             "Review Counters",
             "human_review_required_count",
             "durable_write_human_approval_required_count",
@@ -757,6 +760,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "archive connection-edge-intelligence-plan --evidence workbench/connection-evidence.sample.json --source notion --connection-kind all --dry-run",
             "source_mechanism",
             "relationship_meaning",
+            "version_replacement",
+            "supersedes",
             "review_summary",
             "human_review_required_count",
             "auto_writable_count: 0",
@@ -818,11 +823,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)
         for phrase in (
-            "Status: v0.3.99 approval-gated policy batch zettel edge write checkpoint",
+            "Status: v0.3.102 approval-gated policy batch zettel edge write ergonomics checkpoint",
             "archive zettel-edge-batch <archive-root>",
+            "--skip-existing",
             "bulk-zettel-edge",
             "batch-zettel-edge",
             "human_review_queue",
+            "skipped_existing_edges",
+            "archive-relative",
             "receipts/edges/batches/*.zettel-edge-batch.json",
             "policy.auto_write_edge_types",
             "policy.minimum_confidence",
@@ -835,17 +843,18 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Status: v0.3.99 policy batch zettel edge write checkpoint",
             "Zettel edge write",
             "archive zettel-edge --from-zettel <zet> --target <zet-or-objet> --edge-type <type> --dry-run|--approve",
-            "archive zettel-edge-batch --plan <json> --dry-run|--approve",
+            "archive zettel-edge-batch --plan <json> --dry-run|--approve [--skip-existing]",
             "receipts/edges/*.zettel-edge.json",
             "receipts/edges/batches/*.zettel-edge-batch.json",
             "human_review_queue",
+            "skipped_existing_edges",
             "MCP exposes no write tool",
             "echo no zettel body text",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.100 pre-release",
+            "v0.3.102 pre-release",
             "[Zettel Edge Write](wom-kit/docs/zettel-edge-write.md)",
             "[Zettel Edge Batch](wom-kit/docs/zettel-edge-batch.md)",
             "approval-gated single-edge zettel edge writes",
@@ -991,13 +1000,16 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
 
         for phrase in (
-            "Status: v0.3.84 read-only concept guide CLI checkpoint",
-            "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
+            "Status: v0.3.102 read-only concept and operational terminology guide checkpoint",
+            "archive ai-response-concept-guide <archive-root> --topic all --locale ko-KR --dry-run --format json",
             "ai-concept-guide",
             "wom-concept-guide",
             "sha256 identity vs location URL",
             "manifest vs zet",
             "objet -> derived text -> zet",
+            "operational terminology translation layer",
+            "derived_from",
+            "supersedes",
             "WOM identifies source objets by content fingerprint",
             "The sha256 is the fingerprint. R2 or a local folder is only a shelf",
             "WOM은 \"지금 파일이 어디 폴더에 있나\"보다",
@@ -1016,8 +1028,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for phrase in (
             "AI response concept guide",
             "sha256 object identity vs location",
+            "operational terminology translation layer",
             "`read-only preview`",
-            "CLI `archive ai-response-concept-guide --topic all --dry-run`",
+            "CLI `archive ai-response-concept-guide --topic all --locale ko-KR --dry-run`",
             "writes nothing, adds no MCP tool, calls no providers",
         ):
             with self.subTest(phrase=phrase):
