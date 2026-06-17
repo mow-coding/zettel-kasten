@@ -18010,6 +18010,9 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["receipt_preview"]["dry_run"])
             self.assertEqual(result["receipt_preview"]["authority_mode"], "basic")
             self.assertIn("source_refs", result["receipt_preview"])
+            self.assertEqual(result["mint_checklist_guidance"]["preferred_frontmatter_path"], "mint.checklist")
+            self.assertEqual(result["mint_checklist_guidance"]["missing_required_item_ids"], [])
+            self.assertFalse(result["mint_checklist_guidance"]["writes"])
             self.assertFalse((archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists())
             self.assertFalse((archive_root / "receipts" / "mint" / "zet_20260519_draft_ai_lunch_note.mint.json").exists())
             self.assertFalse((archive_root / "receipts" / "mint" / "drafts" / "zet_20260519_draft_ai_lunch_note.draft.md").exists())
@@ -18028,6 +18031,30 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(id_code, 0, id_output)
             id_result = json.loads(id_output)
             self.assertEqual(id_result["draft_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+
+    def test_mint_zettel_dry_run_guides_unreviewed_checklist_without_writing(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(
+            [
+                "mint-zettel",
+                str(archive_root),
+                "--path",
+                "inbox/zet_20260519_draft_ai_lunch_note.md",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 1, output)
+        result = json.loads(output)
+        guidance = result["mint_checklist_guidance"]
+        self.assertFalse(result["ok"])
+        self.assertIn("one_clear_purpose", guidance["missing_required_item_ids"])
+        self.assertIn("sensitive_content_reviewed", guidance["human_review_item_ids"])
+        self.assertEqual(guidance["frontmatter_example"]["mint"]["checklist"]["one_clear_purpose"], True)
+        self.assertEqual(guidance["legacy_accepted_frontmatter_path"], "promotion.checklist")
+        self.assertFalse(guidance["writes"])
+        self.assertFalse((archive_root / "zettels" / "zet_20260519_draft_ai_lunch_note.md").exists())
 
     def test_mint_zet_alias_matches_legacy_mint_zettel(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

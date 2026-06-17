@@ -121,6 +121,7 @@ The dry-run reports:
 blockers
 warnings
 checklist status
+checklist guidance
 near duplicate hints
 proposed canonical path
 proposed mint receipt path
@@ -128,6 +129,22 @@ proposed draft snapshot path
 ```
 
 If the draft is rough, dry-run should block it. That is expected.
+
+Some checklist items, especially `one_clear_purpose` and
+`sensitive_content_reviewed`, need explicit human review. `mint-zettel
+--dry-run` now reports `mint_checklist_guidance` with the preferred
+frontmatter path:
+
+```yaml
+mint:
+  checklist:
+    one_clear_purpose: true
+    sensitive_content_reviewed: true
+```
+
+Only mark an item `true` after reading the draft yourself. For old drafts,
+`promotion.checklist` is still accepted, but new drafts should prefer
+`mint.checklist`.
 
 If dry-run passes and you have intentionally reviewed the draft, real minting is available through the CLI:
 

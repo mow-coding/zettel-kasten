@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.95 - 2026-06-17
+
+- Added `mint_checklist_guidance` to read-only `archive mint-zettel --dry-run`
+  / `archive mint-zet --dry-run` output.
+- The guidance reports missing required checklist ids, checklist items that
+  need explicit human review, the preferred `mint.checklist` frontmatter path,
+  the legacy accepted `promotion.checklist` path, and a safe boolean-only
+  frontmatter example.
+- Text output now prints checklist guidance when required mint checklist items
+  are missing.
+- Updated the beginner quickstart to explain that items such as
+  `one_clear_purpose` and `sensitive_content_reviewed` should only be marked
+  true after the human reads the draft.
+- Kept minting approval rules unchanged: dry-run writes nothing, real minting
+  still requires `--approve` and `--reviewed-by`, and machine-enforced safety
+  checks still run at mint time.
+
 ## v0.3.94 - 2026-06-17
 
 - Improved read-only `archive projection-plan --dry-run` surface guidance.

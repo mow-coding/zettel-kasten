@@ -16,6 +16,7 @@ CREDENTIAL_REF_INVENTORY_PATH = KIT_ROOT / "docs" / "credential-ref-inventory-an
 CREDENTIAL_STORE_RECOMMENDATIONS_PATH = KIT_ROOT / "docs" / "credential-store-recommendations.md"
 CREDENTIAL_VAULT_ONBOARDING_PATH = KIT_ROOT / "docs" / "credential-vault-onboarding-plan.md"
 BEGINNER_SETUP_MANUAL_PATH = KIT_ROOT / "docs" / "beginner-setup-manual.md"
+PHASE_2_QUICKSTART_PATH = KIT_ROOT / "docs" / "phase-2-quickstart.md"
 CONNECTED_ACCOUNTS_PATH = KIT_ROOT / "docs" / "connected-accounts.md"
 CREDENTIAL_SEMANTIC_RECIPE_PATH = KIT_ROOT / "docs" / "credential-semantic-extraction-recipe.md"
 CREDENTIAL_PLAINTEXT_MIGRATION_PATH = KIT_ROOT / "docs" / "credential-plaintext-migration-plan.md"
@@ -200,6 +201,37 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "projection planning with supported-surface help",
             "v0.3.94 - 2026-06-17",
             "projection_contract",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(phrase in readme_text or phrase in changelog_text)
+
+    def test_mint_checklist_guidance_is_documented_for_beginner_dry_run(self) -> None:
+        quickstart_text = PHASE_2_QUICKSTART_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        for phrase in (
+            "checklist guidance",
+            "mint_checklist_guidance",
+            "one_clear_purpose",
+            "sensitive_content_reviewed",
+            "mint:",
+            "checklist:",
+            "promotion.checklist",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, quickstart_text)
+        for phrase in (
+            "Mint lifecycle",
+            "mint_checklist_guidance",
+            "preferred `mint.checklist` frontmatter path",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "minting with dry-run checklist guidance",
+            "v0.3.95 - 2026-06-17",
+            "mint_checklist_guidance",
         ):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in readme_text or phrase in changelog_text)

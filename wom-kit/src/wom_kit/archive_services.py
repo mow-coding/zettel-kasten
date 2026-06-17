@@ -3712,6 +3712,7 @@ def mint_zettel_dry_run(
         "blockers": blockers,
         "warnings": warnings,
         "checklist": promotion_dry_run["checklist"],
+        "mint_checklist_guidance": mint_checklist_guidance(promotion_dry_run["checklist"]),
         "near_duplicates": promotion_dry_run["near_duplicates"],
         "receipt_preview": receipt_preview,
         "would_change": [
@@ -4001,6 +4002,36 @@ def build_minting_checklist(
     allowed_link_types: set[str],
 ) -> list[dict[str, Any]]:
     return build_lifecycle_checklist(frontmatter, body, minting_rules, allowed_link_types)
+
+
+def mint_checklist_guidance(checklist: list[dict[str, Any]]) -> dict[str, Any]:
+    required_items = [item for item in checklist if item.get("required")]
+    missing_required = [
+        str(item.get("id"))
+        for item in required_items
+        if item.get("status") != "passed" and isinstance(item.get("id"), str)
+    ]
+    human_review_items = [
+        str(item.get("id"))
+        for item in checklist
+        if item.get("status") == "needs_human_review" and isinstance(item.get("id"), str)
+    ]
+    example_checklist = {item_id: True for item_id in missing_required}
+    return {
+        "preferred_frontmatter_path": "mint.checklist",
+        "legacy_accepted_frontmatter_path": "promotion.checklist",
+        "required_item_count": len(required_items),
+        "missing_required_item_ids": missing_required,
+        "human_review_item_ids": human_review_items,
+        "frontmatter_example": {"mint": {"checklist": example_checklist}},
+        "operator_steps": [
+            "Read the draft body and frontmatter yourself before minting.",
+            "Only set a checklist item to true after explicit human review.",
+            "Prefer mint.checklist for new drafts; legacy promotion.checklist is still accepted for compatibility.",
+            "Rerun mint-zet --dry-run after editing the draft frontmatter.",
+        ],
+        "writes": False,
+    }
 
 
 def build_lifecycle_checklist(
