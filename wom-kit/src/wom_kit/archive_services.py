@@ -40175,6 +40175,143 @@ def view_health(
     }
 
 
+def safe_view_id_segment(value: Any, *, max_chars: int = 48) -> str:
+    text = str(value or "").strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+    if slug:
+        return slug[:max_chars].strip("_") or slug[:max_chars]
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+    return f"value_{digest}"
+
+
+def view_recommendation_plan(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = True,
+    max_values: int = 5,
+    max_recommendations: int = 12,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("view-recommendation-plan is read-only; pass --dry-run.")
+
+    max_values = max(1, min(int(max_values), 20))
+    max_recommendations = max(1, min(int(max_recommendations), 100))
+    health = view_health(root, dry_run=True, max_values=max_values)
+    blockers.extend(health.get("blockers") if isinstance(health.get("blockers"), list) else [])
+    warnings.extend(health.get("warnings") if isinstance(health.get("warnings"), list) else [])
+
+    existing_pairs: set[tuple[str, str]] = set()
+    views = health.get("views") if isinstance(health.get("views"), list) else []
+    for view in views:
+        if not isinstance(view, dict):
+            continue
+        filters = view.get("filters") if isinstance(view.get("filters"), dict) else {}
+        for key, value in filters.items():
+            existing_pairs.add((str(key), str(value)))
+
+    recommendations: list[dict[str, Any]] = []
+    facet_roles = health.get("facet_roles") if isinstance(health.get("facet_roles"), list) else []
+    if not blockers:
+        for role_entry in facet_roles:
+            if not isinstance(role_entry, dict) or role_entry.get("role") != "navigation":
+                continue
+            key = str(role_entry.get("key") or "").strip()
+            if not key:
+                continue
+            top_values = role_entry.get("top_values") if isinstance(role_entry.get("top_values"), list) else []
+            for value_entry in top_values[:max_values]:
+                if not isinstance(value_entry, dict):
+                    continue
+                value = str(value_entry.get("value") or "").strip()
+                if not value or value == "redacted_facet_value":
+                    continue
+                match_count = int(value_entry.get("count") or 0)
+                if match_count <= 0:
+                    continue
+                already_used = (key, value) in existing_pairs
+                recommendations.append(
+                    {
+                        "recommendation_kind": "single_navigation_facet_view",
+                        "facet_key": key,
+                        "facet_value": value,
+                        "match_count": match_count,
+                        "already_used_by_saved_view_filter": already_used,
+                        "view_id_suggestion": (
+                            f"view.ai.{safe_view_id_segment(key, max_chars=24)}."
+                            f"{safe_view_id_segment(value, max_chars=40)}"
+                        ),
+                        "name_suggestion": f"AI navigation: {key} = {value}",
+                        "filters": {f"facets.{key}": value},
+                        "role_reason": role_entry.get("role_reason"),
+                    }
+                )
+
+    recommendations.sort(
+        key=lambda item: (
+            -int(item.get("match_count") or 0),
+            str(item.get("facet_key") or ""),
+            str(item.get("facet_value") or ""),
+        )
+    )
+    recommendations_truncated = len(recommendations) > max_recommendations
+    recommendations = recommendations[:max_recommendations]
+    if recommendations_truncated:
+        warnings.append("view_recommendation_plan_truncated")
+
+    health_summary = health.get("summary") if isinstance(health.get("summary"), dict) else {}
+    facet_role_summary = health.get("facet_role_summary") if isinstance(health.get("facet_role_summary"), dict) else {}
+    next_safe_actions: list[str] = []
+    if "archive_index_missing" in blockers:
+        next_safe_actions.append("Run archive index before planning saved view recommendations.")
+    elif recommendations:
+        next_safe_actions.append("Review suggested filters against the human archive purpose before editing views/*.yml.")
+        next_safe_actions.append("After a reviewed view edit, run archive index and view-health again.")
+    elif facet_role_summary.get("navigation_key_count", 0):
+        next_safe_actions.append("No non-empty navigation facet values were available for saved view recommendations.")
+    else:
+        next_safe_actions.append("Add or review navigation facets before creating AI navigation saved views.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "view_recommendation_plan",
+        "archive_id": archive_id,
+        "index_path": INDEX_RELATIVE_PATH,
+        "summary": {
+            "saved_view_count": health_summary.get("saved_view_count", 0),
+            "active_view_count": health_summary.get("active_view_count", 0),
+            "empty_view_count": health_summary.get("empty_view_count", 0),
+            "blocked_view_count": health_summary.get("blocked_view_count", 0),
+            "navigation_key_count": facet_role_summary.get("navigation_key_count", 0),
+            "internal_key_count": facet_role_summary.get("internal_key_count", 0),
+            "unknown_key_count": facet_role_summary.get("unknown_key_count", 0),
+            "recommendation_count": len(recommendations),
+            "recommendations_truncated": recommendations_truncated,
+            "classification_basis": facet_role_summary.get("classification_basis", "static_key_heuristics_no_body_read"),
+        },
+        "recommendations": recommendations,
+        "privacy_guards": {
+            "zettel_body_text_echoed": False,
+            "zettel_titles_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "provider_api_called": False,
+            "object_file_bytes_read": False,
+            "view_files_written": False,
+            "index_rebuilt": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": unique_preserve_order(next_safe_actions),
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
 def live_zettel_index_entries(root: Path, *, db_mtime: float | None = None) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for path in iter_zettel_paths(root):

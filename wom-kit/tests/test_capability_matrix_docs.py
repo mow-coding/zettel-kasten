@@ -74,6 +74,7 @@ ZETTEL_OBJET_LINKS_PATH = KIT_ROOT / "docs" / "zettel-objet-links.md"
 NOTION_OBJET_LINK_PLAN_PATH = KIT_ROOT / "docs" / "notion-objet-link-plan.md"
 NOTION_OBJET_LINK_INDEX_PATH = KIT_ROOT / "docs" / "notion-objet-link-index.md"
 VIEW_HEALTH_PATH = KIT_ROOT / "docs" / "view-health.md"
+VIEW_RECOMMENDATION_PLAN_PATH = KIT_ROOT / "docs" / "view-recommendation-plan.md"
 INDEX_HEALTH_PATH = KIT_ROOT / "docs" / "index-health.md"
 SOURCE_OBJECT_STORAGE_POLICY_PATH = KIT_ROOT / "docs" / "source-object-storage-policy.md"
 TEXT_PROVENANCE_HIERARCHY_PATH = KIT_ROOT / "docs" / "text-provenance-hierarchy.md"
@@ -1172,6 +1173,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
 
     def test_view_health_doc_and_matrix_explain_empty_saved_view_diagnostics(self) -> None:
         view_health_text = VIEW_HEALTH_PATH.read_text(encoding="utf-8")
+        view_recommendation_text = VIEW_RECOMMENDATION_PLAN_PATH.read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
@@ -1196,11 +1198,27 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, view_health_text)
         for phrase in (
-            "Saved view health",
+            "Status: v0.3.97 read-only saved view recommendation checkpoint",
+            "archive view-recommendation-plan <archive-root> --dry-run",
+            "view_recommendation_plan",
+            "candidate single-facet saved views",
+            "view.ai.<axis>.<value>",
+            "facets.<key>",
+            "write view files",
+            "echo zettel titles",
+            "Relationship To `view-health`",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, view_recommendation_text)
+        for phrase in (
+            "Saved view health and recommendation",
             "archive view-health --dry-run",
             "MCP `view_health`",
+            "archive view-recommendation-plan --dry-run",
+            "MCP `view_recommendation_plan`",
             "observed facet distribution samples",
             "facet_role_summary",
+            "safe recommendation filters",
             "navigation axes",
             "internal/import metadata",
             "echo no zettel titles",
@@ -1209,11 +1227,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
             "[View Health](wom-kit/docs/view-health.md)",
-            "saved view health and facet role diagnostics",
+            "[View Recommendation Plan](wom-kit/docs/view-recommendation-plan.md)",
+            "saved view health, facet role diagnostics, saved view recommendations",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         self.assertIn("[View Health](view-health.md)", public_map_text)
+        self.assertIn("[View Recommendation Plan](view-recommendation-plan.md)", public_map_text)
 
     def test_index_health_doc_and_matrix_explain_generated_index_drift(self) -> None:
         index_health_text = INDEX_HEALTH_PATH.read_text(encoding="utf-8")

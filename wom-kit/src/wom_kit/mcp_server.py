@@ -1715,6 +1715,20 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "view_recommendation_plan",
+        "description": "Plan saved view recommendations from navigation facet distributions without reading zettel bodies or writing view files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+                "max_values": {"type": "integer", "minimum": 1, "maximum": 20, "default": 5},
+                "max_recommendations": {"type": "integer", "minimum": 1, "maximum": 100, "default": 12},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "index_health",
         "description": "Check whether the generated local SQLite index matches live zettel paths and basic frontmatter metadata. Read-only; writes nothing.",
         "inputSchema": {
@@ -2576,6 +2590,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_zettel_objet_links(arguments)
     if name == "view_health":
         return tool_view_health(arguments)
+    if name == "view_recommendation_plan":
+        return tool_view_recommendation_plan(arguments)
     if name == "index_health":
         return tool_index_health(arguments)
     if name == "notion_objet_link_plan":
@@ -4116,6 +4132,27 @@ def tool_view_health(arguments: dict[str, Any]) -> dict[str, Any]:
         f"{state}, {summary.get('active_view_count', 0)} active, "
         f"{summary.get('empty_view_count', 0)} empty, "
         f"{role_summary.get('internal_key_count', 0)} internal facet key(s).",
+        result,
+    )
+
+
+def tool_view_recommendation_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("view_recommendation_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.view_recommendation_plan,
+        archive_root,
+        dry_run=True,
+        max_values=int(arguments.get("max_values", 5)),
+        max_recommendations=int(arguments.get("max_recommendations", 12)),
+    )
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    state = "passed" if result.get("ok") else "blocked"
+    return tool_success_result(
+        "view_recommendation_plan: "
+        f"{state}, {summary.get('recommendation_count', 0)} recommendation(s), "
+        f"{summary.get('navigation_key_count', 0)} navigation key(s).",
         result,
     )
 
