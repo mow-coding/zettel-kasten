@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.85 - 2026-06-17
+
+- Added approval-gated CLI `archive object-storage-upload-evidence
+  --ledger <jsonl> --dry-run|--approve` for registering reviewed external
+  object-storage upload evidence without provider calls.
+- Dry-run mode reads UTF-8 JSONL upload evidence ledgers, counts successful
+  `uploaded`, `verified`, `succeeded`, `already_present`, or `ok` rows, matches
+  sha256 objects against `objects/manifests/files.jsonl`, previews manifest
+  location updates, and echoes no ledger paths or row values.
+- Approved mode requires `--reviewed-by` and a safe `--store-ref`, writes a
+  non-secret receipt under
+  `receipts/providers/object-storage-upload-evidence/`, and adds
+  `object_storage` locations with `declared_uploaded` availability to existing
+  object manifest records.
+- Kept live provider work closed: no source bytes are read, no local hashes are
+  computed, no R2/S3/API calls are made, no HEAD checks are performed, no
+  upload/download/sync happens, no provider URLs or bucket names are created,
+  and no secrets are read or echoed.
+
 ## v0.3.84 - 2026-06-17
 
 - Added read-only CLI `archive ai-response-concept-guide --topic all

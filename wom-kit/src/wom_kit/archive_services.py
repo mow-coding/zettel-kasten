@@ -352,6 +352,15 @@ PREHASHED_OBJET_LEDGER_STORE_KINDS = {
 }
 PREHASHED_OBJET_LEDGER_RECEIPT_SCHEMA = "wom-kit/prehashed-objet-ledger-receipt/v0.1"
 PREHASHED_OBJET_LEDGER_RECEIPTS_DIR = "receipts/prehashed-objet-ledger"
+OBJECT_STORAGE_UPLOAD_EVIDENCE_RECEIPT_SCHEMA = "wom-kit/object-storage-upload-evidence-receipt/v0.1"
+OBJECT_STORAGE_UPLOAD_EVIDENCE_RECEIPTS_DIR = "receipts/providers/object-storage-upload-evidence"
+OBJECT_STORAGE_UPLOAD_EVIDENCE_SUCCESS_STATUSES = {
+    "already_present",
+    "ok",
+    "succeeded",
+    "uploaded",
+    "verified",
+}
 ZET_SHARED_UPDATE_RECORD_EXPECTED_KIND = "zet_shared_update_record_preview"
 ZET_SHARED_UPDATE_REVIEW_INDEX_MAX_LIMIT = 100
 ZET_SHARED_UPDATE_ATTESTATION_REVIEW_DECISIONS = {"attest", "needs_more_review", "reject"}
@@ -23941,6 +23950,518 @@ def prehashed_objet_ledger_write_receipt(root: Path, receipt: dict[str, Any], re
             receipt_path.unlink(missing_ok=True)
             raise
         return f"{PREHASHED_OBJET_LEDGER_RECEIPTS_DIR}/{receipt_id}.json"
+
+
+def object_storage_upload_evidence_register(
+    archive_root: Path | str,
+    ledger: Path | str | list[Path | str] | tuple[Path | str, ...],
+    *,
+    provider_kind: str = "cloudflare-r2",
+    store_ref: str | None = None,
+    sha256_field: str = "sha256",
+    size_field: str = "bytes",
+    status_field: str = "status",
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    max_rows: int = 100000,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if dry_run == approve:
+        blockers.append("object-storage-upload-evidence requires exactly one of dry_run or approve.")
+    normalized_provider = normalize_object_storage_provider(provider_kind)
+    if normalized_provider not in OBJECT_STORAGE_ALLOWED_PROVIDERS:
+        blockers.append("provider_kind must be one of: " + ", ".join(sorted(OBJECT_STORAGE_ALLOWED_PROVIDERS)) + ".")
+        normalized_provider = "generic-s3"
+    normalized_store_ref = str(store_ref or "").strip()
+    if approve:
+        if not reviewed_by:
+            blockers.append("reviewed_by is required when approve is used.")
+        if not normalized_store_ref:
+            blockers.append("store_ref is required when approve is used.")
+    if normalized_store_ref and not safe_object_storage_ref(normalized_store_ref):
+        blockers.append("store_ref must be a safe label/ref, not a URL, path, token, bucket name, or secret.")
+        normalized_store_ref = ""
+
+    field_blockers: list[str] = []
+    safe_sha256_field = prehashed_ledger_safe_field_name(sha256_field, "sha256_field", field_blockers) or "sha256"
+    safe_size_field = prehashed_ledger_safe_field_name(size_field, "size_field", field_blockers) or "bytes"
+    safe_status_field = prehashed_ledger_safe_field_name(status_field, "status_field", field_blockers) or "status"
+    blockers.extend(field_blockers)
+
+    ledger_paths = prehashed_objet_ledger_input_paths(ledger)
+    evidence = read_object_storage_upload_evidence_ledgers(
+        ledger_paths,
+        sha256_field=safe_sha256_field,
+        size_field=safe_size_field,
+        status_field=safe_status_field,
+        max_rows=max_rows,
+    )
+    blockers.extend(str(item) for item in evidence.get("blockers") or [])
+    warnings.extend(str(item) for item in evidence.get("warnings") or [])
+
+    manifest_path = archive_internal_path(root, "objects/manifests/files.jsonl")
+    manifest_exists = manifest_path.is_file()
+    manifest_records = load_manifest_records(root)
+    records_by_object_id = {
+        str(record.get("object_id") or "").lower(): record
+        for record in manifest_records
+        if isinstance(record, dict)
+    }
+    matched_items: list[dict[str, Any]] = []
+    missing_manifest_count = 0
+    size_mismatch_count = 0
+    already_present_count = 0
+    would_add_count = 0
+    for item in evidence.get("unique_uploads") or []:
+        if not isinstance(item, dict):
+            continue
+        digest = str(item.get("sha256") or "")
+        object_id = f"sha256:{digest}"
+        record = records_by_object_id.get(object_id)
+        if not record:
+            missing_manifest_count += 1
+            continue
+        declared_size = item.get("size_bytes")
+        manifest_size = record.get("size_bytes")
+        if isinstance(declared_size, int) and isinstance(manifest_size, int) and declared_size != manifest_size:
+            size_mismatch_count += 1
+            continue
+        locations = record.get("locations") if isinstance(record.get("locations"), list) else []
+        existing = object_storage_upload_evidence_location_exists(
+            locations,
+            provider_kind=normalized_provider,
+            store_ref=normalized_store_ref or "<pending-store-ref>",
+        )
+        if existing:
+            already_present_count += 1
+        else:
+            would_add_count += 1
+        matched_items.append(
+            {
+                "object_id": object_id,
+                "sha256": digest,
+                "size_bytes": declared_size,
+                "already_present": existing,
+            }
+        )
+
+    if not manifest_exists:
+        blockers.append("objects/manifests/files.jsonl is required before upload evidence can update locations.")
+    if not matched_items:
+        blockers.append("upload evidence did not match any existing object manifest records.")
+    if missing_manifest_count:
+        blockers.append("upload evidence includes object ids missing from objects/manifests/files.jsonl.")
+    if size_mismatch_count:
+        blockers.append("upload evidence byte sizes must match existing manifest records when both are present.")
+    if int(evidence.get("invalid_row_count") or 0):
+        blockers.append("upload evidence ledger contains invalid rows.")
+    if int(evidence.get("successful_upload_count") or 0) == 0:
+        blockers.append("upload evidence ledger contains no successful upload evidence rows.")
+
+    registered_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    proposed_receipt_path = object_storage_upload_evidence_receipt_preview_path(registered_at)
+    would_change = []
+    if would_add_count:
+        would_change.append("objects/manifests/files.jsonl")
+    would_change.append(proposed_receipt_path)
+
+    base_result = {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "object_storage_upload_evidence_preview" if dry_run else "object_storage_upload_evidence_register",
+        "archive_id": archive_id,
+        "provider_kind": normalized_provider,
+        "store_ref": normalized_store_ref or None,
+        "evidence": {
+            "ledger_file_count": evidence.get("ledger_file_count"),
+            "ledger_file_sha256": evidence.get("ledger_file_sha256"),
+            "row_count": evidence.get("row_count"),
+            "successful_upload_count": evidence.get("successful_upload_count"),
+            "unique_successful_object_count": len(evidence.get("unique_uploads") or []),
+            "skipped_row_count": evidence.get("skipped_row_count"),
+            "invalid_row_count": evidence.get("invalid_row_count"),
+            "duplicate_sha256_count": evidence.get("duplicate_sha256_count"),
+            "total_declared_bytes": evidence.get("total_declared_bytes"),
+            "status_field": safe_status_field,
+            "sha256_field": safe_sha256_field,
+            "size_field": safe_size_field,
+            "ledger_paths_echoed": False,
+            "row_values_echoed": False,
+        },
+        "manifest_update": {
+            "manifest_present": manifest_exists,
+            "matched_manifest_records": len(matched_items),
+            "missing_manifest_records": missing_manifest_count,
+            "size_mismatch_count": size_mismatch_count,
+            "locations_already_present": already_present_count,
+            "would_add_locations": would_add_count if dry_run else 0,
+            "added_locations": 0,
+            "object_ids_echoed": False,
+            "manifest_rewrite_required": bool(would_add_count),
+        },
+        "receipt": {
+            "schema": OBJECT_STORAGE_UPLOAD_EVIDENCE_RECEIPT_SCHEMA,
+            "proposed_receipt_path": proposed_receipt_path,
+            "receipt_path": None,
+            "receipt_written": False,
+        },
+        "current_capability": {
+            "external_upload_evidence_registration_implemented": True,
+            "manifest_location_update_implemented": True,
+            "live_object_upload_adapter_implemented": False,
+            "provider_confirmation_by_wom_kit": False,
+            "object_bytes_read": False,
+        },
+        "closed_actions": {
+            "source_bytes_read": False,
+            "local_sha256_computed": False,
+            "provider_api_called": False,
+            "remote_head_checked": False,
+            "upload_performed": False,
+            "download_performed": False,
+            "secret_value_read": False,
+            "provider_url_created": False,
+            "bucket_name_echoed": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "ledger_paths_echoed": False,
+            "row_values_echoed": False,
+            "object_ids_echoed": False,
+            "source_filenames_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "bucket_names_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "tokens_echoed": False,
+            "secret_values_echoed": False,
+            "writes": False,
+        },
+        "would_change": would_change,
+        "files_written": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+    if blockers or dry_run:
+        return base_result
+
+    receipt: dict[str, Any] = {
+        "schema": OBJECT_STORAGE_UPLOAD_EVIDENCE_RECEIPT_SCHEMA,
+        "receipt_id": None,
+        "lifecycle_action": "object_storage_upload_evidence_register",
+        "archive_id": archive_id,
+        "provider_kind": normalized_provider,
+        "store_ref": normalized_store_ref,
+        "reviewed_by": reviewed_by,
+        "registered_at": registered_at,
+        "ledger_file_sha256": evidence.get("ledger_file_sha256"),
+        "ledger_path_included": False,
+        "summary": {
+            "row_count": evidence.get("row_count"),
+            "successful_upload_count": evidence.get("successful_upload_count"),
+            "unique_successful_object_count": len(evidence.get("unique_uploads") or []),
+            "matched_manifest_records": len(matched_items),
+            "locations_already_present": already_present_count,
+            "added_locations": 0,
+            "total_declared_bytes": evidence.get("total_declared_bytes"),
+        },
+        "manifest_update": {
+            "manifest_path": "objects/manifests/files.jsonl",
+            "manifest_update_completed": False,
+            "object_ids_echoed": False,
+            "provider_confirmation_by_wom_kit": False,
+            "byte_verification_by_wom_kit": False,
+        },
+        "privacy_guards": base_result["privacy_guards"],
+        "closed_actions": {**base_result["closed_actions"], "files_written": True},
+    }
+    receipt_path = object_storage_upload_evidence_write_receipt(root, receipt, registered_at)
+    added_locations = update_manifest_with_object_storage_upload_evidence(
+        manifest_path,
+        provider_kind=normalized_provider,
+        store_ref=normalized_store_ref,
+        receipt_path=receipt_path,
+        registered_at=registered_at,
+        matched_items=matched_items,
+    )
+    receipt["summary"]["added_locations"] = added_locations
+    receipt["manifest_update"]["manifest_update_completed"] = True
+    receipt_update_path = archive_internal_path(root, receipt_path)
+    try:
+        receipt_update_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        warnings.append("upload evidence receipt summary could not be updated after manifest write.")
+
+    files_written = [receipt_path]
+    if added_locations:
+        files_written.insert(0, "objects/manifests/files.jsonl")
+    return {
+        **base_result,
+        "ok": True,
+        "dry_run": False,
+        "manifest_update": {
+            **base_result["manifest_update"],
+            "would_add_locations": 0,
+            "added_locations": added_locations,
+        },
+        "receipt": {
+            **base_result["receipt"],
+            "receipt_path": receipt_path,
+            "receipt_written": True,
+        },
+        "closed_actions": {**base_result["closed_actions"], "files_written": True},
+        "privacy_guards": {**base_result["privacy_guards"], "writes": True},
+        "would_change": [],
+        "files_written": files_written,
+        "blockers": [],
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def read_object_storage_upload_evidence_ledgers(
+    ledger_paths: list[Path],
+    *,
+    sha256_field: str,
+    size_field: str,
+    status_field: str,
+    max_rows: int,
+) -> dict[str, Any]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    row_count = 0
+    success_count = 0
+    skipped_count = 0
+    invalid_count = 0
+    duplicate_count = 0
+    total_bytes = 0
+    truncated = False
+    ledger_hashes: list[str] = []
+    seen_sizes: dict[str, int | None] = {}
+    skipped_reasons: dict[str, int] = {}
+    invalid_reasons: dict[str, int] = {}
+    if not ledger_paths:
+        blockers.append("at least one upload evidence ledger must be provided.")
+    for ledger_path in ledger_paths:
+        if not ledger_path.is_file():
+            blockers.append("upload evidence ledger must be an existing JSONL file.")
+            continue
+        try:
+            ledger_hashes.append("sha256:" + sha256_path(ledger_path))
+            with ledger_path.open("r", encoding="utf-8") as handle:
+                for raw_line in handle:
+                    if row_count >= max_rows:
+                        truncated = True
+                        warnings.append("object-storage upload evidence preview stopped at max_rows.")
+                        break
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    row_count += 1
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        invalid_count += 1
+                        invalid_reasons["invalid_json"] = invalid_reasons.get("invalid_json", 0) + 1
+                        continue
+                    if not isinstance(row, dict):
+                        invalid_count += 1
+                        invalid_reasons["row_not_object"] = invalid_reasons.get("row_not_object", 0) + 1
+                        continue
+                    status = normalize_upload_evidence_status(row.get(status_field))
+                    if status not in OBJECT_STORAGE_UPLOAD_EVIDENCE_SUCCESS_STATUSES:
+                        skipped_count += 1
+                        skipped_reasons["status_not_success"] = skipped_reasons.get("status_not_success", 0) + 1
+                        continue
+                    digest = normalize_prehashed_ledger_sha256(row.get(sha256_field))
+                    if digest is None:
+                        invalid_count += 1
+                        invalid_reasons["sha256_invalid"] = invalid_reasons.get("sha256_invalid", 0) + 1
+                        continue
+                    size = normalize_optional_upload_evidence_size(row.get(size_field))
+                    if row.get(size_field) is not None and size is None:
+                        invalid_count += 1
+                        invalid_reasons["size_invalid"] = invalid_reasons.get("size_invalid", 0) + 1
+                        continue
+                    if digest in seen_sizes:
+                        duplicate_count += 1
+                        existing_size = seen_sizes[digest]
+                        if existing_size is not None and size is not None and existing_size != size:
+                            invalid_count += 1
+                            invalid_reasons["duplicate_size_mismatch"] = invalid_reasons.get("duplicate_size_mismatch", 0) + 1
+                            continue
+                        if existing_size is None and size is not None:
+                            seen_sizes[digest] = size
+                    else:
+                        seen_sizes[digest] = size
+                    success_count += 1
+                    if size is not None:
+                        total_bytes += size
+            if truncated:
+                break
+        except (OSError, UnicodeError):
+            blockers.append("upload evidence ledger could not be read safely as UTF-8 JSONL.")
+
+    if len(ledger_hashes) == 1:
+        ledger_file_sha256 = ledger_hashes[0]
+    elif ledger_hashes:
+        ledger_file_sha256 = "sha256:" + sha256_json_hex(
+            {
+                "ledger_file_sha256es": ledger_hashes,
+                "sha256_field": sha256_field,
+                "size_field": size_field,
+                "status_field": status_field,
+            }
+        )
+    else:
+        ledger_file_sha256 = None
+
+    return {
+        "ledger_file_sha256": ledger_file_sha256,
+        "ledger_file_count": len(ledger_hashes),
+        "row_count": row_count,
+        "successful_upload_count": success_count,
+        "skipped_row_count": skipped_count,
+        "invalid_row_count": invalid_count,
+        "duplicate_sha256_count": duplicate_count,
+        "total_declared_bytes": total_bytes,
+        "skipped_reasons": skipped_reasons,
+        "invalid_reasons": invalid_reasons,
+        "unique_uploads": [
+            {"sha256": digest, "size_bytes": size}
+            for digest, size in seen_sizes.items()
+        ],
+        "truncated": truncated,
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+
+def normalize_upload_evidence_status(value: Any) -> str:
+    if isinstance(value, bool):
+        return "uploaded" if value else "not_uploaded"
+    if not isinstance(value, str):
+        return ""
+    return value.strip().lower().replace("-", "_")
+
+
+def normalize_optional_upload_evidence_size(value: Any) -> int | None:
+    if value is None:
+        return None
+    return normalize_prehashed_ledger_size(value)
+
+
+def object_storage_upload_evidence_location_exists(
+    locations: list[Any],
+    *,
+    provider_kind: str,
+    store_ref: str,
+) -> bool:
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        if location.get("provider") != "object_storage":
+            continue
+        if str(location.get("provider_kind") or "") != provider_kind:
+            continue
+        if str(location.get("store_ref") or "") != store_ref:
+            continue
+        return True
+    return False
+
+
+def object_storage_upload_evidence_location(
+    *,
+    digest: str,
+    provider_kind: str,
+    store_ref: str,
+    receipt_path: str,
+    registered_at: str,
+) -> dict[str, Any]:
+    return {
+        "provider": "object_storage",
+        "provider_kind": provider_kind,
+        "store_ref": store_ref,
+        "availability": "declared_uploaded",
+        "content_addressed": True,
+        "key_strategy": OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+        "key_hint": f"sha256/{digest[:2]}/{digest}",
+        "byte_verification_by_wom_kit": False,
+        "provider_confirmation_by_wom_kit": False,
+        "evidence_receipt": receipt_path,
+        "evidence_registered_at": registered_at,
+    }
+
+
+def update_manifest_with_object_storage_upload_evidence(
+    manifest_path: Path,
+    *,
+    provider_kind: str,
+    store_ref: str,
+    receipt_path: str,
+    registered_at: str,
+    matched_items: list[dict[str, Any]],
+) -> int:
+    matched_by_id = {str(item.get("object_id") or ""): item for item in matched_items}
+    changed_count = 0
+    rewritten_lines: list[str] = []
+    for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            rewritten_lines.append(raw_line)
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            rewritten_lines.append(raw_line)
+            continue
+        object_id = str(record.get("object_id") or "")
+        item = matched_by_id.get(object_id)
+        if item and not item.get("already_present"):
+            locations = record.get("locations") if isinstance(record.get("locations"), list) else []
+            locations.append(
+                object_storage_upload_evidence_location(
+                    digest=str(item.get("sha256") or "").removeprefix("sha256:"),
+                    provider_kind=provider_kind,
+                    store_ref=store_ref,
+                    receipt_path=receipt_path,
+                    registered_at=registered_at,
+                )
+            )
+            record["locations"] = locations
+            changed_count += 1
+            rewritten_lines.append(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+        else:
+            rewritten_lines.append(raw_line)
+    manifest_path.write_text("\n".join(rewritten_lines) + "\n", encoding="utf-8")
+    return changed_count
+
+
+def object_storage_upload_evidence_receipt_preview_path(registered_at: str) -> str:
+    timestamp_compact = re.sub(r"[^0-9TZ]", "", registered_at)
+    return f"{OBJECT_STORAGE_UPLOAD_EVIDENCE_RECEIPTS_DIR}/{timestamp_compact}-<receipt-id>.json"
+
+
+def object_storage_upload_evidence_write_receipt(root: Path, receipt: dict[str, Any], registered_at: str) -> str:
+    receipts_dir = archive_internal_path(root, OBJECT_STORAGE_UPLOAD_EVIDENCE_RECEIPTS_DIR)
+    receipts_dir.mkdir(parents=True, exist_ok=True)
+    timestamp_compact = re.sub(r"[^0-9TZ]", "", registered_at)
+    while True:
+        receipt_id = f"{timestamp_compact}-{secrets.token_hex(6)}"
+        receipt_path = receipts_dir / f"{receipt_id}.json"
+        receipt["receipt_id"] = f"receipt:object-storage-upload-evidence:{receipt_id}"
+        try:
+            write_json_new_file(receipt_path, receipt)
+        except FileExistsError:
+            continue
+        except OSError:
+            receipt_path.unlink(missing_ok=True)
+            raise
+        return f"{OBJECT_STORAGE_UPLOAD_EVIDENCE_RECEIPTS_DIR}/{receipt_id}.json"
 
 
 def prehashed_ledger_safe_field_name(value: str | None, label: str, blockers: list[str]) -> str | None:

@@ -143,6 +143,7 @@ Onboarding and setup plans:
 - [Object Storage Adapter Readiness Plan](object-storage-adapter-readiness-plan.md)
 - [Object Storage Operation Request Plan](object-storage-operation-request-plan.md)
 - [Object Storage Adapter Execution Contract](object-storage-adapter-execution-contract.md)
+- [Object Storage Upload Evidence](object-storage-upload-evidence.md)
 - [IMAP Mailbox Source](imap-mailbox-source.md)
 - [IMAP Mailbox Operation Request Plan](imap-mailbox-operation-request-plan.md)
 - [IMAP Mailbox Adapter Manifest Plan](imap-mailbox-adapter-manifest-plan.md)
