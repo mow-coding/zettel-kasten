@@ -136,6 +136,7 @@ docs/zettel-objet-links.md
 docs/notion-objet-link-plan.md
 docs/notion-objet-link-index.md
 docs/notion-objet-link-rewrite-plan.md
+docs/notion-objet-link-convert.md
 docs/notion-objet-manifest-locator-label.md
 docs/view-health.md
 docs/view-recommendation-plan.md
@@ -307,7 +308,10 @@ notion-objet-link-index
   Index Notion provider locator to manifested objet link candidates across non-redacted zettels. Dry-run only; writes nothing, echoes no provider URLs, zettel body text, frontmatter values, page titles, absolute local paths, or object bytes, and calls no providers.
 
 notion-objet-link-rewrite-plan
-  Validate one reviewed locator_fingerprint and object_id pair before any future approved rewrite or embed edge write. Dry-run only; writes nothing, rewrites no body text, writes no edges, echoes no provider URLs, zettel body text, frontmatter values, page titles, absolute local paths, or object bytes, and calls no providers.
+  Validate one reviewed locator_fingerprint and object_id pair before an approved conversion. Dry-run only; writes nothing, rewrites no body text, writes no edges, echoes no provider URLs, zettel body text, frontmatter values, page titles, absolute local paths, or object bytes, and calls no providers.
+
+notion-objet-link-convert
+  Preview or approve converting one reviewed locator/object match into an embed edge. Approve requires --reviewed-by and --expected-occurrence-count, re-runs the rewrite plan, writes through the zettel-edge gate, and creates a conversion receipt. It does not rewrite body text, replace provider locator text, expose an MCP write tool, call providers, read object bytes, or echo provider URLs, body text, titles, frontmatter values, account ids, emails, tokens, or secret values.
 
 notion-objet-manifest-locator-label
   Preview or approve adding one reviewed non-secret Notion locator fingerprint to one object manifest record. Approve requires --reviewed-by and writes only objects/manifests/files.jsonl plus a receipt under receipts/objects/notion-locator-labels/. It stores no raw provider locator text, exposes no MCP write tool, reads no zettel bodies or object bytes, rewrites no zettels, writes no edges, calls no providers, and echoes no provider URLs, zettel body text, zettel titles, page titles, account ids, emails, tokens, or secret values.
@@ -739,7 +743,7 @@ For Notion page/block exports, `recordMap` or `blocks` JSON is treated as a prov
 
 `archive notion-objet-link-plan --path <zet.md>|--zettel-id <id> --dry-run` scans one non-redacted zettel for Notion provider locator fingerprints and matches them against reviewed metadata in `objects/manifests/files.jsonl`. It is the bridge for imported Notion zets that still contain provider locators instead of stable `objet:sha256:<hex>` refs. It writes nothing, rewrites no body text, echoes no provider URLs, page titles, zettel body text, frontmatter values, absolute local paths, account ids, emails, tokens, or secret values, reads no object bytes, calls no providers, creates no presigned URLs, and blocks redacted zettels. MCP exposes the same read-only flow as `notion_objet_link_plan`.
 
-`archive notion-objet-link-index <archive-root> --dry-run` scans non-redacted zettels across the archive for Notion provider locator fingerprints and reports safe counts for locator rows with or without manifested objet candidates. `archive notion-objet-link-rewrite-plan --path <zet.md>|--zettel-id <id> --locator-fingerprint sha256:<hex> --object-id sha256:<hex> --dry-run` validates one reviewed locator/object pair, target mode, and optional occurrence-count drift guard before any future approved rewrite or `embed` edge write. They write nothing, rewrite no body text, write no edges, echo no provider URLs, page titles, zettel body text, frontmatter values, absolute local paths, account ids, emails, tokens, or secret values, read no object bytes, call no providers, create no presigned URLs, and keep actual conversion future work. MCP exposes the same read-only flows as `notion_objet_link_index` and `notion_objet_link_rewrite_plan`. `archive notion-objet-manifest-locator-label --object-id sha256:<hex> --locator-fingerprint sha256:<hex> --dry-run|--approve` is the separate CLI-only write path for adding a reviewed non-secret locator fingerprint to one manifest record, so later index/plan runs can match without storing provider locator text.
+`archive notion-objet-link-index <archive-root> --dry-run` scans non-redacted zettels across the archive for Notion provider locator fingerprints and reports safe counts for locator rows with or without manifested objet candidates. `archive notion-objet-link-rewrite-plan --path <zet.md>|--zettel-id <id> --locator-fingerprint sha256:<hex> --object-id sha256:<hex> --dry-run` validates one reviewed locator/object pair, target mode, and optional occurrence-count drift guard. They write nothing, rewrite no body text, write no edges, echo no provider URLs, page titles, zettel body text, frontmatter values, absolute local paths, account ids, emails, tokens, or secret values, read no object bytes, call no providers, and create no presigned URLs. MCP exposes the same read-only flows as `notion_objet_link_index` and `notion_objet_link_rewrite_plan`. `archive notion-objet-manifest-locator-label --object-id sha256:<hex> --locator-fingerprint sha256:<hex> --dry-run|--approve` is the separate CLI-only write path for adding a reviewed non-secret locator fingerprint to one manifest record, so later index/plan runs can match without storing provider locator text. `archive notion-objet-link-convert --path <zet.md>|--zettel-id <id> --locator-fingerprint sha256:<hex> --object-id sha256:<hex> --target-mode embed_edge --expected-occurrence-count <n> --dry-run|--approve` is the CLI-only approved conversion path for one reviewed `embed` edge. It re-runs the rewrite plan, uses the existing `zettel-edge` gate, writes edge and conversion receipts on approval, and still keeps body replacement future work.
 
 `archive view-health --dry-run` diagnoses saved view drift against the generated local SQLite index. It reports active, empty, and blocked saved views, per-filter facet match counts, and observed facet value samples for the keys used by saved views. It writes nothing, rebuilds no index, rewrites no `views/*.yml` files or zettel facets, reads no zettel bodies or object bytes, echoes no zettel titles, absolute local paths, provider URLs, account ids, emails, tokens, or secret values, and calls no providers. MCP exposes the same read-only flow as `view_health`.
 
@@ -1020,12 +1024,15 @@ v0.3.90 adds read-only saved view health diagnostics for stale or empty
 v0.3.96 adds a read-only archive-wide Notion objet link index for provider
 locator fingerprints. v0.3.97 adds read-only saved view recommendations from
 indexed navigation facets. v0.3.98 adds a read-only Notion objet link rewrite
-plan that validates one reviewed locator/object pair before any future approved
-rewrite or `embed` edge write. v0.3.99 adds approval-gated policy batch zettel
+plan that validates one reviewed locator/object pair before approved
+conversion. v0.3.99 adds approval-gated policy batch zettel
 edge writes through `zettel-edge-batch`, while keeping real export parsing and
 MCP write tools closed. v0.3.100 adds approval-gated Notion objet manifest
 locator fingerprint labels so index/plan matching can recover when manifests
 know the Notion source but lack the reviewed locator fingerprint.
+v0.3.101 adds approval-gated Notion objet link conversion for reviewed
+`embed` edges, while keeping body replacement, provider calls, and MCP write
+tools closed.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

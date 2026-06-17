@@ -116,5 +116,6 @@ archive notion-objet-link-plan <archive-root> --path <zet.md> --dry-run
 ```
 
 Once the manifest match appears, use
-`archive notion-objet-link-rewrite-plan` before any future body rewrite or
-reviewed `embed` edge write.
+`archive notion-objet-link-rewrite-plan`, then
+`archive notion-objet-link-convert --target-mode embed_edge` for a reviewed
+`embed` edge write. Body rewrite remains separate future work.

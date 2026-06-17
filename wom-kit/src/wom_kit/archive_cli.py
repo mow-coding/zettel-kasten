@@ -137,6 +137,8 @@ Commands:
           Plan Notion provider locator to manifested objet links without echoing URLs.
   notion-objet-link-index
           Index Notion provider locator to manifested objet link candidates across zettels.
+  notion-objet-link-convert
+          Preview or approve converting one reviewed Notion locator match into an embed edge.
   view-recommendation-plan
           Plan saved view recommendations from navigation facets without writing views.
   block-header
@@ -4146,6 +4148,62 @@ def command_notion_objet_link_rewrite_plan(args: argparse.Namespace) -> int:
             for action in result["next_safe_actions"]:
                 print(f"- {action}")
         print("Writes: none")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_notion_objet_link_convert(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.notion_objet_link_convert(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            relative_path=args.path,
+            locator_fingerprint=args.locator_fingerprint,
+            object_id=args.object_id,
+            target_mode=args.target_mode,
+            expected_occurrence_count=args.expected_occurrence_count,
+            visibility=args.visibility,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        zettel = result.get("zettel") if isinstance(result.get("zettel"), dict) else {}
+        edge_write = result.get("edge_write") if isinstance(result.get("edge_write"), dict) else {}
+        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
+        print(f"Notion objet link convert: {result.get('write_status') or '-'}")
+        print(f"- target mode: {result.get('target_mode') or '-'}")
+        print(f"- zettel: {zettel.get('id') or zettel.get('path') or '-'}")
+        print(f"- locator: {result.get('locator_fingerprint') or '-'}")
+        print(f"- object: {result.get('selected_object_id') or '-'}")
+        print(f"- edge: {edge_write.get('edge_id') or '-'}")
+        print(f"- edge receipt: {edge_write.get('receipt_path') or '-'}")
+        print(f"- conversion receipt: {receipt.get('receipt_path') or '-'}")
+        if result.get("files_written"):
+            print("Files written:")
+            for path in result["files_written"]:
+                print(f"- {path}")
+        elif result.get("would_change"):
+            print("Would change:")
+            for path in result["would_change"]:
+                print(f"- {path}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
     return 0 if result.get("ok", True) else 1
 
 
@@ -10315,6 +10373,34 @@ def build_parser() -> argparse.ArgumentParser:
     notion_objet_link_rewrite_plan.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing and open nothing.")
     notion_objet_link_rewrite_plan.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     notion_objet_link_rewrite_plan.set_defaults(func=command_notion_objet_link_rewrite_plan)
+
+    notion_objet_link_convert = subcommands.add_parser(
+        "notion-objet-link-convert",
+        help="Preview or approve converting one reviewed Notion locator/object match into an embed edge.",
+    )
+    notion_objet_link_convert.add_argument("archive_root", help="Archive root to update.")
+    notion_objet_link_convert_target = notion_objet_link_convert.add_mutually_exclusive_group(required=True)
+    notion_objet_link_convert_target.add_argument("--zettel-id", help="Zettel id to update.")
+    notion_objet_link_convert_target.add_argument("--path", help="Archive-relative zettel path to update.")
+    notion_objet_link_convert.add_argument("--locator-fingerprint", required=True, help="Selected sha256 locator fingerprint from the reviewed rewrite plan.")
+    notion_objet_link_convert.add_argument("--object-id", required=True, help="Selected manifested object id, sha256:<64 hex>.")
+    notion_objet_link_convert.add_argument(
+        "--target-mode",
+        choices=["embed_edge", "objet_ref_rewrite"],
+        default="embed_edge",
+        help="Approved conversion mode. v0.3.101 writes embed_edge only; body rewrite stays blocked.",
+    )
+    notion_objet_link_convert.add_argument(
+        "--expected-occurrence-count",
+        type=int,
+        help="Drift guard copied from the reviewed rewrite plan. Required with --approve.",
+    )
+    notion_objet_link_convert.add_argument("--visibility", default="private", help="Safe edge visibility label. Default: private.")
+    notion_objet_link_convert.add_argument("--dry-run", action="store_true", help="Preview the embed edge and conversion receipt without writing files.")
+    notion_objet_link_convert.add_argument("--approve", action="store_true", help="Write the reviewed embed edge and conversion receipt.")
+    notion_objet_link_convert.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
+    notion_objet_link_convert.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    notion_objet_link_convert.set_defaults(func=command_notion_objet_link_convert)
 
     notion_objet_manifest_locator_label = subcommands.add_parser(
         "notion-objet-manifest-locator-label",

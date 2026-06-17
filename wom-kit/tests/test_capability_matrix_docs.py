@@ -75,6 +75,7 @@ ZETTEL_OBJET_LINKS_PATH = KIT_ROOT / "docs" / "zettel-objet-links.md"
 NOTION_OBJET_LINK_PLAN_PATH = KIT_ROOT / "docs" / "notion-objet-link-plan.md"
 NOTION_OBJET_LINK_INDEX_PATH = KIT_ROOT / "docs" / "notion-objet-link-index.md"
 NOTION_OBJET_LINK_REWRITE_PLAN_PATH = KIT_ROOT / "docs" / "notion-objet-link-rewrite-plan.md"
+NOTION_OBJET_LINK_CONVERT_PATH = KIT_ROOT / "docs" / "notion-objet-link-convert.md"
 NOTION_OBJET_MANIFEST_LOCATOR_LABEL_PATH = KIT_ROOT / "docs" / "notion-objet-manifest-locator-label.md"
 VIEW_HEALTH_PATH = KIT_ROOT / "docs" / "view-health.md"
 VIEW_RECOMMENDATION_PLAN_PATH = KIT_ROOT / "docs" / "view-recommendation-plan.md"
@@ -1125,6 +1126,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         notion_plan_text = NOTION_OBJET_LINK_PLAN_PATH.read_text(encoding="utf-8")
         notion_index_text = NOTION_OBJET_LINK_INDEX_PATH.read_text(encoding="utf-8")
         notion_rewrite_text = NOTION_OBJET_LINK_REWRITE_PLAN_PATH.read_text(encoding="utf-8")
+        notion_convert_text = NOTION_OBJET_LINK_CONVERT_PATH.read_text(encoding="utf-8")
         notion_label_text = NOTION_OBJET_MANIFEST_LOCATOR_LABEL_PATH.read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
@@ -1157,7 +1159,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "page titles",
             "Redacted zettels are blocked",
             "notion-objet-manifest-locator-label",
-            "This release does not perform that body rewrite",
+            "Approval-gated reviewed `embed` edge conversion now exists",
+            "Body replacement remains future work",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, notion_plan_text)
@@ -1172,12 +1175,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "zettel body text",
             "Redacted zettels are counted",
             "notion-objet-manifest-locator-label",
-            "This release does not perform that body rewrite",
+            "Approval-gated reviewed `embed` edge conversion now exists",
+            "Body replacement remains future work",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, notion_index_text)
         for phrase in (
-            "Status: v0.3.98 read-only conversion checkpoint",
+            "Status: v0.3.101 read-only conversion review checkpoint",
             "archive notion-objet-link-rewrite-plan",
             "notion_objet_link_rewrite_plan",
             "locator_fingerprint",
@@ -1187,10 +1191,28 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "provider URLs",
             "page titles",
             "notion-objet-manifest-locator-label",
-            "This release does not perform that body rewrite or edge write",
+            "notion-objet-link-convert",
+            "target_mode=embed_edge",
+            "receipts without rewriting body text",
+            "Body rewrite remains future work",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, notion_rewrite_text)
+        for phrase in (
+            "Status: v0.3.101 approval-gated embed edge conversion checkpoint",
+            "archive notion-objet-link-convert",
+            "--target-mode embed_edge",
+            "--expected-occurrence-count",
+            "--reviewed-by person:reviewer",
+            "receipts/objects/notion-link-conversions/",
+            "There is no MCP write tool",
+            "does not rewrite zettel body text",
+            "target_mode=objet_ref_rewrite",
+            "needs a separate, narrower replacement guard",
+            "notion-objet-link-rewrite-plan",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, notion_convert_text)
         for phrase in (
             "Status: v0.3.100 approval-gated manifest locator label write checkpoint",
             "archive notion-objet-manifest-locator-label",
@@ -1220,10 +1242,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "MCP `notion_objet_link_rewrite_plan`",
             "archive notion-objet-manifest-locator-label --object-id sha256:<hex> --locator-fingerprint sha256:<hex> --dry-run|--approve",
             "receipts/objects/notion-locator-labels/*.notion-objet-manifest-locator-label.json",
-            "future target mode",
+            "archive notion-objet-link-convert --path <zet.md>|--zettel-id <id> --locator-fingerprint sha256:<hex> --object-id sha256:<hex> --target-mode embed_edge --expected-occurrence-count <n> --dry-run|--approve",
+            "receipts/objects/notion-link-conversions/*.notion-objet-link-convert.json",
+            "occurrence-count drift guard",
+            "does not rewrite zettel body text",
             "provider URLs, provider locator text",
             "skip or block redacted zettel content",
-            "MCP exposes no write tool for the manifest label surface",
+            "MCP exposes no write tool for the manifest label or conversion surface",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -1232,9 +1257,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "[Notion Objet Link Plan](wom-kit/docs/notion-objet-link-plan.md)",
             "[Notion Objet Link Index](wom-kit/docs/notion-objet-link-index.md)",
             "[Notion Objet Link Rewrite Plan](wom-kit/docs/notion-objet-link-rewrite-plan.md)",
+            "[Notion Objet Link Convert](wom-kit/docs/notion-objet-link-convert.md)",
             "[Notion Objet Manifest Locator Label](wom-kit/docs/notion-objet-manifest-locator-label.md)",
             "zettel objet link previews",
             "approval-gated Notion objet manifest locator fingerprint labels",
+            "approval-gated Notion locator conversion to reviewed `embed` edges",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
@@ -1242,6 +1269,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("[Notion Objet Link Plan](notion-objet-link-plan.md)", public_map_text)
         self.assertIn("[Notion Objet Link Index](notion-objet-link-index.md)", public_map_text)
         self.assertIn("[Notion Objet Link Rewrite Plan](notion-objet-link-rewrite-plan.md)", public_map_text)
+        self.assertIn("[Notion Objet Link Convert](notion-objet-link-convert.md)", public_map_text)
         self.assertIn("[Notion Objet Manifest Locator Label](notion-objet-manifest-locator-label.md)", public_map_text)
 
     def test_view_health_doc_and_matrix_explain_empty_saved_view_diagnostics(self) -> None:

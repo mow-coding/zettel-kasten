@@ -45,6 +45,7 @@
 - [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md)
 - [Notion Objet Link Index](notion-objet-link-index.md)
 - [Notion Objet Link Rewrite Plan](notion-objet-link-rewrite-plan.md)
+- [Notion Objet Link Convert](notion-objet-link-convert.md)
 - [Notion Objet Manifest Locator Label](notion-objet-manifest-locator-label.md)
 - [View Recommendation Plan](view-recommendation-plan.md)
 
@@ -166,6 +167,7 @@
 - [IMAP Mailbox Material Capture Approval Audit](imap-mailbox-material-capture-approval-audit.md)
 - [Notion Objet Link Index](notion-objet-link-index.md)
 - [Notion Objet Link Rewrite Plan](notion-objet-link-rewrite-plan.md)
+- [Notion Objet Link Convert](notion-objet-link-convert.md)
 - [Notion Objet Manifest Locator Label](notion-objet-manifest-locator-label.md)
 - [WOM AI Runtime Skill And Plugin Layer](wom-ai-runtime-skill-plugin-layer.md)
 - [WOM Profile Registry](wom-profile-registry.md)

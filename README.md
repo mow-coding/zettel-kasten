@@ -25,10 +25,10 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.100 pre-release
+v0.3.101 pre-release
 ```
 
-Previous public baseline: v0.3.99 pre-release.
+Previous public baseline: v0.3.100 pre-release.
 Earlier compatibility checkpoint: v0.3.87 pre-release.
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
@@ -49,7 +49,7 @@ What exists today:
 - read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces, plus text-first external export planning with explicit large-media trap detection before broad workspace/database downloads, read-only Notion connection import planning for typed-edge candidates with base connection edge vocabulary, approval-gated link type migration for stale archive-local `types.yml`, a read-only connection evidence parser contract before real export parsing, a sanitized fixture parser that emits candidate edge previews without writes, read-only connection edge intelligence planning that separates relationship meaning from source mechanism, distinguishes ambiguous candidates from human-review-required candidates, and flags provisional candidates before human approval, approval-gated single-edge zettel edge writes for reviewed zet-to-zet or zet-to-objet links including safe `zet:notion:<id>` target resolution, plus approval-gated policy batch zettel edge writes that route only high-confidence policy matches through the single-edge gate and leave the rest in a human review queue, manifest-aware object-storage recommendation matching with surfaced bucket names, exact next commands, Cloudflare R2 setup field guidance, adapter readiness planning, operation request packaging, upload execution-contract planning, presigned URL planning, approval-gated external upload evidence registration, and read-only upload evidence auditing before live provider adapters,
 - read-only IMAP mailbox source planning, operation request packaging, schema-validated adapter manifest previews, approval-gated local adapter manifest writes, adapter readiness checks, mailbox selection planning, adapter audit receipt previews, approval-gated local adapter audit receipt writes, adapter preflight checks, adapter execution-contract planning, a first approval-gated local IMAP header metadata scan for Gmail, Naver, and generic IMAP account refs, an offline audit checkpoint for those header scan execution receipts, read-only material selection, capture request, capture execution-contract planning, and material capture approval audits, approval-gated non-secret material selection records, and approval-gated material capture approval receipts before future body/attachment/derived-text work,
 - documented Notion page snapshot and `store-ref` boundaries for page/block JSON exports,
-- read-only objet reference resolution, presigned URL planning, zettel objet link previews for mapping `sha256:<hex>` refs to safe local/external candidates, one-zettel plus archive-wide Notion provider locator to manifested objet link planning and reviewed rewrite planning without echoing provider URLs or creating provider URLs, and approval-gated Notion objet manifest locator fingerprint labels so reviewed manifests can match later locator plans without storing raw provider locator text,
+- read-only objet reference resolution, presigned URL planning, zettel objet link previews for mapping `sha256:<hex>` refs to safe local/external candidates, one-zettel plus archive-wide Notion provider locator to manifested objet link planning and reviewed rewrite planning without echoing provider URLs or creating provider URLs, approval-gated Notion objet manifest locator fingerprint labels so reviewed manifests can match later locator plans without storing raw provider locator text, and approval-gated Notion locator conversion to reviewed `embed` edges without rewriting zettel body text,
 - approval-gated local write paths for selected private archive, foreign-block review records, and the first v0.3.0 shared update attestation/review record,
 - a v0.2.x freeze / v0.3.0 entry boundary document plus a narrow v0.3.0 write boundary that stays local-first and body-safe,
 - local public-release hygiene tools for links, Korean product language, privacy, release readiness, and branch-protection planning.
@@ -168,6 +168,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Notion Objet Link Plan](wom-kit/docs/notion-objet-link-plan.md)
 - [Notion Objet Link Index](wom-kit/docs/notion-objet-link-index.md)
 - [Notion Objet Link Rewrite Plan](wom-kit/docs/notion-objet-link-rewrite-plan.md)
+- [Notion Objet Link Convert](wom-kit/docs/notion-objet-link-convert.md)
 - [Notion Objet Manifest Locator Label](wom-kit/docs/notion-objet-manifest-locator-label.md)
 - [View Health](wom-kit/docs/view-health.md)
 - [View Recommendation Plan](wom-kit/docs/view-recommendation-plan.md)
@@ -291,6 +292,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.101
 v0.3.100
 v0.3.99
 v0.3.98
