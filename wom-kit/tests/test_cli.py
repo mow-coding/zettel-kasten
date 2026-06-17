@@ -2135,6 +2135,13 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["input_summary"]["candidate_count"], 9)
             self.assertEqual(result["classification_summary"]["candidate_count"], 9)
             self.assertGreater(result["classification_summary"]["ambiguous_count"], 0)
+            self.assertGreater(result["classification_summary"]["human_review_required_count"], 0)
+            self.assertEqual(
+                result["classification_summary"]["human_review_required_count"],
+                result["review_summary"]["human_review_required_count"],
+            )
+            self.assertEqual(result["review_summary"]["durable_write_human_approval_required_count"], 9)
+            self.assertEqual(result["review_summary"]["auto_writable_count"], 0)
             self.assertIn("format_variant", result["classification_summary"]["provisional_meaning_candidate_ids"])
             self.assertIn("responds_to", result["classification_summary"]["provisional_meaning_candidate_ids"])
             self.assertTrue(result["edge_intelligence_contract"]["relationship_meaning_axis_is_separate_from_source_mechanism_axis"])
@@ -2174,6 +2181,32 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(by_kind["classification_summary"]["candidate_count"], 1)
             self.assertEqual(by_kind["classification_suggestions"][0]["current_edge_type"], "semantic")
             self.assertTrue(by_kind["classification_suggestions"][0]["human_review_required"])
+            self.assertEqual(by_kind["review_summary"]["human_review_required_count"], 1)
+            self.assertEqual(by_kind["review_summary"]["durable_write_human_approval_required_count"], 1)
+
+            relation_code, relation_output = self.run_cli(
+                [
+                    "connection-edge-intelligence-plan",
+                    str(archive_root),
+                    "--evidence",
+                    "workbench/connection-evidence.sample.json",
+                    "--source",
+                    "notion",
+                    "--connection-kind",
+                    "relation_property",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            relation = json.loads(relation_output)
+            self.assertEqual(relation_code, 0, relation_output)
+            self.assertEqual(relation["classification_summary"]["candidate_count"], 2)
+            self.assertEqual(relation["classification_summary"]["ambiguous_count"], 0)
+            self.assertEqual(relation["review_summary"]["human_review_required_count"], 2)
+            self.assertEqual(relation["review_summary"]["non_ambiguous_human_review_required_count"], 2)
+            self.assertEqual(relation["review_summary"]["durable_write_human_approval_required_count"], 2)
+            self.assertEqual(len(relation["human_review_queue"]), 2)
 
             no_dry_run_code, no_dry_run_output = self.run_cli(
                 [

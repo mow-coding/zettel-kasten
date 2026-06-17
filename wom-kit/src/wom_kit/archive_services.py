@@ -12554,6 +12554,7 @@ def connection_edge_intelligence_plan(
     candidate_edges = parse_result.get("candidate_edges") if isinstance(parse_result.get("candidate_edges"), list) else []
     suggestions = [] if blockers else [connection_edge_intelligence_suggestion(item) for item in candidate_edges if isinstance(item, dict)]
     ambiguous_count = sum(1 for item in suggestions if item.get("ambiguity_flag"))
+    human_review_required_count = sum(1 for item in suggestions if item.get("human_review_required"))
     parsimony_review_count = sum(
         1
         for item in suggestions
@@ -12573,6 +12574,18 @@ def connection_edge_intelligence_plan(
             if item.get("active_edge_type")
         }
     )
+    human_review_queue = [
+        {
+            "candidate_id": item.get("candidate_id"),
+            "review_reason": item.get("review_reason"),
+            "current_edge_type": item.get("current_edge_type"),
+            "suggested_relationship_meaning": item.get("relationship_meaning", {}).get("suggested_id"),
+            "ambiguity_flag": bool(item.get("ambiguity_flag")),
+            "parsimony_signal": item.get("parsimony_signal"),
+        }
+        for item in suggestions
+        if item.get("human_review_required")
+    ]
 
     return {
         "ok": not blockers,
@@ -12611,20 +12624,23 @@ def connection_edge_intelligence_plan(
         "classification_summary": {
             "candidate_count": len(suggestions),
             "ambiguous_count": ambiguous_count,
+            "human_review_required_count": human_review_required_count,
             "parsimony_review_count": parsimony_review_count,
             "provisional_meaning_candidate_ids": provisional_candidates,
         },
+        "review_summary": {
+            "candidate_count": len(suggestions),
+            "ambiguous_count": ambiguous_count,
+            "human_review_required_count": human_review_required_count,
+            "non_ambiguous_human_review_required_count": max(0, human_review_required_count - ambiguous_count),
+            "durable_write_human_approval_required_count": len(suggestions),
+            "review_queue_count": len(human_review_queue),
+            "auto_writable_count": 0,
+            "ambiguous_count_scope": "semantic_or_medium_confidence_candidates_only_not_total_review_need",
+            "human_review_scope": "candidate_level_flags_plus_all_durable_writes_require_human_approval",
+        },
         "classification_suggestions": suggestions,
-        "human_review_queue": [
-            {
-                "candidate_id": item.get("candidate_id"),
-                "review_reason": item.get("review_reason"),
-                "current_edge_type": item.get("current_edge_type"),
-                "suggested_relationship_meaning": item.get("relationship_meaning", {}).get("suggested_id"),
-            }
-            for item in suggestions
-            if item.get("human_review_required")
-        ],
+        "human_review_queue": human_review_queue,
         "multi_lens_gate": {
             "implemented_now": False,
             "planned_lenses": ["mechanism_lens", "meaning_lens", "strict_zettelkasten_lens"],

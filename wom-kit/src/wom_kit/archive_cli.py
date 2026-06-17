@@ -2232,6 +2232,10 @@ def command_connection_edge_intelligence_plan(args: argparse.Namespace) -> int:
         print(f"Connection kind: {result.get('connection_kind') or '-'}")
         print(f"Candidate edges: {summary.get('candidate_count', 0)}")
         print(f"Ambiguous edges: {summary.get('ambiguous_count', 0)}")
+        review_summary = result.get("review_summary") if isinstance(result.get("review_summary"), dict) else {}
+        print(f"Human-review-required candidates: {review_summary.get('human_review_required_count', 0)}")
+        print(f"Durable-write human approvals required: {review_summary.get('durable_write_human_approval_required_count', 0)}")
+        print(f"Auto-writable candidates: {review_summary.get('auto_writable_count', 0)}")
         print("AI/LLM classifier: no")
         print("Writes: none")
         if result.get("blockers"):

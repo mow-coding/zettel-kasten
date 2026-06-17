@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.92 - 2026-06-17
+
+- Added `review_summary` output to read-only
+  `archive connection-edge-intelligence-plan --dry-run`, separating
+  `ambiguous_count` from candidate-level `human_review_required_count` and
+  durable-write approval counts.
+- The text output now prints human-review-required candidate counts,
+  durable-write approval counts, and `auto_writable_count: 0` so
+  `ambiguous_count: 0` cannot be mistaken for "ready to write".
+- Expanded the human review queue entries with ambiguity and parsimony signals
+  while keeping candidate ids opaque.
+- Kept the command read-only and privacy-bounded: it writes no candidate
+  records, zets, edges, receipts, or manifests; calls no providers or LLMs; and
+  echoes no body text, provider URLs, local paths, account ids, emails, tokens,
+  or secret values.
+
 ## v0.3.91 - 2026-06-17
 
 - Added read-only CLI `archive index-health <archive-root> --dry-run` and MCP
