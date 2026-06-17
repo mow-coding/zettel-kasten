@@ -61,6 +61,8 @@ Commands:
           Compose the read-only approval request package before any future object storage operation.
   object-storage-upload-evidence
           Record reviewed external upload evidence and update manifest locations without provider calls.
+  object-storage-upload-evidence-audit
+          Audit upload evidence receipts and manifest locations without provider calls.
   imap-mailbox-operation-request-plan
           Compose the read-only approval request package before any future IMAP mailbox operation.
   imap-mailbox-plan
@@ -2305,6 +2307,24 @@ def command_object_storage_upload_evidence(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_object_storage_upload_evidence_audit(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("object-storage-upload-evidence-audit is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.object_storage_upload_evidence_audit(
+            Path(args.archive_root),
+            receipt=args.receipt,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_object_storage_upload_evidence_audit_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
 def command_resolve_objet_ref(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("resolve-objet-ref is read-only and requires --dry-run.", file=sys.stderr)
@@ -3438,6 +3458,31 @@ def print_object_storage_upload_evidence_result(result: dict[str, Any], output_f
     else:
         print(f"Added locations: {update.get('added_locations', 0)}")
         print(f"Receipt: {receipt.get('receipt_path') or '-'}")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+
+
+def print_object_storage_upload_evidence_audit_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    state = "passed" if result.get("ok") else "blocked"
+    receipt = result.get("receipt_summary") if isinstance(result.get("receipt_summary"), dict) else {}
+    manifest = result.get("manifest_check") if isinstance(result.get("manifest_check"), dict) else {}
+    print(f"Object-storage upload evidence audit {state}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Provider: {receipt.get('provider_kind') or '-'}")
+    print(f"Store ref: {receipt.get('store_ref') or '-'}")
+    print(f"Receipt loaded: {receipt.get('receipt_loaded', False)}")
+    print(f"Manifest locations: {manifest.get('matching_locations', 0)}")
+    print(f"Invalid locations: {manifest.get('invalid_location_count', 0)}")
+    print("Writes: none")
     if result.get("blockers"):
         print("Blockers:")
         for blocker in result["blockers"]:
@@ -8673,6 +8718,25 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_upload_evidence.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
     object_storage_upload_evidence.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_upload_evidence.set_defaults(func=command_object_storage_upload_evidence)
+
+    object_storage_upload_evidence_audit = subcommands.add_parser(
+        "object-storage-upload-evidence-audit",
+        aliases=["object-storage-external-upload-evidence-audit", "objet-storage-upload-evidence-audit"],
+        help="Audit an object-storage upload evidence receipt without calling providers.",
+    )
+    object_storage_upload_evidence_audit.add_argument("archive_root", help="Archive root to inspect.")
+    object_storage_upload_evidence_audit.add_argument(
+        "--receipt",
+        required=True,
+        help="Archive-relative receipts/providers/object-storage-upload-evidence/*.json path. The exact path is not echoed.",
+    )
+    object_storage_upload_evidence_audit.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Audit only; never calls providers, reads object bytes, retrieves secrets, or writes files.",
+    )
+    object_storage_upload_evidence_audit.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    object_storage_upload_evidence_audit.set_defaults(func=command_object_storage_upload_evidence_audit)
 
     resolve_objet_ref = subcommands.add_parser(
         "resolve-objet-ref",

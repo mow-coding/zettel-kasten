@@ -100,6 +100,7 @@ docs/object-storage-adapter-readiness-plan.md
 docs/object-storage-operation-request-plan.md
 docs/object-storage-adapter-execution-contract.md
 docs/object-storage-upload-evidence.md
+docs/object-storage-upload-evidence-audit.md
 docs/imap-mailbox-source.md
 docs/imap-mailbox-operation-request-plan.md
 docs/imap-mailbox-adapter-manifest-plan.md
@@ -190,6 +191,9 @@ object-storage-adapter-execution-contract
 object-storage-upload-evidence
   Preview or approve-register reviewed external object-storage upload evidence for existing manifest objects. Dry-run reads UTF-8 JSONL upload evidence ledgers, matches successful sha256 rows against objects/manifests/files.jsonl, and previews object_storage locations without echoing ledger paths or row values. Approved mode requires --reviewed-by and --store-ref, writes one non-secret receipt, and updates manifest locations while still calling no providers, reading no object bytes, checking no remote availability, uploading nothing, downloading nothing, syncing nothing, and reading no secrets.
 
+object-storage-upload-evidence-audit
+  Audit one upload evidence receipt against objects/manifests/files.jsonl. Dry-run only; validates receipt schema, non-secret privacy guards, no-provider closed actions, linked object_storage locations, declared_uploaded availability, sha256 key hints, and receipt/location count consistency without writing files, calling providers, reading object bytes, checking remote availability, uploading, downloading, syncing, creating provider URLs, or retrieving secrets.
+
 external-export-plan
   Plan a text-first Notion, Google Drive, or generic workspace export before large media downloads. Dry-run only; detects the broad workspace/database export trap, returns safe text-only and targeted first-pass command shapes, starts no export, calls no providers, reads no files, downloads no attachments, writes nothing, and echoes no provider URLs or local paths.
 
@@ -270,6 +274,9 @@ prehashed-objet-ledger
 
 object-storage-upload-evidence
   Preview or approve-register reviewed external object-storage upload evidence for existing manifest objects. Approved mode writes one receipt under receipts/providers/object-storage-upload-evidence/ and appends object_storage locations with declared_uploaded availability. It does not prove remote availability by itself and does not call providers, read object bytes, compute local hashes, upload, download, sync, create provider URLs, or retrieve secrets. MCP exposes no write tool for this surface.
+
+object-storage-upload-evidence-audit
+  Check a reviewed upload evidence receipt against local manifest locations. Dry-run only; it writes no audit receipt, performs no remote availability check, and echoes no receipt path, manifest path, object ids, location records, provider URLs, bucket names, account ids, emails, tokens, or secret values. MCP exposes no tool for this surface.
 
 resolve-objet-ref
   Resolve one sha256 objet reference to safe local archive-relative candidates and external store labels. Dry-run only; reads the object manifest, writes nothing, echoes no absolute local paths or provider URLs, calls no providers, creates no presigned URLs, downloads nothing, and hashes no object bytes.

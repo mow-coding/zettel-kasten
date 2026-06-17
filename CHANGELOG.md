@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.86 - 2026-06-17
+
+- Added read-only CLI `archive object-storage-upload-evidence-audit
+  --receipt <archive-relative-json> --dry-run` for checking a v0.3.85 upload
+  evidence receipt against `objects/manifests/files.jsonl`.
+- The audit verifies receipt schema, lifecycle action, safe provider/store
+  labels, non-secret privacy flags, closed no-provider actions, manifest update
+  completion, linked `object_storage` locations, `declared_uploaded`
+  availability, sha256 content-addressed key hints, and receipt/location count
+  consistency.
+- Kept the audit read-only: it writes no audit receipt, reads no source bytes,
+  computes no local source hashes, calls no provider APIs, performs no remote
+  HEAD checks, uploads/downloads/syncs nothing, creates no provider URLs, reads
+  no secrets, and echoes no receipt path, manifest path, object ids, locations,
+  provider URLs, bucket names, account ids, emails, tokens, or secret values.
+
 ## v0.3.85 - 2026-06-17
 
 - Added approval-gated CLI `archive object-storage-upload-evidence

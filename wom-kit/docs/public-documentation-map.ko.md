@@ -139,6 +139,7 @@
 - [Object Storage Operation Request Plan](object-storage-operation-request-plan.md)
 - [Object Storage Adapter Execution Contract](object-storage-adapter-execution-contract.md)
 - [Object Storage Upload Evidence](object-storage-upload-evidence.md)
+- [Object Storage Upload Evidence Audit](object-storage-upload-evidence-audit.md)
 - [IMAP Mailbox Source](imap-mailbox-source.md)
 - [IMAP Mailbox Operation Request Plan](imap-mailbox-operation-request-plan.md)
 - [IMAP Mailbox Adapter Manifest Plan](imap-mailbox-adapter-manifest-plan.md)

@@ -353,6 +353,7 @@ PREHASHED_OBJET_LEDGER_STORE_KINDS = {
 PREHASHED_OBJET_LEDGER_RECEIPT_SCHEMA = "wom-kit/prehashed-objet-ledger-receipt/v0.1"
 PREHASHED_OBJET_LEDGER_RECEIPTS_DIR = "receipts/prehashed-objet-ledger"
 OBJECT_STORAGE_UPLOAD_EVIDENCE_RECEIPT_SCHEMA = "wom-kit/object-storage-upload-evidence-receipt/v0.1"
+OBJECT_STORAGE_UPLOAD_EVIDENCE_AUDIT_SCHEMA = "wom-kit/object-storage-upload-evidence-audit/v0.1"
 OBJECT_STORAGE_UPLOAD_EVIDENCE_RECEIPTS_DIR = "receipts/providers/object-storage-upload-evidence"
 OBJECT_STORAGE_UPLOAD_EVIDENCE_SUCCESS_STATUSES = {
     "already_present",
@@ -24462,6 +24463,291 @@ def object_storage_upload_evidence_write_receipt(root: Path, receipt: dict[str, 
             receipt_path.unlink(missing_ok=True)
             raise
         return f"{OBJECT_STORAGE_UPLOAD_EVIDENCE_RECEIPTS_DIR}/{receipt_id}.json"
+
+
+def object_storage_upload_evidence_audit(
+    archive_root: Path | str,
+    *,
+    receipt: str,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("object-storage-upload-evidence-audit is read-only and requires dry_run.")
+
+    receipt_relative = str(receipt or "").strip().replace("\\", "/")
+    if not object_storage_upload_evidence_safe_receipt_path(receipt_relative):
+        blockers.append("receipt must be an archive-relative object-storage upload evidence receipt JSON path.")
+        receipt_relative = ""
+
+    receipt_payload: dict[str, Any] = {}
+    receipt_sha256: str | None = None
+    if receipt_relative:
+        receipt_path = archive_internal_path(root, receipt_relative)
+        if not receipt_path.is_file():
+            blockers.append("upload evidence receipt file is missing.")
+        else:
+            try:
+                receipt_text = receipt_path.read_text(encoding="utf-8")
+                receipt_sha256 = hashlib.sha256(receipt_text.encode("utf-8")).hexdigest()
+                loaded = json.loads(receipt_text)
+                if isinstance(loaded, dict):
+                    receipt_payload = loaded
+                else:
+                    blockers.append("upload evidence receipt must contain a JSON object.")
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                blockers.append("upload evidence receipt could not be read as UTF-8 JSON.")
+
+    schema_valid = receipt_payload.get("schema") == OBJECT_STORAGE_UPLOAD_EVIDENCE_RECEIPT_SCHEMA
+    lifecycle_valid = receipt_payload.get("lifecycle_action") == "object_storage_upload_evidence_register"
+    archive_id_valid = receipt_payload.get("archive_id") == archive_id
+    provider_kind = normalize_object_storage_provider(str(receipt_payload.get("provider_kind") or ""))
+    store_ref = str(receipt_payload.get("store_ref") or "").strip()
+    reviewed_by = str(receipt_payload.get("reviewed_by") or "").strip()
+    if receipt_payload:
+        if not schema_valid:
+            blockers.append("receipt schema is not object-storage upload evidence.")
+        if not lifecycle_valid:
+            blockers.append("receipt lifecycle action is not object_storage_upload_evidence_register.")
+        if not archive_id_valid:
+            blockers.append("receipt archive_id does not match this archive.")
+        if provider_kind not in OBJECT_STORAGE_ALLOWED_PROVIDERS:
+            blockers.append("receipt provider_kind is not a supported object-storage provider.")
+            provider_kind = "generic-s3"
+        if not safe_object_storage_ref(store_ref):
+            blockers.append("receipt store_ref is not a safe non-secret object-storage label.")
+            store_ref = ""
+        if not reviewed_by or not safe_source_intake_plan_scalar(reviewed_by):
+            blockers.append("receipt reviewed_by must be a safe non-secret reviewer label.")
+        if receipt_payload.get("ledger_path_included") is not False:
+            blockers.append("receipt must not include upload evidence ledger paths.")
+
+    summary = receipt_payload.get("summary") if isinstance(receipt_payload.get("summary"), dict) else {}
+    manifest_update = receipt_payload.get("manifest_update") if isinstance(receipt_payload.get("manifest_update"), dict) else {}
+    privacy = receipt_payload.get("privacy_guards") if isinstance(receipt_payload.get("privacy_guards"), dict) else {}
+    closed = receipt_payload.get("closed_actions") if isinstance(receipt_payload.get("closed_actions"), dict) else {}
+    added_locations_claimed = summary.get("added_locations")
+    matched_manifest_claimed = summary.get("matched_manifest_records")
+    if receipt_payload:
+        for label, value in (
+            ("added_locations", added_locations_claimed),
+            ("matched_manifest_records", matched_manifest_claimed),
+            ("successful_upload_count", summary.get("successful_upload_count")),
+        ):
+            if not isinstance(value, int) or value < 0:
+                blockers.append(f"receipt summary {label} must be a non-negative integer.")
+        if manifest_update.get("manifest_path") != "objects/manifests/files.jsonl":
+            blockers.append("receipt manifest_update path must be objects/manifests/files.jsonl.")
+        if manifest_update.get("manifest_update_completed") is not True:
+            blockers.append("receipt must mark manifest_update_completed true before audit can pass.")
+        if manifest_update.get("object_ids_echoed") is not False:
+            blockers.append("receipt must mark object ids as not echoed.")
+        if manifest_update.get("provider_confirmation_by_wom_kit") is not False:
+            blockers.append("receipt must not claim WOM-kit provider confirmation.")
+        if manifest_update.get("byte_verification_by_wom_kit") is not False:
+            blockers.append("receipt must not claim WOM-kit byte verification.")
+        for flag in (
+            "ledger_paths_echoed",
+            "row_values_echoed",
+            "object_ids_echoed",
+            "source_filenames_echoed",
+            "local_absolute_paths_echoed",
+            "provider_urls_echoed",
+            "bucket_names_echoed",
+            "account_ids_echoed",
+            "emails_echoed",
+            "tokens_echoed",
+            "secret_values_echoed",
+        ):
+            if privacy.get(flag) is not False:
+                blockers.append("receipt privacy guards do not prove non-secret upload evidence output.")
+                break
+        for flag in (
+            "source_bytes_read",
+            "local_sha256_computed",
+            "provider_api_called",
+            "remote_head_checked",
+            "upload_performed",
+            "download_performed",
+            "secret_value_read",
+            "provider_url_created",
+            "bucket_name_echoed",
+        ):
+            if closed.get(flag) is not False:
+                blockers.append("receipt closed actions do not preserve the no-provider-call boundary.")
+                break
+
+    manifest_path = archive_internal_path(root, "objects/manifests/files.jsonl")
+    manifest_present = manifest_path.is_file()
+    manifest_records = load_manifest_records(root) if manifest_present else []
+    matching_locations = 0
+    invalid_location_count = 0
+    location_object_count = 0
+    if not manifest_present:
+        blockers.append("objects/manifests/files.jsonl is required before upload evidence can be audited.")
+    if receipt_payload and receipt_relative:
+        for record in manifest_records:
+            if not isinstance(record, dict):
+                continue
+            object_id = str(record.get("object_id") or "")
+            digest = object_id.removeprefix("sha256:") if object_id.startswith("sha256:") else ""
+            locations = record.get("locations") if isinstance(record.get("locations"), list) else []
+            record_matched = False
+            for location in locations:
+                if not isinstance(location, dict):
+                    continue
+                if location.get("provider") != "object_storage":
+                    continue
+                if location.get("evidence_receipt") != receipt_relative:
+                    continue
+                matching_locations += 1
+                record_matched = True
+                location_errors = object_storage_upload_evidence_audit_location_errors(
+                    location,
+                    digest=digest,
+                    provider_kind=provider_kind,
+                    store_ref=store_ref,
+                    receipt_relative=receipt_relative,
+                )
+                if location_errors:
+                    invalid_location_count += 1
+                    blockers.extend(location_errors)
+            if record_matched:
+                location_object_count += 1
+        if matching_locations == 0:
+            blockers.append("manifest contains no object-storage locations linked to this upload evidence receipt.")
+        if isinstance(added_locations_claimed, int) and matching_locations != added_locations_claimed:
+            blockers.append("manifest linked location count does not match receipt summary added_locations.")
+        if isinstance(matched_manifest_claimed, int) and matching_locations > matched_manifest_claimed:
+            blockers.append("manifest linked location count cannot exceed receipt matched_manifest_records.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "object_storage_upload_evidence_audit",
+        "archive_id": archive_id,
+        "audit_state": "passed" if not blockers else "blocked",
+        "report_schema": OBJECT_STORAGE_UPLOAD_EVIDENCE_AUDIT_SCHEMA,
+        "receipt_summary": {
+            "receipt_loaded": bool(receipt_payload),
+            "receipt_path_echoed": False,
+            "receipt_sha256": receipt_sha256,
+            "schema_valid": schema_valid,
+            "lifecycle_action_valid": lifecycle_valid,
+            "archive_id_valid": archive_id_valid,
+            "provider_kind": provider_kind if receipt_payload else None,
+            "store_ref": store_ref if store_ref else None,
+            "ledger_path_included": receipt_payload.get("ledger_path_included") if receipt_payload else None,
+            "added_locations_claimed": added_locations_claimed if isinstance(added_locations_claimed, int) else None,
+            "matched_manifest_records_claimed": matched_manifest_claimed if isinstance(matched_manifest_claimed, int) else None,
+        },
+        "manifest_check": {
+            "manifest_present": manifest_present,
+            "manifest_path_echoed": False,
+            "matching_locations": matching_locations,
+            "matching_object_records": location_object_count,
+            "invalid_location_count": invalid_location_count,
+            "object_ids_echoed": False,
+            "locations_echoed": False,
+            "declared_uploaded_only": invalid_location_count == 0 and matching_locations > 0,
+            "provider_confirmation_by_wom_kit": False,
+            "byte_verification_by_wom_kit": False,
+        },
+        "current_capability": {
+            "upload_evidence_audit_implemented": True,
+            "upload_evidence_receipt_read_implemented": True,
+            "manifest_location_audit_implemented": True,
+            "live_object_upload_adapter_implemented": False,
+            "provider_confirmation_by_wom_kit": False,
+            "object_bytes_read": False,
+        },
+        "closed_actions": {
+            "receipt_read": bool(receipt_payload),
+            "manifest_read": manifest_present,
+            "files_written": False,
+            "source_bytes_read": False,
+            "local_sha256_computed": False,
+            "provider_api_called": False,
+            "remote_head_checked": False,
+            "upload_performed": False,
+            "download_performed": False,
+            "sync_performed": False,
+            "secret_value_read": False,
+            "provider_url_created": False,
+            "bucket_name_echoed": False,
+        },
+        "privacy_guards": {
+            "receipt_path_echoed": False,
+            "manifest_path_echoed": False,
+            "object_ids_echoed": False,
+            "locations_echoed": False,
+            "source_filenames_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "bucket_names_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "tokens_echoed": False,
+            "secret_values_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "files_written": [],
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def object_storage_upload_evidence_safe_receipt_path(value: str) -> bool:
+    text = value.strip().replace("\\", "/")
+    if not text:
+        return False
+    if text.startswith("/") or ":" in text or "\x00" in text or ".." in text.split("/"):
+        return False
+    if not text.startswith(f"{OBJECT_STORAGE_UPLOAD_EVIDENCE_RECEIPTS_DIR}/"):
+        return False
+    if not text.endswith(".json"):
+        return False
+    return True
+
+
+def object_storage_upload_evidence_audit_location_errors(
+    location: dict[str, Any],
+    *,
+    digest: str,
+    provider_kind: str,
+    store_ref: str,
+    receipt_relative: str,
+) -> list[str]:
+    errors: list[str] = []
+    if location.get("provider_kind") != provider_kind:
+        errors.append("manifest object-storage location provider_kind does not match the receipt.")
+    if location.get("store_ref") != store_ref:
+        errors.append("manifest object-storage location store_ref does not match the receipt.")
+    if not isinstance(location.get("store_ref"), str) or not safe_object_storage_ref(str(location.get("store_ref") or "")):
+        errors.append("manifest object-storage location store_ref is not a safe label.")
+    if location.get("availability") != "declared_uploaded":
+        errors.append("manifest object-storage location must use declared_uploaded availability.")
+    if location.get("content_addressed") is not True:
+        errors.append("manifest object-storage location must be content-addressed.")
+    if location.get("key_strategy") != OBJECT_STORAGE_UPLOAD_KEY_STRATEGY:
+        errors.append("manifest object-storage location key_strategy is not sha256 content-addressed.")
+    expected_key_hint = f"sha256/{digest[:2]}/{digest}" if SHA256_RE.match(digest) else None
+    if expected_key_hint is None or location.get("key_hint") != expected_key_hint:
+        errors.append("manifest object-storage location key_hint does not match the object id.")
+    if location.get("byte_verification_by_wom_kit") is not False:
+        errors.append("manifest object-storage location must not claim WOM-kit byte verification.")
+    if location.get("provider_confirmation_by_wom_kit") is not False:
+        errors.append("manifest object-storage location must not claim WOM-kit provider confirmation.")
+    if location.get("evidence_receipt") != receipt_relative:
+        errors.append("manifest object-storage location evidence_receipt does not match the audited receipt.")
+    evidence_registered_at = location.get("evidence_registered_at")
+    if not isinstance(evidence_registered_at, str) or not evidence_registered_at:
+        errors.append("manifest object-storage location must include evidence_registered_at.")
+    return errors
 
 
 def prehashed_ledger_safe_field_name(value: str | None, label: str, blockers: list[str]) -> str | None:
