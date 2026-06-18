@@ -210,6 +210,8 @@ Commands:
   mint-zet
           Mint an inbox draft zet into canonical private archive memory.
           Alias: mint-zettel.
+  retire-draft
+          Close an already minted inbox draft after evidence verification.
   delegate-zet
           Preview or write delegated zet access from a saved view.
   attest-zet
@@ -484,6 +486,7 @@ class Doctor:
         self._check_recovery_receipts()
         self._check_lineage_receipts()
         self._check_mint_receipts()
+        self._check_retired_draft_receipts()
         self._check_delegate_receipts()
         self._check_zettel_kasten_layer()
         self._check_local_profile_and_secret_safety()
@@ -992,9 +995,20 @@ class Doctor:
         elif status != expected_status:
             self.warn("zettel_status_path_mismatch", f"Zettel in {path.parent.name}/ has status {status}, expected {expected_status}.", path)
 
+        minted_draft_twin = None
+        displayed_path = self._display_path(path) or ""
+        if expected_status == "draft" and displayed_path.startswith("inbox/"):
+            minted_draft_twin = archive_services.is_minted_inbox_draft_twin(self.archive_root, path)
+            if minted_draft_twin:
+                self.info(
+                    "minted_inbox_draft_twin_pending_retire",
+                    "Inbox draft is already backed by canonical mint artifacts and can be closed with retire-draft.",
+                    path,
+                )
+
         if expected_status == "canonical" and "mint" not in data and "promotion" not in data:
             self.warn("canonical_lifecycle_metadata_missing", "Canonical zettel has no mint or v0.2 promotion metadata.", path)
-        if "mint" in data:
+        if "mint" in data and not minted_draft_twin:
             self._check_zettel_mint_metadata(data, path)
         if "kind" not in data:
             self.warn("zettel_kind_missing", "Zettel has no v0.2 kind field.", path)
@@ -1221,7 +1235,8 @@ class Doctor:
 
             self._check_mint_receipt_status(data, path, "source", "draft")
             self._check_mint_receipt_status(data, path, "target", "canonical")
-            self._check_mint_receipt_file_ref(data, path, "source")
+            if not self._mint_receipt_source_is_retired(data, path):
+                self._check_mint_receipt_file_ref(data, path, "source")
             target_path = self._check_mint_receipt_file_ref(data, path, "target")
             self._check_mint_receipt_file_ref(data, path, "snapshot")
 
@@ -1241,6 +1256,79 @@ class Doctor:
                         "Mint receipt target zettel does not link back through mint.receipt_path.",
                         path,
                     )
+
+    def _mint_receipt_source_is_retired(self, data: dict[str, Any], path: Path) -> bool:
+        zettel = data.get("zettel") if isinstance(data.get("zettel"), dict) else {}
+        zettel_id = zettel.get("id")
+        if not isinstance(zettel_id, str) or not zettel_id:
+            return False
+        retire_path = self.archive_root / archive_services.MINT_RETIRED_DRAFT_RECEIPTS_DIR / f"{zettel_id}.retire-draft.json"
+        if not retire_path.is_file() or not self._path_stays_inside_archive(retire_path):
+            return False
+        receipt = self._load_json_file(retire_path)
+        if not isinstance(receipt, dict):
+            return False
+        mint_receipt = receipt.get("mint_receipt") if isinstance(receipt.get("mint_receipt"), dict) else {}
+        return receipt.get("action") == "retire_minted_draft" and mint_receipt.get("path") == self._display_path(path)
+
+    def _check_retired_draft_receipts(self) -> None:
+        root = self.archive_root / archive_services.MINT_RETIRED_DRAFT_RECEIPTS_DIR
+        if not root.is_dir():
+            return
+        for path in sorted(root.glob("*.retire-draft.json")):
+            if not self._path_stays_inside_archive(path):
+                continue
+            data = self._load_json_file(path)
+            if not isinstance(data, dict):
+                continue
+            self._check_schema(data, "mint-retired-draft-receipt.schema.json", path)
+            if data.get("action") != "retire_minted_draft":
+                self.error("mint_retired_draft_action_invalid", "Retired draft receipt action must be retire_minted_draft.", path)
+            if data.get("authority_mode") != archive_services.MINT_AUTHORITY_MODE:
+                self.error("mint_retired_draft_authority_mode_invalid", "Retired draft receipt authority_mode must be basic.", path)
+            if data.get("dry_run") is False and not data.get("reviewed_by"):
+                self.error("mint_retired_draft_reviewer_missing", "Applied retired draft receipt must include reviewed_by.", path)
+            if data.get("receipt_path") != self._display_path(path):
+                self.error("mint_retired_draft_path_mismatch", "Retired draft receipt receipt_path must match its archive-relative path.", path)
+            for field in ["source", "target", "mint_receipt", "snapshot", "zettel", "result"]:
+                if not isinstance(data.get(field), dict):
+                    self.error("mint_retired_draft_field_missing", f"Retired draft receipt must contain object field: {field}.", path)
+
+            source = data.get("source") if isinstance(data.get("source"), dict) else {}
+            source_path_value = source.get("path")
+            if isinstance(source_path_value, str) and source_path_value:
+                try:
+                    source_path = resolve_archive_relative_path(self.archive_root, source_path_value)
+                except ArchivePathError:
+                    self.error("mint_retired_draft_source_path_invalid", "Retired draft receipt source.path is unsafe.", path)
+                else:
+                    if source_path.exists():
+                        self.error("mint_retired_draft_source_still_exists", "Retired inbox draft still exists after retirement receipt.", path)
+
+            self._check_retired_draft_existing_ref(data, path, "target")
+            self._check_retired_draft_existing_ref(data, path, "mint_receipt")
+            self._check_retired_draft_existing_ref(data, path, "snapshot")
+
+    def _check_retired_draft_existing_ref(self, data: dict[str, Any], path: Path, section: str) -> None:
+        section_data = data.get(section)
+        if not isinstance(section_data, dict):
+            return
+        resolved = self._resolve_archive_file_ref(
+            section_data.get("path"),
+            path,
+            code_prefix=f"mint_retired_draft_{section}",
+            label=f"Retired draft receipt {section}.path",
+            required=True,
+        )
+        if resolved is None:
+            return
+        expected_sha = section_data.get("sha256")
+        if not isinstance(expected_sha, str) or not SHA256_RE.match(expected_sha):
+            self.error("mint_retired_draft_sha_invalid", f"Retired draft receipt {section}.sha256 must be a lowercase SHA-256 hex digest.", path)
+            return
+        actual_sha = sha256_file(resolved)
+        if actual_sha != expected_sha:
+            self.error("mint_retired_draft_sha_mismatch", f"Retired draft receipt {section}.sha256 does not match the referenced file.", path)
 
     def _check_mint_receipt_status(self, data: dict[str, Any], path: Path, section: str, expected_status: str) -> None:
         section_data = data.get(section)
@@ -5518,6 +5606,54 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
             for warning in result["warnings"]:
                 print(f"- {warning}")
     return 0
+
+
+def command_retire_draft(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("retire-draft requires --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("retire-draft requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.retire_minted_draft(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            relative_path=args.path,
+            reviewed_by=args.reviewed_by,
+            approve=args.approve,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        print(f"Retire draft {state} for {result.get('zettel_id') or result.get('draft_path')}.")
+        print(f"Draft path: {result.get('draft_path') or '-'}")
+        print(f"Canonical path: {result.get('canonical_path') or '-'}")
+        print(f"Mint receipt path: {result.get('mint_receipt_path') or '-'}")
+        print(f"Draft snapshot path: {result.get('draft_snapshot_path') or '-'}")
+        print(f"Retire receipt path: {result.get('retire_receipt_path') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("dry_run"):
+            print("Writes: none")
+        else:
+            print("Retired inbox draft.")
+    return 0 if result.get("ok") else 1
 
 
 def command_index(args: argparse.Namespace) -> int:
@@ -11207,6 +11343,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mint.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     mint.set_defaults(func=command_mint_zettel)
+
+    retire_draft = subcommands.add_parser(
+        "retire-draft",
+        aliases=["retire-minted-draft"],
+        help="Close an already minted inbox draft after canonical, receipt, and snapshot evidence is verified.",
+    )
+    retire_draft.add_argument("archive_root", help="Archive root to inspect.")
+    retire_target = retire_draft.add_mutually_exclusive_group(required=True)
+    retire_target.add_argument("--zettel-id", help="Inbox draft zettel id to retire.")
+    retire_target.add_argument("--path", help="Archive-relative inbox draft path to retire.")
+    retire_draft.add_argument("--dry-run", action="store_true", help="Verify retirement evidence without writing or deleting.")
+    retire_draft.add_argument("--approve", action="store_true", help="Remove the verified inbox draft and write a retire receipt.")
+    retire_draft.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
+    retire_draft.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    retire_draft.set_defaults(func=command_retire_draft)
 
     index = subcommands.add_parser("index", help="Build a generated local SQLite search index.")
     index.add_argument("archive_root", help="Archive root to index.")

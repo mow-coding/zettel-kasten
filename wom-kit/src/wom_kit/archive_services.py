@@ -758,6 +758,7 @@ PROJECT_INTAKE_ITEM_REF_RE = re.compile(r"^item-\d{4}$")
 PROJECT_INTAKE_MAX_STRING_LENGTH = 4000
 MINT_RECEIPTS_DIR = "receipts/mint"
 MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
+MINT_RETIRED_DRAFT_RECEIPTS_DIR = "receipts/mint/retired-drafts"
 ZETTEL_EDGE_RECEIPTS_DIR = "receipts/edges"
 ZETTEL_EDGE_BATCH_RECEIPTS_DIR = "receipts/edges/batches"
 ZETTEL_EDGE_REVERT_RECEIPTS_DIR = "receipts/edges/reverts"
@@ -6282,6 +6283,277 @@ def mint_zettel(
     }
 
 
+def resolve_inbox_draft_path(archive_root: Path, zettel_id: str | None, relative_path: str | None) -> Path:
+    if relative_path:
+        draft_path_hint = "unsafe draft path. Draft path must be archive-relative inside inbox/ (for example: inbox/foo.md). Use --zettel-id if you are unsure."
+        if Path(relative_path).expanduser().is_absolute():
+            raise ArchiveServiceError(draft_path_hint)
+        try:
+            candidate = resolve_archive_relative_path(archive_root, relative_path)
+        except ArchivePathError as exc:
+            raise ArchiveServiceError(draft_path_hint) from exc
+        relative = archive_relative_path(candidate, archive_root)
+        if not relative.startswith("inbox/") or candidate.suffix.lower() != ".md":
+            raise ArchiveServiceError(draft_path_hint)
+        if not candidate.is_file():
+            raise ArchiveServiceError(f"Draft path not found: {relative_path}")
+        return candidate
+
+    assert zettel_id is not None
+    inbox_root = archive_root / "inbox"
+    if not inbox_root.is_dir():
+        raise ArchiveServiceError("Archive inbox directory is missing.")
+    for path in safe_archive_glob(inbox_root, "*.md", archive_root, recursive=True):
+        frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
+        if frontmatter.get("id") == zettel_id:
+            return path
+    raise ArchiveServiceError(f"Inbox draft id not found: {zettel_id}")
+
+
+def read_json_object(path: Path, label: str) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ArchiveServiceError(f"{label} is not valid JSON: {path}") from exc
+    if not isinstance(data, dict):
+        raise ArchiveServiceError(f"{label} must be a JSON object: {path}")
+    return data
+
+
+def resolve_required_archive_file(root: Path, relative_path: Any, blockers: list[str], label: str) -> Path | None:
+    if not isinstance(relative_path, str) or not relative_path:
+        blockers.append(f"{label} path is missing.")
+        return None
+    try:
+        path = resolve_archive_relative_path(root, relative_path)
+    except ArchivePathError:
+        blockers.append(f"{label} path is unsafe: {relative_path}.")
+        return None
+    if not path.is_file():
+        blockers.append(f"{label} path is missing: {relative_path}.")
+        return None
+    return path
+
+
+def verify_sha256_reference(path: Path, expected: Any, blockers: list[str], label: str) -> str | None:
+    if not isinstance(expected, str) or not SHA256_RE.match(expected):
+        blockers.append(f"{label} sha256 is missing or invalid.")
+        return None
+    actual = sha256_path(path)
+    if actual != expected:
+        blockers.append(f"{label} sha256 does not match the referenced file.")
+    return actual
+
+
+def minted_draft_retirement_plan(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    draft_path = resolve_inbox_draft_path(root, zettel_id, relative_path)
+    draft_relative = archive_relative_path(draft_path, root)
+    source_text = draft_path.read_text(encoding="utf-8")
+    source_frontmatter, _body = split_zettel_text(source_text)
+    source_frontmatter = json_safe(source_frontmatter)
+    zettel_id_value = str(source_frontmatter.get("id") or "").strip()
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not zettel_id_value:
+        blockers.append("Draft frontmatter id is missing.")
+    if source_frontmatter.get("status") != "draft":
+        blockers.append("Only draft status can be retired from inbox.")
+
+    receipt_relative = f"{MINT_RECEIPTS_DIR}/{zettel_id_value}.mint.json"
+    retire_receipt_relative = f"{MINT_RETIRED_DRAFT_RECEIPTS_DIR}/{zettel_id_value}.retire-draft.json"
+    receipt_path = resolve_archive_relative_path(root, receipt_relative)
+    retire_receipt_path = resolve_archive_relative_path(root, retire_receipt_relative)
+    if retire_receipt_path.exists():
+        blockers.append(f"Retired draft receipt already exists: {retire_receipt_relative}.")
+
+    receipt: dict[str, Any] = {}
+    if not receipt_path.is_file():
+        blockers.append(f"Mint receipt path is missing: {receipt_relative}.")
+    else:
+        try:
+            receipt = read_json_object(receipt_path, "Mint receipt")
+        except ArchiveServiceError as exc:
+            blockers.append(str(exc))
+
+    source = receipt.get("source") if isinstance(receipt.get("source"), dict) else {}
+    target = receipt.get("target") if isinstance(receipt.get("target"), dict) else {}
+    snapshot = receipt.get("snapshot") if isinstance(receipt.get("snapshot"), dict) else {}
+    receipt_zettel = receipt.get("zettel") if isinstance(receipt.get("zettel"), dict) else {}
+
+    if receipt:
+        if receipt.get("action") != "mint_zettel":
+            blockers.append("Mint receipt action must be mint_zettel.")
+        if receipt.get("dry_run") is not False:
+            blockers.append("Only an applied mint receipt can retire an inbox draft.")
+        if receipt.get("authority_mode") != MINT_AUTHORITY_MODE:
+            blockers.append(f"Mint receipt authority_mode must be {MINT_AUTHORITY_MODE}.")
+        if source.get("path") != draft_relative:
+            blockers.append("Mint receipt source.path does not point to this inbox draft.")
+        if source.get("status") != "draft":
+            blockers.append("Mint receipt source.status must be draft.")
+        if target.get("status") != "canonical":
+            blockers.append("Mint receipt target.status must be canonical.")
+        if receipt_zettel.get("id") != zettel_id_value:
+            blockers.append("Mint receipt zettel.id does not match the inbox draft id.")
+
+    canonical_relative = target.get("path")
+    snapshot_relative = snapshot.get("path")
+    canonical_path = resolve_required_archive_file(root, canonical_relative, blockers, "Canonical zettel")
+    snapshot_path = resolve_required_archive_file(root, snapshot_relative, blockers, "Draft snapshot")
+
+    source_sha = verify_sha256_reference(draft_path, source.get("sha256"), blockers, "Mint receipt source")
+    canonical_sha = verify_sha256_reference(canonical_path, target.get("sha256"), blockers, "Mint receipt target") if canonical_path else None
+    snapshot_sha = verify_sha256_reference(snapshot_path, snapshot.get("sha256"), blockers, "Mint receipt snapshot") if snapshot_path else None
+    if source_sha and snapshot_sha and source_sha != snapshot_sha:
+        blockers.append("Draft snapshot sha256 does not match the inbox draft sha256.")
+
+    if canonical_path is not None:
+        canonical_frontmatter, _canonical_body = split_zettel_text(canonical_path.read_text(encoding="utf-8"))
+        canonical_frontmatter = json_safe(canonical_frontmatter)
+        if canonical_frontmatter.get("id") != zettel_id_value:
+            blockers.append("Canonical zettel id does not match the inbox draft id.")
+        if canonical_frontmatter.get("status") != "canonical":
+            blockers.append("Canonical zettel status must be canonical.")
+        mint = canonical_frontmatter.get("mint") if isinstance(canonical_frontmatter.get("mint"), dict) else {}
+        if mint.get("receipt_path") != receipt_relative:
+            blockers.append("Canonical zettel mint.receipt_path does not match the mint receipt.")
+        if mint.get("draft_snapshot_path") != snapshot_relative:
+            blockers.append("Canonical zettel mint.draft_snapshot_path does not match the draft snapshot.")
+
+    receipt_preview = {
+        "receipt_id": f"receipt:mint-retired-draft:{zettel_id_value}",
+        "receipt_path": retire_receipt_relative,
+        "action": "retire_minted_draft",
+        "dry_run": True,
+        "timestamp": "<execution-time>",
+        "archive_id": read_archive_id(root),
+        "authority_mode": MINT_AUTHORITY_MODE,
+        "source": {
+            "path": draft_relative,
+            "status": "draft",
+            "sha256": source_sha or source.get("sha256"),
+        },
+        "target": {
+            "path": canonical_relative,
+            "status": "canonical",
+            "sha256": canonical_sha or target.get("sha256"),
+        },
+        "mint_receipt": {
+            "path": receipt_relative,
+            "sha256": sha256_path(receipt_path) if receipt_path.is_file() else None,
+        },
+        "snapshot": {
+            "path": snapshot_relative,
+            "sha256": snapshot_sha or snapshot.get("sha256"),
+        },
+        "zettel": {
+            "id": zettel_id_value,
+        },
+        "result": {
+            "removed_paths": [draft_relative],
+            "created_paths": [retire_receipt_relative],
+        },
+    }
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "zettel_id": zettel_id_value,
+        "draft_path": draft_relative,
+        "canonical_path": canonical_relative,
+        "mint_receipt_path": receipt_relative,
+        "draft_snapshot_path": snapshot_relative,
+        "retire_receipt_path": retire_receipt_relative,
+        "blockers": blockers,
+        "warnings": warnings,
+        "would_change": [
+            f"remove {draft_relative}",
+            f"write {retire_receipt_relative}",
+        ],
+        "receipt_preview": json_safe(receipt_preview),
+    }
+
+
+def is_minted_inbox_draft_twin(archive_root: Path | str, draft_path: Path) -> dict[str, Any] | None:
+    try:
+        relative_path = archive_relative_path(draft_path, require_existing_archive_root(archive_root))
+        plan = minted_draft_retirement_plan(archive_root, relative_path=relative_path)
+    except (ArchiveServiceError, OSError, ValueError):
+        return None
+    return plan if plan.get("ok") else None
+
+
+def retire_minted_draft(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    reviewed_by: str | None = None,
+    approve: bool = False,
+) -> dict[str, Any]:
+    reviewer = (reviewed_by or "").strip()
+    if approve and not reviewer:
+        raise ArchiveServiceError("Retiring a minted draft requires --reviewed-by.")
+
+    root = require_existing_archive_root(archive_root)
+    plan = minted_draft_retirement_plan(root, zettel_id=zettel_id, relative_path=relative_path)
+    if plan["blockers"]:
+        if approve:
+            raise ArchiveServiceError("Retiring minted draft blocked: " + "; ".join(plan["blockers"]))
+        return plan
+    if not approve:
+        return plan
+
+    draft_path = resolve_inbox_draft_path(root, zettel_id, relative_path)
+    source_text = draft_path.read_text(encoding="utf-8")
+    expected_source_sha = plan["receipt_preview"]["source"].get("sha256")
+    if sha256_path(draft_path) != expected_source_sha:
+        raise ArchiveServiceError("Inbox draft changed after retirement verification; rerun dry-run.")
+
+    now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    receipt = dict(plan["receipt_preview"])
+    receipt["dry_run"] = False
+    receipt["timestamp"] = now
+    receipt["reviewed_by"] = reviewer
+    receipt["reviewed_at"] = now
+    receipt["result"] = {
+        "removed_paths": [plan["draft_path"]],
+        "created_paths": [plan["retire_receipt_path"]],
+    }
+
+    retire_receipt_path = resolve_archive_relative_path(root, plan["retire_receipt_path"])
+    retire_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        draft_path.unlink()
+        try:
+            with retire_receipt_path.open("x", encoding="utf-8") as handle:
+                handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+        except OSError:
+            draft_path.write_text(source_text, encoding="utf-8")
+            raise
+    except OSError:
+        raise
+
+    result = dict(plan)
+    result.update(
+        {
+            "ok": True,
+            "dry_run": False,
+            "reviewed_by": reviewer,
+            "removed_paths": [plan["draft_path"]],
+            "created_paths": [plan["retire_receipt_path"]],
+            "receipt": json_safe(receipt),
+        }
+    )
+    return result
+
+
 def load_zettel_rules(archive_root: Path) -> dict[str, Any]:
     for path in [
         archive_internal_path(archive_root, "zettel-kasten/zettel-rules.yml"),
@@ -6541,7 +6813,7 @@ def infer_promotion_checklist_item(
     edges = frontmatter.get("edges")
 
     if item_id == "understandable_title":
-        if len(title) >= 5 and title.lower() not in {"draft", "untitled", "note"}:
+        if title_is_specific_enough_for_checklist(title):
             return "passed", "Title is present and specific enough for a machine check."
         return "blocked", "Title is missing or too vague."
     if item_id == "future_self_contained":
@@ -6627,7 +6899,11 @@ def find_promotion_duplicates(
                 }
             )
             continue
+        candidate_body_key = normalize_compare_text(candidate_body)[:500]
+        body_is_similar = len(body_key) >= 120 and candidate_body_key == body_key
         if title_key and normalize_compare_text(str(candidate_frontmatter.get("title") or "")) == title_key:
+            if not body_is_similar:
+                continue
             duplicates.append(
                 {
                     "path": candidate_relative,
@@ -6636,7 +6912,7 @@ def find_promotion_duplicates(
                 }
             )
             continue
-        if len(body_key) >= 120 and normalize_compare_text(candidate_body)[:500] == body_key:
+        if body_is_similar:
             duplicates.append(
                 {
                     "path": candidate_relative,
@@ -6645,6 +6921,59 @@ def find_promotion_duplicates(
                 }
             )
     return duplicates
+
+
+def title_is_specific_enough_for_checklist(title: str) -> bool:
+    stripped = title.strip()
+    if not stripped:
+        return False
+
+    lowered = stripped.casefold()
+    compact = re.sub(r"[\s._-]+", "", lowered)
+    generic_titles = {
+        "draft",
+        "untitled",
+        "note",
+        "memo",
+        "zettel",
+        "zet",
+        "제목없음",
+        "무제",
+        "메모",
+        "노트",
+        "초안",
+    }
+    if lowered in generic_titles or compact in generic_titles:
+        return False
+
+    semantic_chars = [
+        char
+        for char in stripped
+        if not char.isspace() and not unicodedata.category(char).startswith("P")
+    ]
+    if not semantic_chars:
+        return False
+    has_cjk = any(title_char_is_cjk(char) for char in semantic_chars)
+    display_units = sum(
+        2 if title_char_is_cjk(char) or unicodedata.east_asian_width(char) in {"F", "W"} else 1
+        for char in semantic_chars
+    )
+    return display_units >= (4 if has_cjk else 5)
+
+
+def title_char_is_cjk(char: str) -> bool:
+    codepoint = ord(char)
+    return (
+        0x3400 <= codepoint <= 0x4DBF
+        or 0x4E00 <= codepoint <= 0x9FFF
+        or 0xF900 <= codepoint <= 0xFAFF
+        or 0x3040 <= codepoint <= 0x30FF
+        or 0xAC00 <= codepoint <= 0xD7AF
+        or 0x1100 <= codepoint <= 0x11FF
+        or 0x3130 <= codepoint <= 0x318F
+        or 0xA960 <= codepoint <= 0xA97F
+        or 0xD7B0 <= codepoint <= 0xD7FF
+    )
 
 
 def normalize_compare_text(text: str) -> str:

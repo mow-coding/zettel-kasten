@@ -489,6 +489,12 @@ mint-zet --dry-run
 mint-zet --approve --reviewed-by
   Mint an inbox draft zet into canonical private archive memory and write a receipt plus draft snapshot.
 
+retire-draft --dry-run
+  Verify that an inbox draft is already backed by canonical mint artifacts before cleanup. Writes nothing and deletes nothing.
+
+retire-draft --approve --reviewed-by
+  Remove a verified already minted inbox draft and write a retired-draft receipt while preserving the canonical zet, mint receipt, and draft snapshot.
+
 mint-zettel
   Transitional compatibility alias for mint-zet.
 
@@ -685,6 +691,8 @@ db/archive-index.sqlite
 This file is a rebuildable map, not the archive itself. The durable archive still lives in zets, YAML files, object manifests, receipts, and original files. In v0.2, zets remain Markdown-compatible; the long-term target is the WOM Safe HTML Profile.
 
 `archive mint-zet --dry-run` checks the minting gate using `minting_rules` in `zettel-kasten/zettel-rules.yml`, with legacy `promotion_rules` as a v0.2 fallback. It reports blockers, warnings, missing human-review items, near duplicates, the proposed canonical path, the proposed mint receipt path, and the proposed draft snapshot path. It writes nothing. `archive mint-zettel` remains a v0.2 compatibility alias.
+
+`archive retire-draft --dry-run|--approve` closes the lifecycle gap after a draft has already been minted. Dry-run verifies that the inbox draft, canonical zet, mint receipt, draft snapshot, archive-relative paths, and SHA-256 evidence all agree. Approved mode requires `--reviewed-by`, removes only that verified inbox draft, writes `receipts/mint/retired-drafts/*.retire-draft.json`, and preserves the canonical zet, original mint receipt, and draft snapshot.
 
 `archive source-intake --dry-run` is the safe classification step before drafting from a source/objet. It accepts exactly one locator, returns `source_refs_for_draft`, reports object storage context, and writes nothing. It does not read file bodies, hash, copy, upload, import, OCR, transcribe, extract, call provider APIs, create drafts, or mint.
 
@@ -1077,6 +1085,12 @@ v0.3.109 adds receipt-backed `archive migrate --target link-types-v0.3
 which edge types were added and those types remain unused and unchanged from the
 base template, while blocking `frontmatter-v0.3 --revert` until future snapshot
 receipts can make that rollback lossless.
+v0.3.110 adds verified `archive retire-draft --dry-run|--approve` cleanup for
+already minted inbox drafts, lets validate/doctor treat still-present minted
+draft twins as informational cleanup candidates, accepts retired mint sources
+through retired-draft receipts, makes short CJK titles pass the title checklist
+when they are not generic placeholders, and suppresses title-only duplicate
+warnings when bodies are materially different.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

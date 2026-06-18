@@ -6,6 +6,28 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.110 - 2026-06-18
+
+- Added `archive retire-draft --dry-run|--approve` for closing an already
+  minted inbox draft only after the canonical zet, mint receipt, draft
+  snapshot, archive-relative paths, and SHA-256 evidence all agree.
+- Approved retirement removes the verified inbox draft and writes a schema-backed
+  receipt under `receipts/mint/retired-drafts/`, while preserving the canonical
+  zet, original mint receipt, and draft snapshot.
+- `archive validate` / `archive doctor` now classify a still-present inbox draft
+  backed by complete mint artifacts as an informational cleanup candidate rather
+  than a mint metadata error, and accept a retired mint source when the retire
+  receipt proves that lifecycle closure.
+- The mint checklist title gate is CJK-width aware, so short meaningful Korean,
+  Japanese, or Chinese titles can pass while generic placeholders remain
+  blocked.
+- Near-duplicate warnings no longer trigger on title alone when the body is
+  materially different; `same_title` remains a warning when the body start is
+  also very similar.
+- Kept the boundary local and evidence-gated: no provider calls, source export
+  reads, object byte reads, canonical zet deletion, mint receipt deletion, or
+  unverified inbox cleanup were added.
+
 ## v0.3.109 - 2026-06-18
 
 - Added receipt-backed `archive migrate --target link-types-v0.3 --revert

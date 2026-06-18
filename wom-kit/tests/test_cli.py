@@ -413,7 +413,12 @@ class ArchiveCliTests(unittest.TestCase):
             "would_change": [],
         }
 
-    def make_fake_lunch_draft_promotion_ready(self, archive_root: Path, title: str = "Promotion-ready lunch note") -> Path:
+    def make_fake_lunch_draft_promotion_ready(
+        self,
+        archive_root: Path,
+        title: str = "Promotion-ready lunch note",
+        replacement_body: str | None = None,
+    ) -> Path:
         path = archive_root / "inbox" / "zet_20260519_draft_ai_lunch_note.md"
         text = path.read_text(encoding="utf-8")
         match = archive_cli.FRONTMATTER_RE.match(text)
@@ -428,8 +433,16 @@ class ArchiveCliTests(unittest.TestCase):
             "ready_for_promotion": True,
             "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
         }
-        path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+        path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + (replacement_body if replacement_body is not None else body), encoding="utf-8")
         return path
+
+    def fake_lunch_canonical_body(self, archive_root: Path) -> str:
+        path = archive_root / "zettels" / "zet_20240504_fake_lunch_thought.md"
+        text = path.read_text(encoding="utf-8")
+        match = archive_cli.FRONTMATTER_RE.match(text)
+        self.assertIsNotNone(match)
+        assert match is not None
+        return text[match.end() :].lstrip()
 
     def test_doctor_fake_life_archive_passes_strict(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
@@ -19595,7 +19608,11 @@ class ArchiveCliTests(unittest.TestCase):
     def test_promote_real_requires_allow_warnings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.make_fake_lunch_draft_promotion_ready(archive_root, title="Fake thought while eating alone")
+            self.make_fake_lunch_draft_promotion_ready(
+                archive_root,
+                title="Fake thought while eating alone",
+                replacement_body=self.fake_lunch_canonical_body(archive_root),
+            )
 
             code, output = self.run_cli(
                 [
@@ -19999,6 +20016,129 @@ class ArchiveCliTests(unittest.TestCase):
             doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
             self.assertEqual(doctor_code, 0, doctor_output)
 
+    def test_retire_draft_dry_run_and_approve_removes_verified_minted_inbox_twin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path = self.make_fake_lunch_draft_promotion_ready(archive_root)
+            text = draft_path.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            self.assertIsNotNone(match)
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            body = text[match.end() :].lstrip()
+            frontmatter["mint"] = {"stage": "draft"}
+            draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+
+            mint_code, mint_output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(mint_code, 0, mint_output)
+
+            validate_code, validate_output = self.run_cli(["validate", str(archive_root), "--format", "json"])
+            self.assertEqual(validate_code, 0, validate_output)
+            validate_result = json.loads(validate_output)
+            self.assertTrue(
+                any(
+                    item["code"] == "minted_inbox_draft_twin_pending_retire"
+                    for item in validate_result["diagnostics"]
+                )
+            )
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "retire-draft",
+                    str(archive_root),
+                    "--zettel-id",
+                    "zet_20260519_draft_ai_lunch_note",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(dry_code, 0, dry_output)
+            dry_result = json.loads(dry_output)
+            self.assertTrue(dry_result["ok"])
+            self.assertTrue(dry_result["dry_run"])
+            self.assertEqual(dry_result["draft_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+            self.assertEqual(dry_result["retire_receipt_path"], "receipts/mint/retired-drafts/zet_20260519_draft_ai_lunch_note.retire-draft.json")
+            self.assertTrue(draft_path.is_file())
+            self.assertFalse((archive_root / dry_result["retire_receipt_path"]).exists())
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "retire-draft",
+                    str(archive_root),
+                    "--zettel-id",
+                    "zet_20260519_draft_ai_lunch_note",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            result = json.loads(approve_output)
+            self.assertTrue(result["ok"])
+            self.assertFalse(result["dry_run"])
+            self.assertFalse(draft_path.exists())
+            self.assertTrue((archive_root / result["canonical_path"]).is_file())
+            self.assertTrue((archive_root / result["draft_snapshot_path"]).is_file())
+
+            retire_receipt_path = archive_root / result["retire_receipt_path"]
+            self.assertTrue(retire_receipt_path.is_file())
+            receipt = json.loads(retire_receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(archive_cli.validate_schema(receipt, "mint-retired-draft-receipt.schema.json"), [])
+            self.assertEqual(receipt["action"], "retire_minted_draft")
+            self.assertEqual(receipt["reviewed_by"], "person:test")
+            self.assertEqual(receipt["source"]["path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+            self.assertEqual(receipt["mint_receipt"]["path"], "receipts/mint/zet_20260519_draft_ai_lunch_note.mint.json")
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+            final_validate_code, final_validate_output = self.run_cli(["validate", str(archive_root), "--format", "json"])
+            self.assertEqual(final_validate_code, 0, final_validate_output)
+
+    def test_mint_zettel_dry_run_accepts_short_cjk_title(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path = self.make_fake_lunch_draft_promotion_ready(archive_root, title="학업")
+            text = draft_path.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            self.assertIsNotNone(match)
+            assert match is not None
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            body = text[match.end() :].lstrip()
+            frontmatter["promotion"]["checklist"].pop("understandable_title")
+            draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            title_item = next(item for item in result["checklist"] if item["id"] == "understandable_title")
+            self.assertEqual(title_item["status"], "passed")
+            self.assertEqual(title_item["source"], "machine")
+
     def test_mint_zettel_real_blocks_dry_run_blockers_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -20023,7 +20163,11 @@ class ArchiveCliTests(unittest.TestCase):
     def test_mint_zettel_real_requires_allow_warnings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.make_fake_lunch_draft_promotion_ready(archive_root, title="Fake thought while eating alone")
+            self.make_fake_lunch_draft_promotion_ready(
+                archive_root,
+                title="Fake thought while eating alone",
+                replacement_body=self.fake_lunch_canonical_body(archive_root),
+            )
 
             code, output = self.run_cli(
                 [
@@ -20131,7 +20275,11 @@ class ArchiveCliTests(unittest.TestCase):
     def test_promote_dry_run_reports_same_title_duplicate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.make_fake_lunch_draft_promotion_ready(archive_root, title="Fake thought while eating alone")
+            self.make_fake_lunch_draft_promotion_ready(
+                archive_root,
+                title="Fake thought while eating alone",
+                replacement_body=self.fake_lunch_canonical_body(archive_root),
+            )
             code, output = self.run_cli(
                 [
                     "promote",
@@ -20148,6 +20296,27 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertTrue(any(item["reason"] == "same_title" for item in result["near_duplicates"]))
             self.assertTrue(any("same_title" in warning for warning in result["warnings"]))
+
+    def test_promote_dry_run_ignores_same_title_when_body_is_different(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root, title="Fake thought while eating alone")
+            code, output = self.run_cli(
+                [
+                    "promote",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertFalse(any(item["reason"] == "same_title" for item in result["near_duplicates"]))
+            self.assertFalse(any("same_title" in warning for warning in result["warnings"]))
 
     def test_search_requires_generated_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
