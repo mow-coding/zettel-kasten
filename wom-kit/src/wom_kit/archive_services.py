@@ -5025,7 +5025,26 @@ def notion_objet_link_convert(
     )
 
 
-def resolve_zettel_path(archive_root: Path, zettel_id: str | None, relative_path: str | None) -> Path:
+def zettel_paths_by_id(archive_root: Path) -> dict[str, Path]:
+    paths: dict[str, Path] = {}
+    for path in iter_zettel_paths(archive_root):
+        try:
+            frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError):
+            continue
+        zettel_id = str(frontmatter.get("id") or "").strip()
+        if zettel_id and zettel_id not in paths:
+            paths[zettel_id] = path
+    return paths
+
+
+def resolve_zettel_path(
+    archive_root: Path,
+    zettel_id: str | None,
+    relative_path: str | None,
+    *,
+    zettel_path_index: dict[str, Path] | None = None,
+) -> Path:
     if relative_path:
         zettel_path_hint = "unsafe zettel path. Zettel path must be archive-relative inside inbox/ or zettels/ (for example: inbox/foo.md). Use --zettel-id if you are unsure."
         if Path(relative_path).expanduser().is_absolute():
@@ -5042,6 +5061,12 @@ def resolve_zettel_path(archive_root: Path, zettel_id: str | None, relative_path
         return candidate
 
     assert zettel_id is not None
+    if zettel_path_index is not None:
+        indexed_path = zettel_path_index.get(zettel_id)
+        if indexed_path is not None and indexed_path.is_file():
+            return indexed_path
+        raise ArchiveServiceError(f"Zettel id not found: {zettel_id}")
+
     for path in iter_zettel_paths(archive_root):
         frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
         if frontmatter.get("id") == zettel_id:
@@ -6152,6 +6177,7 @@ def mint_zettel(
         )
 
     source_path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
+    source_bytes = source_path.read_bytes()
     source_text = source_path.read_text(encoding="utf-8")
     source_frontmatter, body = split_zettel_text(source_text)
     source_frontmatter = json_safe(source_frontmatter)
@@ -6209,9 +6235,9 @@ def mint_zettel(
         with canonical_path.open("x", encoding="utf-8") as handle:
             created_files.append(canonical_path)
             handle.write(canonical_text)
-        with snapshot_path.open("x", encoding="utf-8") as handle:
+        with snapshot_path.open("xb") as handle:
             created_files.append(snapshot_path)
-            handle.write(source_text)
+            handle.write(source_bytes)
 
         source_sha = sha256_path(source_path)
         canonical_sha = sha256_path(canonical_path)
@@ -6413,7 +6439,10 @@ def minted_draft_retirement_plan(
     canonical_sha = verify_sha256_reference(canonical_path, target.get("sha256"), blockers, "Mint receipt target") if canonical_path else None
     snapshot_sha = verify_sha256_reference(snapshot_path, snapshot.get("sha256"), blockers, "Mint receipt snapshot") if snapshot_path else None
     if source_sha and snapshot_sha and source_sha != snapshot_sha:
-        blockers.append("Draft snapshot sha256 does not match the inbox draft sha256.")
+        if snapshot_path is not None and files_match_after_newline_normalization(draft_path, snapshot_path):
+            warnings.append("Draft snapshot sha256 differs only by newline normalization; retire-draft can continue.")
+        else:
+            blockers.append("Draft snapshot sha256 does not match the inbox draft sha256.")
 
     if canonical_path is not None:
         canonical_frontmatter, _canonical_body = split_zettel_text(canonical_path.read_text(encoding="utf-8"))
@@ -6512,7 +6541,7 @@ def retire_minted_draft(
         return plan
 
     draft_path = resolve_inbox_draft_path(root, zettel_id, relative_path)
-    source_text = draft_path.read_text(encoding="utf-8")
+    source_bytes = draft_path.read_bytes()
     expected_source_sha = plan["receipt_preview"]["source"].get("sha256")
     if sha256_path(draft_path) != expected_source_sha:
         raise ArchiveServiceError("Inbox draft changed after retirement verification; rerun dry-run.")
@@ -6536,7 +6565,7 @@ def retire_minted_draft(
             with retire_receipt_path.open("x", encoding="utf-8") as handle:
                 handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
         except OSError:
-            draft_path.write_text(source_text, encoding="utf-8")
+            draft_path.write_bytes(source_bytes)
             raise
     except OSError:
         raise
@@ -15898,6 +15927,7 @@ def zettel_edge_target_summary(
     blockers: list[str],
     *,
     manifest_records_by_object_id: dict[str, list[dict[str, Any]]] | None = None,
+    zettel_path_index: dict[str, Path] | None = None,
 ) -> dict[str, Any]:
     text = str(target_ref or "").strip()
     if not safe_source_intake_plan_scalar(text):
@@ -15910,7 +15940,7 @@ def zettel_edge_target_summary(
 
     if ZETTEL_EDGE_ZETTEL_ID_RE.match(text):
         try:
-            target_path = resolve_zettel_path(root, zettel_id=text, relative_path=None)
+            target_path = resolve_zettel_path(root, zettel_id=text, relative_path=None, zettel_path_index=zettel_path_index)
         except ArchiveServiceError:
             blockers.append("target zettel id was not found.")
             return {"ref": text, "kind": "zettel", "verified": False}
@@ -16053,6 +16083,7 @@ def zettel_edge_write(
     approve: bool = False,
     reviewed_by: str | None = None,
     manifest_records_by_object_id: dict[str, list[dict[str, Any]]] | None = None,
+    zettel_path_index: dict[str, Path] | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -16089,7 +16120,7 @@ def zettel_edge_write(
 
     if bool(from_zettel) != bool(from_path):
         try:
-            source_path = resolve_zettel_path(root, zettel_id=from_zettel, relative_path=from_path)
+            source_path = resolve_zettel_path(root, zettel_id=from_zettel, relative_path=from_path, zettel_path_index=zettel_path_index)
             source_frontmatter, source_body = split_zettel_text(source_path.read_text(encoding="utf-8"))
             source_zettel_id = str(source_frontmatter.get("id") or source_zettel_id).strip()
             source_relative = archive_relative_path(source_path, root)
@@ -16110,6 +16141,7 @@ def zettel_edge_write(
         target_ref,
         blockers,
         manifest_records_by_object_id=manifest_records_by_object_id,
+        zettel_path_index=zettel_path_index,
     )
     normalized_target_ref = str(target_summary.get("ref") or target_ref or "").strip()
     if source_zettel_id and normalized_target_ref == source_zettel_id:
@@ -16504,6 +16536,16 @@ def zettel_edge_batch_needs_manifest_index(rows: list[dict[str, Any]]) -> bool:
     return False
 
 
+def zettel_edge_batch_needs_zettel_index(rows: list[dict[str, Any]]) -> bool:
+    for row in rows:
+        if row.get("from_zettel"):
+            return True
+        target = str(row.get("target") or "").strip()
+        if ZETTEL_EDGE_ZETTEL_ID_RE.match(target):
+            return True
+    return False
+
+
 def zettel_edge_batch_result(
     *,
     archive_id: str,
@@ -16724,9 +16766,12 @@ def zettel_edge_batch_write(
     skipped_existing_edges: list[dict[str, Any]] = []
     would_change: list[str] = []
     manifest_records_by_object_id: dict[str, list[dict[str, Any]]] | None = None
+    zettel_path_index: dict[str, Path] | None = None
     if not blockers:
         if zettel_edge_batch_needs_manifest_index(policy_writable_rows):
             manifest_records_by_object_id = manifest_records_by_normalized_object_id(load_manifest_records(root))
+        if zettel_edge_batch_needs_zettel_index(policy_writable_rows):
+            zettel_path_index = zettel_paths_by_id(root)
         for row in policy_writable_rows:
             dry_result = zettel_edge_write(
                 root,
@@ -16738,6 +16783,7 @@ def zettel_edge_batch_write(
                 dry_run=True,
                 approve=False,
                 manifest_records_by_object_id=manifest_records_by_object_id,
+                zettel_path_index=zettel_path_index,
             )
             if not dry_result.get("ok") and skip_existing and zettel_edge_batch_existing_edge_blockers(dry_result.get("blockers")):
                 skipped_existing_edges.append(
@@ -16870,6 +16916,7 @@ def zettel_edge_batch_write(
                 approve=True,
                 reviewed_by=reviewed_by,
                 manifest_records_by_object_id=manifest_records_by_object_id,
+                zettel_path_index=zettel_path_index,
             )
             if not write_result.get("ok"):
                 raise ArchiveServiceError("; ".join(str(blocker) for blocker in write_result.get("blockers", [])) or "batch edge item write failed.")
@@ -45955,6 +46002,17 @@ def sha256_path(path: Path) -> str:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def newline_normalized_bytes(path: Path) -> bytes:
+    return path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
+def files_match_after_newline_normalization(left: Path, right: Path) -> bool:
+    try:
+        return newline_normalized_bytes(left) == newline_normalized_bytes(right)
+    except OSError:
+        return False
 
 
 def default_private_visibility() -> dict[str, Any]:

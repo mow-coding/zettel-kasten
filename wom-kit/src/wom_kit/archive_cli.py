@@ -529,6 +529,141 @@ class Doctor:
         except (ArchivePathError, OSError, ValueError):
             return str(path)
 
+    def _parse_receipt_time(self, value: Any) -> datetime | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    def _receipt_cutoff_time(self, data: dict[str, Any]) -> datetime | None:
+        for key in ["timestamp", "created_at", "reviewed_at"]:
+            parsed = self._parse_receipt_time(data.get(key))
+            if parsed is not None:
+                return parsed
+        return None
+
+    def _text_sha256_candidates(self, text: str) -> set[str]:
+        candidates = {text.encode("utf-8")}
+        candidates.add(text.replace("\n", "\r\n").encode("utf-8"))
+        return {hashlib.sha256(item).hexdigest() for item in candidates}
+
+    def _candidate_zettel_texts(self, frontmatter: dict[str, Any], body: str) -> list[str]:
+        dumped = dump_yaml(frontmatter)
+        no_blank = "---\n" + dumped + "---\n" + body
+        with_blank = "---\n" + dumped + "---\n\n" + body.rstrip() + "\n"
+        return list(dict.fromkeys([no_blank, with_blank]))
+
+    def _edge_receipts_for_source(self, source_relative: str) -> list[dict[str, Any]]:
+        root = self.archive_root / archive_services.ZETTEL_EDGE_RECEIPTS_DIR
+        if not root.is_dir():
+            return []
+        receipts: list[dict[str, Any]] = []
+        for path in sorted(root.glob("*.zettel-edge.json")):
+            if not self._path_stays_inside_archive(path):
+                continue
+            data = self._load_json_file(path)
+            if not isinstance(data, dict):
+                continue
+            if data.get("receipt_kind") != "zettel_edge_write":
+                continue
+            if data.get("source_zettel_path") != source_relative:
+                continue
+            created_at = self._parse_receipt_time(data.get("created_at"))
+            if created_at is None:
+                continue
+            receipts.append(
+                {
+                    "receipt_path": self._display_path(path),
+                    "edge_id": str(data.get("edge_id") or "").strip(),
+                    "created_at": created_at,
+                    "created_at_raw": data.get("created_at"),
+                }
+            )
+        return receipts
+
+    def _target_sha_evolved_by_edge_receipts(
+        self,
+        receipt_data: dict[str, Any],
+        target_path: Path,
+        expected_sha: str,
+    ) -> bool:
+        target_relative = self._display_path(target_path)
+        if not isinstance(target_relative, str):
+            return False
+        cutoff = self._receipt_cutoff_time(receipt_data)
+        if cutoff is None:
+            return False
+
+        try:
+            target_text = target_path.read_text(encoding="utf-8")
+            frontmatter, body = archive_services.split_zettel_text(target_text)
+        except (OSError, UnicodeError):
+            return False
+        edges = frontmatter.get("edges")
+        if not isinstance(edges, list):
+            return False
+
+        edge_receipts = self._edge_receipts_for_source(target_relative)
+        if not edge_receipts:
+            return False
+
+        mint = frontmatter.get("mint") if isinstance(frontmatter.get("mint"), dict) else {}
+        updated_at_candidates: list[str] = [
+            value
+            for value in [
+                mint.get("minted_at"),
+                receipt_data.get("timestamp"),
+                receipt_data.get("reviewed_at"),
+                receipt_data.get("created_at"),
+            ]
+            if isinstance(value, str) and value.strip()
+        ]
+        previous_edge_times = [
+            item
+            for item in edge_receipts
+            if item["created_at"] < cutoff and isinstance(item.get("created_at_raw"), str)
+        ]
+        if previous_edge_times:
+            latest = max(previous_edge_times, key=lambda item: item["created_at"])
+            updated_at_candidates.append(str(latest["created_at_raw"]))
+
+        for inclusive in [False, True]:
+            removable = [
+                item
+                for item in edge_receipts
+                if item["created_at"] > cutoff or (inclusive and item["created_at"] == cutoff)
+            ]
+            receipt_paths = {str(item.get("receipt_path") or "") for item in removable if item.get("receipt_path")}
+            edge_ids = {str(item.get("edge_id") or "") for item in removable if item.get("edge_id")}
+            if not receipt_paths and not edge_ids:
+                continue
+
+            retained_edges = []
+            removed_count = 0
+            for edge in edges:
+                if not isinstance(edge, dict):
+                    retained_edges.append(edge)
+                    continue
+                edge_receipt = str(edge.get("receipt") or "").strip()
+                edge_id = str(edge.get("edge_id") or "").strip()
+                if (edge_receipt and edge_receipt in receipt_paths) or (edge_id and edge_id in edge_ids):
+                    removed_count += 1
+                    continue
+                retained_edges.append(edge)
+            if removed_count == 0:
+                continue
+
+            for updated_at in dict.fromkeys(updated_at_candidates):
+                candidate_frontmatter = dict(frontmatter)
+                candidate_frontmatter["edges"] = retained_edges
+                candidate_frontmatter["updated_at"] = updated_at
+                for candidate_text in self._candidate_zettel_texts(candidate_frontmatter, body):
+                    if expected_sha in self._text_sha256_candidates(candidate_text):
+                        return True
+        return False
+
     def _check_required_structure(self) -> None:
         for relative in REQUIRED_ARCHIVE_DIRS:
             path = self.archive_root / relative
@@ -1328,6 +1463,13 @@ class Doctor:
             return
         actual_sha = sha256_file(resolved)
         if actual_sha != expected_sha:
+            if section == "target" and self._target_sha_evolved_by_edge_receipts(data, resolved, expected_sha):
+                self.info(
+                    "mint_retired_draft_target_sha_evolved_by_edge_receipts",
+                    "Retired draft receipt target.sha256 is historical; current target differs only by approved zettel-edge receipts.",
+                    path,
+                )
+                return
             self.error("mint_retired_draft_sha_mismatch", f"Retired draft receipt {section}.sha256 does not match the referenced file.", path)
 
     def _check_mint_receipt_status(self, data: dict[str, Any], path: Path, section: str, expected_status: str) -> None:
@@ -1361,6 +1503,13 @@ class Doctor:
             return resolved
         actual_sha = sha256_file(resolved)
         if actual_sha != expected_sha:
+            if section == "target" and self._target_sha_evolved_by_edge_receipts(data, resolved, expected_sha):
+                self.info(
+                    "mint_receipt_target_sha_evolved_by_edge_receipts",
+                    "Mint receipt target.sha256 is historical; current target differs only by approved zettel-edge receipts.",
+                    path,
+                )
+                return resolved
             self.error("mint_receipt_sha_mismatch", f"Mint receipt {section}.sha256 does not match the referenced file.", path)
         return resolved
 

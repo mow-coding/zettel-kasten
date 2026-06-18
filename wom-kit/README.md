@@ -1096,6 +1096,10 @@ extends `archive import-external` for high-fidelity structured manifests: safe
 zettel id overrides, facets, source refs, and an explicit Notion locator to
 `objet:` conversion option are supported while provider URLs in imported bodies
 remain blocked by default.
+v0.3.112 fixes receipt SHA validation after approved edge-only canonical zet
+growth, preserves mint snapshot bytes, lets legacy LF/CRLF-only source/snapshot
+pairs retire with a warning, and preloads one zettel id/path index for
+zet-to-zet `zettel-edge-batch` plans.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 
