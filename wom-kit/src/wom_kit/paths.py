@@ -17,10 +17,67 @@ LOCAL_ABSOLUTE_REFERENCE_RE = re.compile(
     r"(^|[\s'\"(<])(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/][^\\/\s]+|/(?:Users|home|root|Volumes|mnt|media|tmp|var|etc|opt|private)/)",
     re.IGNORECASE,
 )
+UNC_REFERENCE_BODY_RE = re.compile(r"\\\\(?P<host>[^\\/\s]+)[\\/](?P<share>[^\\/\s]+)", re.IGNORECASE)
 FORBIDDEN_LOCATION_RE = re.compile(
     PROVIDER_URL_RE.pattern + "|" + LOCAL_ABSOLUTE_REFERENCE_RE.pattern,
     re.IGNORECASE,
 )
+LATEX_COMMAND_NAMES = {
+    "alpha",
+    "argmax",
+    "argmin",
+    "bar",
+    "begin",
+    "beta",
+    "cdot",
+    "chi",
+    "cos",
+    "delta",
+    "div",
+    "end",
+    "epsilon",
+    "eta",
+    "exp",
+    "frac",
+    "gamma",
+    "geq",
+    "hat",
+    "infty",
+    "int",
+    "lambda",
+    "left",
+    "leq",
+    "ln",
+    "log",
+    "mathbb",
+    "mathcal",
+    "max",
+    "min",
+    "mu",
+    "nabla",
+    "neq",
+    "omega",
+    "operatorname",
+    "overline",
+    "partial",
+    "phi",
+    "pi",
+    "prod",
+    "psi",
+    "rho",
+    "right",
+    "sigma",
+    "sin",
+    "sqrt",
+    "sum",
+    "tau",
+    "text",
+    "theta",
+    "tilde",
+    "times",
+    "underline",
+    "vec",
+}
 
 
 class ArchivePathError(ValueError):
@@ -85,4 +142,28 @@ def resolve_archive_relative_path(archive_root: Path, raw_path: str) -> Path:
 def contains_forbidden_location_reference(text: str) -> bool:
     """Return true if text appears to contain provider URLs or local absolute paths."""
 
-    return bool(FORBIDDEN_LOCATION_RE.search(text))
+    if PROVIDER_URL_RE.search(text):
+        return True
+    for match in LOCAL_ABSOLUTE_REFERENCE_RE.finditer(text):
+        if _local_absolute_reference_match_is_latex_escape(text, match):
+            continue
+        return True
+    return False
+
+
+def _local_absolute_reference_match_is_latex_escape(text: str, match: re.Match[str]) -> bool:
+    candidate = match.group(0)
+    unc_start = candidate.find("\\\\")
+    if unc_start < 0:
+        return False
+    absolute_start = match.start() + unc_start
+    unc_match = UNC_REFERENCE_BODY_RE.match(text, absolute_start)
+    if unc_match is None:
+        return False
+
+    host = unc_match.group("host")
+    command = host.split("_", 1)[0].casefold()
+    share = unc_match.group("share")
+    if share and not share[0].isalnum() and share[0] not in {"_", "$"}:
+        return command in LATEX_COMMAND_NAMES
+    return "_" in host and command in LATEX_COMMAND_NAMES

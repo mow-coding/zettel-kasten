@@ -523,10 +523,10 @@ import --dry-run
   Transitional compatibility alias for admit.
 
 import-external --dry-run
-  Preview a Notion or Google Drive export import without mutating the target archive. Manifest items that contain explicit safe object refs report source_ref_count without echoing the values.
+  Preview a Notion or Google Drive export import without mutating the target archive. Manifest items that contain safe object refs, source refs, facets, or zettel id overrides report counts and routing metadata without echoing private values.
 
 import-external --approve --reviewed-by
-  Import Notion or Google Drive export items as inbox drafts and write an import receipt. Explicit safe object refs from manifest metadata are preserved in draft source_refs.
+  Import Notion or Google Drive export items as inbox drafts and write an import receipt. Explicit safe metadata from the manifest is preserved in draft source_refs and facets; use --provider-locator-policy object-ref to convert supported Notion body locators to a reviewed objet ref when exactly one object source ref is present.
 
 share --dry-run
   Legacy-compatible dry-run for the older share language. Product language should prefer delegate.
@@ -933,7 +933,7 @@ Real minting reuses the dry-run checks as a gate. Blockers always stop the comma
 
 `archive admit --dry-run` previews target inbox writes, object manifest merges, conflicts, and an admit/import receipt. Real parcel/workpack admit remains unavailable until the dry-run path is proven safer. `archive import --dry-run` remains a v0.2 compatibility alias.
 
-`archive import-external --source notion --export <folder> --dry-run` previews a Notion Markdown export import. `archive import-external --source google_drive --export <manifest.json> --dry-run` does the same for Google Drive exports. Approved imports write inbox drafts and `receipts/import/*.external-import.json`; when manifest metadata includes explicit safe object refs, those refs are preserved in draft `source_refs`. The command does not call Notion or Google Drive APIs or store OAuth secrets.
+`archive import-external --source notion --export <folder> --dry-run` previews a Notion Markdown export import. `archive import-external --source google_drive --export <manifest.json> --dry-run` does the same for Google Drive exports. Approved imports write inbox drafts and `receipts/import/*.external-import.json`; when manifest metadata includes explicit safe object refs, safe non-object source refs, safe facets, or a safe zettel id override, those values are preserved in the imported draft frontmatter. Imported bodies that still contain provider URLs or local absolute paths block before approval. `--provider-locator-policy object-ref` can convert supported Notion body locators to one reviewed `objet:<object_id>` reference when exactly one object source ref is present. The command does not call Notion or Google Drive APIs, read object bytes, or store OAuth secrets.
 
 `archive share --dry-run` is the legacy dry-run for the older share language. It previews a GitHub-like archive share from a saved view, shows which zettels are included or excluded, blocks sensitive categories by default, verifies the target counterparty fingerprint against `archive-identity.yml`, and writes nothing. Product design should prefer `delegate-zet`.
 
@@ -1091,6 +1091,11 @@ draft twins as informational cleanup candidates, accepts retired mint sources
 through retired-draft receipts, makes short CJK titles pass the title checklist
 when they are not generic placeholders, and suppresses title-only duplicate
 warnings when bodies are materially different.
+v0.3.111 fixes LaTeX escape false positives in forbidden-location checks and
+extends `archive import-external` for high-fidelity structured manifests: safe
+zettel id overrides, facets, source refs, and an explicit Notion locator to
+`objet:` conversion option are supported while provider URLs in imported bodies
+remain blocked by default.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

@@ -250,6 +250,7 @@ OWNER_KINDS = {
 SENSITIVE_SHARE_CATEGORIES = {"medical", "psychological", "journal", "relationship-private"}
 SENSITIVE_CATEGORY_ALIASES = {"diary": "journal", "therapy": "psychological", "mental-health": "psychological"}
 EXTERNAL_IMPORT_SOURCES = {"notion", "google_drive"}
+EXTERNAL_IMPORT_PROVIDER_LOCATOR_POLICIES = {"preserve", "object-ref"}
 EXTERNAL_EXPORT_PLAN_SOURCES = {"notion", "google_drive", "generic_workspace"}
 EXTERNAL_EXPORT_GOALS = {"text_only", "targeted_pages", "full_workspace_review"}
 EXTERNAL_EXPORT_MEDIA_POLICIES = {"avoid_bulk_media", "selected_media_only", "full_media_requested"}
@@ -31528,9 +31529,11 @@ def external_import_dry_run(
     *,
     source_system: str,
     limit: int = 200,
+    provider_locator_policy: str = "preserve",
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     source = normalize_external_import_source(source_system)
+    locator_policy = normalize_external_import_provider_locator_policy(provider_locator_policy)
     export_root = Path(export_path).expanduser().resolve()
     if not export_root.exists():
         raise ArchiveServiceError(f"External import export path does not exist: {export_root}")
@@ -31546,16 +31549,27 @@ def external_import_dry_run(
     target_ids = collect_target_zettel_ids(root)
     previews: list[dict[str, Any]] = []
     for item in discovered:
+        item_blockers = [str(blocker) for blocker in item.get("blockers", []) if blocker]
         zettel_id = external_import_zettel_id(source, item)
         target_path = f"inbox/{zettel_id}.md"
         conflicts: list[str] = []
+        body_info = external_import_body_for_import(
+            item,
+            source_system=source,
+            provider_locator_policy=locator_policy,
+            blockers=item_blockers,
+            warnings=warnings,
+        )
         if zettel_id in target_ids:
             conflicts.append("zettel_id_exists")
             blockers.append(f"Target archive already has imported zettel id: {zettel_id}.")
         if archive_internal_path(root, target_path).exists():
             conflicts.append("target_path_exists")
             blockers.append(f"Target inbox path already exists: {target_path}.")
-        if contains_forbidden_location_reference(item["body"]):
+        for item_blocker in item_blockers:
+            conflicts.append("manifest_metadata_blocked")
+            blockers.append(f"External import item metadata is unsafe for {item['source_path']}: {item_blocker}")
+        if contains_forbidden_location_reference(body_info["body"]) or source_intake_has_provider_url(body_info["body"]):
             conflicts.append("forbidden_location_reference")
             blockers.append(f"External item contains a forbidden provider/local path reference: {item['source_path']}.")
         previews.append(
@@ -31567,10 +31581,16 @@ def external_import_dry_run(
                 "sha256": item["sha256"],
                 "source_ref_count": len(item.get("source_refs") or []),
                 "source_refs_preserved": bool(item.get("source_refs")),
+                "facet_count": len(item.get("facets") or {}),
+                "facets_preserved": bool(item.get("facets")),
                 "zettel_id": zettel_id,
+                "zettel_id_source": item.get("zettel_id_source") or "generated",
                 "target_path": target_path,
                 "action": "create_inbox_draft",
                 "conflicts": conflicts,
+                "provider_locator_policy": locator_policy,
+                "provider_locator_count": body_info["provider_locator_count"],
+                "provider_locator_action": body_info["provider_locator_action"],
             }
         )
 
@@ -31579,6 +31599,7 @@ def external_import_dry_run(
             {
                 "source": source,
                 "export_path": str(export_root),
+                "provider_locator_policy": locator_policy,
                 "items": [item["sha256"] for item in discovered],
             },
             sort_keys=True,
@@ -31621,6 +31642,7 @@ def external_import_dry_run(
             "path": str(export_root),
             "fingerprint": export_fingerprint,
             "mode": "manifest_or_export_folder",
+            "provider_locator_policy": locator_policy,
             "external_api_called": False,
         },
         "target_archive": target_archive,
@@ -31636,6 +31658,7 @@ def external_import_dry_run(
         "dry_run": True,
         "source_system": source,
         "source_export": str(export_root),
+        "provider_locator_policy": locator_policy,
         "target_archive": target_archive,
         "items": previews,
         "item_count": len(previews),
@@ -31660,13 +31683,20 @@ def import_external_archive(
     source_system: str,
     reviewed_by: str,
     limit: int = 200,
+    provider_locator_policy: str = "preserve",
 ) -> dict[str, Any]:
     reviewer = reviewed_by.strip()
     if not reviewer:
         raise ArchiveServiceError("External import requires --reviewed-by.")
 
     root = require_existing_archive_root(archive_root)
-    dry_run = external_import_dry_run(root, export_path, source_system=source_system, limit=limit)
+    dry_run = external_import_dry_run(
+        root,
+        export_path,
+        source_system=source_system,
+        limit=limit,
+        provider_locator_policy=provider_locator_policy,
+    )
     if dry_run["blockers"]:
         raise ArchiveServiceError("External import blocked by dry-run: " + "; ".join(dry_run["blockers"]))
 
@@ -31713,6 +31743,7 @@ def import_external_archive(
                 zettel_id=preview["zettel_id"],
                 now=now,
                 reviewed_by=reviewer,
+                provider_locator_policy=dry_run["provider_locator_policy"],
             )
             with target_path.open("x", encoding="utf-8") as handle:
                 handle.write(text)
@@ -31738,6 +31769,7 @@ def import_external_archive(
         "dry_run": False,
         "source_system": source,
         "source_export": dry_run["source_export"],
+        "provider_locator_policy": dry_run["provider_locator_policy"],
         "target_archive": dry_run["target_archive"],
         "imported_count": len(dry_run["items"]),
         "reviewed_by": reviewer,
@@ -31754,6 +31786,16 @@ def normalize_external_import_source(source_system: str) -> str:
     if source not in EXTERNAL_IMPORT_SOURCES:
         raise ArchiveServiceError("source_system must be one of: " + ", ".join(sorted(EXTERNAL_IMPORT_SOURCES)))
     return source
+
+
+def normalize_external_import_provider_locator_policy(value: str | None) -> str:
+    policy = (value or "preserve").strip().lower().replace("_", "-")
+    if policy not in EXTERNAL_IMPORT_PROVIDER_LOCATOR_POLICIES:
+        raise ArchiveServiceError(
+            "provider_locator_policy must be one of: "
+            + ", ".join(sorted(EXTERNAL_IMPORT_PROVIDER_LOCATOR_POLICIES))
+        )
+    return policy
 
 
 def discover_external_import_items(
@@ -31859,6 +31901,11 @@ def external_import_item_from_file(
     meta = metadata or {}
     title = str(meta.get("title") or extract_external_import_title(text, path))
     external_id = str(meta.get("external_id") or meta.get("id") or f"{source_system}:{relative}")
+    metadata_blockers: list[str] = []
+    if not external_import_safe_metadata_scalar(title):
+        metadata_blockers.append("title is unsafe.")
+    if not external_import_safe_metadata_scalar(external_id):
+        metadata_blockers.append("external_id is unsafe.")
     return [
         {
             "external_id": external_id,
@@ -31869,7 +31916,11 @@ def external_import_item_from_file(
             "created_at": meta.get("created_at"),
             "updated_at": meta.get("updated_at"),
             "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            "source_refs": external_import_source_refs_from_metadata(meta),
+            "source_refs": external_import_source_refs_from_metadata(meta, metadata_blockers),
+            "facets": external_import_facets_from_metadata(meta, source_system, external_id, metadata_blockers),
+            "zettel_id_override": external_import_zettel_id_override_from_metadata(meta, metadata_blockers),
+            "zettel_id_source": external_import_zettel_id_source_from_metadata(meta),
+            "blockers": metadata_blockers,
         }
     ]
 
@@ -31883,8 +31934,13 @@ def external_import_item_from_content(
     text = str(metadata.get("content") or "")
     title = str(metadata.get("title") or "Untitled external import")
     external_id = str(metadata.get("external_id") or metadata.get("id") or f"{source_system}:{safe_slug(title)}")
+    metadata_blockers: list[str] = []
+    if not external_import_safe_metadata_scalar(title):
+        metadata_blockers.append("title is unsafe.")
+    if not external_import_safe_metadata_scalar(external_id):
+        metadata_blockers.append("external_id is unsafe.")
     if not text.strip():
-        warnings.append(f"Manifest item has empty content: {external_id}.")
+        warnings.append("Manifest item has empty content.")
     return {
         "external_id": external_id,
         "title": title,
@@ -31894,24 +31950,31 @@ def external_import_item_from_content(
         "created_at": metadata.get("created_at"),
         "updated_at": metadata.get("updated_at"),
         "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        "source_refs": external_import_source_refs_from_metadata(metadata),
+        "source_refs": external_import_source_refs_from_metadata(metadata, metadata_blockers),
+        "facets": external_import_facets_from_metadata(metadata, source_system, external_id, metadata_blockers),
+        "zettel_id_override": external_import_zettel_id_override_from_metadata(metadata, metadata_blockers),
+        "zettel_id_source": external_import_zettel_id_source_from_metadata(metadata),
+        "blockers": metadata_blockers,
     }
 
 
-def external_import_source_refs_from_metadata(metadata: dict[str, Any]) -> list[dict[str, str]]:
+def external_import_source_refs_from_metadata(metadata: dict[str, Any], blockers: list[str] | None = None) -> list[dict[str, str]]:
     refs: list[dict[str, str]] = []
+    blockers = blockers if blockers is not None else []
 
     def add_object_ref(raw: Any) -> None:
         text = str(raw or "").strip().lower()
         if not text:
             return
-        blockers: list[str] = []
+        ref_blockers: list[str] = []
         if text.startswith("objet:sha256:"):
-            normalized = object_id_from_objet_ref(text, blockers)
+            normalized = object_id_from_objet_ref(text, ref_blockers)
         else:
-            normalized = normalize_object_id(text, blockers)
-        if normalized and not blockers:
+            normalized = normalize_object_id(text, ref_blockers)
+        if normalized and not ref_blockers:
             refs.append({"type": "object_id", "value": normalized, "role": SOURCE_INTAKE_DEFAULT_ROLE})
+        elif ref_blockers:
+            blockers.append("source_refs contains an invalid object_id or objet_ref.")
 
     for key in ("object_id", "source_object_id", "approved_object_id", "target_object_id", "objet_ref"):
         if key in metadata:
@@ -31927,8 +31990,113 @@ def external_import_source_refs_from_metadata(metadata: dict[str, Any]) -> list[
             value_prefix = value.lower()
             if ref_type in {"object_id", "objet_ref"} or value_prefix.startswith(("sha256:", "objet:sha256:")):
                 add_object_ref(value)
+                continue
+            role = str(item.get("role") or "").strip()
+            if not external_import_safe_ref_type(ref_type):
+                blockers.append("source_refs contains an unsafe ref type.")
+                continue
+            if not external_import_safe_metadata_scalar(value):
+                blockers.append("source_refs contains an unsafe ref value.")
+                continue
+            ref: dict[str, str] = {"type": ref_type, "value": value}
+            if role:
+                if not external_import_safe_metadata_scalar(role):
+                    blockers.append("source_refs contains an unsafe ref role.")
+                    continue
+                ref["role"] = role
+            refs.append(ref)
 
     return unique_dicts(refs)
+
+
+def external_import_safe_ref_type(value: str) -> bool:
+    return bool(re.match(r"^[A-Za-z0-9][A-Za-z0-9:._-]{0,79}$", value or ""))
+
+
+def external_import_safe_metadata_scalar(value: Any) -> bool:
+    if not isinstance(value, (str, int, float, bool)) and value is not None:
+        return False
+    text = str(value)
+    if "\x00" in text or "\n" in text or "\r" in text or len(text) > 500:
+        return False
+    return not (
+        contains_forbidden_location_reference(text)
+        or source_intake_has_provider_url(text)
+        or source_intake_secret_like(text)
+    )
+
+
+def external_import_safe_metadata_tree(value: Any, blockers: list[str], field_path: str) -> Any:
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, child in value.items():
+            key_text = str(key)
+            if not key_text.strip() or "\x00" in key_text or "\n" in key_text or "\r" in key_text or len(key_text) > 120:
+                blockers.append(f"{field_path} contains an unsafe key.")
+                continue
+            if contains_forbidden_location_reference(key_text) or source_intake_has_provider_url(key_text) or source_intake_secret_like(key_text):
+                blockers.append(f"{field_path} contains an unsafe key.")
+                continue
+            result[key_text] = external_import_safe_metadata_tree(child, blockers, f"{field_path}.{key_text}")
+        return result
+    if isinstance(value, list):
+        return [
+            external_import_safe_metadata_tree(child, blockers, f"{field_path}[{index}]")
+            for index, child in enumerate(value[:50])
+        ]
+    if external_import_safe_metadata_scalar(value):
+        return value
+    blockers.append(f"{field_path} contains a provider URL, local path, token, or unsupported value.")
+    return None
+
+
+def external_import_facets_from_metadata(
+    metadata: dict[str, Any],
+    source_system: str,
+    external_id: str,
+    blockers: list[str],
+) -> dict[str, Any]:
+    raw_facets = metadata.get("facets") if "facets" in metadata else {}
+    if raw_facets is None:
+        raw_facets = {}
+    if not isinstance(raw_facets, dict):
+        blockers.append("facets must be an object when provided.")
+        raw_facets = {}
+    facets = external_import_safe_metadata_tree(raw_facets, blockers, "$.facets")
+    if not isinstance(facets, dict):
+        facets = {}
+    facets["source_system"] = source_system
+    facets["external_id"] = external_id
+    return json_safe(facets)
+
+
+def external_import_zettel_id_source_from_metadata(metadata: dict[str, Any]) -> str | None:
+    for key in ("zettel_id", "target_zettel_id", "target_id"):
+        if metadata.get(key):
+            return key
+    raw_id = str(metadata.get("id") or "").strip()
+    if raw_id.startswith("zet_"):
+        return "id"
+    return None
+
+
+def external_import_zettel_id_override_from_metadata(metadata: dict[str, Any], blockers: list[str]) -> str | None:
+    raw: Any = None
+    for key in ("zettel_id", "target_zettel_id", "target_id"):
+        if metadata.get(key):
+            raw = metadata.get(key)
+            break
+    if raw is None:
+        raw_id = str(metadata.get("id") or "").strip()
+        if raw_id.startswith("zet_"):
+            raw = raw_id
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if not valid_draft_zettel_id(text) or contains_forbidden_location_reference(text) or source_intake_has_provider_url(text) or source_intake_secret_like(text):
+        blockers.append("zettel_id override is unsafe.")
+        return None
+    return text
 
 
 def extract_external_import_title(text: str, path: Path) -> str:
@@ -31942,6 +32110,9 @@ def extract_external_import_title(text: str, path: Path) -> str:
 
 
 def external_import_zettel_id(source_system: str, item: dict[str, Any]) -> str:
+    override = item.get("zettel_id_override")
+    if isinstance(override, str) and override:
+        return override
     digest = hashlib.sha256(
         f"{source_system}\n{item.get('external_id')}\n{item.get('source_path')}\n{item.get('sha256')}".encode("utf-8")
     ).hexdigest()[:16]
@@ -31956,7 +32127,19 @@ def build_external_import_zettel_text(
     zettel_id: str,
     now: str,
     reviewed_by: str,
+    provider_locator_policy: str = "preserve",
 ) -> str:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    body_info = external_import_body_for_import(
+        item,
+        source_system=source_system,
+        provider_locator_policy=provider_locator_policy,
+        blockers=blockers,
+        warnings=warnings,
+    )
+    if blockers:
+        raise ArchiveServiceError("External import body blocked: " + "; ".join(blockers))
     frontmatter = {
         "id": zettel_id,
         "title": item["title"],
@@ -31965,7 +32148,7 @@ def build_external_import_zettel_text(
         "archive_id": target_archive,
         "status": "draft",
         "kind": "imported_external_record",
-        "facets": {
+        "facets": item.get("facets") if isinstance(item.get("facets"), dict) else {
             "source_system": source_system,
             "external_id": item["external_id"],
         },
@@ -31999,12 +32182,72 @@ def build_external_import_zettel_text(
             "source_created_at": item.get("created_at"),
             "source_updated_at": item.get("updated_at"),
             "sha256": item["sha256"],
+            "provider_locator_policy": provider_locator_policy,
+            "provider_locator_count": body_info["provider_locator_count"],
+            "provider_locator_action": body_info["provider_locator_action"],
         },
     }
     source_refs = item.get("source_refs") if isinstance(item.get("source_refs"), list) else []
     if source_refs:
         frontmatter["source_refs"] = source_refs
-    return "---\n" + dump_yaml(frontmatter) + "---\n\n" + item["body"].rstrip() + "\n"
+    return "---\n" + dump_yaml(frontmatter) + "---\n\n" + body_info["body"].rstrip() + "\n"
+
+
+def external_import_body_for_import(
+    item: dict[str, Any],
+    *,
+    source_system: str,
+    provider_locator_policy: str,
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    body = str(item.get("body") or "")
+    policy = normalize_external_import_provider_locator_policy(provider_locator_policy)
+    locator_matches = NOTION_PROVIDER_LOCATOR_RE.findall(body) if source_system == "notion" else []
+    if not locator_matches:
+        return {
+            "body": body,
+            "provider_locator_count": 0,
+            "provider_locator_action": "none",
+        }
+    if policy == "preserve":
+        return {
+            "body": body,
+            "provider_locator_count": len(locator_matches),
+            "provider_locator_action": "preserved",
+        }
+
+    object_refs = external_import_object_source_refs(item)
+    if len(object_refs) != 1:
+        blockers.append("provider-locator object-ref policy requires exactly one object_id source ref.")
+        return {
+            "body": body,
+            "provider_locator_count": len(locator_matches),
+            "provider_locator_action": "blocked",
+        }
+
+    replacement = "objet:" + object_refs[0]
+    converted = NOTION_PROVIDER_LOCATOR_RE.sub(replacement, body)
+    warnings.append("Converted Notion provider locators in imported body to an objet ref.")
+    return {
+        "body": converted,
+        "provider_locator_count": len(locator_matches),
+        "provider_locator_action": "object_ref",
+    }
+
+
+def external_import_object_source_refs(item: dict[str, Any]) -> list[str]:
+    refs = item.get("source_refs") if isinstance(item.get("source_refs"), list) else []
+    object_refs: list[str] = []
+    for ref in refs:
+        if not isinstance(ref, dict) or ref.get("type") != "object_id":
+            continue
+        value = str(ref.get("value") or "").strip().lower()
+        blockers: list[str] = []
+        normalized = normalize_object_id(value, blockers)
+        if normalized and not blockers:
+            object_refs.append(normalized)
+    return unique_preserve_order(object_refs)
 
 
 def build_zettel_scope_preview(
