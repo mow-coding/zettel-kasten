@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.112 - 2026-06-19
+
+- Fixed mint and retired-draft receipt validation after normal graph growth:
+  `archive validate` / `archive doctor` now accept historical target SHA-256
+  values when the current canonical zet can be reconstructed by removing only
+  approved post-receipt `zettel-edge` writes.
+- Preserved draft snapshot bytes during minting so LF-only source drafts no
+  longer become CRLF snapshots on Windows, while canonical zet generation keeps
+  the existing normalized text path.
+- Allowed `retire-draft` to close legacy minted draft pairs whose source and
+  snapshot hashes differ only by LF/CRLF newline normalization, with a warning
+  instead of a blocker.
+- Fixed the remaining `zettel-edge-batch` scale hang path for zet-to-zet rows by
+  preloading one zettel id/path index for policy-writable batch items, matching
+  the earlier object-manifest index optimization for objet targets.
+- Kept the boundary local and receipt-gated: no receipt rewriting, edge
+  re-sealing command, provider calls, source export reads, object byte reads,
+  automatic edge inference, or unreceipted integrity bypass was added.
+
 ## v0.3.111 - 2026-06-18
 
 - Fixed the `object_id_only` / forbidden-location guard so escaped LaTeX

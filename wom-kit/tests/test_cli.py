@@ -2921,6 +2921,65 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["summary"]["policy_writable_edge_count"], 2)
             self.assertEqual(manifest_load_count, 1)
 
+    def test_zettel_edge_batch_zettel_targets_preload_zettel_index_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path = Path(tmp) / "zettel-edge-batch-zettels.plan.json"
+            plan = {
+                "schema": "wom-kit/zettel-edge-batch/v0.1",
+                "policy": {
+                    "policy_id": "policy:fixture-high-confidence-zettel-links",
+                    "auto_write_edge_types": ["material", "derived"],
+                    "minimum_confidence": "high",
+                },
+                "edges": [
+                    {
+                        "candidate_id": "candidate:fixture-material-zettel",
+                        "from_zettel": "zet_20240504_fake_lunch_thought",
+                        "target": "zet_20240505_fake_company_onboarding_insight",
+                        "edge_type": "material",
+                        "visibility": "private",
+                        "confidence": "high",
+                        "review_status": "policy_candidate",
+                    },
+                    {
+                        "candidate_id": "candidate:fixture-derived-zettel",
+                        "from_zettel": "zet_20240504_fake_lunch_thought",
+                        "target": "zet_20260519_fake_family_memory",
+                        "edge_type": "derived",
+                        "visibility": "private",
+                        "confidence": "high",
+                        "review_status": "policy_candidate",
+                    },
+                ],
+            }
+            plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            iter_count = 0
+            original_iter_zettel_paths = archive_services.iter_zettel_paths
+
+            def counted_iter_zettel_paths(root: Path) -> list[Path]:
+                nonlocal iter_count
+                iter_count += 1
+                return original_iter_zettel_paths(root)
+
+            with patch.object(archive_services, "iter_zettel_paths", side_effect=counted_iter_zettel_paths):
+                code, output = self.run_cli(
+                    [
+                        "zettel-edge-batch",
+                        str(archive_root),
+                        "--plan",
+                        str(plan_path),
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["summary"]["policy_writable_edge_count"], 2)
+            self.assertEqual(iter_count, 1)
+
     def test_zettel_edge_batch_plan_path_is_archive_relative_first(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -20113,6 +20172,140 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(doctor_code, 0, doctor_output)
             final_validate_code, final_validate_output = self.run_cli(["validate", str(archive_root), "--format", "json"])
             self.assertEqual(final_validate_code, 0, final_validate_output)
+
+    def test_mint_snapshot_preserves_source_bytes_and_retire_accepts_legacy_newline_only_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path = self.make_fake_lunch_draft_promotion_ready(archive_root)
+            lf_source_text = draft_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+            draft_path.write_bytes(lf_source_text.encode("utf-8"))
+            source_bytes = draft_path.read_bytes()
+
+            mint_code, mint_output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(mint_code, 0, mint_output)
+            mint_result = json.loads(mint_output)
+            snapshot_path = archive_root / mint_result["draft_snapshot_path"]
+            self.assertEqual(snapshot_path.read_bytes(), source_bytes)
+
+            legacy_snapshot_bytes = source_bytes.replace(b"\n", b"\r\n")
+            snapshot_path.write_bytes(legacy_snapshot_bytes)
+            receipt_path = archive_root / mint_result["mint_receipt_path"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt["snapshot"]["sha256"] = hashlib.sha256(legacy_snapshot_bytes).hexdigest()
+            receipt_path.write_text(json.dumps(receipt, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "retire-draft",
+                    str(archive_root),
+                    "--zettel-id",
+                    "zet_20260519_draft_ai_lunch_note",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertTrue(dry_result["ok"])
+            self.assertTrue(
+                any("newline normalization" in warning for warning in dry_result["warnings"]),
+                dry_result["warnings"],
+            )
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "retire-draft",
+                    str(archive_root),
+                    "--zettel-id",
+                    "zet_20260519_draft_ai_lunch_note",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertFalse(draft_path.exists())
+
+    def test_validate_accepts_mint_and_retire_target_sha_after_approved_edge_only_evolution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path = self.make_fake_lunch_draft_promotion_ready(archive_root)
+
+            mint_code, mint_output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(mint_code, 0, mint_output)
+
+            retire_code, retire_output = self.run_cli(
+                [
+                    "retire-draft",
+                    str(archive_root),
+                    "--zettel-id",
+                    "zet_20260519_draft_ai_lunch_note",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(retire_code, 0, retire_output)
+            self.assertFalse(draft_path.exists())
+
+            edge_code, edge_output = self.run_cli(
+                [
+                    "zettel-edge",
+                    str(archive_root),
+                    "--from-zettel",
+                    "zet_20260519_draft_ai_lunch_note",
+                    "--target",
+                    "zet_20240505_fake_company_onboarding_insight",
+                    "--edge-type",
+                    "semantic",
+                    "--visibility",
+                    "private",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(edge_code, 0, edge_output)
+
+            validate_code, validate_output = self.run_cli(["validate", str(archive_root), "--format", "json"])
+            validate_result = json.loads(validate_output)
+            codes = {item["code"] for item in validate_result["diagnostics"]}
+            self.assertEqual(validate_code, 0, validate_output)
+            self.assertNotIn("mint_receipt_sha_mismatch", codes)
+            self.assertNotIn("mint_retired_draft_sha_mismatch", codes)
+            self.assertIn("mint_receipt_target_sha_evolved_by_edge_receipts", codes)
+            self.assertIn("mint_retired_draft_target_sha_evolved_by_edge_receipts", codes)
 
     def test_mint_zettel_dry_run_accepts_short_cjk_title(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
