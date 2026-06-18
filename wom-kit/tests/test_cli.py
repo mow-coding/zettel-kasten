@@ -3839,7 +3839,12 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn("real-password-hidden", approve_output)
             self.assertNotIn("imap:account:naver-personal", approve_output)
             self.assertNotIn("imap:mailbox:inbox", approve_output)
-            self.assertNotIn("101", approve_output)
+            uid_redaction_view = json.loads(json.dumps(approve_result))
+            uid_redaction_view["scan_summary"]["candidate_refs"] = []
+            uid_redaction_view["receipt"]["receipt_path"] = ""
+            uid_redaction_view["files_written"] = []
+            uid_redaction_json = json.dumps(uid_redaction_view, ensure_ascii=False)
+            self.assertNotRegex(uid_redaction_json, r"(?<![0-9])101(?![0-9])")
             self.assertNotIn("redacted-header-bytes", approve_output)
             self.assertNotIn(str(archive_root), approve_output)
 
@@ -22924,6 +22929,266 @@ class ArchiveCliTests(unittest.TestCase):
                 frontmatter["source_refs"],
                 [{"type": "object_id", "value": object_id, "role": "primary_source"}],
             )
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_import_external_manifest_preserves_zettel_id_facets_and_safe_source_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:notion-import-fidelity")
+            self.assertEqual(init_code, 0, init_output)
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            object_id = "sha256:" + "e" * 64
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "object_id": object_id,
+                        "sha256": "e" * 64,
+                        "logical_key": "objects/external/prehashed/notion_source_export/ee/" + "e" * 64,
+                        "locations": [{"provider": "external_prehashed", "store_kind": "notion_source_export"}],
+                        "provenance": {"source": "prehashed_external_objet_ledger"},
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "id": "zet_notion_db3_ZET0950",
+                                "external_id": "notion-page-0950",
+                                "title": "Structured Notion Memo",
+                                "content": "# Structured Notion Memo\n\nBody imported from a sanitized mirror.\n",
+                                "object_id": object_id,
+                                "facets": {
+                                    "domain": "study",
+                                    "record_type": "memo",
+                                    "origin_zet": "ZET0950",
+                                    "notion_status": "done",
+                                    "event_time": "2026-06-18T12:00:00+09:00",
+                                },
+                                "source_refs": [
+                                    {"type": "notion_page", "value": "notion:page:ZET0950", "role": "primary_source"}
+                                ],
+                            }
+                        ],
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(dry_code, 0, dry_output)
+            dry_result = json.loads(dry_output)
+            dry_item = dry_result["items"][0]
+            self.assertEqual(dry_item["zettel_id"], "zet_notion_db3_ZET0950")
+            self.assertEqual(dry_item["zettel_id_source"], "id")
+            self.assertEqual(dry_item["target_path"], "inbox/zet_notion_db3_ZET0950.md")
+            self.assertTrue(dry_item["facets_preserved"])
+            self.assertGreaterEqual(dry_item["facet_count"], 7)
+            self.assertEqual(dry_item["source_ref_count"], 2)
+            self.assertTrue(dry_item["source_refs_preserved"])
+            self.assertNotIn(object_id, dry_output)
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertIn("inbox/zet_notion_db3_ZET0950.md", result["created_paths"])
+            draft_text = (archive_root / "inbox" / "zet_notion_db3_ZET0950.md").read_text(encoding="utf-8")
+            frontmatter, body = archive_services.split_zettel_text(draft_text)
+            self.assertEqual(frontmatter["id"], "zet_notion_db3_ZET0950")
+            self.assertEqual(frontmatter["facets"]["source_system"], "notion")
+            self.assertEqual(frontmatter["facets"]["external_id"], "notion-page-0950")
+            self.assertEqual(frontmatter["facets"]["origin_zet"], "ZET0950")
+            self.assertEqual(frontmatter["facets"]["notion_status"], "done")
+            self.assertIn({"type": "object_id", "value": object_id, "role": "primary_source"}, frontmatter["source_refs"])
+            self.assertIn(
+                {"type": "notion_page", "value": "notion:page:ZET0950", "role": "primary_source"},
+                frontmatter["source_refs"],
+            )
+            self.assertIn("Body imported from a sanitized mirror.", body)
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_import_external_blocks_body_provider_locator_without_conversion_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:notion-import-url-block")
+            self.assertEqual(init_code, 0, init_output)
+            export_root = Path(tmp) / "notion-export"
+            export_root.mkdir()
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-page-url-blocked",
+                                "title": "Locator Note",
+                                "content": "# Locator Note\n\nSource page https://www.notion.so/Fake-Page-abcdef1234567890\n",
+                            }
+                        ],
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertIn("forbidden_location_reference", result["items"][0]["conflicts"])
+            self.assertEqual(result["items"][0]["provider_locator_action"], "preserved")
+            self.assertNotIn("notion.so", output)
+            self.assertFalse(any((archive_root / "inbox").glob("zet_import_notion_*.md")))
+
+    def test_import_external_object_ref_policy_converts_notion_body_locators(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:notion-import-url-convert")
+            self.assertEqual(init_code, 0, init_output)
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            object_id = "sha256:" + "d" * 64
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "object_id": object_id,
+                        "sha256": "d" * 64,
+                        "logical_key": "objects/external/prehashed/notion_source_export/dd/" + "d" * 64,
+                        "locations": [{"provider": "external_prehashed", "store_kind": "notion_source_export"}],
+                        "provenance": {"source": "prehashed_external_objet_ledger"},
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-page-url-converted",
+                                "title": "Locator Note",
+                                "content": "# Locator Note\n\nSource page https://www.notion.so/Fake-Page-abcdef1234567890\n",
+                                "object_id": object_id,
+                            }
+                        ],
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--provider-locator-policy",
+                    "object-ref",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(dry_code, 0, dry_output)
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_result["provider_locator_policy"], "object-ref")
+            self.assertEqual(dry_result["items"][0]["provider_locator_count"], 1)
+            self.assertEqual(dry_result["items"][0]["provider_locator_action"], "object_ref")
+            self.assertNotIn(object_id, dry_output)
+            self.assertNotIn("notion.so", dry_output)
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--provider-locator-policy",
+                    "object-ref",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            draft_paths = [path for path in result["created_paths"] if path.startswith("inbox/")]
+            self.assertEqual(len(draft_paths), 1)
+            draft_text = (archive_root / draft_paths[0]).read_text(encoding="utf-8")
+            frontmatter, body = archive_services.split_zettel_text(draft_text)
+            self.assertEqual(frontmatter["external_import"]["provider_locator_policy"], "object-ref")
+            self.assertEqual(frontmatter["external_import"]["provider_locator_count"], 1)
+            self.assertEqual(frontmatter["external_import"]["provider_locator_action"], "object_ref")
+            self.assertIn("objet:" + object_id, body)
+            self.assertNotIn("notion.so", body)
 
             doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
             self.assertEqual(doctor_code, 0, doctor_output)

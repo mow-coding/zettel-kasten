@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.111 - 2026-06-18
+
+- Fixed the `object_id_only` / forbidden-location guard so escaped LaTeX
+  commands such as `\\frac` and `\\sigma_Y` are no longer treated as Windows
+  UNC path references, while real UNC/local absolute paths remain blocked.
+- Expanded `archive import-external` manifest fidelity for structured Notion
+  migration: safe zettel id overrides, safe arbitrary facets, and safe
+  non-object `source_refs` are preserved into imported draft frontmatter.
+- Added `archive import-external --provider-locator-policy object-ref`, which
+  converts supported Notion body locators to one reviewed `objet:<object_id>`
+  reference when the manifest has exactly one safe object source ref.
+- Aligned import and mint safety gates by blocking imported bodies that would
+  leave provider URLs or local paths in draft text; dry-run still reports counts
+  and actions without echoing object ids or provider locator values.
+- Kept the boundary local and approval-gated: no provider calls, OAuth flows,
+  source export reads beyond the selected local import item, object byte reads,
+  edge writes, body rewrites outside approved import drafts, or custom live
+  importer adapters were added.
+
 ## v0.3.110 - 2026-06-18
 
 - Added `archive retire-draft --dry-run|--approve` for closing an already

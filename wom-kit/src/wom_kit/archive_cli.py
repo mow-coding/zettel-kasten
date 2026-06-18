@@ -6302,6 +6302,7 @@ def command_import_external(args: argparse.Namespace) -> int:
                 Path(args.export),
                 source_system=args.source,
                 limit=args.limit,
+                provider_locator_policy=args.provider_locator_policy,
             )
         else:
             result = archive_services.import_external_archive(
@@ -6310,6 +6311,7 @@ def command_import_external(args: argparse.Namespace) -> int:
                 source_system=args.source,
                 reviewed_by=args.reviewed_by,
                 limit=args.limit,
+                provider_locator_policy=args.provider_locator_policy,
             )
     except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError) as exc:
         print(str(exc), file=sys.stderr)
@@ -11824,6 +11826,12 @@ def build_parser() -> argparse.ArgumentParser:
     import_external.add_argument("--approve", action="store_true", help="Write imported items to inbox and record a receipt.")
     import_external.add_argument("--reviewed-by", help="Reviewer id required for approved import.")
     import_external.add_argument("--limit", type=int, default=200, help="Maximum number of external items to import.")
+    import_external.add_argument(
+        "--provider-locator-policy",
+        choices=sorted(archive_services.EXTERNAL_IMPORT_PROVIDER_LOCATOR_POLICIES),
+        default="preserve",
+        help="How to handle provider locators found in imported bodies. object-ref converts supported Notion locators to an objet ref when exactly one object source ref is present.",
+    )
     import_external.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     import_external.set_defaults(func=command_import_external)
 

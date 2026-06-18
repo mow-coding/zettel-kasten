@@ -65,6 +65,8 @@ class ArchivePathTests(unittest.TestCase):
             "source is C:\\Users\\example\\private.txt",
             "source is /Users/example/private.txt",
             "source is /home/example/private.txt",
+            "source is \\\\server\\share\\private.txt",
+            "source is \\\\sigma\\share\\private.txt",
         ]
         for unsafe_text in unsafe_texts:
             with self.subTest(unsafe_text=unsafe_text):
@@ -72,6 +74,16 @@ class ArchivePathTests(unittest.TestCase):
 
         self.assertFalse(contains_forbidden_location_reference("source is objects/sample/fake.txt"))
         self.assertFalse(contains_forbidden_location_reference("see https://example.com/home/page"))
+
+    def test_forbidden_location_reference_does_not_treat_latex_as_unc_path(self) -> None:
+        safe_latex_texts = [
+            r"Pearson formula: \\frac\{cov(X,Y)\}\{\\sigma_X\\sigma_Y\}",
+            r"Variance note: \\sigma_Y\} is a rendered LaTeX escape, not a network share.",
+            r"Display math: \[ r = \\frac\{\\sum x_i y_i\}\{n\} \]",
+        ]
+        for safe_text in safe_latex_texts:
+            with self.subTest(safe_text=safe_text):
+                self.assertFalse(contains_forbidden_location_reference(safe_text))
 
 
 if __name__ == "__main__":
