@@ -7,6 +7,7 @@ from pathlib import Path
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
+PRODUCT_ROADMAP_PATH = KIT_ROOT / "docs" / "product-roadmap.md"
 BASE_TYPES_PATH = KIT_ROOT / "zettel-kasten" / "types.yml"
 FAKE_ARCHIVE_TYPES_PATH = KIT_ROOT / "examples" / "fake-life-archive" / "zettel-kasten" / "types.yml"
 FREEZE_DOC_PATH = KIT_ROOT / "docs" / "v02x-freeze-v03-entry-boundary.md"
@@ -296,6 +297,49 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in readme_text or phrase in changelog_text)
+
+    def test_public_product_roadmap_is_linked_from_release_surfaces(self) -> None:
+        roadmap_text = PRODUCT_ROADMAP_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        releases_readme_text = (KIT_ROOT / "docs" / "releases" / "README.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.115.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.115 public roadmap baseline",
+            "`v0.1.x` | Idea and protocol language",
+            "`v0.2.x` | Local implementation",
+            "`v0.3.x` | WOM real-use feedback",
+            "`v0.4.x` | Custom UI control layer",
+            "`v0.5.x` | ZET real-use feedback",
+            "It is not a promise that future features already exist.",
+            "It is not a claim that production ZET",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, roadmap_text)
+        for phrase in (
+            "v0.3.115 pre-release",
+            "[WOM Product Roadmap](wom-kit/docs/product-roadmap.md)",
+            "v0.3.x` is the current WOM real-use",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        for phrase in (
+            "Status: v0.3.115 public roadmap baseline",
+            "Public product roadmap",
+            "planned `v0.4.x` custom UI control layer",
+            "planned `v0.5.x` ZET real-use feedback",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        self.assertIn("[WOM Product Roadmap](product-roadmap.md)", public_map_text)
+        self.assertIn("[WOM Product Roadmap](https://github.com/mow-coding/zettel-kasten/blob/main/wom-kit/docs/product-roadmap.md)", releases_readme_text)
+        self.assertIn("v0.3.115 - 2026-06-19", changelog_text)
+        self.assertIn("v0.3.115 adds the public product roadmap", kit_readme_text)
+        self.assertIn("# v0.3.115 - Public Roadmap Baseline", release_text)
+        self.assertIn("documentation-only", release_text)
 
     def test_version_truth_source_doc_and_matrix_make_current_cli_explicit(self) -> None:
         version_text = VERSION_TRUTH_SOURCE_PATH.read_text(encoding="utf-8")

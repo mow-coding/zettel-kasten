@@ -25,10 +25,11 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.114 pre-release
+v0.3.115 pre-release
 ```
 
-Previous public baseline: v0.3.113 pre-release.
+Previous public baseline: v0.3.114 pre-release.
+Earlier public baseline: v0.3.113 pre-release.
 Earlier public baseline: v0.3.112 pre-release.
 Earlier public baseline: v0.3.111 pre-release.
 Earlier public baseline: v0.3.110 pre-release.
@@ -37,9 +38,17 @@ Earlier compatibility checkpoint: v0.3.87 pre-release.
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
 
+Roadmap snapshot: `v0.1.x` was the idea/protocol-language line, `v0.2.x`
+was the first local implementation line, `v0.3.x` is the current WOM real-use
+feedback and safety-hardening line, `v0.4.x` is planned for the custom UI
+control layer, and `v0.5.x` is planned for ZET real-use feedback. See the
+[WOM Product Roadmap](wom-kit/docs/product-roadmap.md) for the phase gates and
+future-only boundaries.
+
 What exists today:
 
 - a public WOM/zet/ZET design baseline with specs, schemas, fake archives, release notes, and work logs,
+- a public version-line roadmap that explains how the pre-1.0 minor lines map to idea, implementation, WOM feedback, UI/control-layer, and ZET feedback phases,
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
 - read-only WOM-kit version truth-source checks through `archive --version`, `archive version --format json`, parent project installed-version pin discovery from archive roots, and runtime-context version metadata,
 - runtime-context canonical entrypoint metadata so AI runtimes can see which archive-relative files/directories to treat as start-here and authoritative sources, plus machine-readable `ai_runtime_order`, `recommended_first_commands`, and `material_link_routes` that hand off from `runtime-context` to `AGENTS.md` and `ai-response-concept-guide`,
@@ -97,6 +106,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Foundational Product Whitepaper](wom-kit/docs/concepts/foundational-product-whitepaper.md)
 - [Product Philosophy](wom-kit/docs/concepts/product-philosophy.md)
 - [WOM Safe HTML Profile](wom-kit/docs/concepts/wom-safe-html-profile.md)
+- [WOM Product Roadmap](wom-kit/docs/product-roadmap.md)
 - [Korean Product Language Baseline](wom-kit/docs/concepts/korean-product-language-baseline.ko.md)
 - [Korean Product Language Hygiene](wom-kit/docs/korean-product-language-hygiene.md)
 - [WOM-kit Capability Matrix](wom-kit/docs/capability-matrix.md)
@@ -298,6 +308,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.115
 v0.3.114
 v0.3.113
 v0.3.112

@@ -30,6 +30,7 @@ Start here:
 - [Korean Product Philosophy](concepts/product-philosophy.ko.md)
 - [WOM Safe HTML Profile](concepts/wom-safe-html-profile.md)
 - [Korean WOM Safe HTML Profile](concepts/wom-safe-html-profile.ko.md)
+- [WOM Product Roadmap](product-roadmap.md)
 - [ZET Sharing Lifecycle Terminology](concepts/zet-sharing-lifecycle.md)
 - [Korean ZET Sharing Lifecycle Terminology](concepts/zet-sharing-lifecycle.ko.md)
 - [Zettel-Kasten, zet, and ZET Product Blueprint](../specs/zettelkasten-zet-product-blueprint.md)
@@ -112,6 +113,7 @@ These documents explain how the project should be built in phases.
 
 Primary current plan:
 
+- [WOM Product Roadmap](product-roadmap.md)
 - [Phase 8 Minting Implementation Plan](../plans/phase-8-minting-implementation-plan.md)
 
 Earlier and supporting plans:
