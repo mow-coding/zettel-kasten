@@ -20500,6 +20500,55 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertTrue(draft_path.exists())
 
+    def test_mint_zettel_id_uses_standard_path_without_archive_wide_resolve_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(
+                archive_root,
+                title="A direct path mint target",
+                replacement_body="A direct path mint target body with enough distinct text for fast-path testing.\n",
+            )
+            archive_services.index_archive(archive_root)
+
+            with patch(
+                "wom_kit.archive_services.iter_zettel_paths",
+                side_effect=AssertionError("mint by standard draft id should not scan all zettels"),
+            ):
+                dry_code, dry_output = self.run_cli(
+                    [
+                        "mint-zet",
+                        str(archive_root),
+                        "--zettel-id",
+                        "zet_20260519_draft_ai_lunch_note",
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+                self.assertEqual(dry_code, 0, dry_output)
+                dry_result = json.loads(dry_output)
+                self.assertEqual(dry_result["draft_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+                self.assertTrue(dry_result["duplicate_check"]["used_generated_index"])
+
+                approve_code, approve_output = self.run_cli(
+                    [
+                        "mint-zet",
+                        str(archive_root),
+                        "--zettel-id",
+                        "zet_20260519_draft_ai_lunch_note",
+                        "--approve",
+                        "--reviewed-by",
+                        "person:test",
+                        "--format",
+                        "json",
+                    ]
+                )
+                self.assertEqual(approve_code, 0, approve_output)
+                approve_result = json.loads(approve_output)
+                self.assertEqual(approve_result["draft_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
+                self.assertTrue(approve_result["duplicate_check"]["used_generated_index"])
+                self.assertTrue(approve_result["generated_index_updated"])
+
     def test_mint_zettel_real_blocks_dry_run_blockers_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

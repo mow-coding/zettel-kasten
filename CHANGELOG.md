@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.116 - 2026-06-19
+
+- Added a standard zettel-id source path fast path to `resolve_zettel_path`:
+  when standard `inbox/<zettel_id>.md` or `zettels/<zettel_id>.md` exists and its
+  frontmatter id matches, WOM-kit resolves that file directly before falling
+  back to the legacy archive-wide id scan.
+- Closed the remaining mint scale gap after v0.3.114: `archive mint-zet
+  --zettel-id ... --dry-run|--approve` no longer reparses every zettel just to
+  find a standard inbox draft path.
+- Preserved compatibility for legacy non-standard filenames: if the direct file
+  does not exist or its frontmatter id does not match, the existing full scan
+  fallback still applies.
+- Added a regression test that makes archive-wide id scanning fail during
+  generated-index-backed mint dry-run and approve flows, proving the standard
+  path is used.
+
 ## v0.3.115 - 2026-06-19
 
 - Added a public WOM product roadmap that explains the intended pre-1.0 phase

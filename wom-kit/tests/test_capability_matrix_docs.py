@@ -231,6 +231,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.94.md").read_text(encoding="utf-8")
         for phrase in (
             "v0.3.94 improves the dry-run help",
             "`generic_surface`",
@@ -265,6 +266,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.116.md").read_text(encoding="utf-8")
         for phrase in (
             "checklist guidance",
             "mint_checklist_guidance",
@@ -283,6 +285,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "`duplicate_check` metadata",
             "use the generated index instead of rereading every canonical zet body",
             "upserts the new canonical row",
+            "source path resolution uses that file before falling back to the legacy archive-wide id scan",
             "mint target SHA that changed only through approved post-receipt zettel-edge writes can still retire",
         ):
             with self.subTest(phrase=phrase):
@@ -291,12 +294,23 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "minting with dry-run checklist guidance",
             "v0.3.95 - 2026-06-17",
             "mint_checklist_guidance",
+            "v0.3.116 - 2026-06-19",
+            "standard `inbox/<zettel_id>.md`",
             "v0.3.114 - 2026-06-19",
             "generated index",
             "retire-draft",
         ):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in readme_text or phrase in changelog_text)
+        for phrase in (
+            "# v0.3.116 - Mint Source Resolve Fast Path",
+            "direct standard-path fast path",
+            "no longer reparses every zettel just to find the standard",
+            "frontmatter id does not match",
+            "remove the legacy id scan fallback",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
 
     def test_public_product_roadmap_is_linked_from_release_surfaces(self) -> None:
         roadmap_text = PRODUCT_ROADMAP_PATH.read_text(encoding="utf-8")
@@ -320,7 +334,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, roadmap_text)
         for phrase in (
-            "v0.3.115 pre-release",
+            "v0.3.116 pre-release",
             "[WOM Product Roadmap](wom-kit/docs/product-roadmap.md)",
             "v0.3.x` is the current WOM real-use",
         ):

@@ -25,10 +25,11 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.115 pre-release
+v0.3.116 pre-release
 ```
 
-Previous public baseline: v0.3.114 pre-release.
+Previous public baseline: v0.3.115 pre-release.
+Earlier public baseline: v0.3.114 pre-release.
 Earlier public baseline: v0.3.113 pre-release.
 Earlier public baseline: v0.3.112 pre-release.
 Earlier public baseline: v0.3.111 pre-release.
@@ -52,7 +53,7 @@ What exists today:
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
 - read-only WOM-kit version truth-source checks through `archive --version`, `archive version --format json`, parent project installed-version pin discovery from archive roots, and runtime-context version metadata,
 - runtime-context canonical entrypoint metadata so AI runtimes can see which archive-relative files/directories to treat as start-here and authoritative sources, plus machine-readable `ai_runtime_order`, `recommended_first_commands`, and `material_link_routes` that hand off from `runtime-context` to `AGENTS.md` and `ai-response-concept-guide`,
-- private archive lifecycle tools for doctor checks, draft creation, minting with dry-run checklist guidance, generated-index-backed duplicate checks for large archives, verified minted-draft retirement, delegation, receipts, search, and metadata review,
+- private archive lifecycle tools for doctor checks, draft creation, minting with dry-run checklist guidance, generated-index-backed duplicate checks and standard-id source-path fast resolution for large archives, verified minted-draft retirement, delegation, receipts, search, and metadata review,
 - read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading, block headers with first-read summaries, generated index health checks, saved view health, facet role diagnostics, saved view recommendations, prompt boundaries, foreign block review, projection planning with supported-surface help, shared update review/index, shared update route pointers, and ZET would-transport planning,
 - read-only derived-text coverage/toolchain/doctor/agent-contract gates, manifest-scoped completeness signals, manifest-quality checks that block false complete claims when `tool_version` or required extraction metadata is missing, including existing derived-text records as a fallback textual signal for older prehashed manifests, non-echoed tool-hint paths for PATH-missing local extractors, plus approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
 - read-only `archive ai-response-concept-guide --dry-run` for beginner-facing AI explanation cards about sha256 object identity vs location, manifests vs zets, the objet -> derived text -> zet layer split, operational term translations for edge types, lifecycle states, and connection kinds, plus safe routing to Notion import material-clue audits and source-map material-link planning when provider locators were omitted from imported zettel bodies, without overclaiming upload, availability, or stronger tie meaning,
@@ -308,6 +309,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.116
 v0.3.115
 v0.3.114
 v0.3.113
