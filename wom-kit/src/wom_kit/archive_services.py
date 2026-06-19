@@ -41,6 +41,8 @@ except ImportError:  # pragma: no cover - exercised only when dependency is abse
 FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n", re.DOTALL)
 VALID_ZETTEL_FOLDERS = ("zettels/", "inbox/")
 INDEX_RELATIVE_PATH = "db/archive-index.sqlite"
+INDEX_METADATA_SCHEMA = "wom-kit/archive-index-metadata/v0.1"
+ARCHIVE_INDEX_BUSY_TIMEOUT_MS = 30_000
 DERIVED_TEXT_MANIFEST_RELATIVE_PATH = "objects/manifests/derived-text.jsonl"
 DERIVED_TEXT_STORE_PREFIX = "objects/derived-text/sha256"
 DERIVED_TEXT_CAPTURE_RECEIPTS_DIR = "receipts/derived-text-capture"
@@ -1979,6 +1981,26 @@ MACHINE_ENFORCED_CHECKLIST_ITEMS = {"object_id_only", "allowed_edges"}
 
 class ArchiveServiceError(Exception):
     pass
+
+
+def connect_archive_index(
+    db_path: Path,
+    *,
+    write: bool = False,
+    row_factory: bool = False,
+) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path, timeout=ARCHIVE_INDEX_BUSY_TIMEOUT_MS / 1000)
+    if row_factory:
+        conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(f"PRAGMA busy_timeout = {ARCHIVE_INDEX_BUSY_TIMEOUT_MS}")
+        if write:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+    except sqlite3.Error:
+        conn.close()
+        raise
+    return conn
 
 
 def require_yaml() -> None:
@@ -7200,18 +7222,118 @@ def promotion_duplicate_index_rows(archive_root: Path) -> tuple[list[dict[str, A
         "fallback_reason": None,
         "stale_reasons": [],
         "canonical_candidates_checked": 0,
+        "indexed_canonical_count": 0,
+        "staleness_check": "not_checked",
+        "live_staleness_paths_checked": 0,
     }
     if not db_path.is_file():
         state["fallback_reason"] = "archive_index_missing"
         return [], state
 
+    try:
+        conn = connect_archive_index(db_path, row_factory=True)
+        try:
+            rows = promotion_duplicate_index_canonical_rows(conn)
+            metadata = read_archive_index_metadata(conn)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        state["fallback_reason"] = "archive_index_unreadable"
+        return [], state
+
+    metadata_reasons = archive_index_metadata_stale_reasons(metadata, indexed_canonical_count=len(rows))
+    if not metadata_reasons:
+        state.update(
+            {
+                "source": "generated_index",
+                "used_generated_index": True,
+                "fallback_reason": None,
+                "indexed_canonical_count": len(rows),
+                "canonical_candidates_checked": len(rows),
+                "staleness_check": "index_metadata",
+                "live_staleness_paths_checked": 0,
+                "stale_reasons": [],
+                "index_metadata": {
+                    "schema": metadata.get("schema"),
+                    "canonical_zettel_count": metadata.get("canonical_zettel_count"),
+                    "canonical_max_mtime_ns": metadata.get("canonical_max_mtime_ns"),
+                    "updated_by": metadata.get("updated_by"),
+                },
+            }
+        )
+        return rows, state
+
+    state["staleness_check"] = "legacy_live_scan"
+    state["stale_reasons"] = metadata_reasons
+    return promotion_duplicate_index_rows_legacy_live_check(archive_root, rows, state)
+
+
+def promotion_duplicate_index_canonical_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return [
+        {
+            "path": str(row["path"] or ""),
+            "zettel_id": str(row["zettel_id"] or ""),
+            "title": str(row["title"] or ""),
+            "body": str(row["body"] or ""),
+        }
+        for row in conn.execute(
+            """
+            SELECT path, zettel_id, title, body
+            FROM zettels
+            WHERE coalesce(status, '') = 'canonical'
+              AND path LIKE 'zettels/%'
+            ORDER BY path
+            """
+        ).fetchall()
+    ]
+
+
+def read_archive_index_metadata(conn: sqlite3.Connection) -> dict[str, str]:
+    try:
+        rows = conn.execute("SELECT key, value FROM index_metadata").fetchall()
+    except sqlite3.Error:
+        return {}
+    metadata: dict[str, str] = {}
+    for row in rows:
+        key = str(row["key"] if isinstance(row, sqlite3.Row) else row[0])
+        value = str(row["value"] if isinstance(row, sqlite3.Row) else row[1])
+        metadata[key] = value
+    return metadata
+
+
+def archive_index_metadata_stale_reasons(metadata: dict[str, str], *, indexed_canonical_count: int) -> list[str]:
+    reasons: list[str] = []
+    if not metadata:
+        return ["archive_index_metadata_missing"]
+    if metadata.get("schema") != INDEX_METADATA_SCHEMA:
+        reasons.append("archive_index_metadata_schema_mismatch")
+    try:
+        recorded_count = int(metadata.get("canonical_zettel_count", ""))
+    except ValueError:
+        reasons.append("archive_index_metadata_canonical_count_invalid")
+    else:
+        if recorded_count != indexed_canonical_count:
+            reasons.append("archive_index_metadata_canonical_count_mismatch")
+    try:
+        int(metadata.get("canonical_max_mtime_ns", ""))
+    except ValueError:
+        reasons.append("archive_index_metadata_canonical_max_mtime_invalid")
+    return reasons
+
+
+def promotion_duplicate_index_rows_legacy_live_check(
+    archive_root: Path,
+    rows: list[dict[str, Any]],
+    state: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     canonical_root = archive_root / "zettels"
     live_paths = [
         archive_relative_path(path, archive_root)
         for path in safe_archive_glob(canonical_root, "*.md", archive_root, recursive=True)
     ]
     state["canonical_candidates_checked"] = len(live_paths)
-    db_mtime = db_path.stat().st_mtime
+    state["live_staleness_paths_checked"] = len(live_paths)
+    db_mtime = (archive_root / INDEX_RELATIVE_PATH).stat().st_mtime
     modified_after_index = []
     for relative in live_paths:
         try:
@@ -7220,36 +7342,9 @@ def promotion_duplicate_index_rows(archive_root: Path) -> tuple[list[dict[str, A
         except (OSError, ArchivePathError):
             modified_after_index.append(relative)
 
-    try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            rows = [
-                {
-                    "path": str(row["path"] or ""),
-                    "zettel_id": str(row["zettel_id"] or ""),
-                    "title": str(row["title"] or ""),
-                    "body": str(row["body"] or ""),
-                }
-                for row in conn.execute(
-                    """
-                    SELECT path, zettel_id, title, body
-                    FROM zettels
-                    WHERE coalesce(status, '') = 'canonical'
-                      AND path LIKE 'zettels/%'
-                    ORDER BY path
-                    """
-                ).fetchall()
-            ]
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        state["fallback_reason"] = "archive_index_unreadable"
-        return [], state
-
     indexed_paths = {row["path"] for row in rows}
     live_path_set = set(live_paths)
-    stale_reasons = []
+    stale_reasons = list(state.get("stale_reasons") or [])
     if live_path_set - indexed_paths:
         stale_reasons.append("canonical_zettels_missing_from_index")
     if indexed_paths - live_path_set:
@@ -7258,7 +7353,7 @@ def promotion_duplicate_index_rows(archive_root: Path) -> tuple[list[dict[str, A
         stale_reasons.append("canonical_zettel_modified_after_index")
     if stale_reasons:
         state["fallback_reason"] = "archive_index_stale"
-        state["stale_reasons"] = stale_reasons
+        state["stale_reasons"] = unique_preserve_order(stale_reasons)
         return [], state
 
     state.update(
@@ -44708,7 +44803,7 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
     source_map_count = 0
     edge_count = 0
     facet_count = 0
-    conn = sqlite3.connect(db_path)
+    conn = connect_archive_index(db_path, write=True)
     try:
         conn.executescript(
             """
@@ -44766,6 +44861,10 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
               facet_value TEXT
             );
             CREATE INDEX IF NOT EXISTS facets_key_value ON zettel_facets(facet_key, facet_value);
+            CREATE TABLE IF NOT EXISTS index_metadata (
+              key TEXT PRIMARY KEY,
+              value TEXT
+            );
             DELETE FROM zettels;
             DELETE FROM objects;
             DELETE FROM derived_texts;
@@ -44773,10 +44872,13 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
             DELETE FROM source_map_entries;
             DELETE FROM edges;
             DELETE FROM zettel_facets;
+            DELETE FROM index_metadata;
             """
         )
 
         warnings: list[str] = []
+        canonical_metadata_count = 0
+        canonical_metadata_max_mtime_ns = 0
 
         def insert_facet_row(zettel_id: str, facet_key: str, facet_value: Any) -> bool:
             if not isinstance(facet_value, (str, int, float, bool)):
@@ -44788,9 +44890,17 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
             return True
 
         for path in iter_zettel_paths(root):
+            relative_path = archive_relative_path(path, root)
+            try:
+                zettel_mtime_ns = path.stat().st_mtime_ns
+            except OSError:
+                zettel_mtime_ns = 0
             frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
             frontmatter = json_safe(frontmatter)
             zettel_status = frontmatter.get("status")
+            if relative_path.startswith("zettels/") and zettel_status == "canonical":
+                canonical_metadata_count += 1
+                canonical_metadata_max_mtime_ns = max(canonical_metadata_max_mtime_ns, zettel_mtime_ns)
             # Privacy/defense-in-depth: a 'redacted' zettel's plaintext (title/body/frontmatter) must
             # never be written into the disposable on-disk index. path/id/status/kind are kept so the row
             # stays countable + filterable; search additionally excludes redacted rows entirely.
@@ -44801,7 +44911,7 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    archive_relative_path(path, root),
+                    relative_path,
                     frontmatter.get("id"),
                     "" if redacted else frontmatter.get("title"),
                     zettel_status,
@@ -44946,6 +45056,11 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
                     )
                     source_map_count += 1
 
+        replace_archive_index_metadata(
+            conn,
+            canonical_zettel_count=canonical_metadata_count,
+            canonical_max_mtime_ns=canonical_metadata_max_mtime_ns,
+        )
         conn.commit()
     finally:
         conn.close()
@@ -44964,6 +45079,31 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
     }
 
 
+def replace_archive_index_metadata(
+    conn: sqlite3.Connection,
+    *,
+    canonical_zettel_count: int,
+    canonical_max_mtime_ns: int,
+) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS index_metadata (
+          key TEXT PRIMARY KEY,
+          value TEXT
+        )
+        """
+    )
+    payload = {
+        "schema": INDEX_METADATA_SCHEMA,
+        "canonical_zettel_count": str(max(0, canonical_zettel_count)),
+        "canonical_max_mtime_ns": str(max(0, canonical_max_mtime_ns)),
+        "updated_at": datetime.now().astimezone().replace(microsecond=0).isoformat(),
+        "updated_by": f"wom-kit/{WOM_KIT_VERSION}",
+    }
+    for key, value in payload.items():
+        conn.execute("INSERT OR REPLACE INTO index_metadata(key, value) VALUES (?, ?)", (key, value))
+
+
 def upsert_zettel_index_entry(root: Path, zettel_path: Path, frontmatter: dict[str, Any], body: str) -> bool:
     db_path = root / INDEX_RELATIVE_PATH
     if not db_path.is_file():
@@ -44974,8 +45114,14 @@ def upsert_zettel_index_entry(root: Path, zettel_path: Path, frontmatter: dict[s
     zettel_id = str(frontmatter.get("id") or "")
     redacted = zettel_status == "redacted"
 
-    conn = sqlite3.connect(db_path)
+    conn = connect_archive_index(db_path, write=True)
     try:
+        old_row = conn.execute("SELECT status FROM zettels WHERE path = ?", (relative,)).fetchone()
+        old_is_canonical = (
+            old_row is not None
+            and relative.startswith("zettels/")
+            and str(old_row[0] if not isinstance(old_row, sqlite3.Row) else old_row["status"]) == "canonical"
+        )
         conn.execute(
             """
             INSERT OR REPLACE INTO zettels(path, zettel_id, title, status, kind, body, frontmatter_json)
@@ -45011,10 +45157,47 @@ def upsert_zettel_index_entry(root: Path, zettel_path: Path, frontmatter: dict[s
                                     "INSERT INTO zettel_facets(zettel_id, facet_key, facet_value) VALUES (?, ?, ?)",
                                     (zettel_id, str(facet_key), str(item)),
                                 )
+        update_archive_index_metadata_for_zettel_upsert(
+            conn,
+            zettel_path=zettel_path,
+            old_is_canonical=old_is_canonical,
+            new_is_canonical=relative.startswith("zettels/") and zettel_status == "canonical",
+        )
         conn.commit()
     finally:
         conn.close()
     return True
+
+
+def update_archive_index_metadata_for_zettel_upsert(
+    conn: sqlite3.Connection,
+    *,
+    zettel_path: Path,
+    old_is_canonical: bool,
+    new_is_canonical: bool,
+) -> None:
+    metadata = read_archive_index_metadata(conn)
+    if not metadata or metadata.get("schema") != INDEX_METADATA_SCHEMA:
+        return
+    try:
+        canonical_count = int(metadata.get("canonical_zettel_count", "0"))
+        canonical_max_mtime_ns = int(metadata.get("canonical_max_mtime_ns", "0"))
+    except ValueError:
+        return
+    if old_is_canonical and not new_is_canonical:
+        canonical_count = max(0, canonical_count - 1)
+    elif new_is_canonical and not old_is_canonical:
+        canonical_count += 1
+    if new_is_canonical:
+        try:
+            canonical_max_mtime_ns = max(canonical_max_mtime_ns, zettel_path.stat().st_mtime_ns)
+        except OSError:
+            pass
+    replace_archive_index_metadata(
+        conn,
+        canonical_zettel_count=canonical_count,
+        canonical_max_mtime_ns=canonical_max_mtime_ns,
+    )
 
 
 def view_zets(
@@ -45107,8 +45290,7 @@ def view_zets(
     sql.append("ORDER BY path LIMIT ?")
     params.append(limit)
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = connect_archive_index(db_path, row_factory=True)
     try:
         rows = conn.execute(" ".join(sql), params).fetchall()
     finally:
@@ -45420,8 +45602,7 @@ def view_health(
             )
         summary["blocked_view_count"] = len(view_results)
     else:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = connect_archive_index(db_path, row_factory=True)
         try:
             for view in views:
                 normalized_filters, view_blockers = normalize_view_facet_filters(
@@ -45711,8 +45892,7 @@ def index_health(
     indexed_entries: list[dict[str, Any]] = []
 
     if db_path.is_file():
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = connect_archive_index(db_path, row_factory=True)
         try:
             indexed_entries = [
                 {
@@ -45836,8 +46016,7 @@ def get_related_zets(
     related: list[dict[str, Any]] = []
     visited: set[str] = {zettel_id}
     frontier: set[str] = {zettel_id}
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = connect_archive_index(db_path, row_factory=True)
     try:
         # Parity with read_zettel/block_header_preview: a redacted zettel is not a valid
         # query subject; return an empty related set rather than exposing its neighborhood.
@@ -45913,8 +46092,7 @@ def search_archive(archive_root: Path | str, query: str, limit: int = 20) -> dic
     like = f"%{query.lower()}%"
     limit = max(1, min(int(limit), 100))
     results: list[dict[str, Any]] = []
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = connect_archive_index(db_path, row_factory=True)
     try:
         for row in conn.execute(
             """

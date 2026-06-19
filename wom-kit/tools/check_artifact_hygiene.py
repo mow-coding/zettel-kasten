@@ -40,6 +40,9 @@ REQUIRED_ARCHIVE_GITIGNORE_PATTERNS: tuple[str, ...] = (
     "/collab/",
     "/.mow-harness/",
     "**/db/archive-index.sqlite",
+    "**/db/archive-index.sqlite-wal",
+    "**/db/archive-index.sqlite-shm",
+    "**/db/archive-index.sqlite-journal",
     "objects/sha256/",
     "objects/derived-text/sha256/",
 )
@@ -124,7 +127,12 @@ def classify_artifact(relative_path: str) -> ArtifactObservation:
     if lower == "collab" or lower.startswith("collab/") or lower == ".mow-harness" or lower.startswith(".mow-harness/"):
         return ArtifactObservation(path, LOCAL_ONLY_COLLAB_HARNESS, "local-only collaboration or harness state")
 
-    if lower == "db/archive-index.sqlite":
+    if lower in {
+        "db/archive-index.sqlite",
+        "db/archive-index.sqlite-wal",
+        "db/archive-index.sqlite-shm",
+        "db/archive-index.sqlite-journal",
+    }:
         return ArtifactObservation(path, REBUILDABLE_GENERATED, "generated SQLite search index")
 
     if lower == "tmp" or lower.startswith("tmp/") or has_part_starting_with(path, "tmp-"):

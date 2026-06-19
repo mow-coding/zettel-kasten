@@ -18887,6 +18887,9 @@ state:
             self.assertIn("/.mow-harness/", gitignore)
             self.assertNotIn("/AGENTS.md", gitignore)
             self.assertIn("**/db/archive-index.sqlite", gitignore)
+            self.assertIn("**/db/archive-index.sqlite-wal", gitignore)
+            self.assertIn("**/db/archive-index.sqlite-shm", gitignore)
+            self.assertIn("**/db/archive-index.sqlite-journal", gitignore)
             self.assertIn("objects/sha256/", gitignore)
             self.assertIn("objects/derived-text/sha256/", gitignore)
 
@@ -18906,6 +18909,9 @@ state:
                     "/collab/",
                     "/.mow-harness/",
                     "**/db/archive-index.sqlite",
+                    "**/db/archive-index.sqlite-wal",
+                    "**/db/archive-index.sqlite-shm",
+                    "**/db/archive-index.sqlite-journal",
                 }
             ]
             gitignore_path.write_text("\n".join(kept_lines) + "\n", encoding="utf-8")
@@ -18917,6 +18923,7 @@ state:
             self.assertEqual(result["action"], "would_append_patterns")
             self.assertIn("objects/derived-text/sha256/", result["missing_patterns"])
             self.assertIn("/collab/", result["missing_patterns"])
+            self.assertIn("**/db/archive-index.sqlite-wal", result["missing_patterns"])
             self.assertEqual(gitignore_path.read_text(encoding="utf-8"), before)
 
             code, output = self.run_cli(
@@ -18940,6 +18947,9 @@ state:
             self.assertIn("/collab/", repaired)
             self.assertIn("/.mow-harness/", repaired)
             self.assertIn("**/db/archive-index.sqlite", repaired)
+            self.assertIn("**/db/archive-index.sqlite-wal", repaired)
+            self.assertIn("**/db/archive-index.sqlite-shm", repaired)
+            self.assertIn("**/db/archive-index.sqlite-journal", repaired)
 
             doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
             self.assertEqual(doctor_code, 0, doctor_output)
@@ -20622,6 +20632,8 @@ state:
             dry_result = json.loads(dry_output)
             self.assertTrue(dry_result["duplicate_check"]["used_generated_index"])
             self.assertEqual(dry_result["duplicate_check"]["source"], "generated_index")
+            self.assertEqual(dry_result["duplicate_check"]["staleness_check"], "index_metadata")
+            self.assertEqual(dry_result["duplicate_check"]["live_staleness_paths_checked"], 0)
 
             approve_code, approve_output = self.run_cli(
                 [
@@ -20639,6 +20651,8 @@ state:
             self.assertEqual(approve_code, 0, approve_output)
             approve_result = json.loads(approve_output)
             self.assertTrue(approve_result["duplicate_check"]["used_generated_index"])
+            self.assertEqual(approve_result["duplicate_check"]["staleness_check"], "index_metadata")
+            self.assertEqual(approve_result["duplicate_check"]["live_staleness_paths_checked"], 0)
             self.assertTrue(approve_result["generated_index_updated"])
 
             health = archive_services.index_health(archive_root, dry_run=True)
@@ -20662,6 +20676,9 @@ state:
             with patch(
                 "wom_kit.archive_services.iter_zettel_paths",
                 side_effect=AssertionError("mint by standard draft id should not scan all zettels"),
+            ), patch(
+                "wom_kit.archive_services.safe_archive_glob",
+                side_effect=AssertionError("mint generated-index staleness check should not glob canonical zettels"),
             ):
                 dry_code, dry_output = self.run_cli(
                     [
@@ -20678,6 +20695,8 @@ state:
                 dry_result = json.loads(dry_output)
                 self.assertEqual(dry_result["draft_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
                 self.assertTrue(dry_result["duplicate_check"]["used_generated_index"])
+                self.assertEqual(dry_result["duplicate_check"]["staleness_check"], "index_metadata")
+                self.assertEqual(dry_result["duplicate_check"]["live_staleness_paths_checked"], 0)
 
                 approve_code, approve_output = self.run_cli(
                     [
@@ -20696,6 +20715,8 @@ state:
                 approve_result = json.loads(approve_output)
                 self.assertEqual(approve_result["draft_path"], "inbox/zet_20260519_draft_ai_lunch_note.md")
                 self.assertTrue(approve_result["duplicate_check"]["used_generated_index"])
+                self.assertEqual(approve_result["duplicate_check"]["staleness_check"], "index_metadata")
+                self.assertEqual(approve_result["duplicate_check"]["live_staleness_paths_checked"], 0)
                 self.assertTrue(approve_result["generated_index_updated"])
 
     def test_mint_zettel_real_blocks_dry_run_blockers_without_writing(self) -> None:
@@ -20924,6 +20945,24 @@ state:
             self.assertEqual(source_code, 0, source_output)
             source_result = json.loads(source_output)
             self.assertTrue(any(item["type"] == "source_map" for item in source_result["results"]))
+
+    def test_archive_index_uses_wal_and_busy_timeout_for_batch_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            code, output = self.run_cli(["index", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 0, output)
+            index_path = archive_root / "db" / "archive-index.sqlite"
+
+            conn = archive_services.connect_archive_index(index_path, row_factory=True)
+            try:
+                journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+                busy_timeout = int(conn.execute("PRAGMA busy_timeout").fetchone()[0])
+            finally:
+                conn.close()
+
+            self.assertEqual(journal_mode, "wal")
+            self.assertEqual(busy_timeout, archive_services.ARCHIVE_INDEX_BUSY_TIMEOUT_MS)
 
     def test_search_excludes_redacted_zettels_and_never_leaks_their_body(self) -> None:
         # Privacy regression guard: a status='redacted' zettel must never be matched on or
