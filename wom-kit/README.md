@@ -1129,6 +1129,14 @@ CLI `archive operational-context` can dry-run read or approval-write reviewed
 mission, scope, state, gotchas, decisions, and next actions with a receipt. It
 does not replace zets or receipts, scan broad archive bodies, call providers, or
 add MCP write tools.
+v0.3.118 closes the remaining mint staleness scale gap for current-format
+generated indexes: `archive index` writes `index_metadata`, and generated-index
+backed `mint-zet` uses that metadata instead of glob/stat checking every
+canonical zettel before each mint. Approved mint upserts keep the metadata
+current during large batches; older indexes without metadata still fall back to
+the legacy live staleness scan. The same release opens generated-index SQLite
+connections with a 30s busy timeout, uses WAL mode on index write paths, and
+keeps WAL/SHM/journal sidecars in the generated-artifact ignore/hygiene layer.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

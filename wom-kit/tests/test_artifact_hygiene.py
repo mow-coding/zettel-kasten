@@ -41,6 +41,9 @@ class ArtifactHygieneTests(unittest.TestCase):
             "inbox/draft.md": check_artifact_hygiene.DURABLE_UNTIL_RESOLVED,
             "workpacks/export/package.yml": check_artifact_hygiene.DURABLE_WITH_EXPIRY,
             "db/archive-index.sqlite": check_artifact_hygiene.REBUILDABLE_GENERATED,
+            "db/archive-index.sqlite-wal": check_artifact_hygiene.REBUILDABLE_GENERATED,
+            "db/archive-index.sqlite-shm": check_artifact_hygiene.REBUILDABLE_GENERATED,
+            "db/archive-index.sqlite-journal": check_artifact_hygiene.REBUILDABLE_GENERATED,
             "tmp/session/report.json": check_artifact_hygiene.DISPOSABLE_AFTER_REVIEW,
             "profiles/local/source-roots.local.yml": check_artifact_hygiene.LOCAL_ONLY_SECRET_CONFIG,
             ".mow-harness/installed-version.txt": check_artifact_hygiene.LOCAL_ONLY_COLLAB_HARNESS,
@@ -63,6 +66,7 @@ class ArtifactHygieneTests(unittest.TestCase):
         self.assertIn("Missing generated archive .gitignore pattern: .env", formatted)
         self.assertIn("Missing generated archive .gitignore pattern: /.mow-harness/", formatted)
         self.assertIn("Missing generated archive .gitignore pattern: **/db/archive-index.sqlite", formatted)
+        self.assertIn("Missing generated archive .gitignore pattern: **/db/archive-index.sqlite-wal", formatted)
 
     def test_throwaway_archive_init_gitignore_passes_artifact_hygiene(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

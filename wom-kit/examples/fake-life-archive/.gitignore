@@ -25,6 +25,9 @@ tmp-*/
 
 # Generated archive search indexes
 **/db/archive-index.sqlite
+**/db/archive-index.sqlite-wal
+**/db/archive-index.sqlite-shm
+**/db/archive-index.sqlite-journal
 
 # Local content-addressed stores
 objects/sha256/

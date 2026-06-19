@@ -43,7 +43,7 @@ For installation today:
 | `DURABLE_ARCHIVE_RECORD` | `archive.yml`, `archive-identity.yml`, `AGENTS.md`, `zettels/`, `objects/manifests/*.jsonl`, `source-maps/*.jsonl`, `receipts/`, `views/`, `db/schema.sql`, non-secret `provider-bindings.yml`, non-secret `source-bindings.yml` | Keep. These are archive memory or control records. |
 | `DURABLE_UNTIL_RESOLVED` | `inbox/` drafts, active project intake staging decisions | Keep until minted, explicitly deferred, or explicitly abandoned. |
 | `DURABLE_WITH_EXPIRY` | `workpacks/` and transfer/export bundles with `expires_at` or a review window | Keep until expiry and explicit cleanup review. |
-| `REBUILDABLE_GENERATED` | `db/archive-index.sqlite`, future search indexes and caches | Safe to rebuild later, but do not delete silently in this batch. |
+| `REBUILDABLE_GENERATED` | `db/archive-index.sqlite`, `db/archive-index.sqlite-wal`, `db/archive-index.sqlite-shm`, `db/archive-index.sqlite-journal`, future search indexes and caches | Safe to rebuild later, but do not delete silently in this batch. |
 | `DISPOSABLE_AFTER_REVIEW` | `tmp/`, `tmp-*`, dry-run sandboxes, abandoned staging folders, expired workpacks after review | Disposable only after explicit review gates. |
 | `LOCAL_ONLY_SECRET_CONFIG` | `.env`, `.env.*`, keys, tokens, `profiles/local/`, `keyrings/local/`, `.archive-local/`, `rclone.conf`, credentials | Must stay local and ignored by git. Never publish. |
 | `EXTERNAL_LIVE_NEVER_TOUCH` | private dogfood archives, any real user archive, any real local `-objets` store | Never read or mutate by default. Require explicit operator approval. |
@@ -105,6 +105,9 @@ tmp/
 /collab/
 /.mow-harness/
 **/db/archive-index.sqlite
+**/db/archive-index.sqlite-wal
+**/db/archive-index.sqlite-shm
+**/db/archive-index.sqlite-journal
 ```
 
 The checker validates these patterns on throwaway or explicitly approved archive

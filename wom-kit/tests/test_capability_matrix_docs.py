@@ -268,6 +268,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.116.md").read_text(encoding="utf-8")
+        staleness_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.118.md").read_text(encoding="utf-8")
         for phrase in (
             "checklist guidance",
             "mint_checklist_guidance",
@@ -285,7 +286,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "preferred `mint.checklist` frontmatter path",
             "`duplicate_check` metadata",
             "use the generated index instead of rereading every canonical zet body",
+            "Current-format generated indexes include `index_metadata`",
+            "`staleness_check: index_metadata`",
+            "`live_staleness_paths_checked: 0`",
             "upserts the new canonical row",
+            "updates `index_metadata`",
             "source path resolution uses that file before falling back to the legacy archive-wide id scan",
             "mint target SHA that changed only through approved post-receipt zettel-edge writes can still retire",
         ):
@@ -295,6 +300,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "minting with dry-run checklist guidance",
             "v0.3.95 - 2026-06-17",
             "mint_checklist_guidance",
+            "v0.3.118 - 2026-06-20",
+            "generated-index metadata",
             "v0.3.116 - 2026-06-19",
             "standard `inbox/<zettel_id>.md`",
             "v0.3.114 - 2026-06-19",
@@ -312,6 +319,18 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, release_text)
+        for phrase in (
+            "# v0.3.118 - Mint Index Staleness Fast Path",
+            "index_metadata",
+            "globbing every canonical zettel",
+            "file mtime",
+            "staleness_check: index_metadata",
+            "live_staleness_paths_checked: 0",
+            "Older generated indexes do not have `index_metadata`",
+            "falls back to the legacy live staleness scan",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, staleness_release_text)
 
     def test_public_product_roadmap_is_linked_from_release_surfaces(self) -> None:
         roadmap_text = PRODUCT_ROADMAP_PATH.read_text(encoding="utf-8")

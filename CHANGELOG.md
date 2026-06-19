@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.118 - 2026-06-20
+
+- Added generated-index metadata for canonical zettel count and max mtime during
+  `archive index`, stored in `index_metadata` inside `db/archive-index.sqlite`.
+- Changed generated-index-backed `mint-zet` duplicate checks so current-format
+  indexes use metadata for staleness validation instead of globbing and statting
+  every canonical zettel before each mint.
+- Kept compatibility for older generated indexes: if `index_metadata` is missing
+  or malformed, mint falls back to the legacy live staleness scan instead of
+  trusting the index blindly.
+- Updated approved mint index upserts so large mint batches keep both the new
+  canonical row and index metadata current after each approved mint.
+- Added SQLite generated-index contention hardening: WOM-kit now opens archive
+  index connections with a 30s `busy_timeout`, uses WAL mode on index write
+  paths, and treats SQLite WAL/SHM/journal sidecars as rebuildable generated
+  archive artifacts.
+- Added regression coverage proving standard-id mint does not call
+  `iter_zettel_paths` or `safe_archive_glob` when the current generated-index
+  fast path is available.
+
 ## v0.3.117 - 2026-06-20
 
 - Added AI operational context rehydration through `ops/operational-context.yml`
