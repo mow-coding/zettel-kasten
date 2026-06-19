@@ -690,9 +690,9 @@ db/archive-index.sqlite
 
 This file is a rebuildable map, not the archive itself. The durable archive still lives in zets, YAML files, object manifests, receipts, and original files. In v0.2, zets remain Markdown-compatible; the long-term target is the WOM Safe HTML Profile.
 
-`archive mint-zet --dry-run` checks the minting gate using `minting_rules` in `zettel-kasten/zettel-rules.yml`, with legacy `promotion_rules` as a v0.2 fallback. It reports blockers, warnings, missing human-review items, near duplicates, the proposed canonical path, the proposed mint receipt path, and the proposed draft snapshot path. It writes nothing. `archive mint-zettel` remains a v0.2 compatibility alias.
+`archive mint-zet --dry-run` checks the minting gate using `minting_rules` in `zettel-kasten/zettel-rules.yml`, with legacy `promotion_rules` as a v0.2 fallback. It reports blockers, warnings, missing human-review items, near duplicates, `duplicate_check` metadata, the proposed canonical path, the proposed mint receipt path, and the proposed draft snapshot path. When `db/archive-index.sqlite` is current, duplicate checks use the generated index instead of rereading every canonical zet body; otherwise the command falls back to the live scan. It writes nothing. `archive mint-zettel` remains a v0.2 compatibility alias.
 
-`archive retire-draft --dry-run|--approve` closes the lifecycle gap after a draft has already been minted. Dry-run verifies that the inbox draft, canonical zet, mint receipt, draft snapshot, archive-relative paths, and SHA-256 evidence all agree. Approved mode requires `--reviewed-by`, removes only that verified inbox draft, writes `receipts/mint/retired-drafts/*.retire-draft.json`, and preserves the canonical zet, original mint receipt, and draft snapshot.
+`archive retire-draft --dry-run|--approve` closes the lifecycle gap after a draft has already been minted. Dry-run verifies that the inbox draft, canonical zet, mint receipt, draft snapshot, archive-relative paths, and SHA-256 evidence all agree. It can also accept a mint target SHA that changed only through approved post-receipt zettel-edge writes. Approved mode requires `--reviewed-by`, removes only that verified inbox draft, writes `receipts/mint/retired-drafts/*.retire-draft.json`, and preserves the canonical zet, original mint receipt, and draft snapshot.
 
 `archive source-intake --dry-run` is the safe classification step before drafting from a source/objet. It accepts exactly one locator, returns `source_refs_for_draft`, reports object storage context, and writes nothing. It does not read file bodies, hash, copy, upload, import, OCR, transcribe, extract, call provider APIs, create drafts, or mint.
 
@@ -1104,6 +1104,10 @@ v0.3.113 adds account recovery and break-glass credential-store scenarios for
 2FA recovery codes and emergency-only secrets, requiring independent offline
 redundancy, a two-location minimum, and circular-dependency review while WOM
 still records only refs and metadata.
+v0.3.114 makes mint duplicate checks use the current generated index when
+available, upserts newly minted canonical rows back into that index during
+approved mint loops, and lets `retire-draft` accept mint target SHA history that
+changed only through approved post-receipt zettel-edge writes.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

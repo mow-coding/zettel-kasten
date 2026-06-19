@@ -5924,7 +5924,15 @@ def promote_zettel_dry_run(
                     f"Required minting checklist item is not passed: {item['id']} ({item['status']})."
                 )
 
-    near_duplicates = find_promotion_duplicates(root, path, frontmatter, body, proposed_path)
+    duplicate_check: dict[str, Any] = {}
+    near_duplicates = find_promotion_duplicates(
+        root,
+        path,
+        frontmatter,
+        body,
+        proposed_path,
+        duplicate_check=duplicate_check,
+    )
     for duplicate in near_duplicates:
         message = (
             f"Possible duplicate canonical zettel: {duplicate['path']} "
@@ -5960,6 +5968,7 @@ def promote_zettel_dry_run(
         "blockers": blockers,
         "warnings": warnings,
         "checklist": checklist,
+        "duplicate_check": duplicate_check,
         "near_duplicates": near_duplicates,
         "receipt_preview": receipt_preview,
         "would_change": [
@@ -6141,6 +6150,7 @@ def mint_zettel_dry_run(
         "warnings": warnings,
         "checklist": promotion_dry_run["checklist"],
         "mint_checklist_guidance": mint_checklist_guidance(promotion_dry_run["checklist"]),
+        "duplicate_check": promotion_dry_run.get("duplicate_check", {}),
         "near_duplicates": promotion_dry_run["near_duplicates"],
         "receipt_preview": receipt_preview,
         "would_change": [
@@ -6293,6 +6303,15 @@ def mint_zettel(
                 created_path.unlink()
         raise
 
+    generated_index_updated = False
+    duplicate_check = dry_run.get("duplicate_check") if isinstance(dry_run.get("duplicate_check"), dict) else {}
+    if duplicate_check.get("used_generated_index"):
+        try:
+            generated_index_updated = upsert_zettel_index_entry(root, canonical_path, canonical_frontmatter, body)
+        except (OSError, sqlite3.Error):
+            generated_index_updated = False
+            dry_run["warnings"].append("Generated index update failed after mint; run archive index before the next large mint batch.")
+
     return {
         "ok": True,
         "dry_run": False,
@@ -6305,6 +6324,8 @@ def mint_zettel(
         "draft_snapshot_path": snapshot_relative,
         "reviewed_by": reviewer,
         "warnings": dry_run["warnings"],
+        "duplicate_check": duplicate_check,
+        "generated_index_updated": generated_index_updated,
         "near_duplicates": dry_run["near_duplicates"],
         "checklist": dry_run["checklist"],
         "created_paths": created_paths,
@@ -6374,6 +6395,170 @@ def verify_sha256_reference(path: Path, expected: Any, blockers: list[str], labe
     return actual
 
 
+def parse_receipt_time(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def receipt_cutoff_time(data: dict[str, Any]) -> datetime | None:
+    for key in ["timestamp", "created_at", "reviewed_at"]:
+        parsed = parse_receipt_time(data.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def text_sha256_candidates(text: str) -> set[str]:
+    candidates = {text.encode("utf-8")}
+    candidates.add(text.replace("\n", "\r\n").encode("utf-8"))
+    return {hashlib.sha256(item).hexdigest() for item in candidates}
+
+
+def candidate_zettel_texts(frontmatter: dict[str, Any], body: str) -> list[str]:
+    dumped = dump_yaml(frontmatter)
+    no_blank = "---\n" + dumped + "---\n" + body
+    with_blank = "---\n" + dumped + "---\n\n" + body.rstrip() + "\n"
+    return list(dict.fromkeys([no_blank, with_blank]))
+
+
+def edge_receipts_for_source(archive_root: Path, source_relative: str) -> list[dict[str, Any]]:
+    root = archive_root / ZETTEL_EDGE_RECEIPTS_DIR
+    if not root.is_dir():
+        return []
+    receipts: list[dict[str, Any]] = []
+    for path in safe_archive_glob(root, "*.zettel-edge.json", archive_root):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if data.get("receipt_kind") != "zettel_edge_write":
+            continue
+        if data.get("source_zettel_path") != source_relative:
+            continue
+        created_at = parse_receipt_time(data.get("created_at"))
+        if created_at is None:
+            continue
+        receipts.append(
+            {
+                "receipt_path": archive_relative_path(path, archive_root),
+                "edge_id": str(data.get("edge_id") or "").strip(),
+                "created_at": created_at,
+                "created_at_raw": data.get("created_at"),
+            }
+        )
+    return receipts
+
+
+def target_sha_evolved_by_edge_receipts(
+    archive_root: Path,
+    receipt_data: dict[str, Any],
+    target_path: Path,
+    expected_sha: str,
+) -> bool:
+    try:
+        target_relative = archive_relative_path(target_path, archive_root)
+    except (ArchivePathError, OSError, ValueError):
+        return False
+    cutoff = receipt_cutoff_time(receipt_data)
+    if cutoff is None:
+        return False
+
+    try:
+        target_text = target_path.read_text(encoding="utf-8")
+        frontmatter, body = split_zettel_text(target_text)
+    except (OSError, UnicodeError, ArchiveServiceError):
+        return False
+    edges = frontmatter.get("edges")
+    if not isinstance(edges, list):
+        return False
+
+    edge_receipts = edge_receipts_for_source(archive_root, target_relative)
+    if not edge_receipts:
+        return False
+
+    mint = frontmatter.get("mint") if isinstance(frontmatter.get("mint"), dict) else {}
+    updated_at_candidates: list[str] = [
+        value
+        for value in [
+            mint.get("minted_at"),
+            receipt_data.get("timestamp"),
+            receipt_data.get("reviewed_at"),
+            receipt_data.get("created_at"),
+        ]
+        if isinstance(value, str) and value.strip()
+    ]
+    previous_edge_times = [
+        item
+        for item in edge_receipts
+        if item["created_at"] < cutoff and isinstance(item.get("created_at_raw"), str)
+    ]
+    if previous_edge_times:
+        latest = max(previous_edge_times, key=lambda item: item["created_at"])
+        updated_at_candidates.append(str(latest["created_at_raw"]))
+
+    for inclusive in [False, True]:
+        removable = [
+            item
+            for item in edge_receipts
+            if item["created_at"] > cutoff or (inclusive and item["created_at"] == cutoff)
+        ]
+        receipt_paths = {str(item.get("receipt_path") or "") for item in removable if item.get("receipt_path")}
+        edge_ids = {str(item.get("edge_id") or "") for item in removable if item.get("edge_id")}
+        if not receipt_paths and not edge_ids:
+            continue
+
+        retained_edges = []
+        removed_count = 0
+        for edge in edges:
+            if not isinstance(edge, dict):
+                retained_edges.append(edge)
+                continue
+            edge_receipt = str(edge.get("receipt") or "").strip()
+            edge_id = str(edge.get("edge_id") or "").strip()
+            if (edge_receipt and edge_receipt in receipt_paths) or (edge_id and edge_id in edge_ids):
+                removed_count += 1
+                continue
+            retained_edges.append(edge)
+        if removed_count == 0:
+            continue
+
+        for updated_at in dict.fromkeys(updated_at_candidates):
+            candidate_frontmatter = dict(frontmatter)
+            candidate_frontmatter["edges"] = retained_edges
+            candidate_frontmatter["updated_at"] = updated_at
+            for candidate_text in candidate_zettel_texts(candidate_frontmatter, body):
+                if expected_sha in text_sha256_candidates(candidate_text):
+                    return True
+    return False
+
+
+def verify_mint_target_sha_reference(
+    archive_root: Path,
+    path: Path,
+    expected: Any,
+    receipt: dict[str, Any],
+    blockers: list[str],
+    warnings: list[str],
+) -> str | None:
+    if not isinstance(expected, str) or not SHA256_RE.match(expected):
+        blockers.append("Mint receipt target sha256 is missing or invalid.")
+        return None
+    actual = sha256_path(path)
+    if actual == expected:
+        return actual
+    if target_sha_evolved_by_edge_receipts(archive_root, receipt, path, expected):
+        warnings.append("Mint receipt target sha256 is historical; current target differs only by approved zettel-edge receipts.")
+        return actual
+    blockers.append("Mint receipt target sha256 does not match the referenced file.")
+    return actual
+
+
 def minted_draft_retirement_plan(
     archive_root: Path | str,
     *,
@@ -6438,7 +6623,11 @@ def minted_draft_retirement_plan(
     snapshot_path = resolve_required_archive_file(root, snapshot_relative, blockers, "Draft snapshot")
 
     source_sha = verify_sha256_reference(draft_path, source.get("sha256"), blockers, "Mint receipt source")
-    canonical_sha = verify_sha256_reference(canonical_path, target.get("sha256"), blockers, "Mint receipt target") if canonical_path else None
+    canonical_sha = (
+        verify_mint_target_sha_reference(root, canonical_path, target.get("sha256"), receipt, blockers, warnings)
+        if canonical_path
+        else None
+    )
     snapshot_sha = verify_sha256_reference(snapshot_path, snapshot.get("sha256"), blockers, "Mint receipt snapshot") if snapshot_path else None
     if source_sha and snapshot_sha and source_sha != snapshot_sha:
         if snapshot_path is not None and files_match_after_newline_normalization(draft_path, snapshot_path):
@@ -6897,18 +7086,44 @@ def find_promotion_duplicates(
     frontmatter: dict[str, Any],
     body: str,
     proposed_path: str,
+    duplicate_check: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     canonical_root = archive_root / "zettels"
     if not canonical_root.is_dir():
+        if duplicate_check is not None:
+            duplicate_check.update(
+                {
+                    "source": "none",
+                    "used_generated_index": False,
+                    "fallback_reason": "canonical_root_missing",
+                    "canonical_candidates_checked": 0,
+                }
+            )
         return []
 
     zettel_id = str(frontmatter.get("id") or "")
     title_key = normalize_compare_text(str(frontmatter.get("title") or ""))
     body_key = normalize_compare_text(body)[:500]
     duplicates: list[dict[str, Any]] = []
+    indexed_rows, index_state = promotion_duplicate_index_rows(archive_root)
+    if duplicate_check is not None:
+        duplicate_check.update(index_state)
+    if indexed_rows:
+        return find_promotion_duplicates_from_rows(
+            indexed_rows,
+            draft_path=draft_path,
+            archive_root=archive_root,
+            zettel_id=zettel_id,
+            title_key=title_key,
+            body_key=body_key,
+            proposed_path=proposed_path,
+        )
+
+    checked = 0
     for candidate in safe_archive_glob(canonical_root, "*.md", archive_root, recursive=True):
         if candidate.resolve() == draft_path.resolve():
             continue
+        checked += 1
         candidate_relative = archive_relative_path(candidate, archive_root)
         candidate_frontmatter, candidate_body = split_zettel_text(candidate.read_text(encoding="utf-8"))
         candidate_frontmatter = json_safe(candidate_frontmatter)
@@ -6934,6 +7149,148 @@ def find_promotion_duplicates(
         candidate_body_key = normalize_compare_text(candidate_body)[:500]
         body_is_similar = len(body_key) >= 120 and candidate_body_key == body_key
         if title_key and normalize_compare_text(str(candidate_frontmatter.get("title") or "")) == title_key:
+            if not body_is_similar:
+                continue
+            duplicates.append(
+                {
+                    "path": candidate_relative,
+                    "reason": "same_title",
+                    "severity": "warning",
+                }
+            )
+            continue
+        if body_is_similar:
+            duplicates.append(
+                {
+                    "path": candidate_relative,
+                    "reason": "very_similar_body_start",
+                    "severity": "warning",
+                }
+            )
+    if duplicate_check is not None:
+        duplicate_check["canonical_candidates_checked"] = checked
+    return duplicates
+
+
+def promotion_duplicate_index_rows(archive_root: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    db_path = archive_root / INDEX_RELATIVE_PATH
+    state: dict[str, Any] = {
+        "source": "live_scan",
+        "used_generated_index": False,
+        "index_path": INDEX_RELATIVE_PATH,
+        "fallback_reason": None,
+        "stale_reasons": [],
+        "canonical_candidates_checked": 0,
+    }
+    if not db_path.is_file():
+        state["fallback_reason"] = "archive_index_missing"
+        return [], state
+
+    canonical_root = archive_root / "zettels"
+    live_paths = [
+        archive_relative_path(path, archive_root)
+        for path in safe_archive_glob(canonical_root, "*.md", archive_root, recursive=True)
+    ]
+    state["canonical_candidates_checked"] = len(live_paths)
+    db_mtime = db_path.stat().st_mtime
+    modified_after_index = []
+    for relative in live_paths:
+        try:
+            if resolve_archive_relative_path(archive_root, relative).stat().st_mtime > db_mtime:
+                modified_after_index.append(relative)
+        except (OSError, ArchivePathError):
+            modified_after_index.append(relative)
+
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = [
+                {
+                    "path": str(row["path"] or ""),
+                    "zettel_id": str(row["zettel_id"] or ""),
+                    "title": str(row["title"] or ""),
+                    "body": str(row["body"] or ""),
+                }
+                for row in conn.execute(
+                    """
+                    SELECT path, zettel_id, title, body
+                    FROM zettels
+                    WHERE coalesce(status, '') = 'canonical'
+                      AND path LIKE 'zettels/%'
+                    ORDER BY path
+                    """
+                ).fetchall()
+            ]
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        state["fallback_reason"] = "archive_index_unreadable"
+        return [], state
+
+    indexed_paths = {row["path"] for row in rows}
+    live_path_set = set(live_paths)
+    stale_reasons = []
+    if live_path_set - indexed_paths:
+        stale_reasons.append("canonical_zettels_missing_from_index")
+    if indexed_paths - live_path_set:
+        stale_reasons.append("index_has_missing_live_canonical_paths")
+    if modified_after_index:
+        stale_reasons.append("canonical_zettel_modified_after_index")
+    if stale_reasons:
+        state["fallback_reason"] = "archive_index_stale"
+        state["stale_reasons"] = stale_reasons
+        return [], state
+
+    state.update(
+        {
+            "source": "generated_index",
+            "used_generated_index": True,
+            "fallback_reason": None,
+            "indexed_canonical_count": len(rows),
+            "stale_reasons": [],
+        }
+    )
+    return rows, state
+
+
+def find_promotion_duplicates_from_rows(
+    rows: list[dict[str, Any]],
+    *,
+    draft_path: Path,
+    archive_root: Path,
+    zettel_id: str,
+    title_key: str,
+    body_key: str,
+    proposed_path: str,
+) -> list[dict[str, Any]]:
+    duplicates: list[dict[str, Any]] = []
+    draft_relative = archive_relative_path(draft_path, archive_root)
+    for row in rows:
+        candidate_relative = str(row.get("path") or "")
+        if candidate_relative == draft_relative:
+            continue
+        if candidate_relative == proposed_path:
+            duplicates.append(
+                {
+                    "path": candidate_relative,
+                    "reason": "target_path_exists",
+                    "severity": "blocker",
+                }
+            )
+            continue
+        if zettel_id and str(row.get("zettel_id") or "") == zettel_id:
+            duplicates.append(
+                {
+                    "path": candidate_relative,
+                    "reason": "same_zettel_id",
+                    "severity": "blocker",
+                }
+            )
+            continue
+        candidate_body_key = normalize_compare_text(str(row.get("body") or ""))[:500]
+        body_is_similar = len(body_key) >= 120 and candidate_body_key == body_key
+        if title_key and normalize_compare_text(str(row.get("title") or "")) == title_key:
             if not body_is_similar:
                 continue
             duplicates.append(
@@ -44141,6 +44498,59 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
         "facets": facet_count,
         "warnings": warnings,
     }
+
+
+def upsert_zettel_index_entry(root: Path, zettel_path: Path, frontmatter: dict[str, Any], body: str) -> bool:
+    db_path = root / INDEX_RELATIVE_PATH
+    if not db_path.is_file():
+        return False
+
+    relative = archive_relative_path(zettel_path, root)
+    zettel_status = frontmatter.get("status")
+    zettel_id = str(frontmatter.get("id") or "")
+    redacted = zettel_status == "redacted"
+
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO zettels(path, zettel_id, title, status, kind, body, frontmatter_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                relative,
+                zettel_id or None,
+                "" if redacted else frontmatter.get("title"),
+                zettel_status,
+                frontmatter.get("kind"),
+                "" if redacted else body,
+                "" if redacted else json.dumps(json_safe(frontmatter), ensure_ascii=False, default=str),
+            ),
+        )
+
+        if zettel_id:
+            conn.execute("DELETE FROM edges WHERE from_id = ?", (zettel_id,))
+            conn.execute("DELETE FROM zettel_facets WHERE zettel_id = ?", (zettel_id,))
+            if not redacted:
+                for ref in collect_referenced_zets(frontmatter):
+                    conn.execute(
+                        "INSERT INTO edges(from_id, to_id, edge_type) VALUES (?, ?, ?)",
+                        (zettel_id, ref["id"], ref.get("edge_type")),
+                    )
+                facets = frontmatter.get("facets")
+                if isinstance(facets, dict):
+                    for facet_key, facet_value in facets.items():
+                        values = facet_value if isinstance(facet_value, list) else [facet_value]
+                        for item in values:
+                            if isinstance(item, (str, int, float, bool)):
+                                conn.execute(
+                                    "INSERT INTO zettel_facets(zettel_id, facet_key, facet_value) VALUES (?, ?, ?)",
+                                    (zettel_id, str(facet_key), str(item)),
+                                )
+        conn.commit()
+    finally:
+        conn.close()
+    return True
 
 
 def view_zets(

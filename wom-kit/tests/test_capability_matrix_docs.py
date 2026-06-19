@@ -279,6 +279,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Mint lifecycle",
             "mint_checklist_guidance",
             "preferred `mint.checklist` frontmatter path",
+            "`duplicate_check` metadata",
+            "use the generated index instead of rereading every canonical zet body",
+            "upserts the new canonical row",
+            "mint target SHA that changed only through approved post-receipt zettel-edge writes can still retire",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -286,6 +290,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "minting with dry-run checklist guidance",
             "v0.3.95 - 2026-06-17",
             "mint_checklist_guidance",
+            "v0.3.114 - 2026-06-19",
+            "generated index",
+            "retire-draft",
         ):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in readme_text or phrase in changelog_text)
