@@ -124,6 +124,7 @@ docs/imap-mailbox-material-capture-approval-plan.md
 docs/imap-mailbox-material-capture-approval-audit.md
 docs/version-truth-source.md
 docs/runtime-canonical-entrypoints.md
+docs/operational-context.md
 docs/connected-accounts.md
 docs/credential-semantic-extraction-recipe.md
 docs/credential-keepassxc-command-plan.md
@@ -1122,6 +1123,12 @@ directly, with matching frontmatter id verification, before the legacy
 archive-wide id scan fallback. Generated-index-backed `mint-zet --zettel-id`
 dry-run and approve flows no longer reparse every zettel just to find the
 standard inbox draft path.
+v0.3.117 adds AI operational context rehydration: `runtime-context` now exposes
+the bounded `operational_context` record from `ops/operational-context.yml`, and
+CLI `archive operational-context` can dry-run read or approval-write reviewed
+mission, scope, state, gotchas, decisions, and next actions with a receipt. It
+does not replace zets or receipts, scan broad archive bodies, call providers, or
+add MCP write tools.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

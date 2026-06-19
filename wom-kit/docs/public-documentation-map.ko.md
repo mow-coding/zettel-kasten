@@ -187,6 +187,7 @@
 - [View Recommendation Plan](view-recommendation-plan.md)
 - [Version Truth Source](version-truth-source.md)
 - [Runtime Canonical Entry Points](runtime-canonical-entrypoints.md)
+- [Operational Context](operational-context.md)
 - [한국어 제품 언어 기준선](concepts/korean-product-language-baseline.ko.md)
 - [한국어 제품 언어 Hygiene](korean-product-language-hygiene.md)
 - [ZET Publication Surface Baseline](zet-publication-surface-baseline.md)

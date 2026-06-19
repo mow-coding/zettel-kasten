@@ -13,6 +13,8 @@ Commands:
           Preview wallet-ready identity metadata for a resolved WOM profile.
   runtime-context
           Print read-only AI runtime context for a mounted archive.
+  operational-context
+          Read or approve-update the AI-facing mission/state rehydration record.
   prompt-boundary
           Preview prompt-injection boundary risk for untrusted text.
   github-repo
@@ -1970,6 +1972,32 @@ def command_runtime_context(args: argparse.Namespace) -> int:
             strict=args.strict,
             redact_local_paths=args.redact_local_paths,
             diagnostics=diagnostics,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_json(result)
+    return 0 if result["ok"] else 1
+
+
+def command_operational_context(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("operational-context requires --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("operational-context requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.operational_context(
+            Path(args.archive_root),
+            record_path=args.record,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
         )
     except archive_services.ArchiveServiceError as exc:
         print(str(exc), file=sys.stderr)
@@ -9471,6 +9499,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runtime_context.add_argument("--format", choices=["json"], default="json", help="Output format.")
     runtime_context.set_defaults(func=command_runtime_context)
+
+    operational_context = subcommands.add_parser(
+        "operational-context",
+        help="Read or approve-update the AI-facing mission/state rehydration record.",
+    )
+    operational_context.add_argument("archive_root", help="Archive root to inspect or update.")
+    operational_context.add_argument(
+        "--record",
+        help="Archive-relative staged YAML candidate to validate or approve into ops/operational-context.yml.",
+    )
+    operational_context.add_argument("--dry-run", action="store_true", help="Read or preview only; never write files.")
+    operational_context.add_argument("--approve", action="store_true", help="Approve writing the staged operational context record.")
+    operational_context.add_argument("--reviewed-by", help="Safe non-secret actor id required when --approve is used.")
+    operational_context.add_argument("--format", choices=["json"], default="json", help="Output format.")
+    operational_context.set_defaults(func=command_operational_context)
 
     prompt_boundary = subcommands.add_parser(
         "prompt-boundary",

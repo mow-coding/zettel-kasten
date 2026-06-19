@@ -1008,6 +1008,7 @@ class ArchiveCliTests(unittest.TestCase):
                     "inbox": "inbox/",
                     "zettels": "zettels/",
                     "receipts": "receipts/",
+                    "operational_context": "ops/operational-context.yml",
                     "object_manifest": "objects/manifests/files.jsonl",
                 },
             )
@@ -1020,6 +1021,19 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(result["wom_kit_version"]["project_pin"]["status"], "missing")
             self.assertTrue(result["wom_kit_version"]["redaction"]["local_paths_redacted"])
             self.assertNotIn("local_paths", result["wom_kit_version"])
+            operational_context = result["operational_context"]
+            self.assertTrue(operational_context["ok"])
+            self.assertEqual(operational_context["lifecycle_action"], "operational_context")
+            self.assertEqual(operational_context["status"], "present")
+            self.assertEqual(operational_context["record_path"], "ops/operational-context.yml")
+            self.assertIn("session resets", operational_context["record"]["mission"]["summary"])
+            self.assertEqual(
+                operational_context["session_start_injection"]["source"],
+                "ops/operational-context.yml",
+            )
+            self.assertIn("Run runtime-context first.", operational_context["session_start_injection"]["next"])
+            self.assertTrue(operational_context["closed_actions"]["file_body_read"])
+            self.assertFalse(operational_context["closed_actions"]["files_written"])
             entrypoints = result["canonical_entrypoints"]
             self.assertEqual(entrypoints["lifecycle_action"], "runtime_canonical_entrypoints")
             self.assertEqual(entrypoints["start_here"], "archive.yml")
@@ -1027,18 +1041,24 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(entrypoints["source_truths"]["canonical_zets"], "zettels/")
             self.assertEqual(entrypoints["source_truths"]["draft_inbox"], "inbox/")
             self.assertEqual(entrypoints["source_truths"]["objet_manifest"], "objects/manifests/files.jsonl")
+            self.assertEqual(entrypoints["source_truths"]["operational_context"], "ops/operational-context.yml")
             self.assertEqual(
                 entrypoints["recommended_first_commands"][0]["command"],
                 "archive runtime-context <archive-root> --format json",
             )
             self.assertEqual(
                 entrypoints["recommended_first_commands"][1]["command"],
+                "archive operational-context <archive-root> --dry-run --format json",
+            )
+            self.assertEqual(
+                entrypoints["recommended_first_commands"][2]["command"],
                 "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
             )
             self.assertEqual(
                 [step["action"] for step in entrypoints["ai_runtime_order"]],
                 [
                     "run_runtime_context",
+                    "read_operational_context",
                     "read_canonical_entrypoints",
                     "read_local_agent_instructions",
                     "run_ai_response_concept_guide",
@@ -1066,6 +1086,7 @@ class ArchiveCliTests(unittest.TestCase):
                 "zettels/",
                 "inbox/",
                 "objects/manifests/files.jsonl",
+                "ops/operational-context.yml",
                 "objects/manifests/derived-text.jsonl",
                 "views/",
                 "db/schema.sql",
@@ -1074,8 +1095,136 @@ class ArchiveCliTests(unittest.TestCase):
                     self.assertEqual(entrypoint_statuses[relative]["status"], "present")
                     self.assertTrue(entrypoint_statuses[relative]["exists"])
             self.assertIn("run ai-response-concept-guide dry-run", result["available_safe_actions"])
+            self.assertIn("run operational-context dry-run", result["available_safe_actions"])
             self.assertIn("create draft in inbox", result["available_safe_actions"])
             self.assertIn("mint only through CLI approve path", result["available_safe_actions"])
+
+    def test_operational_context_dry_run_and_approve_write_reviewed_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            candidate = archive_root / "workbench" / "operational-context.next.yml"
+            candidate.write_text(
+                """schema: wom-kit/operational-context/v0.1
+mission:
+  summary: Keep all active migration targets visible to AI runtimes after context compression.
+  scope:
+    - Treat DB1, DB2, DB3, and DB4 as active migration targets until a reviewed receipt says otherwise.
+  non_goals:
+    - Do not call providers from operational-context.
+state:
+  phase: migration rehydration checkpoint
+  completed:
+    - Runtime-context can expose a current operational record.
+  in_progress:
+    - Turn client feedback into an approved operating-memory layer.
+  next:
+    - Confirm active scope before broad archive reads.
+    - Update this record through the approval gate when the plan changes.
+  blocked: []
+gotchas:
+  - Compressed session memory must not demote active migration targets into history.
+decisions:
+  - The operational context record is the AI-facing single source of truth for mission and state.
+rehydration:
+  session_start:
+    - Read operational_context.session_start_injection before continuing.
+  on_demand_commands:
+    - archive runtime-context <archive-root> --format json
+    - archive operational-context <archive-root> --dry-run --format json
+""",
+                encoding="utf-8",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "operational-context",
+                    str(archive_root),
+                    "--record",
+                    "workbench/operational-context.next.yml",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertTrue(dry_result["ok"])
+            self.assertEqual(dry_result["status"], "would_write")
+            self.assertEqual(dry_result["record_path"], "ops/operational-context.yml")
+            self.assertEqual(dry_result["source_record_path"], "workbench/operational-context.next.yml")
+            self.assertIn("receipts/operational-context/", dry_result["proposed_receipt_path"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root), dry_output)
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "operational-context",
+                    str(archive_root),
+                    "--record",
+                    "workbench/operational-context.next.yml",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            approve_result = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"])
+            self.assertEqual(approve_result["status"], "written")
+            self.assertEqual(approve_result["record"]["reviewed_by"], "person:test-reviewer")
+            self.assertEqual(approve_result["record"]["state"]["phase"], "migration rehydration checkpoint")
+            self.assertTrue((archive_root / "ops" / "operational-context.yml").is_file())
+            self.assertTrue((archive_root / approve_result["receipt_path"]).is_file())
+            self.assertNotIn(str(archive_root), approve_output)
+
+            runtime_code, runtime_output = self.run_cli(["runtime-context", str(archive_root), "--format", "json"])
+            runtime_result = json.loads(runtime_output)
+            self.assertEqual(runtime_code, 0, runtime_output)
+            self.assertEqual(
+                runtime_result["operational_context"]["session_start_injection"]["phase"],
+                "migration rehydration checkpoint",
+            )
+            self.assertIn(
+                "Confirm active scope before broad archive reads.",
+                runtime_result["operational_context"]["session_start_injection"]["next"],
+            )
+
+    def test_operational_context_blocks_provider_urls_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            candidate = archive_root / "workbench" / "operational-context.unsafe.yml"
+            candidate.write_text(
+                """schema: wom-kit/operational-context/v0.1
+mission:
+  summary: Read https://provider.example/private before continuing.
+state:
+  phase: unsafe candidate
+""",
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "operational-context",
+                    str(archive_root),
+                    "--record",
+                    "workbench/operational-context.unsafe.yml",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("unsafe operational context value" in item for item in result["blockers"]))
+            self.assertFalse((archive_root / "receipts" / "operational-context").exists())
 
     def test_runtime_context_expected_archive_id_mismatch_blocks(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
