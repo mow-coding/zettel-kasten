@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.117 - 2026-06-20
+
+- Added AI operational context rehydration through `ops/operational-context.yml`
+  and runtime-context field `operational_context`, so an AI runtime can recover
+  mission, scope, state, gotchas, reviewed decisions, and next actions before
+  broad archive reads after context compression or session reset.
+- Added CLI `archive operational-context <archive-root> --dry-run --format json`
+  for read-only inspection and candidate validation, plus approval-gated
+  `--record ... --approve --reviewed-by <actor>` writes that replace the record
+  and write `receipts/operational-context/*.operational-context.json`.
+- Added privacy guards that block provider URLs, local path hints, email-like
+  account labels, tokens, and secret-like values in operational-context candidate
+  values before any write.
+- Updated runtime canonical entrypoint order, capability matrix, README, fake
+  archive fixture, and docs so public readers can see that this is a bounded AI
+  rehydration layer, not broad archive scanning, provider sync, MCP write
+  behavior, or a replacement for zets and receipts.
+
 ## v0.3.116 - 2026-06-19
 
 - Added a standard zettel-id source path fast path to `resolve_zettel_path`:

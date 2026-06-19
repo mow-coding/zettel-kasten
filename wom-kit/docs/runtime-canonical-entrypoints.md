@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.106 read-only AI guide handoff and material-route discovery checkpoint
+Status: v0.3.117 AI operational context rehydration checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -14,10 +14,13 @@ v0.3.58 adds that map to:
 archive runtime-context <archive-root> --format json
 ```
 
-The result includes `canonical_entrypoints`. From v0.3.106, that object also
-includes machine-readable `ai_runtime_order`, `recommended_first_commands`, and
-`material_link_routes` so a terminal-capable AI can discover the guide handoff
-without waiting for the human to mention it.
+The result includes `canonical_entrypoints`. From v0.3.117, it also includes
+`operational_context`, a read-only view of `ops/operational-context.yml` for
+AI-facing mission, scope, state, gotchas, and reviewed decisions. The
+`canonical_entrypoints` object includes machine-readable `ai_runtime_order`,
+`recommended_first_commands`, and `material_link_routes` so a terminal-capable
+AI can discover both the operational handoff and the guide handoff without
+waiting for the human to mention them.
 
 ## AI Runtime Order
 
@@ -25,17 +28,26 @@ When an AI enters an archive, use this order before interpreting or writing
 anything:
 
 1. Run `archive runtime-context <archive-root> --format json`.
-2. Read `canonical_entrypoints`, especially `archive.yml` and `AGENTS.md`.
-3. Run `archive ai-response-concept-guide <archive-root> --topic all --dry-run`
+2. Read `operational_context.session_start_injection` when present.
+3. Read `canonical_entrypoints`, especially `archive.yml`, `AGENTS.md`, and
+   `ops/operational-context.yml`.
+4. Run `archive ai-response-concept-guide <archive-root> --topic all --dry-run`
    when the human is asking what to do next.
-4. For Notion material links, choose the route from that guide:
+5. For Notion material links, choose the route from that guide:
    `notion-objet-import-clue-audit` to check omitted-locator imports,
    `notion-objet-source-map-link-plan` when source maps or ledgers can recover
    a candidate, or `notion-objet-link-index` / `notion-objet-link-plan` when
    body locators still exist.
 
-This order keeps archive identity, local instructions, beginner-facing wording,
-and material-link safety gates aligned before any later approval-gated write.
+This order keeps archive identity, operational mission/state, local
+instructions, beginner-facing wording, and material-link safety gates aligned
+before any later approval-gated write.
+
+To inspect only the operational handoff, run:
+
+```powershell
+archive operational-context <archive-root> --dry-run --format json
+```
 
 The same order is returned in JSON:
 
@@ -43,6 +55,7 @@ The same order is returned in JSON:
 canonical_entrypoints.ai_runtime_order
 canonical_entrypoints.recommended_first_commands
 canonical_entrypoints.material_link_routes
+operational_context.session_start_injection
 ```
 
 The route list includes `notion-objet-import-clue-audit`,
@@ -65,6 +78,8 @@ and their roles:
 - `archive-identity.yml`: owner and principal identity context,
 - `source-bindings.yml`: source catalog,
 - `provider-bindings.yml`: provider setup metadata,
+- `ops/operational-context.yml`: AI-facing mission, scope, state, gotchas, and
+  reviewed decisions,
 - `zettels/`: canonical zets,
 - `inbox/`: draft inbox,
 - `objects/manifests/files.jsonl`: objet manifest,
@@ -79,9 +94,11 @@ the workspace as authoritative.
 
 ## Privacy Boundary
 
-The entrypoint check is a map, not an import:
+The entrypoint check is mostly a map, not an import. The operational context
+field intentionally reads only `ops/operational-context.yml` so the AI can
+rehydrate the current mission/state. Apart from that bounded record:
 
-- it reads no file bodies,
+- it reads no other file bodies,
 - it writes no files,
 - it calls no providers,
 - it reads no secrets, keyrings, vaults, browser stores, mailboxes, or source
@@ -92,8 +109,8 @@ Use `runtime-context --no-redact-local-paths` only for trusted local debugging.
 
 ## Not Implemented
 
-v0.3.106 does not enforce migration, auto-upgrade project folders, scan file
-contents, choose between competing exports, synchronize providers, write
-material links, or run IMAP adapters. It only gives AI runtimes a deterministic
-archive-relative map of what to consult first and which read-only guide command
-or material-link route to run next.
+v0.3.117 does not enforce migration, auto-upgrade project folders, scan broad
+file contents, choose between competing exports, synchronize providers, write
+material links, or run IMAP adapters. It gives AI runtimes a deterministic
+archive-relative map, a bounded operational-context rehydration record, and the
+read-only guide command or material-link route to run next.

@@ -71,6 +71,7 @@ IMAP_MAILBOX_MATERIAL_CAPTURE_APPROVAL_PATH = KIT_ROOT / "docs" / "imap-mailbox-
 IMAP_MAILBOX_MATERIAL_CAPTURE_APPROVAL_AUDIT_PATH = KIT_ROOT / "docs" / "imap-mailbox-material-capture-approval-audit.md"
 VERSION_TRUTH_SOURCE_PATH = KIT_ROOT / "docs" / "version-truth-source.md"
 RUNTIME_CANONICAL_ENTRYPOINTS_PATH = KIT_ROOT / "docs" / "runtime-canonical-entrypoints.md"
+OPERATIONAL_CONTEXT_PATH = KIT_ROOT / "docs" / "operational-context.md"
 NOTION_PAGE_SNAPSHOT_MODEL_PATH = KIT_ROOT / "docs" / "notion-page-snapshot-model.md"
 OBJET_REF_RESOLUTION_PATH = KIT_ROOT / "docs" / "objet-ref-resolution.md"
 ZETTEL_OBJET_LINKS_PATH = KIT_ROOT / "docs" / "zettel-objet-links.md"
@@ -427,8 +428,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.58.md").read_text(encoding="utf-8")
         current_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.106.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.106 read-only AI guide handoff and material-route discovery checkpoint",
+            "Status: v0.3.117 AI operational context rehydration checkpoint",
             "archive runtime-context <archive-root> --format json",
+            "operational_context",
+            "ops/operational-context.yml",
+            "operational_context.session_start_injection",
             "canonical_entrypoints",
             "ai_runtime_order",
             "recommended_first_commands",
@@ -436,6 +440,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "AI Runtime Order",
             "archive.yml",
             "AGENTS.md",
+            "archive operational-context <archive-root> --dry-run --format json",
             "archive ai-response-concept-guide <archive-root> --topic all --dry-run",
             "notion-objet-import-clue-audit",
             "notion-objet-source-map-link-plan",
@@ -444,7 +449,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "provider-bindings.yml",
             "objects/manifests/files.jsonl",
             "objects/manifests/derived-text.jsonl",
-            "reads no file bodies",
+            "reads no other file bodies",
             "writes no files",
             "calls no providers",
             "reads no secrets",
@@ -457,12 +462,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Status: v0.3.87 connection edge intelligence checkpoint",
             "Runtime canonical entrypoints",
             "Runtime-context field `canonical_entrypoints`",
+            "AI operational context rehydration",
+            "Runtime-context field `operational_context`",
             "`ai_runtime_order`",
             "`recommended_first_commands`",
             "`material_link_routes`",
             "`archive.yml` as the start-here file",
             "`source-bindings.yml`",
-            "reads no file bodies",
+            "`ops/operational-context.yml`",
             "echoes no local absolute paths by default",
         ):
             with self.subTest(phrase=phrase):
@@ -471,11 +478,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "v0.3.87 pre-release",
             "[Runtime Canonical Entry Points](wom-kit/docs/runtime-canonical-entrypoints.md)",
             "runtime-context canonical entrypoint metadata",
+            "AI operational context rehydration",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
             "docs/runtime-canonical-entrypoints.md",
+            "docs/operational-context.md",
             "canonical entrypoint metadata",
             "WOM-kit version",
         ):
@@ -502,6 +511,74 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, current_release_text)
         self.assertIn("[Runtime Canonical Entry Points](runtime-canonical-entrypoints.md)", public_map_text)
         self.assertIn("[Runtime Canonical Entry Points](runtime-canonical-entrypoints.md)", public_map_ko_text)
+
+    def test_operational_context_doc_and_release_surfaces_define_rehydration_boundary(self) -> None:
+        operational_text = OPERATIONAL_CONTEXT_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.117.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.117 AI operational context rehydration checkpoint",
+            "ops/operational-context.yml",
+            "operational_context.record",
+            "operational_context.session_start_injection",
+            "archive operational-context <archive-root> --dry-run --format json",
+            "workbench/operational-context.next.yml",
+            "--approve --reviewed-by",
+            "receipts/operational-context/",
+            "must not contain provider URLs, local absolute paths",
+            "exposes no MCP write tool",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, operational_text)
+        for phrase in (
+            "Status: v0.3.117 AI operational context rehydration checkpoint",
+            "AI operational context rehydration",
+            "approval-gated write",
+            "Runtime-context field `operational_context`",
+            "`ops/operational-context.yml`",
+            "`archive operational-context <archive-root> --dry-run --format json`",
+            "`receipts/operational-context/*.operational-context.json`",
+            "MCP write tool",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.117 pre-release",
+            "AI operational context rehydration",
+            "`ops/operational-context.yml`",
+            "`archive operational-context`",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        for phrase in (
+            "docs/operational-context.md",
+            "v0.3.117 adds AI operational context rehydration",
+            "CLI `archive operational-context`",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, kit_readme_text)
+        for phrase in (
+            "v0.3.117 - 2026-06-20",
+            "AI operational context rehydration",
+            "provider URLs, local path hints, email-like",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, changelog_text)
+        for phrase in (
+            "# v0.3.117 - AI Operational Context Rehydration",
+            "session_start_injection",
+            "scan broad archive bodies",
+            "Candidate values that contain provider URLs",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
+        self.assertIn("[Operational Context](operational-context.md)", public_map_text)
+        self.assertIn("[Operational Context](operational-context.md)", public_map_ko_text)
 
     def test_capability_matrix_documents_closing_plan_without_product_behavior(self) -> None:
         text = MATRIX_PATH.read_text(encoding="utf-8")

@@ -1,0 +1,37 @@
+schema: wom-kit/operational-context/v0.1
+mission:
+  summary: Keep the Fake Life Archive usable across AI session resets by preserving the current mission, scope, state, gotchas, and reviewed decisions.
+  scope:
+    - Maintain the fake personal archive as a public-safe WOM demonstration.
+    - Keep canonical zets, inbox drafts, objets, receipts, views, and source maps discoverable from runtime-context.
+    - Treat operational context as AI-facing session rehydration, not as a replacement for zets or receipts.
+  non_goals:
+    - Do not call live providers from this fake archive.
+    - Do not store private account labels, emails, local paths, provider URLs, tokens, or source body text here.
+state:
+  phase: v0.3 real-use feedback and safety-hardening demo.
+  completed:
+    - Runtime-context exposes archive identity, entrypoints, version metadata, and safe action boundaries.
+    - Fake archive fixtures cover zets, inbox, objets, receipts, views, source maps, and derived-text manifests.
+  in_progress:
+    - Make AI runtime rehydration explicit before draft, mint, material-link, or migration work.
+  next:
+    - Run runtime-context first.
+    - Read this operational context before choosing archive actions.
+    - Use approval-gated commands for any state update.
+  blocked:
+    - Live provider sync and production ZET transport remain outside this fake archive.
+gotchas:
+  - DB or migration scopes must be written as explicit current scope when they are still active, not treated as history by compressed memory.
+  - This record is operational handoff material for AI runtimes; durable knowledge still belongs in zets, manifests, and receipts.
+decisions:
+  - Operational context lives at ops/operational-context.yml.
+  - AI may read operational context at session start, but updates require an approved CLI write and receipt.
+rehydration:
+  session_start:
+    - Read runtime-context.
+    - Read operational_context.session_start_injection.
+    - Confirm active mission, scope, next actions, and gotchas before inspecting broad zettel bodies.
+  on_demand_commands:
+    - archive runtime-context <archive-root> --format json
+    - archive operational-context <archive-root> --dry-run --format json

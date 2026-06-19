@@ -1,10 +1,11 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.116 mint source resolve fast path checkpoint
-Date: 2026-06-19
-Version: v0.3.116, release candidate
+Status: v0.3.117 AI operational context rehydration checkpoint
+Date: 2026-06-20
+Version: v0.3.117, release candidate
 
-Previous checkpoint: Status: v0.3.115 public roadmap baseline
+Previous checkpoint: Status: v0.3.116 mint source resolve fast path checkpoint
+Earlier public roadmap checkpoint: Status: v0.3.115 public roadmap baseline
 Earlier mint scale checkpoint: Status: v0.3.114 mint duplicate scale and retire edge-only checkpoint
 Earlier account recovery checkpoint: Status: v0.3.113 account recovery break-glass credential scenario checkpoint
 Earlier receipt checkpoint: Status: v0.3.112 receipt SHA evolution and zettel batch scale checkpoint
@@ -71,6 +72,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Runtime context | `read-only preview` | none | AI runtimes can confirm archive id, type, paths, policy, and safe next actions. |
 | WOM-kit version truth source | `read-only preview` | none | CLI `archive --version` prints the running CLI version. CLI `archive version [root] --format json` and runtime-context field `wom_kit_version` report `wom_kit.__version__`, source-checkout consistency, and an optional project installed-version pin. When the inspected root is an archive root, the pin check also looks at the parent project root and reports safe logical checked locations such as `parent_of_archive/.zettel-kasten/installed-version.txt` without echoing local absolute paths. It writes no files, calls no providers, and reads no secrets. |
 | Runtime canonical entrypoints | `read-only preview` | none | Runtime-context field `canonical_entrypoints` names `archive.yml` as the start-here file and lists archive-relative authoritative files/directories such as `AGENTS.md`, `source-bindings.yml`, `provider-bindings.yml`, `zettels/`, `inbox/`, object and derived-text manifests, views, and schema context. It also returns `ai_runtime_order`, `recommended_first_commands`, and `material_link_routes` so AI runtimes can discover the `runtime-context` -> `AGENTS.md` -> `ai-response-concept-guide` handoff and choose read-only Notion material-link routes without inventing provider calls. It reads no file bodies, writes nothing, calls no providers, reads no secrets, and echoes no local absolute paths by default. |
+| AI operational context rehydration | `approval-gated write` | dry-run reads first; CLI approve writes `ops/operational-context.yml` plus one receipt | Runtime-context field `operational_context` reads the bounded archive-internal `ops/operational-context.yml` record so AI runtimes can rehydrate mission, scope, state, gotchas, reviewed decisions, and next actions before broad archive reads. CLI `archive operational-context <archive-root> --dry-run --format json` reads the current record or validates a staged candidate. CLI `archive operational-context <archive-root> --record workbench/operational-context.next.yml --approve --reviewed-by <actor> --format json` replaces the record and writes `receipts/operational-context/*.operational-context.json`. Candidate values that contain provider URLs, local paths, email-like account labels, tokens, or secret-like values are blocked before write. It does not replace zets or receipts, scan broad archive bodies, call providers, read secrets, auto-resolve contradictory notes, or expose an MCP write tool. |
 | Profile registry list/resolve | `read-only preview` | none | Resolves the intended WOM profile before runtime-context or draft work. |
 | Profile wallet preview | `read-only preview` | none | Wallet-ready identity model only. No keys, signing, or blockchain calls. |
 | GitHub repository setup plan | `approval-gated write` | CLI approve writes local provider metadata/receipt only | Does not create a repository, configure remotes, push, call GitHub APIs, or run OAuth. |

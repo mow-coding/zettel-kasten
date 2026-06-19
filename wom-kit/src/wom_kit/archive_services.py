@@ -699,12 +699,18 @@ PROFILE_IGNORABLE_QUERY_CHARS = dict.fromkeys(map(ord, "\ufeff\u200b\u200c\u200d
 RUNTIME_CONTEXT_ARCHIVE_TYPES = {"personal", "company", "family", "project", "relationship", "child", "business_unit"}
 RUNTIME_CONTEXT_SAFE_ACTIONS = [
     "run ai-response-concept-guide dry-run",
+    "run operational-context dry-run",
     "create draft in inbox",
     "run mint dry-run",
     "run check-safe-html dry-run",
     "run doctor",
     "mint only through CLI approve path",
 ]
+OPERATIONAL_CONTEXT_SCHEMA = "wom-kit/operational-context/v0.1"
+OPERATIONAL_CONTEXT_RELATIVE_PATH = "ops/operational-context.yml"
+OPERATIONAL_CONTEXT_RECEIPTS_DIR = "receipts/operational-context"
+OPERATIONAL_CONTEXT_MAX_TEXT_LENGTH = 600
+OPERATIONAL_CONTEXT_MAX_LIST_ITEMS = 24
 RUNTIME_CONTEXT_FIXED_ENTRYPOINTS = (
     {
         "path": "archive.yml",
@@ -41799,6 +41805,421 @@ def wom_kit_version_info(
     return result
 
 
+def operational_context(
+    archive_root: Path | str,
+    *,
+    record_path: str | None = None,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    target_relative = OPERATIONAL_CONTEXT_RELATIVE_PATH
+    target_path = archive_internal_path(root, target_relative)
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+    if approve and not record_path:
+        blockers.append("operational-context approve requires --record.")
+    if approve and not reviewer:
+        blockers.append("operational-context approve requires a safe --reviewed-by actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    if record_path:
+        source_relative = operational_context_source_relative_path(root, record_path, blockers)
+        source_text: str | None = None
+        if source_relative:
+            if source_relative == target_relative:
+                blockers.append("--record must point to a staged candidate, not ops/operational-context.yml itself.")
+            else:
+                source_path = archive_internal_path(root, source_relative)
+                if not source_path.is_file():
+                    blockers.append("operational context candidate record is missing.")
+                else:
+                    source_text = source_path.read_text(encoding="utf-8")
+        candidate_record = operational_context_parse_record_text(source_text, blockers, warnings) if source_text else None
+        base_record_hash = sha256_json_value(candidate_record) if candidate_record else None
+        proposed_receipt_path = operational_context_receipt_relative_path(base_record_hash) if base_record_hash else None
+        if proposed_receipt_path and archive_internal_path(root, proposed_receipt_path).exists():
+            blockers.append(f"Proposed operational context receipt already exists: {proposed_receipt_path}.")
+        result: dict[str, Any] = {
+            "ok": not blockers,
+            "dry_run": bool(dry_run),
+            "lifecycle_action": "operational_context",
+            "archive_id": archive_id,
+            "record_path": target_relative,
+            "source_record_path": source_relative,
+            "status": "blocked" if blockers else ("would_write" if dry_run else "ready_to_write"),
+            "record": candidate_record,
+            "session_start_injection": operational_context_session_start_injection(candidate_record)
+            if candidate_record and not blockers
+            else None,
+            "proposed_receipt_path": proposed_receipt_path,
+            "closed_actions": {
+                "source_file_body_read": bool(source_text),
+                "files_written": False,
+                "provider_api_called": False,
+                "secrets_read": False,
+            },
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+        }
+        if dry_run or blockers:
+            return result
+
+        assert approve
+        assert candidate_record is not None
+        assert proposed_receipt_path is not None
+        assert reviewer is not None
+        reviewed_at = datetime.now().astimezone().replace(microsecond=0).isoformat()
+        written_record = {
+            **candidate_record,
+            "updated_at": reviewed_at,
+            "reviewed_by": reviewer,
+        }
+        written_text = dump_yaml(written_record)
+        written_hash = "sha256:" + hashlib.sha256(written_text.encode("utf-8")).hexdigest()
+        previous_text = target_path.read_text(encoding="utf-8") if target_path.is_file() else None
+        receipt_path = archive_internal_path(root, proposed_receipt_path)
+        receipt = {
+            "schema": "wom-kit/operational-context-receipt/v0.1",
+            "lifecycle_action": "operational_context_write",
+            "archive_id": archive_id,
+            "record_path": target_relative,
+            "source_record_path": source_relative,
+            "receipt_path": proposed_receipt_path,
+            "reviewed_by": reviewer,
+            "reviewed_at": reviewed_at,
+            "base_record_sha256": base_record_hash,
+            "written_record_sha256": written_hash,
+            "previous_record_sha256": "sha256:" + hashlib.sha256(previous_text.encode("utf-8")).hexdigest()
+            if previous_text is not None
+            else None,
+            "session_start_injection": operational_context_session_start_injection(written_record),
+            "closed_actions": {
+                "provider_api_called": False,
+                "secrets_read": False,
+            },
+            "files_written": [target_relative, proposed_receipt_path],
+        }
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(written_text, encoding="utf-8")
+            write_json_new_file(receipt_path, receipt)
+        except Exception:
+            if previous_text is None:
+                try:
+                    target_path.unlink()
+                except OSError:
+                    pass
+            else:
+                target_path.write_text(previous_text, encoding="utf-8")
+            raise
+
+        result.update(
+            {
+                "ok": True,
+                "dry_run": False,
+                "status": "written",
+                "record": written_record,
+                "session_start_injection": operational_context_session_start_injection(written_record),
+                "receipt_path": proposed_receipt_path,
+                "closed_actions": {
+                    "source_file_body_read": bool(source_text),
+                    "files_written": True,
+                    "provider_api_called": False,
+                    "secrets_read": False,
+                },
+                "blockers": [],
+            }
+        )
+        return result
+
+    preview = runtime_context_operational_context(root)
+    preview.update(
+        {
+            "dry_run": bool(dry_run),
+            "archive_id": archive_id,
+        }
+    )
+    if not preview["ok"]:
+        blockers.extend(preview["blockers"])
+    preview["blockers"] = unique_preserve_order(blockers)
+    preview["warnings"] = unique_preserve_order([*warnings, *preview.get("warnings", [])])
+    preview["ok"] = not preview["blockers"]
+    return preview
+
+
+def runtime_context_operational_context(root: Path) -> dict[str, Any]:
+    target_path = archive_internal_path(root, OPERATIONAL_CONTEXT_RELATIVE_PATH)
+    if not target_path.is_file():
+        return {
+            "ok": True,
+            "lifecycle_action": "operational_context",
+            "record_path": OPERATIONAL_CONTEXT_RELATIVE_PATH,
+            "status": "missing_optional",
+            "record": None,
+            "session_start_injection": None,
+            "recommended_commands": operational_context_recommended_commands(),
+            "closed_actions": {
+                "file_body_read": False,
+                "files_written": False,
+                "provider_api_called": False,
+                "secrets_read": False,
+            },
+            "blockers": [],
+            "warnings": [
+                "No operational context record is present yet; AI runtimes should fall back to archive.yml, AGENTS.md, and current task context."
+            ],
+        }
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    text = target_path.read_text(encoding="utf-8")
+    record = operational_context_parse_record_text(text, blockers, warnings)
+    return {
+        "ok": not blockers,
+        "lifecycle_action": "operational_context",
+        "record_path": OPERATIONAL_CONTEXT_RELATIVE_PATH,
+        "status": "present" if not blockers else "blocked",
+        "record": record if not blockers else None,
+        "session_start_injection": operational_context_session_start_injection(record) if record and not blockers else None,
+        "recommended_commands": operational_context_recommended_commands(),
+        "closed_actions": {
+            "file_body_read": True,
+            "files_written": False,
+            "provider_api_called": False,
+            "secrets_read": False,
+        },
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def operational_context_source_relative_path(root: Path, record_path: str, blockers: list[str]) -> str | None:
+    raw = record_path.strip()
+    if not raw:
+        blockers.append("record path must be a non-empty archive-relative path.")
+        return None
+    if Path(raw).is_absolute():
+        blockers.append("record path must be archive-relative.")
+        return None
+    try:
+        source_path = resolve_archive_relative_path(root, raw)
+    except ArchivePathError:
+        blockers.append("record path must stay inside the archive root.")
+        return None
+    return archive_relative_path(source_path, root)
+
+
+def operational_context_parse_record_text(
+    text: str | None,
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any] | None:
+    if text is None:
+        return None
+    try:
+        data = load_yaml(text)
+    except Exception as exc:
+        blockers.append(f"operational context record could not be parsed as YAML: {exc}")
+        return None
+    if not isinstance(data, dict):
+        blockers.append("operational context record must be a YAML object.")
+        return None
+    return operational_context_normalize_record(data, blockers, warnings)
+
+
+def operational_context_normalize_record(
+    data: dict[str, Any],
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any] | None:
+    schema = data.get("schema")
+    if schema != OPERATIONAL_CONTEXT_SCHEMA:
+        blockers.append(f"operational context schema must be {OPERATIONAL_CONTEXT_SCHEMA}.")
+
+    mission = data.get("mission") if isinstance(data.get("mission"), dict) else {}
+    state = data.get("state") if isinstance(data.get("state"), dict) else {}
+    rehydration = data.get("rehydration") if isinstance(data.get("rehydration"), dict) else {}
+    if not isinstance(data.get("mission"), dict):
+        blockers.append("operational context mission must be a YAML object.")
+    if not isinstance(data.get("state"), dict):
+        blockers.append("operational context state must be a YAML object.")
+    if data.get("rehydration") is not None and not isinstance(data.get("rehydration"), dict):
+        blockers.append("operational context rehydration must be a YAML object.")
+
+    mission_summary = operational_context_string(mission.get("summary"), blockers, "mission.summary", required=True)
+    state_phase = operational_context_string(state.get("phase"), blockers, "state.phase", required=True, max_length=160)
+    if blockers:
+        return None
+
+    assert mission_summary is not None
+    assert state_phase is not None
+    record: dict[str, Any] = {
+        "schema": OPERATIONAL_CONTEXT_SCHEMA,
+        "mission": {
+            "summary": mission_summary,
+            "scope": operational_context_string_list(mission.get("scope"), blockers, warnings, "mission.scope"),
+            "non_goals": operational_context_string_list(mission.get("non_goals"), blockers, warnings, "mission.non_goals"),
+        },
+        "state": {
+            "phase": state_phase,
+            "completed": operational_context_string_list(state.get("completed"), blockers, warnings, "state.completed"),
+            "in_progress": operational_context_string_list(state.get("in_progress"), blockers, warnings, "state.in_progress"),
+            "next": operational_context_string_list(state.get("next"), blockers, warnings, "state.next"),
+            "blocked": operational_context_string_list(state.get("blocked"), blockers, warnings, "state.blocked"),
+        },
+        "gotchas": operational_context_string_list(data.get("gotchas"), blockers, warnings, "gotchas"),
+        "decisions": operational_context_string_list(data.get("decisions"), blockers, warnings, "decisions"),
+        "rehydration": {
+            "session_start": operational_context_string_list(
+                rehydration.get("session_start"),
+                blockers,
+                warnings,
+                "rehydration.session_start",
+            ),
+            "on_demand_commands": operational_context_string_list(
+                rehydration.get("on_demand_commands"),
+                blockers,
+                warnings,
+                "rehydration.on_demand_commands",
+            ),
+        },
+    }
+    if not record["rehydration"]["on_demand_commands"]:
+        record["rehydration"]["on_demand_commands"] = [
+            "archive runtime-context <archive-root> --format json",
+            "archive operational-context <archive-root> --dry-run --format json",
+        ]
+    updated_at = operational_context_string(data.get("updated_at"), blockers, "updated_at", max_length=80)
+    reviewed_by = data.get("reviewed_by")
+    if isinstance(reviewed_by, str):
+        safe_reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+        if safe_reviewer:
+            record["reviewed_by"] = safe_reviewer
+        else:
+            blockers.append("operational context reviewed_by must be a safe non-secret actor id.")
+    elif reviewed_by is not None:
+        blockers.append("operational context reviewed_by must be a string.")
+    if updated_at:
+        record["updated_at"] = updated_at
+    if blockers:
+        return None
+    return record
+
+
+def operational_context_string(
+    value: Any,
+    blockers: list[str],
+    field_path: str,
+    *,
+    required: bool = False,
+    max_length: int = OPERATIONAL_CONTEXT_MAX_TEXT_LENGTH,
+) -> str | None:
+    if value is None:
+        if required:
+            blockers.append(f"operational context {field_path} is required.")
+        return None
+    if not isinstance(value, str):
+        blockers.append(f"operational context {field_path} must be a string.")
+        return None
+    text = " ".join(value.strip().split())
+    if not text:
+        if required:
+            blockers.append(f"operational context {field_path} is required.")
+        return None
+    if len(text) > max_length:
+        blockers.append(f"operational context {field_path} must be {max_length} characters or fewer.")
+        return None
+    if operational_context_text_is_unsafe(text):
+        blockers.append(f"unsafe operational context value in {field_path}.")
+        return None
+    return text
+
+
+def operational_context_string_list(
+    value: Any,
+    blockers: list[str],
+    warnings: list[str],
+    field_path: str,
+) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        blockers.append(f"operational context {field_path} must be a list of strings.")
+        return []
+    items: list[str] = []
+    for index, item in enumerate(value):
+        normalized = operational_context_string(item, blockers, f"{field_path}[{index}]")
+        if normalized:
+            items.append(normalized)
+    if len(items) > OPERATIONAL_CONTEXT_MAX_LIST_ITEMS:
+        warnings.append(
+            f"operational context {field_path} has more than {OPERATIONAL_CONTEXT_MAX_LIST_ITEMS} items; extra items were omitted."
+        )
+        items = items[:OPERATIONAL_CONTEXT_MAX_LIST_ITEMS]
+    return items
+
+
+def operational_context_text_is_unsafe(text: str) -> bool:
+    return (
+        "@" in text
+        or contains_forbidden_location_reference(text)
+        or source_intake_has_provider_url(text)
+        or source_intake_secret_like(text)
+    )
+
+
+def operational_context_session_start_injection(record: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not record:
+        return None
+    mission = record.get("mission") if isinstance(record.get("mission"), dict) else {}
+    state = record.get("state") if isinstance(record.get("state"), dict) else {}
+    rehydration = record.get("rehydration") if isinstance(record.get("rehydration"), dict) else {}
+    return {
+        "source": OPERATIONAL_CONTEXT_RELATIVE_PATH,
+        "mission_summary": mission.get("summary"),
+        "scope": mission.get("scope") if isinstance(mission.get("scope"), list) else [],
+        "phase": state.get("phase"),
+        "completed": state.get("completed") if isinstance(state.get("completed"), list) else [],
+        "in_progress": state.get("in_progress") if isinstance(state.get("in_progress"), list) else [],
+        "next": state.get("next") if isinstance(state.get("next"), list) else [],
+        "blocked": state.get("blocked") if isinstance(state.get("blocked"), list) else [],
+        "gotchas": record.get("gotchas") if isinstance(record.get("gotchas"), list) else [],
+        "decisions": record.get("decisions") if isinstance(record.get("decisions"), list) else [],
+        "session_start": rehydration.get("session_start") if isinstance(rehydration.get("session_start"), list) else [],
+    }
+
+
+def operational_context_recommended_commands() -> list[dict[str, str]]:
+    return [
+        {
+            "command": "archive runtime-context <archive-root> --format json",
+            "purpose": "rehydrate archive identity, entrypoints, version, and operational context in one read-only call",
+        },
+        {
+            "command": "archive operational-context <archive-root> --dry-run --format json",
+            "purpose": "read the current AI-facing mission, scope, state, gotchas, and decisions record",
+        },
+        {
+            "command": "archive operational-context <archive-root> --record workbench/operational-context.next.yml --approve --reviewed-by <actor> --format json",
+            "purpose": "write a reviewed operational context update and receipt after human approval",
+        },
+    ]
+
+
+def operational_context_receipt_relative_path(record_hash: str) -> str:
+    digest = record_hash.removeprefix("sha256:")
+    return f"{OPERATIONAL_CONTEXT_RECEIPTS_DIR}/{digest[:16]}.operational-context.json"
+
+
 def runtime_context(
     archive_root: Path | str,
     *,
@@ -41839,6 +42260,9 @@ def runtime_context(
 
     doctor_summary = runtime_context_doctor_summary(diagnostics, strict=strict, blockers=blockers, warnings=warnings)
     paths = runtime_context_paths(root, archive_config, warnings)
+    operational_context_summary = runtime_context_operational_context(root)
+    if not operational_context_summary["ok"]:
+        warnings.append("ops/operational-context.yml is present but not safe/readable; run operational-context dry-run.")
     if strict and warnings:
         blockers.extend(warnings)
         warnings = []
@@ -41854,6 +42278,7 @@ def runtime_context(
         "ai_write_policy": runtime_context_ai_write_policy_summary(archive_config),
         "paths": paths,
         "wom_kit_version": wom_kit_version_info(root, redact_local_paths=redact_local_paths),
+        "operational_context": operational_context_summary,
         "canonical_entrypoints": runtime_context_canonical_entrypoints(root, archive_config, paths),
         "available_safe_actions": list(RUNTIME_CONTEXT_SAFE_ACTIONS),
         "doctor_summary": doctor_summary,
@@ -41923,6 +42348,14 @@ def runtime_context_paths(root: Path, archive_config: dict[str, Any], warnings: 
         "inbox": runtime_context_relative_path(root, root_policy.get("ai_inbox"), "inbox/", warnings, "inbox", directory=True),
         "zettels": runtime_context_relative_path(root, root_policy.get("canonical_zettels"), "zettels/", warnings, "zettels", directory=True),
         "receipts": runtime_context_relative_path(root, None, "receipts/", warnings, "receipts", directory=True),
+        "operational_context": runtime_context_relative_path(
+            root,
+            None,
+            OPERATIONAL_CONTEXT_RELATIVE_PATH,
+            warnings,
+            "operational context",
+            directory=False,
+        ),
         "object_manifest": runtime_context_relative_path(
             root,
             root_policy.get("object_manifest"),
@@ -41962,6 +42395,13 @@ def runtime_context_canonical_entrypoints(
             "kind": "file",
             "required": False,
             "source": "archive.yml root_policy.object_manifest",
+        },
+        {
+            "path": paths.get("operational_context"),
+            "role": "operational_context",
+            "kind": "file",
+            "required": False,
+            "source": "WOM operational context record",
         },
         {
             "path": root_policy.get("derived_text_manifest") if isinstance(root_policy.get("derived_text_manifest"), str) else None,
@@ -42005,6 +42445,7 @@ def runtime_context_canonical_entrypoints(
             "canonical_zets": paths.get("zettels"),
             "draft_inbox": paths.get("inbox"),
             "objet_manifest": paths.get("object_manifest"),
+            "operational_context": paths.get("operational_context"),
             "derived_text_manifest": (
                 root_policy.get("derived_text_manifest")
                 if isinstance(root_policy.get("derived_text_manifest"), str)
@@ -42027,6 +42468,10 @@ def runtime_context_recommended_first_commands() -> list[dict[str, str]]:
             "purpose": "confirm archive identity, local policy, canonical entrypoints, and redaction before any work",
         },
         {
+            "command": "archive operational-context <archive-root> --dry-run --format json",
+            "purpose": "load the AI-facing mission, scope, state, gotchas, and decisions record before choosing next actions",
+        },
+        {
             "command": "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
             "purpose": "load beginner-facing WOM concepts, safe routing hints, and overclaim guardrails",
         },
@@ -42043,25 +42488,31 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
         },
         {
             "step": 2,
+            "action": "read_operational_context",
+            "fields": ["operational_context.record", "operational_context.session_start_injection"],
+            "reason": "rehydrate the current mission, scope, state, gotchas, decisions, and next actions before local exploration",
+        },
+        {
+            "step": 3,
             "action": "read_canonical_entrypoints",
             "fields": ["canonical_entrypoints.read_order", "canonical_entrypoints.source_truths"],
             "reason": "prefer archive-relative source-of-truth paths before inspecting zets or provider artifacts",
         },
         {
-            "step": 3,
+            "step": 4,
             "action": "read_local_agent_instructions",
             "path": "AGENTS.md",
             "when": "canonical_entrypoints.read_order reports AGENTS.md as present",
             "reason": "load archive-local human/AI rules before choosing tools",
         },
         {
-            "step": 4,
+            "step": 5,
             "action": "run_ai_response_concept_guide",
             "command": "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
             "reason": "load WOM concept wording, safe routing, material-link routes, and overclaim guardrails",
         },
         {
-            "step": 5,
+            "step": 6,
             "action": "choose_material_link_route",
             "field": "canonical_entrypoints.material_link_routes",
             "reason": "use omitted-locator, source-map, or body-locator routes without inventing provider calls",
