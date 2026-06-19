@@ -48,6 +48,7 @@ docs/concepts/korean-product-language-baseline.ko.md
 docs/korean-product-language-hygiene.md
 docs/concepts/wom-safe-html-profile.md
 docs/concepts/wom-safe-html-profile.ko.md
+docs/product-roadmap.md
 ```
 
 v0.1 established the file protocol: specs, templates, and fake examples.
@@ -1015,6 +1016,7 @@ docs/zet-shared-update-record-baseline.md
 docs/zet-shared-update-record-review-preview.md
 docs/zet-shared-update-record-review-index.md
 docs/zet-transport-threat-model.md
+docs/product-roadmap.md
 docs/public-release-link-hygiene.md
 docs/concepts/korean-product-language-baseline.ko.md
 docs/korean-product-language-hygiene.md
@@ -1108,6 +1110,12 @@ v0.3.114 makes mint duplicate checks use the current generated index when
 available, upserts newly minted canonical rows back into that index during
 approved mint loops, and lets `retire-draft` accept mint target SHA history that
 changed only through approved post-receipt zettel-edge writes.
+v0.3.115 adds the public product roadmap that makes the pre-1.0 line meanings
+explicit: `v0.1.x` idea/protocol language, `v0.2.x` local implementation,
+current `v0.3.x` WOM real-use feedback and safety hardening, planned `v0.4.x`
+custom UI control layer, and planned `v0.5.x` ZET real-use feedback. It is
+documentation-only and adds no UI, provider adapter, ZET transport, wallet,
+token, sync, or worker behavior.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

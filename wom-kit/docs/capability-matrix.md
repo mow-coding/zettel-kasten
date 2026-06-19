@@ -1,10 +1,11 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.114 mint duplicate scale and retire edge-only checkpoint
+Status: v0.3.115 public roadmap baseline
 Date: 2026-06-19
-Version: v0.3.114, release candidate
+Version: v0.3.115, release candidate
 
-Previous checkpoint: Status: v0.3.113 account recovery break-glass credential scenario checkpoint
+Previous checkpoint: Status: v0.3.114 mint duplicate scale and retire edge-only checkpoint
+Earlier account recovery checkpoint: Status: v0.3.113 account recovery break-glass credential scenario checkpoint
 Earlier receipt checkpoint: Status: v0.3.112 receipt SHA evolution and zettel batch scale checkpoint
 Earlier import hygiene checkpoint: Status: v0.3.111 LaTeX path hygiene and import fidelity checkpoint
 Earlier mint retirement checkpoint: Status: v0.3.110 mint draft retirement checkpoint
@@ -174,6 +175,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Korean product-language hygiene | `local hygiene tool` | none | Checks public Markdown drift against the Korean product-language baseline. No auto-rewrite. |
 | Public privacy hygiene | `local hygiene tool` | none | Checks public files for obvious local path, token, private key, seed phrase, and private endpoint leaks. |
 | Release readiness gate | `local hygiene tool` | none | Runs the public hygiene checkers together. It is not CI or branch protection. |
+| Public product roadmap | `documented-only` | none | `docs/product-roadmap.md` explains the intended pre-1.0 version-line phases: `v0.1.x` idea/protocol language, `v0.2.x` local implementation, current `v0.3.x` WOM real-use feedback and safety hardening, planned `v0.4.x` custom UI control layer, and planned `v0.5.x` ZET real-use feedback. It adds no UI, provider adapter, ZET transport, wallet, token, sync, or background worker. |
 | Main branch protection readiness | `documented-only` | none | Documents a staged path toward future repository settings. It changes no GitHub settings. |
 | Real ZET transport | `not implemented` | none | No send/receive relay, P2P, inbox transport, or transport worker exists. |
 | Public proof anchoring | `documented-only` | none | Future minimal proof concept only. No anchoring, chain registry, validator behavior, provider call, or public proof write exists. |

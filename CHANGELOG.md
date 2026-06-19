@@ -6,6 +6,19 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.115 - 2026-06-19
+
+- Added a public WOM product roadmap that explains the intended pre-1.0 phase
+  meaning: `v0.1.x` idea/protocol language, `v0.2.x` local implementation,
+  `v0.3.x` WOM real-use feedback and safety hardening, `v0.4.x` custom UI
+  control layer, and `v0.5.x` ZET real-use feedback.
+- Linked the roadmap from the top-level README, public documentation map,
+  capability matrix, and release notes so public readers can understand the
+  release line without inferring the plan from individual changelog entries.
+- Kept the change documentation-only: no new product command, UI behavior, live
+  provider adapter, ZET transport, wallet, token, sync, or background worker was
+  added.
+
 ## v0.3.114 - 2026-06-19
 
 - Optimized mint duplicate checks for large archives: when
