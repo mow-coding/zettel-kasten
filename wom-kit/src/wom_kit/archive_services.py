@@ -1497,6 +1497,8 @@ CREDENTIAL_STORE_RECOMMENDATION_SCENARIOS = {
     "automation_or_dev_secrets",
     "local_app_adapter",
     "institutional_mail",
+    "account_recovery_codes",
+    "break_glass_secrets",
 }
 CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS = {"windows", "macos", "linux", "cross_platform"}
 CREDENTIAL_VAULT_ONBOARDING_STORE_IDS = {
@@ -23768,6 +23770,8 @@ def credential_store_recommendation(
         warnings.append("Environment variables are suitable for short-lived automation shells, not long-lived personal password storage.")
     if resolved_scenario == "local_app_adapter":
         warnings.append("OS keyring adapters should stay behind explicit policy checks and human approval before any future read.")
+    if resolved_scenario in {"account_recovery_codes", "break_glass_secrets"}:
+        warnings.append("Recovery codes are break-glass material; do not keep the only copy in one digital vault or device.")
 
     return {
         "ok": not blockers,
@@ -23780,6 +23784,7 @@ def credential_store_recommendation(
         "recommendation_summary": selected["summary"],
         "primary_recommendation": selected["primary"],
         "secondary_recommendations": selected["secondary"],
+        "scenario_guidance": selected.get("scenario_guidance", {}),
         "wom_compatibility": {
             "wom_stores_secret_values": False,
             "wom_stores_refs_and_catalog_only": True,
@@ -23815,6 +23820,7 @@ def credential_store_recommendation(
             "If the secret already lives in a browser/platform manager, treat it as a login/autofill source, not a general API-key vault.",
             "If a local WOM adapter must retrieve a secret without chat copy/paste, prefer the OS keyring surface.",
             "If automation needs injection, prefer a secrets manager or short-lived environment variable over committed files.",
+            "If the value is account recovery or break-glass material, require independent offline redundancy and check for circular vault/account dependency.",
             "If the value is a mail/app/API secret, WOM should store only a credential ref and purpose metadata.",
         ],
         "non_goals": [
@@ -23968,6 +23974,38 @@ def credential_store_scenario_profiles(platform_keyring: str) -> dict[str, dict[
             "The surrounding shell, logs, and process environment need separate care.",
         ],
     }
+    break_glass_keepassxc = {
+        "store_id": "keepassxc",
+        "store_class": "offline_password_manager_plus_break_glass_redundancy",
+        "fit": "primary_with_offline_redundancy",
+        "wom_ref_prefix": "secret:",
+        "example_ref_shape": "secret:keepassxc-account-recovery-codes",
+        "why": [
+            "Keeps the encrypted digital copy outside Git, zets, search indexes, and AI context.",
+            "Fits WOM's local-first credential-ref model while still treating recovery material as high risk.",
+            "Pairs with an independent offline copy so device or vault loss does not defeat recovery.",
+        ],
+        "tradeoffs": [
+            "The encrypted vault copy must not be the only copy.",
+            "If the protected account controls vault sync or device access, this becomes a circular dependency.",
+            "Human must periodically verify that both the vault entry and offline copy are still retrievable.",
+        ],
+    }
+    offline_recovery_copy = {
+        "store_id": "offline_physical_copy",
+        "store_class": "offline_break_glass_copy",
+        "fit": "required_redundancy",
+        "wom_ref_prefix": "metadata-only",
+        "example_ref_shape": "offline:physical-safe",
+        "why": [
+            "Recovery codes exist for moments when the normal device, vault, or login route may be unavailable.",
+            "A printed or otherwise offline copy can be kept in a physically protected independent location.",
+        ],
+        "tradeoffs": [
+            "Physical copies need tamper/privacy protection.",
+            "WOM should record only a safe location label, never the recovery code values.",
+        ],
+    }
 
     return {
         "personal_local_first": {
@@ -24024,6 +24062,52 @@ def credential_store_scenario_profiles(platform_keyring: str) -> dict[str, dict[
                 "Separate human login passwords from automation/API credentials.",
                 "Use a secrets manager or OS keyring for long-lived tokens.",
                 "Use `env:` refs only when the runtime injects values outside Git and logs.",
+            ],
+        },
+        "account_recovery_codes": {
+            "human_need": "A user needs to store 2FA recovery codes, backup codes, or emergency account access material.",
+            "summary": "Use a KeePassXC `secret:` entry for the encrypted digital copy plus an independent offline break-glass copy.",
+            "primary": break_glass_keepassxc,
+            "secondary": [offline_recovery_copy, os_keyring],
+            "scenario_guidance": {
+                "high_risk_material": True,
+                "credential_classes": ["recovery_codes"],
+                "recommended_credential_kind": "backup_password",
+                "offline_redundancy_required": True,
+                "minimum_independent_locations": 2,
+                "single_digital_copy_blocked": True,
+                "circular_dependency_check_required": True,
+                "example_redundancy_metadata": ["secret:keepassxc-account-recovery-codes", "offline:physical-safe"],
+                "wom_records_secret_values": False,
+            },
+            "next_safe_actions": [
+                "Store one encrypted digital copy in a KeePassXC entry with a boring non-account-revealing label.",
+                "Create one independent offline copy, such as a printed copy in a physically protected location.",
+                "Check whether the protected account controls vault sync, device login, email recovery, or password-manager access; if yes, do not rely on that same vault as the only recovery path.",
+                "Record only safe refs and redundancy labels in WOM, never recovery code values.",
+                "Use credential-semantic-extraction-recipe to classify recovery material before any migration plan.",
+            ],
+        },
+        "break_glass_secrets": {
+            "human_need": "A user needs a break-glass storage policy for emergency-only secrets such as recovery codes.",
+            "summary": "Use the account recovery code policy: encrypted vault copy plus independent offline redundancy and circular-dependency review.",
+            "primary": break_glass_keepassxc,
+            "secondary": [offline_recovery_copy, os_keyring],
+            "scenario_guidance": {
+                "high_risk_material": True,
+                "credential_classes": ["recovery_codes", "wallet_seed_or_private_key_material"],
+                "recommended_credential_kind": "backup_password",
+                "offline_redundancy_required": True,
+                "minimum_independent_locations": 2,
+                "single_digital_copy_blocked": True,
+                "circular_dependency_check_required": True,
+                "example_redundancy_metadata": ["secret:keepassxc-break-glass", "offline:physical-safe"],
+                "wom_records_secret_values": False,
+            },
+            "next_safe_actions": [
+                "Classify the material first; wallet seed or private-key material still requires a separate custody plan.",
+                "Keep the encrypted vault copy and offline copy independent from the account or device they recover.",
+                "Record only safe refs and redundancy labels in WOM, never break-glass secret values.",
             ],
         },
         "local_app_adapter": {
@@ -25484,6 +25568,7 @@ def credential_semantic_entry_classes() -> list[dict[str, Any]]:
             "human_meaning": "Backup codes, recovery codes, or emergency access material.",
             "split_rule": "Keep as high-risk recovery material with separate human confirmation.",
             "safe_target_kinds": ["backup_password"],
+            "recommended_store_scenario": "account_recovery_codes",
             "not_secret_fields": ["recovery material label", "storage policy label"],
         },
         {
@@ -25491,6 +25576,7 @@ def credential_semantic_entry_classes() -> list[dict[str, Any]]:
             "human_meaning": "Seed phrases, private keys, wallet backups, or signing authority.",
             "split_rule": "Do not route through generic credential migration; require a separate high-risk custody plan.",
             "safe_target_kinds": [],
+            "recommended_store_scenario": "break_glass_secrets",
             "not_secret_fields": ["wallet/custody policy label"],
         },
         {

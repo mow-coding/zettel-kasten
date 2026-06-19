@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.113 - 2026-06-19
+
+- Added `account_recovery_codes` and `break_glass_secrets` to
+  `credential-store-recommendation`, with KeePassXC-style `secret:` guidance,
+  required independent offline redundancy, a two-location minimum, and an
+  explicit circular-dependency check for vault/account recovery loops.
+- Extended the credential semantic extraction recipe so `recovery_codes` route
+  toward the account recovery scenario and wallet seed/private-key material
+  routes toward the break-glass scenario without reading plaintext files or
+  returning secret values.
+- Documented the break-glass boundary for 2FA recovery codes and emergency-only
+  secrets: WOM stores refs, safe labels, and redundancy metadata only, never the
+  recovery code values.
+
 ## v0.3.112 - 2026-06-19
 
 - Fixed mint and retired-draft receipt validation after normal graph growth:

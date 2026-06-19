@@ -1,7 +1,7 @@
 # Credential Semantic Extraction Recipe
 
-Status: v0.3.60 read-only semantic extraction recipe
-Date: 2026-06-16
+Status: v0.3.113 read-only semantic extraction recipe with store-scenario routing
+Date: 2026-06-19
 
 v0.3.60 adds a read-only recipe for the moment before plaintext credential
 migration.
@@ -66,6 +66,18 @@ recovery_codes
 wallet_seed_or_private_key_material
 toggle_or_status_note
 ```
+
+v0.3.113 adds store-scenario routing hints for the highest-risk classes:
+
+```text
+recovery_codes -> account_recovery_codes
+wallet_seed_or_private_key_material -> break_glass_secrets
+```
+
+These hints do not lower the risk of the material. They tell the next planner to
+use a break-glass policy: encrypted `secret:` ref, independent offline redundancy,
+no single digital-only copy, and an explicit circular-dependency check before
+the human relies on the vault.
 
 ## Human Review Questions
 
@@ -146,3 +158,7 @@ credential-semantic-extraction-recipe
 v0.3.60 only adds the first semantic review step. Automatic candidate
 extraction, local secret scanning, password-manager imports, browser password
 imports, wallet migration, and live vault writes remain future work.
+
+v0.3.113 connects `recovery_codes` to the account recovery storage scenario and
+`wallet_seed_or_private_key_material` to the break-glass scenario. The command
+still reads no source file and returns no secret values.

@@ -1100,6 +1100,10 @@ v0.3.112 fixes receipt SHA validation after approved edge-only canonical zet
 growth, preserves mint snapshot bytes, lets legacy LF/CRLF-only source/snapshot
 pairs retire with a warning, and preloads one zettel id/path index for
 zet-to-zet `zettel-edge-batch` plans.
+v0.3.113 adds account recovery and break-glass credential-store scenarios for
+2FA recovery codes and emergency-only secrets, requiring independent offline
+redundancy, a two-location minimum, and circular-dependency review while WOM
+still records only refs and metadata.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

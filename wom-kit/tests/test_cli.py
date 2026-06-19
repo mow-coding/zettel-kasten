@@ -5947,6 +5947,36 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(any("broker" in action for action in browser_result["next_safe_actions"]))
             self.assertFalse(browser_result["current_capability"]["password_manager_adapter_implemented"])
 
+            recovery_code, recovery_output = self.run_cli(
+                [
+                    "credential-store-recommendation",
+                    str(archive_root),
+                    "--scenario",
+                    "account_recovery_codes",
+                    "--platform",
+                    "windows",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            recovery_result = json.loads(recovery_output)
+            self.assertEqual(recovery_code, 0, recovery_output)
+            self.assertTrue(recovery_result["ok"])
+            self.assertEqual(recovery_result["primary_recommendation"]["store_id"], "keepassxc")
+            self.assertEqual(recovery_result["primary_recommendation"]["wom_ref_prefix"], "secret:")
+            self.assertTrue(recovery_result["scenario_guidance"]["offline_redundancy_required"])
+            self.assertTrue(recovery_result["scenario_guidance"]["circular_dependency_check_required"])
+            self.assertTrue(recovery_result["scenario_guidance"]["single_digital_copy_blocked"])
+            self.assertEqual(recovery_result["scenario_guidance"]["recommended_credential_kind"], "backup_password")
+            self.assertEqual(recovery_result["scenario_guidance"]["minimum_independent_locations"], 2)
+            self.assertTrue(any(item["store_id"] == "offline_physical_copy" for item in recovery_result["secondary_recommendations"]))
+            self.assertTrue(any("only copy" in warning for warning in recovery_result["warnings"]))
+            self.assertFalse(recovery_result["closed_actions"]["password_manager_opened"])
+            self.assertFalse(recovery_result["closed_actions"]["secret_value_read"])
+            self.assertNotIn("sample-recovery-code-file", recovery_output)
+            self.assertNotIn("123456", recovery_output)
+
             no_dry_run_code, no_dry_run_output = self.run_cli(
                 [
                     "credential-store-recommendation",
@@ -6455,6 +6485,10 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("toggle_or_status_note", class_ids)
             self.assertIn("mail_access", class_ids)
             self.assertIn("api_key_or_cli_token", class_ids)
+            recovery_class = next(entry for entry in result["entry_classes"] if entry["class_id"] == "recovery_codes")
+            self.assertEqual(recovery_class["recommended_store_scenario"], "account_recovery_codes")
+            wallet_class = next(entry for entry in result["entry_classes"] if entry["class_id"] == "wallet_seed_or_private_key_material")
+            self.assertEqual(wallet_class["recommended_store_scenario"], "break_glass_secrets")
             for entry in result["entry_classes"]:
                 self.assertTrue(set(entry["safe_target_kinds"]).issubset(allowed_target_kinds))
             self.assertTrue(result["classification_rules"]["split_multi_account_notes"])
