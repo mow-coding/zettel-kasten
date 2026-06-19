@@ -2941,7 +2941,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.22 read-only recommendation baseline",
+            "Status: v0.3.113 read-only recommendation baseline with account recovery scenarios",
             "credential-store-recommendation",
             "credential-store-plan",
             "secret-store-recommendation",
@@ -2950,6 +2950,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "browser_or_platform_password_manager",
             "automation_or_dev_secrets",
             "local_app_adapter",
+            "account_recovery_codes",
+            "break_glass_secrets",
+            "offline:physical-safe",
+            "Minimum safe policy",
+            "check for circular dependency",
             "Future Credential Access Broker",
             "The AI should not freely scrape browser databases",
             "human selects the file in a local UI",
@@ -2971,6 +2976,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "archive credential-store-recommendation --scenario <scenario> --dry-run",
             "MCP `credential_store_recommendation`",
             "browser/platform password manager",
+            "account_recovery_codes",
+            "break_glass_secrets",
+            "at least two independent locations",
+            "single digital copy",
+            "circular dependency",
             "read no browser store",
             "future credential access broker boundaries",
             "without implementing secret retrieval",
@@ -3547,13 +3557,17 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.60.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.60 read-only semantic extraction recipe",
+            "Status: v0.3.113 read-only semantic extraction recipe with store-scenario routing",
             "credential-semantic-extraction-recipe",
             "credential-extraction-recipe",
             "secret-semantic-extraction-recipe",
             "multi_account_same_service",
             "sso_or_passkey_route",
             "wallet_seed_or_private_key_material",
+            "recovery_codes -> account_recovery_codes",
+            "wallet_seed_or_private_key_material -> break_glass_secrets",
+            "independent offline redundancy",
+            "circular-dependency",
             "toggle_or_status_note",
             "does not read plaintext files",
             "does not detect secret values",
@@ -3569,6 +3583,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "multi-secret",
             "SSO/passkey",
             "wallet/recovery",
+            "routes `recovery_codes` toward `account_recovery_codes`",
+            "break_glass_secrets",
             "returns no secret values to AI",
         ):
             with self.subTest(phrase=phrase):

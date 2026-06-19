@@ -3312,6 +3312,37 @@ class McpServerTests(unittest.TestCase):
                 self.assertFalse(structured["closed_actions"]["secret_value_read"])
                 self.assertFalse(structured["privacy_guards"]["secret_values_echoed"])
                 self.assertNotIn("sk-proj-", serialized)
+
+                recovery_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 4,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "credential_store_recommendation",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "scenario": "account_recovery_codes",
+                                "platform": "windows",
+                            },
+                        },
+                    },
+                )
+                recovery_result = recovery_response["result"]
+                self.assertFalse(recovery_result["isError"])
+                recovery_structured = recovery_result["structuredContent"]
+                recovery_serialized = json.dumps(recovery_structured)
+                self.assertTrue(recovery_structured["ok"])
+                self.assertEqual(recovery_structured["primary_recommendation"]["store_id"], "keepassxc")
+                self.assertTrue(recovery_structured["scenario_guidance"]["offline_redundancy_required"])
+                self.assertTrue(recovery_structured["scenario_guidance"]["circular_dependency_check_required"])
+                self.assertEqual(recovery_structured["scenario_guidance"]["minimum_independent_locations"], 2)
+                self.assertFalse(recovery_structured["closed_actions"]["password_manager_opened"])
+                self.assertFalse(recovery_structured["closed_actions"]["secret_value_read"])
+                self.assertFalse(recovery_structured["privacy_guards"]["secret_values_echoed"])
+                self.assertNotIn("sample-recovery-code-file", recovery_serialized)
+                self.assertNotIn("123456", recovery_serialized)
                 after = {
                     path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
                     for path in sorted(allowed_archive.rglob("*"))

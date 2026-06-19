@@ -1,7 +1,7 @@
 # Credential Store Recommendations
 
-Status: v0.3.22 read-only recommendation baseline
-Date: 2026-06-14
+Status: v0.3.113 read-only recommendation baseline with account recovery scenarios
+Date: 2026-06-19
 
 This document explains which external secret store fits which human scenario,
 and how WOM should refer to those stores without becoming the vault itself.
@@ -52,6 +52,11 @@ credential_store_recommendation
 The planner does not open a password manager, read a keyring, read environment
 variables, call browser APIs, call providers, write files, or echo secrets.
 
+v0.3.113 adds account recovery and break-glass scenarios for 2FA recovery
+codes, backup codes, and emergency-only access material. The planner still
+returns only policy, refs, and metadata. It never asks for or echoes the code
+values.
+
 ## Scenario Matrix
 
 | Human scenario | Primary recommendation | WOM ref style | Notes |
@@ -63,6 +68,37 @@ variables, call browser APIs, call providers, write files, or echo secrets.
 | `automation_or_dev_secrets` | Bitwarden Secrets Manager or another developer secret manager | `secret:` or short-lived `env:` | Best for API keys, object storage tokens, model/OCR keys, CI-like injection, and service credentials. |
 | `local_app_adapter` | Windows Credential Manager, macOS Keychain, or Linux Secret Service keyring | `keyring:` | Best fit for a future local WOM adapter that needs approved OS-mediated retrieval. |
 | `institutional_mail` | Provider-required credential mode plus OS keyring/password manager | `keyring:` or `secret:` | Keep `imap:account:*` account labels separate from username/app-password/OAuth refs. |
+| `account_recovery_codes` | KeePassXC-style offline password manager plus independent offline copy | `secret:` plus metadata-only offline label | Best for 2FA recovery codes, backup codes, and emergency account access material. Requires at least two independent locations and blocks a single digital-only copy. |
+| `break_glass_secrets` | Same policy as account recovery, with separate custody review for very high-risk material | `secret:` plus metadata-only offline label | Best for emergency-only secrets. Wallet seed or private-key material must not be folded into generic credential migration. |
+
+## Account Recovery And Break-Glass Material
+
+Recovery codes and break-glass secrets are different from ordinary login
+passwords because they are meant for the moment when the normal login route is
+unavailable.
+
+Use:
+
+```text
+secret:keepassxc-account-recovery-codes
+offline:physical-safe
+```
+
+The `secret:` ref points to an encrypted digital copy in a password manager such
+as KeePassXC. The `offline:` label is only metadata for an independent physical
+copy, such as a printed copy in a protected place. WOM should record the labels
+and redundancy policy only. WOM should never record the actual recovery code
+values.
+
+Minimum safe policy:
+
+- keep at least two independent locations,
+- do not keep the only copy in one digital vault or one device,
+- check for circular dependency before trusting a vault,
+- if the protected account controls vault sync, device login, email recovery, or
+  password-manager access, the vault copy alone is not a valid recovery path,
+- classify the material through `credential-semantic-extraction-recipe` before
+  planning migration or inventory metadata.
 
 ## Browser And Platform Password Managers
 
@@ -143,6 +179,11 @@ policy gates. See [Credential KeePassXC Write](credential-keepassxc-write.md).
 
 v0.3.29 adds a read-only plaintext migration plan. See
 [Credential Plaintext Migration Plan](credential-plaintext-migration-plan.md).
+
+v0.3.113 adds `account_recovery_codes` and `break_glass_secrets` scenario
+profiles. They recommend an encrypted `secret:` entry plus independent offline
+redundancy, and add explicit circular-dependency guidance without implementing
+secret retrieval.
 
 ## WOM Compatibility Rules
 
