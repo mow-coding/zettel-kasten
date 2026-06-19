@@ -589,80 +589,12 @@ class Doctor:
         target_path: Path,
         expected_sha: str,
     ) -> bool:
-        target_relative = self._display_path(target_path)
-        if not isinstance(target_relative, str):
-            return False
-        cutoff = self._receipt_cutoff_time(receipt_data)
-        if cutoff is None:
-            return False
-
-        try:
-            target_text = target_path.read_text(encoding="utf-8")
-            frontmatter, body = archive_services.split_zettel_text(target_text)
-        except (OSError, UnicodeError):
-            return False
-        edges = frontmatter.get("edges")
-        if not isinstance(edges, list):
-            return False
-
-        edge_receipts = self._edge_receipts_for_source(target_relative)
-        if not edge_receipts:
-            return False
-
-        mint = frontmatter.get("mint") if isinstance(frontmatter.get("mint"), dict) else {}
-        updated_at_candidates: list[str] = [
-            value
-            for value in [
-                mint.get("minted_at"),
-                receipt_data.get("timestamp"),
-                receipt_data.get("reviewed_at"),
-                receipt_data.get("created_at"),
-            ]
-            if isinstance(value, str) and value.strip()
-        ]
-        previous_edge_times = [
-            item
-            for item in edge_receipts
-            if item["created_at"] < cutoff and isinstance(item.get("created_at_raw"), str)
-        ]
-        if previous_edge_times:
-            latest = max(previous_edge_times, key=lambda item: item["created_at"])
-            updated_at_candidates.append(str(latest["created_at_raw"]))
-
-        for inclusive in [False, True]:
-            removable = [
-                item
-                for item in edge_receipts
-                if item["created_at"] > cutoff or (inclusive and item["created_at"] == cutoff)
-            ]
-            receipt_paths = {str(item.get("receipt_path") or "") for item in removable if item.get("receipt_path")}
-            edge_ids = {str(item.get("edge_id") or "") for item in removable if item.get("edge_id")}
-            if not receipt_paths and not edge_ids:
-                continue
-
-            retained_edges = []
-            removed_count = 0
-            for edge in edges:
-                if not isinstance(edge, dict):
-                    retained_edges.append(edge)
-                    continue
-                edge_receipt = str(edge.get("receipt") or "").strip()
-                edge_id = str(edge.get("edge_id") or "").strip()
-                if (edge_receipt and edge_receipt in receipt_paths) or (edge_id and edge_id in edge_ids):
-                    removed_count += 1
-                    continue
-                retained_edges.append(edge)
-            if removed_count == 0:
-                continue
-
-            for updated_at in dict.fromkeys(updated_at_candidates):
-                candidate_frontmatter = dict(frontmatter)
-                candidate_frontmatter["edges"] = retained_edges
-                candidate_frontmatter["updated_at"] = updated_at
-                for candidate_text in self._candidate_zettel_texts(candidate_frontmatter, body):
-                    if expected_sha in self._text_sha256_candidates(candidate_text):
-                        return True
-        return False
+        return archive_services.target_sha_evolved_by_edge_receipts(
+            self.archive_root,
+            receipt_data,
+            target_path,
+            expected_sha,
+        )
 
     def _check_required_structure(self) -> None:
         for relative in REQUIRED_ARCHIVE_DIRS:

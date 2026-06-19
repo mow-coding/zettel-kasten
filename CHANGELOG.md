@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.114 - 2026-06-19
+
+- Optimized mint duplicate checks for large archives: when
+  `db/archive-index.sqlite` is current, `archive mint-zet --dry-run|--approve`
+  compares canonical zettel id/title/body-start data through the generated index
+  instead of rereading every canonical zet body on every mint.
+- Kept large mint loops on the fast path by upserting the newly minted canonical
+  row into the generated index after an approved mint that used a current index;
+  missing or stale indexes still fall back to the existing live scan without
+  changing duplicate semantics.
+- Applied the approved post-receipt edge-only target SHA exemption to
+  `retire-draft`, so a draft can retire after minting even when reviewed
+  zettel-edge writes have grown the canonical zet frontmatter.
+- Shared the edge-only target SHA reconstruction helper between `retire-draft`
+  and `doctor` / `validate`, keeping body edits and non-edge frontmatter drift
+  blocked.
+
 ## v0.3.113 - 2026-06-19
 
 - Added `account_recovery_codes` and `break_glass_secrets` to

@@ -20207,6 +20207,83 @@ class ArchiveCliTests(unittest.TestCase):
             final_validate_code, final_validate_output = self.run_cli(["validate", str(archive_root), "--format", "json"])
             self.assertEqual(final_validate_code, 0, final_validate_output)
 
+    def test_retire_draft_accepts_mint_target_sha_after_approved_edge_only_evolution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path = self.make_fake_lunch_draft_promotion_ready(archive_root)
+
+            mint_code, mint_output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(mint_code, 0, mint_output)
+            self.assertTrue(draft_path.exists())
+
+            edge_code, edge_output = self.run_cli(
+                [
+                    "zettel-edge",
+                    str(archive_root),
+                    "--from-zettel",
+                    "zet_20260519_draft_ai_lunch_note",
+                    "--target",
+                    "zet_20240505_fake_company_onboarding_insight",
+                    "--edge-type",
+                    "semantic",
+                    "--visibility",
+                    "private",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(edge_code, 0, edge_output)
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "retire-draft",
+                    str(archive_root),
+                    "--zettel-id",
+                    "zet_20260519_draft_ai_lunch_note",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(dry_code, 0, dry_output)
+            dry_result = json.loads(dry_output)
+            self.assertTrue(dry_result["ok"])
+            self.assertTrue(
+                any("approved zettel-edge receipts" in warning for warning in dry_result["warnings"]),
+                dry_result["warnings"],
+            )
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "retire-draft",
+                    str(archive_root),
+                    "--zettel-id",
+                    "zet_20260519_draft_ai_lunch_note",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertFalse(draft_path.exists())
+
     def test_mint_snapshot_preserves_source_bytes_and_retire_accepts_legacy_newline_only_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -20370,6 +20447,58 @@ class ArchiveCliTests(unittest.TestCase):
             title_item = next(item for item in result["checklist"] if item["id"] == "understandable_title")
             self.assertEqual(title_item["status"], "passed")
             self.assertEqual(title_item["source"], "machine")
+
+    def test_mint_duplicate_check_uses_current_generated_index_and_keeps_it_current_after_mint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path = self.make_fake_lunch_draft_promotion_ready(
+                archive_root,
+                title="A fresh indexed mint target",
+                replacement_body="A fresh indexed mint target body with enough distinct text for the duplicate scan.\n",
+            )
+            archive_services.index_archive(archive_root)
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(dry_code, 0, dry_output)
+            dry_result = json.loads(dry_output)
+            self.assertTrue(dry_result["duplicate_check"]["used_generated_index"])
+            self.assertEqual(dry_result["duplicate_check"]["source"], "generated_index")
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            approve_result = json.loads(approve_output)
+            self.assertTrue(approve_result["duplicate_check"]["used_generated_index"])
+            self.assertTrue(approve_result["generated_index_updated"])
+
+            health = archive_services.index_health(archive_root, dry_run=True)
+            self.assertTrue(health["ok"], health)
+            self.assertFalse(
+                (archive_root / "db" / "archive-index.sqlite").stat().st_mtime
+                < (archive_root / approve_result["canonical_path"]).stat().st_mtime
+            )
+            self.assertTrue(draft_path.exists())
 
     def test_mint_zettel_real_blocks_dry_run_blockers_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
