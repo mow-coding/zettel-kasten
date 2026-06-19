@@ -5040,6 +5040,13 @@ def zettel_paths_by_id(archive_root: Path) -> dict[str, Path]:
     return paths
 
 
+def direct_zettel_id_path_candidates(archive_root: Path, zettel_id: str) -> list[Path]:
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]*$", zettel_id):
+        return []
+    filename = f"{zettel_id}.md"
+    return [archive_root / "zettels" / filename, archive_root / "inbox" / filename]
+
+
 def resolve_zettel_path(
     archive_root: Path,
     zettel_id: str | None,
@@ -5068,6 +5075,12 @@ def resolve_zettel_path(
         if indexed_path is not None and indexed_path.is_file():
             return indexed_path
         raise ArchiveServiceError(f"Zettel id not found: {zettel_id}")
+
+    for candidate in direct_zettel_id_path_candidates(archive_root, zettel_id):
+        if candidate.is_file() and is_path_within_root(candidate, archive_root):
+            frontmatter, _body = split_zettel_text(candidate.read_text(encoding="utf-8"))
+            if frontmatter.get("id") == zettel_id:
+                return candidate
 
     for path in iter_zettel_paths(archive_root):
         frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))

@@ -1116,6 +1116,12 @@ current `v0.3.x` WOM real-use feedback and safety hardening, planned `v0.4.x`
 custom UI control layer, and planned `v0.5.x` ZET real-use feedback. It is
 documentation-only and adds no UI, provider adapter, ZET transport, wallet,
 token, sync, or worker behavior.
+v0.3.116 closes the remaining mint source-resolution scale gap after v0.3.114:
+standard `inbox/<zettel_id>.md` and `zettels/<zettel_id>.md` paths are checked
+directly, with matching frontmatter id verification, before the legacy
+archive-wide id scan fallback. Generated-index-backed `mint-zet --zettel-id`
+dry-run and approve flows no longer reparse every zettel just to find the
+standard inbox draft path.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 
