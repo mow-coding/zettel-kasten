@@ -1245,6 +1245,169 @@ state:
             self.assertTrue(any("unsafe operational context value" in item for item in result["blockers"]))
             self.assertFalse((archive_root / "receipts" / "operational-context").exists())
 
+    def test_ai_usage_plan_estimates_explicit_context_without_echoing_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            code, output = self.run_cli(
+                [
+                    "ai-usage-plan",
+                    str(archive_root),
+                    "--budget-tokens",
+                    "1200",
+                    "--include",
+                    "archive.yml",
+                    "--include",
+                    "zettels/zet_20240504_fake_lunch_thought.md",
+                    "--task-id",
+                    "task:usage-plan-test",
+                    "--purpose",
+                    "context budget smoke test",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "ai_usage_plan")
+            self.assertEqual(result["item_count"], 2)
+            self.assertGreater(result["estimated_context_tokens"], 0)
+            self.assertFalse(result["over_budget"])
+            self.assertFalse(result["closed_actions"]["prompt_or_response_body_stored"])
+            self.assertFalse(result["closed_actions"]["source_object_bytes_read"])
+            self.assertIn("sha256:", result["items"][0]["sha256"])
+            self.assertNotIn("This zettel represents a private personal reflection.", output)
+            self.assertNotIn(str(archive_root), output)
+
+    def test_ai_usage_record_approve_and_report_aggregate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            dry_code, dry_output = self.run_cli(
+                [
+                    "ai-usage-record",
+                    str(archive_root),
+                    "--task-id",
+                    "task:usage-record-test",
+                    "--runtime",
+                    "codex",
+                    "--model",
+                    "gpt-5",
+                    "--purpose",
+                    "scoped validation planning",
+                    "--input-tokens",
+                    "1000",
+                    "--output-tokens",
+                    "250",
+                    "--cached-input-tokens",
+                    "100",
+                    "--reasoning-tokens",
+                    "40",
+                    "--budget-tokens",
+                    "1500",
+                    "--planned-tokens",
+                    "900",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertTrue(dry_result["ok"])
+            self.assertEqual(dry_result["status"], "would_write")
+            self.assertIn("receipts/ai-usage/", dry_result["proposed_receipt_path"])
+            self.assertFalse((archive_root / "receipts" / "ai-usage").exists())
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "ai-usage-record",
+                    str(archive_root),
+                    "--task-id",
+                    "task:usage-record-test",
+                    "--runtime",
+                    "codex",
+                    "--model",
+                    "gpt-5",
+                    "--purpose",
+                    "scoped validation planning",
+                    "--input-tokens",
+                    "1000",
+                    "--output-tokens",
+                    "250",
+                    "--cached-input-tokens",
+                    "100",
+                    "--reasoning-tokens",
+                    "40",
+                    "--budget-tokens",
+                    "1500",
+                    "--planned-tokens",
+                    "900",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            approve_result = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"])
+            self.assertEqual(approve_result["status"], "written")
+            self.assertEqual(approve_result["usage"]["total_tokens"], 1250)
+            receipt_path = archive_root / approve_result["receipt_path"]
+            self.assertTrue(receipt_path.is_file())
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertFalse(receipt["closed_actions"]["prompt_or_response_body_stored"])
+            self.assertNotIn(str(archive_root), approve_output)
+
+            report_code, report_output = self.run_cli(
+                ["ai-usage-report", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            report = json.loads(report_output)
+            self.assertEqual(report_code, 0, report_output)
+            self.assertTrue(report["ok"])
+            self.assertEqual(report["totals"]["records"], 1)
+            self.assertEqual(report["totals"]["input_tokens"], 1000)
+            self.assertEqual(report["totals"]["output_tokens"], 250)
+            self.assertEqual(report["totals"]["total_tokens"], 1250)
+            self.assertEqual(report["by_runtime"][0]["key"], "codex")
+            self.assertFalse(report["closed_actions"]["prompt_or_response_body_read"])
+
+    def test_ai_usage_record_blocks_unsafe_runtime_label(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            code, output = self.run_cli(
+                [
+                    "ai-usage-record",
+                    str(archive_root),
+                    "--task-id",
+                    "task:unsafe-usage",
+                    "--runtime",
+                    "unsafe@example.com",
+                    "--model",
+                    "gpt-5",
+                    "--purpose",
+                    "unsafe label test",
+                    "--input-tokens",
+                    "1",
+                    "--output-tokens",
+                    "1",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("runtime must be a safe non-secret scalar" in item for item in result["blockers"]))
+            self.assertFalse((archive_root / "receipts" / "ai-usage").exists())
+
     def test_runtime_context_expected_archive_id_mismatch_blocks(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         code, output = self.run_cli(

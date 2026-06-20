@@ -713,6 +713,13 @@ OPERATIONAL_CONTEXT_RELATIVE_PATH = "ops/operational-context.yml"
 OPERATIONAL_CONTEXT_RECEIPTS_DIR = "receipts/operational-context"
 OPERATIONAL_CONTEXT_MAX_TEXT_LENGTH = 600
 OPERATIONAL_CONTEXT_MAX_LIST_ITEMS = 24
+AI_USAGE_RECEIPTS_DIR = "receipts/ai-usage"
+AI_USAGE_RECEIPT_SCHEMA = "wom-kit/ai-usage-receipt/v0.1"
+AI_USAGE_MAX_LABEL_LENGTH = 160
+AI_USAGE_BLOCKED_CONTEXT_PREFIXES = (
+    "objects/sha256/",
+    "objects/derived-text/sha256/",
+)
 RUNTIME_CONTEXT_FIXED_ENTRYPOINTS = (
     {
         "path": "archive.yml",
@@ -43045,6 +43052,426 @@ def operational_context_recommended_commands() -> list[dict[str, str]]:
 def operational_context_receipt_relative_path(record_hash: str) -> str:
     digest = record_hash.removeprefix("sha256:")
     return f"{OPERATIONAL_CONTEXT_RECEIPTS_DIR}/{digest[:16]}.operational-context.json"
+
+
+def ai_usage_estimated_tokens(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
+
+
+def ai_usage_safe_label(value: Any, blockers: list[str], field_path: str, *, required: bool = True) -> str | None:
+    if value is None:
+        if required:
+            blockers.append(f"{field_path} is required.")
+        return None
+    text = " ".join(str(value).strip().split())
+    if not text:
+        if required:
+            blockers.append(f"{field_path} is required.")
+        return None
+    if len(text) > AI_USAGE_MAX_LABEL_LENGTH:
+        blockers.append(f"{field_path} must be {AI_USAGE_MAX_LABEL_LENGTH} characters or fewer.")
+        return None
+    if not safe_source_intake_plan_scalar(text):
+        blockers.append(f"{field_path} must be a safe non-secret scalar.")
+        return None
+    return text
+
+
+def ai_usage_non_negative_int(value: Any, blockers: list[str], field_path: str, *, required: bool = True) -> int | None:
+    if value is None:
+        if required:
+            blockers.append(f"{field_path} is required.")
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        blockers.append(f"{field_path} must be an integer.")
+        return None
+    if number < 0:
+        blockers.append(f"{field_path} must be non-negative.")
+        return None
+    return number
+
+
+def ai_usage_context_relative_path(root: Path, raw_path: str, blockers: list[str]) -> str | None:
+    text = str(raw_path or "").strip()
+    if not text:
+        blockers.append("context include path must be non-empty.")
+        return None
+    if Path(text).is_absolute():
+        blockers.append("context include path must be archive-relative.")
+        return None
+    try:
+        path = resolve_archive_relative_path(root, text)
+        relative = archive_relative_path(path, root)
+    except (ArchivePathError, OSError, ValueError):
+        blockers.append("context include path must stay inside the archive root.")
+        return None
+    normalized = relative.replace("\\", "/")
+    if any(normalized.startswith(prefix) for prefix in AI_USAGE_BLOCKED_CONTEXT_PREFIXES):
+        blockers.append(f"context include path is source/object byte storage and must not be read by ai-usage-plan: {normalized}.")
+        return None
+    if not path.is_file():
+        blockers.append(f"context include path is missing or not a file: {normalized}.")
+        return None
+    return normalized
+
+
+def ai_usage_plan(
+    archive_root: Path | str,
+    *,
+    budget_tokens: int | None,
+    include_paths: list[str] | None = None,
+    task_id: str | None = None,
+    purpose: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    task_label = ai_usage_safe_label(task_id, blockers, "task_id", required=False)
+    purpose_label = ai_usage_safe_label(purpose, blockers, "purpose", required=False)
+    budget = ai_usage_non_negative_int(budget_tokens, blockers, "budget_tokens")
+
+    if not dry_run:
+        blockers.append("ai-usage-plan is read-only and requires --dry-run.")
+    if not include_paths:
+        warnings.append("No context include paths were provided; the plan records a zero-token budget baseline only.")
+
+    items: list[dict[str, Any]] = []
+    for raw_path in include_paths or []:
+        relative = ai_usage_context_relative_path(root, raw_path, blockers)
+        if relative is None:
+            continue
+        path = archive_internal_path(root, relative)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            blockers.append(f"context include path is not UTF-8 text: {relative}.")
+            continue
+        except OSError as exc:
+            blockers.append(f"context include path could not be read: {relative} ({exc}).")
+            continue
+        stat = path.stat()
+        estimated = ai_usage_estimated_tokens(text)
+        items.append(
+            {
+                "path": relative,
+                "sha256": "sha256:" + sha256_text(text),
+                "bytes": stat.st_size,
+                "chars": len(text),
+                "estimated_tokens": estimated,
+                "read_mode": "explicit_text_for_token_estimate",
+                "content_echoed": False,
+            }
+        )
+
+    total_estimated = sum(int(item["estimated_tokens"]) for item in items)
+    remaining = (budget - total_estimated) if budget is not None else None
+    if budget is not None and total_estimated > budget:
+        warnings.append("Estimated context tokens exceed the requested budget.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "ai_usage_plan",
+        "archive_id": archive_id,
+        "task_id": task_label,
+        "purpose": purpose_label,
+        "budget_tokens": budget,
+        "estimated_context_tokens": total_estimated,
+        "remaining_budget_tokens": remaining,
+        "over_budget": bool(budget is not None and total_estimated > budget),
+        "items": items,
+        "item_count": len(items),
+        "closed_actions": {
+            "explicit_context_files_read": len(items),
+            "source_object_bytes_read": False,
+            "prompt_or_response_body_stored": False,
+            "files_written": False,
+            "provider_api_called": False,
+            "secrets_read": False,
+        },
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+def ai_usage_receipt_relative_path(receipt_seed: dict[str, Any]) -> str:
+    digest = sha256_json_value(receipt_seed).removeprefix("sha256:")
+    return f"{AI_USAGE_RECEIPTS_DIR}/{digest[:24]}.ai-usage.json"
+
+
+def ai_usage_record(
+    archive_root: Path | str,
+    *,
+    task_id: str | None,
+    runtime: str | None,
+    model: str | None,
+    purpose: str | None,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    total_tokens: int | None = None,
+    cached_input_tokens: int | None = None,
+    reasoning_tokens: int | None = None,
+    budget_tokens: int | None = None,
+    planned_tokens: int | None = None,
+    context_plan_sha256: str | None = None,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    if approve and reviewer is None:
+        blockers.append("ai-usage-record approve requires a safe --reviewed-by actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    task_label = ai_usage_safe_label(task_id, blockers, "task_id")
+    runtime_label = ai_usage_safe_label(runtime, blockers, "runtime")
+    model_label = ai_usage_safe_label(model, blockers, "model")
+    purpose_label = ai_usage_safe_label(purpose, blockers, "purpose")
+    input_count = ai_usage_non_negative_int(input_tokens, blockers, "input_tokens")
+    output_count = ai_usage_non_negative_int(output_tokens, blockers, "output_tokens")
+    cached_count = ai_usage_non_negative_int(cached_input_tokens, blockers, "cached_input_tokens", required=False) or 0
+    reasoning_count = ai_usage_non_negative_int(reasoning_tokens, blockers, "reasoning_tokens", required=False) or 0
+    budget_count = ai_usage_non_negative_int(budget_tokens, blockers, "budget_tokens", required=False)
+    planned_count = ai_usage_non_negative_int(planned_tokens, blockers, "planned_tokens", required=False)
+    context_plan_hash = ai_usage_safe_label(context_plan_sha256, blockers, "context_plan_sha256", required=False)
+    if context_plan_hash and not re.match(r"^sha256:[0-9a-f]{64}$", context_plan_hash):
+        blockers.append("context_plan_sha256 must use sha256:<64 lowercase hex> syntax.")
+
+    inferred_total = None
+    if input_count is not None and output_count is not None:
+        inferred_total = input_count + output_count
+    total_count = ai_usage_non_negative_int(total_tokens, blockers, "total_tokens", required=False)
+    if total_count is None:
+        total_count = inferred_total
+    if input_count is not None and cached_count > input_count:
+        blockers.append("cached_input_tokens cannot exceed input_tokens.")
+    if total_count is not None and inferred_total is not None and total_count < inferred_total:
+        blockers.append("total_tokens cannot be smaller than input_tokens + output_tokens.")
+    if budget_count is not None and total_count is not None and total_count > budget_count:
+        warnings.append("Recorded total_tokens exceed the stated budget_tokens.")
+    if planned_count is not None and input_count is not None and input_count > planned_count:
+        warnings.append("Recorded input_tokens exceed planned_tokens.")
+
+    recorded_at = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    usage = {
+        "input_tokens": input_count,
+        "output_tokens": output_count,
+        "total_tokens": total_count,
+        "cached_input_tokens": cached_count,
+        "reasoning_tokens": reasoning_count,
+    }
+    receipt_seed = {
+        "schema": AI_USAGE_RECEIPT_SCHEMA,
+        "lifecycle_action": "ai_usage_record",
+        "archive_id": archive_id,
+        "task_id": task_label,
+        "runtime": runtime_label,
+        "model": model_label,
+        "purpose": purpose_label,
+        "usage": usage,
+        "budget_tokens": budget_count,
+        "planned_tokens": planned_count,
+        "context_plan_sha256": context_plan_hash,
+    }
+    proposed_receipt_path = ai_usage_receipt_relative_path(receipt_seed) if not blockers else None
+    if proposed_receipt_path and archive_internal_path(root, proposed_receipt_path).exists():
+        blockers.append(f"Proposed AI usage receipt already exists: {proposed_receipt_path}.")
+
+    result: dict[str, Any] = {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "ai_usage_record",
+        "archive_id": archive_id,
+        "status": "blocked" if blockers else ("would_write" if dry_run else "ready_to_write"),
+        "task_id": task_label,
+        "runtime": runtime_label,
+        "model": model_label,
+        "purpose": purpose_label,
+        "usage": usage,
+        "budget_tokens": budget_count,
+        "planned_tokens": planned_count,
+        "context_plan_sha256": context_plan_hash,
+        "proposed_receipt_path": proposed_receipt_path,
+        "closed_actions": {
+            "prompt_or_response_body_stored": False,
+            "provider_api_called": False,
+            "secrets_read": False,
+            "files_written": False,
+        },
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+    if dry_run or blockers:
+        return result
+
+    assert approve
+    assert reviewer is not None
+    assert proposed_receipt_path is not None
+    receipt = {
+        **receipt_seed,
+        "receipt_path": proposed_receipt_path,
+        "reviewed_by": reviewer,
+        "recorded_at": recorded_at,
+        "closed_actions": {
+            "prompt_or_response_body_stored": False,
+            "provider_api_called": False,
+            "secrets_read": False,
+        },
+        "files_written": [proposed_receipt_path],
+    }
+    receipt_path = archive_internal_path(root, proposed_receipt_path)
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json_new_file(receipt_path, receipt)
+    result.update(
+        {
+            "ok": True,
+            "dry_run": False,
+            "status": "written",
+            "receipt_path": proposed_receipt_path,
+            "reviewed_by": reviewer,
+            "recorded_at": recorded_at,
+            "closed_actions": {
+                "prompt_or_response_body_stored": False,
+                "provider_api_called": False,
+                "secrets_read": False,
+                "files_written": True,
+            },
+            "blockers": [],
+        }
+    )
+    return result
+
+
+def ai_usage_report(
+    archive_root: Path | str,
+    *,
+    task_id: str | None = None,
+    runtime: str | None = None,
+    model: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("ai-usage-report is read-only and requires --dry-run.")
+    task_filter = ai_usage_safe_label(task_id, blockers, "task_id", required=False)
+    runtime_filter = ai_usage_safe_label(runtime, blockers, "runtime", required=False)
+    model_filter = ai_usage_safe_label(model, blockers, "model", required=False)
+    receipts_root = archive_internal_path(root, AI_USAGE_RECEIPTS_DIR)
+    receipts: list[dict[str, Any]] = []
+    skipped_receipts: list[str] = []
+
+    def usage_counter(value: Any) -> int:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, number)
+
+    if receipts_root.is_dir():
+        for path in sorted(receipts_root.glob("*.ai-usage.json")):
+            relative = archive_relative_path(path, root)
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                skipped_receipts.append(relative)
+                continue
+            if data.get("schema") != AI_USAGE_RECEIPT_SCHEMA or data.get("lifecycle_action") != "ai_usage_record":
+                skipped_receipts.append(relative)
+                continue
+            if task_filter and data.get("task_id") != task_filter:
+                continue
+            if runtime_filter and data.get("runtime") != runtime_filter:
+                continue
+            if model_filter and data.get("model") != model_filter:
+                continue
+            usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+            receipts.append(
+                {
+                    "receipt_path": relative,
+                    "task_id": data.get("task_id"),
+                    "runtime": data.get("runtime"),
+                    "model": data.get("model"),
+                    "purpose": data.get("purpose"),
+                    "recorded_at": data.get("recorded_at"),
+                    "usage": {
+                        "input_tokens": usage_counter(usage.get("input_tokens")),
+                        "output_tokens": usage_counter(usage.get("output_tokens")),
+                        "total_tokens": usage_counter(usage.get("total_tokens")),
+                        "cached_input_tokens": usage_counter(usage.get("cached_input_tokens")),
+                        "reasoning_tokens": usage_counter(usage.get("reasoning_tokens")),
+                    },
+                    "budget_tokens": data.get("budget_tokens"),
+                    "planned_tokens": data.get("planned_tokens"),
+                }
+            )
+    if skipped_receipts:
+        warnings.append(f"Skipped {len(skipped_receipts)} unreadable or invalid AI usage receipt(s).")
+
+    totals = {
+        "records": len(receipts),
+        "input_tokens": sum(item["usage"]["input_tokens"] for item in receipts),
+        "output_tokens": sum(item["usage"]["output_tokens"] for item in receipts),
+        "total_tokens": sum(item["usage"]["total_tokens"] for item in receipts),
+        "cached_input_tokens": sum(item["usage"]["cached_input_tokens"] for item in receipts),
+        "reasoning_tokens": sum(item["usage"]["reasoning_tokens"] for item in receipts),
+    }
+
+    def aggregate_by(field: str) -> list[dict[str, Any]]:
+        buckets: dict[str, dict[str, Any]] = {}
+        for item in receipts:
+            key = str(item.get(field) or "unknown")
+            bucket = buckets.setdefault(
+                key,
+                {"key": key, "records": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            )
+            bucket["records"] += 1
+            bucket["input_tokens"] += item["usage"]["input_tokens"]
+            bucket["output_tokens"] += item["usage"]["output_tokens"]
+            bucket["total_tokens"] += item["usage"]["total_tokens"]
+        return sorted(buckets.values(), key=lambda item: (-int(item["total_tokens"]), str(item["key"])))
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "ai_usage_report",
+        "archive_id": archive_id,
+        "filters": {
+            "task_id": task_filter,
+            "runtime": runtime_filter,
+            "model": model_filter,
+        },
+        "totals": totals,
+        "by_runtime": aggregate_by("runtime"),
+        "by_model": aggregate_by("model"),
+        "by_purpose": aggregate_by("purpose"),
+        "receipts": receipts,
+        "closed_actions": {
+            "receipt_files_read": len(receipts) + len(skipped_receipts),
+            "prompt_or_response_body_read": False,
+            "files_written": False,
+            "provider_api_called": False,
+            "secrets_read": False,
+        },
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
 
 
 def runtime_context(
