@@ -6469,10 +6469,14 @@ def candidate_zettel_texts(frontmatter: dict[str, Any], body: str) -> list[str]:
 
 
 def edge_receipts_for_source(archive_root: Path, source_relative: str) -> list[dict[str, Any]]:
+    return edge_receipts_by_source(archive_root).get(source_relative, [])
+
+
+def edge_receipts_by_source(archive_root: Path) -> dict[str, list[dict[str, Any]]]:
     root = archive_root / ZETTEL_EDGE_RECEIPTS_DIR
     if not root.is_dir():
-        return []
-    receipts: list[dict[str, Any]] = []
+        return {}
+    by_source: dict[str, list[dict[str, Any]]] = {}
     for path in safe_archive_glob(root, "*.zettel-edge.json", archive_root):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -6482,12 +6486,13 @@ def edge_receipts_for_source(archive_root: Path, source_relative: str) -> list[d
             continue
         if data.get("receipt_kind") != "zettel_edge_write":
             continue
-        if data.get("source_zettel_path") != source_relative:
+        source_relative = str(data.get("source_zettel_path") or "").strip()
+        if not source_relative:
             continue
         created_at = parse_receipt_time(data.get("created_at"))
         if created_at is None:
             continue
-        receipts.append(
+        by_source.setdefault(source_relative, []).append(
             {
                 "receipt_path": archive_relative_path(path, archive_root),
                 "edge_id": str(data.get("edge_id") or "").strip(),
@@ -6495,7 +6500,7 @@ def edge_receipts_for_source(archive_root: Path, source_relative: str) -> list[d
                 "created_at_raw": data.get("created_at"),
             }
         )
-    return receipts
+    return by_source
 
 
 def target_sha_evolved_by_edge_receipts(
@@ -6503,6 +6508,8 @@ def target_sha_evolved_by_edge_receipts(
     receipt_data: dict[str, Any],
     target_path: Path,
     expected_sha: str,
+    *,
+    edge_receipts: list[dict[str, Any]] | None = None,
 ) -> bool:
     try:
         target_relative = archive_relative_path(target_path, archive_root)
@@ -6521,7 +6528,8 @@ def target_sha_evolved_by_edge_receipts(
     if not isinstance(edges, list):
         return False
 
-    edge_receipts = edge_receipts_for_source(archive_root, target_relative)
+    if edge_receipts is None:
+        edge_receipts = edge_receipts_for_source(archive_root, target_relative)
     if not edge_receipts:
         return False
 
@@ -6588,6 +6596,8 @@ def verify_mint_target_sha_reference(
     receipt: dict[str, Any],
     blockers: list[str],
     warnings: list[str],
+    *,
+    edge_receipts: list[dict[str, Any]] | None = None,
 ) -> str | None:
     if not isinstance(expected, str) or not SHA256_RE.match(expected):
         blockers.append("Mint receipt target sha256 is missing or invalid.")
@@ -6595,7 +6605,7 @@ def verify_mint_target_sha_reference(
     actual = sha256_path(path)
     if actual == expected:
         return actual
-    if target_sha_evolved_by_edge_receipts(archive_root, receipt, path, expected):
+    if target_sha_evolved_by_edge_receipts(archive_root, receipt, path, expected, edge_receipts=edge_receipts):
         warnings.append("Mint receipt target sha256 is historical; current target differs only by approved zettel-edge receipts.")
         return actual
     blockers.append("Mint receipt target sha256 does not match the referenced file.")
@@ -6607,6 +6617,7 @@ def minted_draft_retirement_plan(
     *,
     zettel_id: str | None = None,
     relative_path: str | None = None,
+    edge_receipts_by_source_index: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     draft_path = resolve_inbox_draft_path(root, zettel_id, relative_path)
@@ -6666,8 +6677,22 @@ def minted_draft_retirement_plan(
     snapshot_path = resolve_required_archive_file(root, snapshot_relative, blockers, "Draft snapshot")
 
     source_sha = verify_sha256_reference(draft_path, source.get("sha256"), blockers, "Mint receipt source")
+    canonical_edge_receipts = None
+    if canonical_path is not None and edge_receipts_by_source_index is not None:
+        try:
+            canonical_edge_receipts = edge_receipts_by_source_index.get(archive_relative_path(canonical_path, root), [])
+        except (ArchivePathError, OSError, ValueError):
+            canonical_edge_receipts = []
     canonical_sha = (
-        verify_mint_target_sha_reference(root, canonical_path, target.get("sha256"), receipt, blockers, warnings)
+        verify_mint_target_sha_reference(
+            root,
+            canonical_path,
+            target.get("sha256"),
+            receipt,
+            blockers,
+            warnings,
+            edge_receipts=canonical_edge_receipts,
+        )
         if canonical_path
         else None
     )
@@ -6760,13 +6785,19 @@ def retire_minted_draft(
     relative_path: str | None = None,
     reviewed_by: str | None = None,
     approve: bool = False,
+    edge_receipts_by_source_index: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     reviewer = (reviewed_by or "").strip()
     if approve and not reviewer:
         raise ArchiveServiceError("Retiring a minted draft requires --reviewed-by.")
 
     root = require_existing_archive_root(archive_root)
-    plan = minted_draft_retirement_plan(root, zettel_id=zettel_id, relative_path=relative_path)
+    plan = minted_draft_retirement_plan(
+        root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        edge_receipts_by_source_index=edge_receipts_by_source_index,
+    )
     if plan["blockers"]:
         if approve:
             raise ArchiveServiceError("Retiring minted draft blocked: " + "; ".join(plan["blockers"]))
@@ -6774,17 +6805,49 @@ def retire_minted_draft(
     if not approve:
         return plan
 
-    draft_path = resolve_inbox_draft_path(root, zettel_id, relative_path)
+    return write_retired_draft_from_plan(root, plan, reviewed_by=reviewer, zettel_id=zettel_id, relative_path=relative_path)
+
+
+def verify_retired_draft_plan_still_current(root: Path, plan: dict[str, Any]) -> None:
+    receipt_preview = plan.get("receipt_preview") if isinstance(plan.get("receipt_preview"), dict) else {}
+    refs = [
+        ("source", "Inbox draft changed after retirement verification; rerun dry-run."),
+        ("target", "Canonical zettel changed after retirement verification; rerun dry-run."),
+        ("mint_receipt", "Mint receipt changed after retirement verification; rerun dry-run."),
+        ("snapshot", "Draft snapshot changed after retirement verification; rerun dry-run."),
+    ]
+    for section, message in refs:
+        section_data = receipt_preview.get(section) if isinstance(receipt_preview.get(section), dict) else {}
+        relative = section_data.get("path")
+        expected_sha = section_data.get("sha256")
+        if not isinstance(relative, str) or not relative.strip() or not isinstance(expected_sha, str) or not SHA256_RE.match(expected_sha):
+            raise ArchiveServiceError(message)
+        path = resolve_archive_relative_path(root, relative)
+        if not path.is_file() or sha256_path(path) != expected_sha:
+            raise ArchiveServiceError(message)
+
+
+def write_retired_draft_from_plan(
+    archive_root: Path | str,
+    plan: dict[str, Any],
+    *,
+    reviewed_by: str,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    if plan.get("blockers"):
+        raise ArchiveServiceError("Retiring minted draft blocked: " + "; ".join(str(item) for item in plan.get("blockers", [])))
+
+    draft_path = resolve_inbox_draft_path(root, zettel_id, relative_path or plan.get("draft_path"))
     source_bytes = draft_path.read_bytes()
-    expected_source_sha = plan["receipt_preview"]["source"].get("sha256")
-    if sha256_path(draft_path) != expected_source_sha:
-        raise ArchiveServiceError("Inbox draft changed after retirement verification; rerun dry-run.")
+    verify_retired_draft_plan_still_current(root, plan)
 
     now = datetime.now().astimezone().replace(microsecond=0).isoformat()
     receipt = dict(plan["receipt_preview"])
     receipt["dry_run"] = False
     receipt["timestamp"] = now
-    receipt["reviewed_by"] = reviewer
+    receipt["reviewed_by"] = reviewed_by
     receipt["reviewed_at"] = now
     receipt["result"] = {
         "removed_paths": [plan["draft_path"]],
@@ -6809,7 +6872,7 @@ def retire_minted_draft(
         {
             "ok": True,
             "dry_run": False,
-            "reviewed_by": reviewer,
+            "reviewed_by": reviewed_by,
             "removed_paths": [plan["draft_path"]],
             "created_paths": [plan["retire_receipt_path"]],
             "receipt": json_safe(receipt),
@@ -7357,6 +7420,7 @@ def retire_draft_batch(
     item_results: list[dict[str, Any]] = []
     skipped_existing_items: list[dict[str, Any]] = []
     failed_items: list[dict[str, Any]] = []
+    edge_index: dict[str, list[dict[str, Any]]] = edge_receipts_by_source(root) if not blockers and rows else {}
     if not blockers:
         for row in rows:
             key = mint_lifecycle_batch_item_key(row)
@@ -7365,7 +7429,12 @@ def retire_draft_batch(
                 continue
             seen.add(key)
             try:
-                dry_result = retire_minted_draft(root, zettel_id=row.get("zettel_id"), relative_path=row.get("path"), approve=False)
+                dry_result = minted_draft_retirement_plan(
+                    root,
+                    zettel_id=row.get("zettel_id"),
+                    relative_path=row.get("path"),
+                    edge_receipts_by_source_index=edge_index,
+                )
             except (ArchiveServiceError, OSError) as exc:
                 existing = retire_batch_existing_artifacts(root, row) if skip_existing else None
                 if existing is not None:
@@ -7384,12 +7453,12 @@ def retire_draft_batch(
                 item_results.append(retire_batch_item_summary(row, dry_result, write_status="would_retire"))
             else:
                 try:
-                    write_result = retire_minted_draft(
+                    write_result = write_retired_draft_from_plan(
                         root,
+                        dry_result,
+                        reviewed_by=reviewed_by,
                         zettel_id=row.get("zettel_id"),
                         relative_path=row.get("path"),
-                        reviewed_by=reviewed_by,
-                        approve=True,
                     )
                 except (ArchiveServiceError, OSError) as exc:
                     existing = retire_batch_existing_artifacts(root, row) if skip_existing else None

@@ -270,6 +270,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.116.md").read_text(encoding="utf-8")
         staleness_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.118.md").read_text(encoding="utf-8")
         batch_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.119.md").read_text(encoding="utf-8")
+        retire_validate_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.120.md").read_text(encoding="utf-8")
         for phrase in (
             "checklist guidance",
             "mint_checklist_guidance",
@@ -298,6 +299,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "bulk-retire",
             "failed_items",
             "do not spawn per-item shell processes",
+            "source-zettel-path edge receipt index",
+            "Doctor-level edge receipt cache",
+            "do not rescan all edge receipts per receipt",
             "source path resolution uses that file before falling back to the legacy archive-wide id scan",
             "mint target SHA that changed only through approved post-receipt zettel-edge writes can still retire",
         ):
@@ -313,6 +317,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "mint-zet-batch",
             "retire-draft-batch",
             "per-item shell",
+            "v0.3.120 - 2026-06-20",
+            "edge receipt",
             "v0.3.116 - 2026-06-19",
             "standard `inbox/<zettel_id>.md`",
             "v0.3.114 - 2026-06-19",
@@ -357,6 +363,19 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, batch_release_text)
+        for phrase in (
+            "# v0.3.120 - Retire/Validate Edge Receipt Index",
+            "source-zettel-path edge receipt index",
+            "retire-draft-batch",
+            "O(1) source, canonical target, mint receipt, and snapshot SHA replay",
+            "Doctor-level edge receipt cache",
+            "No archive migration is required",
+            "does not",
+            "add `validate --since`",
+            "progress logging or ETA output",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, retire_validate_release_text)
 
     def test_public_product_roadmap_is_linked_from_release_surfaces(self) -> None:
         roadmap_text = PRODUCT_ROADMAP_PATH.read_text(encoding="utf-8")

@@ -708,7 +708,7 @@ This file is a rebuildable map, not the archive itself. The durable archive stil
 
 `archive retire-draft --dry-run|--approve` closes the lifecycle gap after a draft has already been minted. Dry-run verifies that the inbox draft, canonical zet, mint receipt, draft snapshot, archive-relative paths, and SHA-256 evidence all agree. It can also accept a mint target SHA that changed only through approved post-receipt zettel-edge writes. Approved mode requires `--reviewed-by`, removes only that verified inbox draft, writes `receipts/mint/retired-drafts/*.retire-draft.json`, and preserves the canonical zet, original mint receipt, and draft snapshot.
 
-`archive mint-zet-batch --plan <json> --dry-run|--approve` and `archive retire-draft-batch --plan <json> --dry-run|--approve` are the batch-safe forms for large WOM real-use runs. They consume archive-relative JSON plans, run inside one WOM-kit process, keep the same single-item gates for each item, support `--skip-existing` and `--max-items`, return `failed_items` for partial failures, and write one batch receipt under `receipts/mint/batches/` or `receipts/mint/retired-drafts/batches/`. They do not spawn one shell process per item, call providers, read unrelated source files, or echo zettel body text.
+`archive mint-zet-batch --plan <json> --dry-run|--approve` and `archive retire-draft-batch --plan <json> --dry-run|--approve` are the batch-safe forms for large WOM real-use runs. They consume archive-relative JSON plans, run inside one WOM-kit process, keep the same single-item gates for each item, support `--skip-existing` and `--max-items`, return `failed_items` for partial failures, and write one batch receipt under `receipts/mint/batches/` or `receipts/mint/retired-drafts/batches/`. For post-edge canonical zets, retired-draft batch validation builds one edge receipt index for the batch and approved writes reuse the verified plan with current-file SHA replay checks. They do not spawn one shell process per item, rescan edge receipts once per item, call providers, read unrelated source files, or echo zettel body text.
 
 `archive source-intake --dry-run` is the safe classification step before drafting from a source/objet. It accepts exactly one locator, returns `source_refs_for_draft`, reports object storage context, and writes nothing. It does not read file bodies, hash, copy, upload, import, OCR, transcribe, extract, call provider APIs, create drafts, or mint.
 
@@ -1155,6 +1155,10 @@ v0.3.119 adds `mint-zet-batch` / `bulk-mint` and `retire-draft-batch` /
 `bulk-retire` so large mint and retired-draft cleanup runs can use one reviewed
 plan, one WOM-kit process, `--skip-existing`, `--max-items`, per-item failure
 lists, and one batch receipt instead of fragile per-item shell loops.
+v0.3.120 hardens the next batch performance layer: edge-only canonical target
+SHA evolution checks now reuse a source-zettel-path edge receipt index in
+`retire-draft-batch`, and `validate` / `doctor` use a lazy edge receipt cache
+instead of rescanning edge receipts for every mint or retired-draft receipt.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 
