@@ -253,10 +253,11 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import __version__, archive_services
 from .paths import (
@@ -451,14 +452,330 @@ class Diagnostic:
         return data
 
 
+@dataclass
+class ValidationScope:
+    mode: str = "full"
+    label: str = "full archive"
+    since_refs: list[str] = field(default_factory=list)
+    facet_filters: dict[str, str] = field(default_factory=dict)
+    batch_receipt_paths: set[str] = field(default_factory=set)
+    zettel_paths: set[str] = field(default_factory=set)
+    mint_receipt_paths: set[str] = field(default_factory=set)
+    retired_draft_receipt_paths: set[str] = field(default_factory=set)
+    edge_receipt_paths: set[str] = field(default_factory=set)
+    blockers: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    index_cache_used: bool = False
+
+    def active(self) -> bool:
+        return self.mode != "full"
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "label": self.label,
+            "since_refs": self.since_refs,
+            "facet_filters": self.facet_filters,
+            "batch_receipt_count": len(self.batch_receipt_paths),
+            "zettel_count": len(self.zettel_paths),
+            "mint_receipt_count": len(self.mint_receipt_paths),
+            "retired_draft_receipt_count": len(self.retired_draft_receipt_paths),
+            "edge_receipt_count": len(self.edge_receipt_paths),
+            "index_cache_used": self.index_cache_used,
+        }
+
+
+ProgressCallback = Callable[[str, str, int | None, int | None], None]
+
+
+def parse_validate_scope_filters(raw_filters: list[str] | None) -> tuple[dict[str, str], list[str]]:
+    filters: dict[str, str] = {}
+    blockers: list[str] = []
+    for raw in raw_filters or []:
+        text = str(raw or "").strip()
+        if "=" not in text:
+            blockers.append("validate --scope must use facet=value syntax.")
+            continue
+        key, value = [item.strip() for item in text.split("=", 1)]
+        if key.startswith("facets."):
+            key = key.split(".", 1)[1]
+        if not key or not value:
+            blockers.append("validate --scope requires a non-empty facet key and value.")
+            continue
+        if not archive_services.safe_source_intake_plan_scalar(key) or not archive_services.safe_source_intake_plan_scalar(value):
+            blockers.append("validate --scope facet key/value must be safe non-secret scalar labels.")
+            continue
+        filters[key] = value
+    return filters, blockers
+
+
+def _add_validate_scope_file(
+    scope: ValidationScope,
+    root: Path,
+    relative: Any,
+    collection: set[str],
+    label: str,
+    *,
+    required: bool = True,
+) -> Path | None:
+    if not isinstance(relative, str) or not relative.strip():
+        if required:
+            scope.blockers.append(f"{label} path is missing.")
+        return None
+    try:
+        path = resolve_archive_relative_path(root, relative)
+        display = archive_relative_path(path, root)
+    except (ArchivePathError, OSError, ValueError) as exc:
+        scope.blockers.append(f"{label} path is unsafe: {relative} ({exc})")
+        return None
+    if required and not path.is_file():
+        scope.blockers.append(f"{label} file is missing: {display}")
+        return None
+    if path.is_file():
+        collection.add(display)
+    return path
+
+
+def _load_validate_scope_json(scope: ValidationScope, path: Path, label: str) -> dict[str, Any] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        scope.blockers.append(f"{label} is not readable JSON: {exc}")
+        return None
+    if not isinstance(data, dict):
+        scope.blockers.append(f"{label} must contain a JSON object.")
+        return None
+    return data
+
+
+def _collect_validate_scope_from_mint_receipt(scope: ValidationScope, root: Path, receipt_relative: str) -> None:
+    receipt_path = _add_validate_scope_file(scope, root, receipt_relative, scope.mint_receipt_paths, "mint receipt")
+    if receipt_path is None:
+        return
+    data = _load_validate_scope_json(scope, receipt_path, "mint receipt")
+    if data is None:
+        return
+    target = data.get("target") if isinstance(data.get("target"), dict) else {}
+    target_path = _add_validate_scope_file(scope, root, target.get("path"), scope.zettel_paths, "mint receipt target")
+    source = data.get("source") if isinstance(data.get("source"), dict) else {}
+    if isinstance(source.get("path"), str):
+        _add_validate_scope_file(scope, root, source.get("path"), scope.zettel_paths, "mint receipt source", required=False)
+    if target_path is None:
+        return
+
+
+def _collect_validate_scope_from_retired_draft_receipt(scope: ValidationScope, root: Path, receipt_relative: str) -> None:
+    receipt_path = _add_validate_scope_file(
+        scope,
+        root,
+        receipt_relative,
+        scope.retired_draft_receipt_paths,
+        "retired draft receipt",
+    )
+    if receipt_path is None:
+        return
+    data = _load_validate_scope_json(scope, receipt_path, "retired draft receipt")
+    if data is None:
+        return
+    target = data.get("target") if isinstance(data.get("target"), dict) else {}
+    _add_validate_scope_file(scope, root, target.get("path"), scope.zettel_paths, "retired draft target")
+    mint_receipt = data.get("mint_receipt") if isinstance(data.get("mint_receipt"), dict) else {}
+    if isinstance(mint_receipt.get("path"), str):
+        _collect_validate_scope_from_mint_receipt(scope, root, mint_receipt["path"])
+
+
+def _collect_validate_scope_from_edge_receipt(scope: ValidationScope, root: Path, receipt_relative: str) -> None:
+    receipt_path = _add_validate_scope_file(scope, root, receipt_relative, scope.edge_receipt_paths, "zettel-edge receipt")
+    if receipt_path is None:
+        return
+    data = _load_validate_scope_json(scope, receipt_path, "zettel-edge receipt")
+    if data is None:
+        return
+    source_path = data.get("source_zettel_path")
+    if isinstance(source_path, str):
+        _add_validate_scope_file(scope, root, source_path, scope.zettel_paths, "zettel-edge source")
+
+
+def _validate_batch_receipt_candidates(root: Path, raw_ref: str) -> list[Path]:
+    text = raw_ref.strip()
+    candidates: list[Path] = []
+    try:
+        candidates.append(archive_services.resolve_receipt_input_path(root, text))
+    except Exception:
+        pass
+
+    search_roots = [
+        root / archive_services.MINT_BATCH_RECEIPTS_DIR,
+        root / archive_services.MINT_RETIRED_DRAFT_BATCH_RECEIPTS_DIR,
+        root / archive_services.ZETTEL_EDGE_BATCH_RECEIPTS_DIR,
+    ]
+    for search_root in search_roots:
+        if not search_root.is_dir():
+            continue
+        for path in sorted(search_root.glob("*.json")):
+            if path in candidates:
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            batch_id = str(data.get("batch_id") or "")
+            try:
+                relative = archive_relative_path(path, root)
+            except (ArchivePathError, OSError, ValueError):
+                relative = ""
+            if text in {batch_id, relative, path.name} or (batch_id and batch_id.endswith(text)):
+                candidates.append(path)
+    return list(dict.fromkeys(candidates))
+
+
+def _collect_validate_scope_from_batch_receipt(scope: ValidationScope, root: Path, batch_path: Path) -> None:
+    try:
+        batch_relative = archive_relative_path(batch_path, root)
+    except (ArchivePathError, OSError, ValueError):
+        batch_relative = str(batch_path)
+    scope.batch_receipt_paths.add(batch_relative)
+    data = _load_validate_scope_json(scope, batch_path, "batch receipt")
+    if data is None:
+        return
+    receipt_kind = data.get("receipt_kind")
+    if receipt_kind == "mint_zet_batch_write":
+        for receipt_relative in data.get("mint_receipts") or []:
+            _collect_validate_scope_from_mint_receipt(scope, root, str(receipt_relative or ""))
+    elif receipt_kind == "retire_draft_batch_write":
+        for receipt_relative in data.get("retire_receipts") or []:
+            _collect_validate_scope_from_retired_draft_receipt(scope, root, str(receipt_relative or ""))
+    elif receipt_kind == "zettel_edge_batch_write":
+        for receipt_relative in data.get("edge_receipts") or []:
+            _collect_validate_scope_from_edge_receipt(scope, root, str(receipt_relative or ""))
+    else:
+        scope.blockers.append(f"Unsupported validate --since batch receipt kind: {receipt_kind}")
+
+
+def _add_validate_scope_facet_paths(scope: ValidationScope, root: Path, filters: dict[str, str]) -> None:
+    db_path = root / archive_services.INDEX_RELATIVE_PATH
+    if not db_path.is_file():
+        scope.blockers.append("validate --scope requires db/archive-index.sqlite. Run `archive index` first.")
+        return
+    try:
+        conn = archive_services.connect_archive_index(db_path, row_factory=True)
+        try:
+            canonical_count_row = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM zettels
+                WHERE coalesce(status, '') = 'canonical'
+                  AND path LIKE 'zettels/%'
+                """
+            ).fetchone()
+            canonical_count = int(canonical_count_row["count"] if isinstance(canonical_count_row, sqlite3.Row) else canonical_count_row[0])
+            metadata = archive_services.read_archive_index_metadata(conn)
+            stale_reasons = archive_services.archive_index_metadata_stale_reasons(metadata, indexed_canonical_count=canonical_count)
+            if stale_reasons:
+                scope.blockers.append(
+                    "validate --scope requires a current generated index. Run `archive index` first. "
+                    + "stale_reasons="
+                    + ",".join(stale_reasons)
+                )
+                return
+            sql = [
+                "SELECT path FROM zettels",
+                "WHERE zettel_id IS NOT NULL AND coalesce(status, '') != 'redacted'",
+            ]
+            params: list[Any] = []
+            for key, value in filters.items():
+                sql.append(
+                    "AND EXISTS (SELECT 1 FROM zettel_facets f WHERE f.zettel_id = zettels.zettel_id"
+                    " AND f.facet_key = ? AND f.facet_value = ?)"
+                )
+                params.extend([key, value])
+            sql.append("ORDER BY path")
+            rows = conn.execute(" ".join(sql), params).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        scope.blockers.append(f"validate --scope could not read generated index: {exc}")
+        return
+    for row in rows:
+        relative = str(row["path"] if isinstance(row, sqlite3.Row) else row[0])
+        _add_validate_scope_file(scope, root, relative, scope.zettel_paths, "scoped zettel")
+    scope.index_cache_used = True
+    if not scope.zettel_paths:
+        scope.warnings.append("validate --scope matched zero zettels.")
+
+
+def build_validation_scope(root: Path, since_refs: list[str] | None, raw_scope_filters: list[str] | None) -> ValidationScope:
+    filters, filter_blockers = parse_validate_scope_filters(raw_scope_filters)
+    since_values = [str(item or "").strip() for item in since_refs or [] if str(item or "").strip()]
+    if not since_values and not filters:
+        return ValidationScope()
+    mode_parts = []
+    if since_values:
+        mode_parts.append("since")
+    if filters:
+        mode_parts.append("facet")
+    scope = ValidationScope(mode="+".join(mode_parts), since_refs=since_values, facet_filters=filters)
+    scope.blockers.extend(filter_blockers)
+    if since_values:
+        for since_ref in since_values:
+            candidates = _validate_batch_receipt_candidates(root, since_ref)
+            if not candidates:
+                scope.blockers.append(f"validate --since could not find a matching batch receipt: {since_ref}")
+                continue
+            for candidate in candidates:
+                _collect_validate_scope_from_batch_receipt(scope, root, candidate)
+    if filters:
+        _add_validate_scope_facet_paths(scope, root, filters)
+    label_parts = []
+    if since_values:
+        label_parts.append(f"since={len(since_values)}")
+    if filters:
+        label_parts.append("scope=" + ",".join(f"{key}={value}" for key, value in filters.items()))
+    scope.label = "; ".join(label_parts) if label_parts else "full archive"
+    return scope
+
+
+def make_validate_progress_callback(enabled: bool) -> ProgressCallback | None:
+    if not enabled:
+        return None
+    started = time.monotonic()
+
+    def progress(stage: str, message: str, current: int | None, total: int | None) -> None:
+        elapsed = max(0.0, time.monotonic() - started)
+        if current is not None and total:
+            rate = current / elapsed if elapsed else 0.0
+            remaining = max(0, total - current)
+            eta = remaining / rate if rate else 0.0
+            print(
+                f"[validate] {stage}: {current}/{total} {message} elapsed={elapsed:.1f}s eta={eta:.1f}s",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            print(f"[validate] {stage}: {message} elapsed={elapsed:.1f}s", file=sys.stderr, flush=True)
+
+    return progress
+
+
 class Doctor:
-    def __init__(self, archive_root: Path) -> None:
+    def __init__(
+        self,
+        archive_root: Path,
+        *,
+        validate_scope: ValidationScope | None = None,
+        progress_callback: ProgressCallback | None = None,
+        use_zettel_index_cache: bool = False,
+    ) -> None:
         self.archive_root = archive_root.resolve()
         self.diagnostics: list[Diagnostic] = []
         self.archive_config: dict[str, Any] = {}
         self.manifest_objects: dict[str, dict[str, Any]] = {}
         self.allowed_link_types = self._load_allowed_link_types()
         self.edge_receipts_by_source: dict[str, list[dict[str, Any]]] | None = None
+        self.validate_scope = validate_scope or ValidationScope()
+        self.progress_callback = progress_callback
+        self.use_zettel_index_cache = use_zettel_index_cache
+        self._zettel_index_cache: dict[str, dict[str, Any] | None] = {}
 
     def run(self) -> list[Diagnostic]:
         if not self.archive_root.exists():
@@ -473,30 +790,71 @@ class Doctor:
             "doctor_version_compatibility",
             f"release v{__version__} / schema {archive_services.FRONTMATTER_V03_TARGET} / compatible? yes",
         )
-        self._check_symlink_boundaries()
-        self._check_required_structure()
-        self._check_v02_recommendations()
-        self._check_archive_yml()
-        self._check_archive_identity_yml()
-        self._check_provider_bindings_yml()
-        self._check_source_bindings_yml()
-        self._check_sqlite_schema()
-        self._check_object_manifest()
-        self._check_derived_text_manifest()
-        self._check_source_maps()
-        self._check_zettels()
-        self._check_views()
-        self._check_workpacks()
-        self._check_external_import_receipts()
-        self._check_source_scan_receipts()
-        self._check_recovery_receipts()
-        self._check_lineage_receipts()
-        self._check_mint_receipts()
-        self._check_retired_draft_receipts()
-        self._check_delegate_receipts()
-        self._check_zettel_kasten_layer()
-        self._check_local_profile_and_secret_safety()
+        if self.validate_scope.active():
+            self.info("validate_scope", f"Scoped validation: {self.validate_scope.summary()}")
+            for warning in self.validate_scope.warnings:
+                self.warn("validate_scope_warning", warning)
+            for blocker in self.validate_scope.blockers:
+                self.error("validate_scope_blocked", blocker)
+            if self.validate_scope.blockers:
+                return self.diagnostics
+
+        stages = self._scoped_stages() if self.validate_scope.active() else self._full_stages()
+        for stage_name, stage_func in stages:
+            self._run_stage(stage_name, stage_func)
         return self.diagnostics
+
+    def _full_stages(self) -> list[tuple[str, Callable[[], None]]]:
+        return [
+            ("symlink-boundaries", self._check_symlink_boundaries),
+            ("required-structure", self._check_required_structure),
+            ("v0.2-recommendations", self._check_v02_recommendations),
+            ("archive-yml", self._check_archive_yml),
+            ("archive-identity", self._check_archive_identity_yml),
+            ("provider-bindings", self._check_provider_bindings_yml),
+            ("source-bindings", self._check_source_bindings_yml),
+            ("sqlite-schema", self._check_sqlite_schema),
+            ("object-manifest", self._check_object_manifest),
+            ("derived-text-manifest", self._check_derived_text_manifest),
+            ("source-maps", self._check_source_maps),
+            ("zettels", self._check_zettels),
+            ("views", self._check_views),
+            ("workpacks", self._check_workpacks),
+            ("external-import-receipts", self._check_external_import_receipts),
+            ("source-scan-receipts", self._check_source_scan_receipts),
+            ("recovery-receipts", self._check_recovery_receipts),
+            ("lineage-receipts", self._check_lineage_receipts),
+            ("mint-receipts", self._check_mint_receipts),
+            ("retired-draft-receipts", self._check_retired_draft_receipts),
+            ("delegate-receipts", self._check_delegate_receipts),
+            ("zettel-kasten-layer", self._check_zettel_kasten_layer),
+            ("local-profile-secret-safety", self._check_local_profile_and_secret_safety),
+        ]
+
+    def _scoped_stages(self) -> list[tuple[str, Callable[[], None]]]:
+        return [
+            ("symlink-boundaries", self._check_symlink_boundaries),
+            ("required-structure", self._check_required_structure),
+            ("archive-yml", self._check_archive_yml),
+            ("archive-identity", self._check_archive_identity_yml),
+            ("provider-bindings", self._check_provider_bindings_yml),
+            ("source-bindings", self._check_source_bindings_yml),
+            ("sqlite-schema", self._check_sqlite_schema),
+            ("zettels", self._check_zettels),
+            ("mint-receipts", self._check_mint_receipts),
+            ("retired-draft-receipts", self._check_retired_draft_receipts),
+            ("scoped-edge-receipts", self._check_scoped_edge_receipts),
+            ("zettel-kasten-layer", self._check_zettel_kasten_layer),
+        ]
+
+    def _run_stage(self, stage_name: str, stage_func: Callable[[], None]) -> None:
+        self._progress(stage_name, "start", None, None)
+        stage_func()
+        self._progress(stage_name, "done", None, None)
+
+    def _progress(self, stage: str, message: str, current: int | None, total: int | None) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(stage, message, current, total)
 
     def error(
         self,
@@ -583,6 +941,63 @@ class Doctor:
             expected_sha,
             edge_receipts=self._edge_receipts_for_source(target_relative),
         )
+
+    def _scope_includes_relative(self, relative: str, selected: set[str]) -> bool:
+        return not self.validate_scope.active() or relative in selected
+
+    def _indexed_zettel_cache_for_path(self, path: Path) -> dict[str, Any] | None:
+        if not self.use_zettel_index_cache:
+            return None
+        try:
+            relative = archive_relative_path(path, self.archive_root)
+        except (ArchivePathError, OSError, ValueError):
+            return None
+        if relative in self._zettel_index_cache:
+            return self._zettel_index_cache[relative]
+        self._zettel_index_cache[relative] = None
+        db_path = self.archive_root / archive_services.INDEX_RELATIVE_PATH
+        if not db_path.is_file():
+            return None
+        try:
+            stat = path.stat()
+            conn = archive_services.connect_archive_index(db_path, row_factory=True)
+            try:
+                row = conn.execute(
+                    """
+                    SELECT frontmatter_json, file_size, file_mtime_ns, body_sha256,
+                           approved_body_sha256, forbidden_location_reference_found
+                    FROM zettels
+                    WHERE path = ?
+                    """,
+                    (relative,),
+                ).fetchone()
+            finally:
+                conn.close()
+        except (OSError, sqlite3.Error):
+            return None
+        if row is None:
+            return None
+        try:
+            file_size = int(row["file_size"])
+            file_mtime_ns = int(row["file_mtime_ns"])
+        except (TypeError, ValueError):
+            return None
+        if file_size != stat.st_size or file_mtime_ns != stat.st_mtime_ns:
+            return None
+        try:
+            frontmatter = json.loads(str(row["frontmatter_json"] or ""))
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(frontmatter, dict):
+            return None
+        cached = {
+            "frontmatter": frontmatter,
+            "body_sha256": row["body_sha256"],
+            "approved_body_sha256": row["approved_body_sha256"],
+            "forbidden_location_reference_found": bool(row["forbidden_location_reference_found"]),
+        }
+        self._zettel_index_cache[relative] = cached
+        return cached
 
     def _check_required_structure(self) -> None:
         for relative in REQUIRED_ARCHIVE_DIRS:
@@ -1018,26 +1433,44 @@ class Doctor:
             root = self.archive_root / folder
             if not root.is_dir():
                 continue
+            paths = []
             for path in sorted(root.rglob("*.md")):
                 if not self._path_stays_inside_archive(path):
                     continue
+                try:
+                    relative = archive_relative_path(path, self.archive_root)
+                except (ArchivePathError, OSError, ValueError):
+                    continue
+                if not self._scope_includes_relative(relative, self.validate_scope.zettel_paths):
+                    continue
+                paths.append(path)
+            total = len(paths)
+            for index, path in enumerate(paths, start=1):
+                if index == 1 or index == total or index % 250 == 0:
+                    self._progress("zettels", self._display_path(path) or "zettel", index, total)
                 self._check_zettel_file(path, expected_status)
 
     def _check_zettel_file(self, path: Path, expected_status: str) -> None:
-        text = path.read_text(encoding="utf-8")
-        if contains_forbidden_location_reference(text):
-            self.error("provider_url_in_zettel", "Zettel appears to contain a provider URL or local absolute path.", path)
+        cached = self._indexed_zettel_cache_for_path(path)
+        if cached is not None:
+            data = cached["frontmatter"]
+            if cached.get("forbidden_location_reference_found"):
+                self.error("provider_url_in_zettel", "Zettel appears to contain a provider URL or local absolute path.", path)
+        else:
+            text = path.read_text(encoding="utf-8")
+            if contains_forbidden_location_reference(text):
+                self.error("provider_url_in_zettel", "Zettel appears to contain a provider URL or local absolute path.", path)
 
-        frontmatter = parse_frontmatter(text)
-        if frontmatter is None:
-            self.error("zettel_frontmatter_missing", "Zettel is missing YAML frontmatter.", path)
-            return
+            frontmatter = parse_frontmatter(text)
+            if frontmatter is None:
+                self.error("zettel_frontmatter_missing", "Zettel is missing YAML frontmatter.", path)
+                return
 
-        data = self._load_yaml_text(frontmatter, path)
-        if not isinstance(data, dict):
-            self.error("zettel_frontmatter_invalid", "Zettel frontmatter must be a YAML object.", path)
-            return
-        self._warn_unquoted_yaml_timestamps(data, path)
+            data = self._load_yaml_text(frontmatter, path)
+            if not isinstance(data, dict):
+                self.error("zettel_frontmatter_invalid", "Zettel frontmatter must be a YAML object.", path)
+                return
+            self._warn_unquoted_yaml_timestamps(data, path)
         self._check_schema(data, "zettel-frontmatter.schema.json", path)
 
         for field in REQUIRED_ZETTEL_FIELDS:
@@ -1271,9 +1704,18 @@ class Doctor:
         root = self.archive_root / "receipts" / "mint"
         if not root.is_dir():
             return
+        paths = []
         for path in sorted(root.glob("*.mint.json")):
             if not self._path_stays_inside_archive(path):
                 continue
+            relative = self._display_path(path) or ""
+            if not self._scope_includes_relative(relative, self.validate_scope.mint_receipt_paths):
+                continue
+            paths.append(path)
+        total = len(paths)
+        for index, path in enumerate(paths, start=1):
+            if index == 1 or index == total or index % 250 == 0:
+                self._progress("mint-receipts", self._display_path(path) or "mint receipt", index, total)
             data = self._load_json_file(path)
             if not isinstance(data, dict):
                 continue
@@ -1330,9 +1772,18 @@ class Doctor:
         root = self.archive_root / archive_services.MINT_RETIRED_DRAFT_RECEIPTS_DIR
         if not root.is_dir():
             return
+        paths = []
         for path in sorted(root.glob("*.retire-draft.json")):
             if not self._path_stays_inside_archive(path):
                 continue
+            relative = self._display_path(path) or ""
+            if not self._scope_includes_relative(relative, self.validate_scope.retired_draft_receipt_paths):
+                continue
+            paths.append(path)
+        total = len(paths)
+        for index, path in enumerate(paths, start=1):
+            if index == 1 or index == total or index % 250 == 0:
+                self._progress("retired-draft-receipts", self._display_path(path) or "retired draft receipt", index, total)
             data = self._load_json_file(path)
             if not isinstance(data, dict):
                 continue
@@ -1363,6 +1814,61 @@ class Doctor:
             self._check_retired_draft_existing_ref(data, path, "target")
             self._check_retired_draft_existing_ref(data, path, "mint_receipt")
             self._check_retired_draft_existing_ref(data, path, "snapshot")
+
+    def _check_scoped_edge_receipts(self) -> None:
+        if not self.validate_scope.active() or not self.validate_scope.edge_receipt_paths:
+            return
+        paths = []
+        for relative in sorted(self.validate_scope.edge_receipt_paths):
+            try:
+                path = resolve_archive_relative_path(self.archive_root, relative)
+            except ArchivePathError:
+                self.error("zettel_edge_receipt_path_unsafe", "Scoped zettel-edge receipt path is unsafe.", relative)
+                continue
+            if not path.is_file():
+                self.error("zettel_edge_receipt_path_missing", "Scoped zettel-edge receipt is missing.", relative)
+                continue
+            paths.append(path)
+        total = len(paths)
+        for index, path in enumerate(paths, start=1):
+            if index == 1 or index == total or index % 250 == 0:
+                self._progress("scoped-edge-receipts", self._display_path(path) or "edge receipt", index, total)
+            data = self._load_json_file(path)
+            if not isinstance(data, dict):
+                continue
+            if data.get("receipt_kind") != "zettel_edge_write":
+                self.error("zettel_edge_receipt_kind_invalid", "Zettel-edge receipt_kind must be zettel_edge_write.", path)
+            for field in ["edge_id", "source_zettel_id", "source_zettel_path", "target_ref", "edge_type", "reviewed_by"]:
+                if not isinstance(data.get(field), str) or not str(data.get(field) or "").strip():
+                    self.error("zettel_edge_receipt_field_missing", f"Zettel-edge receipt missing field: {field}.", path)
+            source_path_value = data.get("source_zettel_path")
+            if isinstance(source_path_value, str) and source_path_value.strip():
+                source_path = self._resolve_archive_file_ref(
+                    source_path_value,
+                    path,
+                    code_prefix="zettel_edge_receipt_source",
+                    label="Zettel-edge receipt source_zettel_path",
+                    required=True,
+                )
+                if source_path is not None:
+                    source_frontmatter = parse_frontmatter(source_path.read_text(encoding="utf-8"))
+                    if source_frontmatter is not None:
+                        source_data = self._load_yaml_text(source_frontmatter, source_path)
+                        edges = source_data.get("edges") if isinstance(source_data, dict) else None
+                        if isinstance(edges, list):
+                            edge_id = data.get("edge_id")
+                            receipt_relative = self._display_path(path)
+                            if not any(
+                                isinstance(edge, dict)
+                                and edge.get("edge_id") == edge_id
+                                and edge.get("receipt") == receipt_relative
+                                for edge in edges
+                            ):
+                                self.error(
+                                    "zettel_edge_receipt_source_link_missing",
+                                    "Zettel-edge receipt is not linked from the source zettel frontmatter edge.",
+                                    path,
+                                )
 
     def _check_retired_draft_existing_ref(self, data: dict[str, Any], path: Path, section: str) -> None:
         section_data = data.get(section)
@@ -1800,7 +2306,15 @@ def command_version(args: argparse.Namespace) -> int:
 
 
 def command_validate(args: argparse.Namespace) -> int:
-    doctor = Doctor(Path(args.archive_root))
+    archive_root = Path(args.archive_root)
+    validate_scope = build_validation_scope(archive_root.resolve(), getattr(args, "since", None), getattr(args, "scope", None))
+    progress_callback = make_validate_progress_callback(bool(getattr(args, "progress", False)))
+    doctor = Doctor(
+        archive_root,
+        validate_scope=validate_scope,
+        progress_callback=progress_callback,
+        use_zettel_index_cache=validate_scope.active(),
+    )
     diagnostics = doctor.run()
     errors = [item for item in diagnostics if item.severity == "ERROR"]
     warnings = [item for item in diagnostics if item.severity == "WARN"]
@@ -1812,6 +2326,7 @@ def command_validate(args: argparse.Namespace) -> int:
                 "ok": ok,
                 "errors": len(errors),
                 "warnings": len(warnings),
+                "scope": validate_scope.summary(),
                 "diagnostics": [item.as_dict() for item in diagnostics],
             }
         )
@@ -9415,6 +9930,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Accepted for parity with doctor: validate already treats warnings as failing unless --allow-warnings.",
     )
+    validate.add_argument(
+        "--since",
+        action="append",
+        help="Validate artifacts touched by a mint/retire/edge batch id or batch receipt path. May be repeated.",
+    )
+    validate.add_argument(
+        "--scope",
+        action="append",
+        help="Validate zettels matching an indexed facet filter, for example source_database=database_2_0. May be repeated.",
+    )
+    validate.add_argument("--progress", action="store_true", help="Stream stage and item progress to stderr.")
     validate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     validate.set_defaults(func=command_validate)
 

@@ -6,6 +6,27 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.121 - 2026-06-21
+
+- Added scoped archive validation with `archive validate --since
+  <batch-id-or-receipt>` for mint, retired-draft, and zettel-edge batch
+  receipts, so operators can recheck only the artifacts touched by a recent
+  approved batch instead of always starting with a full archive pass.
+- Added indexed facet validation with repeated `archive validate --scope
+  <facet=value>` filters. The command requires a current generated index and
+  validates only the matching zettels plus the narrow global structure checks
+  needed to interpret them safely.
+- Added generated-index zettel cache columns for `file_size`,
+  `file_mtime_ns`, `body_sha256`, `approved_body_sha256`, and
+  `forbidden_location_reference_found`, allowing scoped validation to reuse
+  unchanged indexed frontmatter/body evidence instead of rereading every
+  selected body.
+- Added `archive validate --progress` output on stderr with stage/item counts,
+  elapsed time, and ETA for long scoped or full validation runs.
+- Kept scoped validation explicitly narrower than full validation: it does not
+  replace periodic `archive validate`, perform archive migration, call
+  providers, or echo zettel body text.
+
 ## v0.3.120 - 2026-06-20
 
 - Added a source-zettel-path edge receipt index for mint/retire target SHA

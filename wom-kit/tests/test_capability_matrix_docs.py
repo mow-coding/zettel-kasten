@@ -271,6 +271,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         staleness_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.118.md").read_text(encoding="utf-8")
         batch_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.119.md").read_text(encoding="utf-8")
         retire_validate_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.120.md").read_text(encoding="utf-8")
+        scoped_validate_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.121.md").read_text(encoding="utf-8")
         for phrase in (
             "checklist guidance",
             "mint_checklist_guidance",
@@ -302,6 +303,15 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "source-zettel-path edge receipt index",
             "Doctor-level edge receipt cache",
             "do not rescan all edge receipts per receipt",
+            "Archive validation",
+            "validate --since",
+            "validate --scope",
+            "not a replacement for periodic full archive validation",
+            "body_sha256",
+            "approved_body_sha256",
+            "forbidden_location_reference_found",
+            "validate --progress",
+            "ETA to stderr",
             "source path resolution uses that file before falling back to the legacy archive-wide id scan",
             "mint target SHA that changed only through approved post-receipt zettel-edge writes can still retire",
         ):
@@ -319,6 +329,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "per-item shell",
             "v0.3.120 - 2026-06-20",
             "edge receipt",
+            "v0.3.121 - 2026-06-21",
+            "scoped validation",
+            "validate --since",
+            "validate --scope",
+            "body_sha256",
+            "--progress",
             "v0.3.116 - 2026-06-19",
             "standard `inbox/<zettel_id>.md`",
             "v0.3.114 - 2026-06-19",
@@ -376,6 +392,19 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, retire_validate_release_text)
+        for phrase in (
+            "# v0.3.121 - Scoped Validate and Progress",
+            "archive validate --since",
+            "archive validate --scope",
+            "generated index",
+            "body_sha256",
+            "approved_body_sha256",
+            "stderr",
+            "not a replacement for full archive validation",
+            "No archive migration is required",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, scoped_validate_release_text)
 
     def test_public_product_roadmap_is_linked_from_release_surfaces(self) -> None:
         roadmap_text = PRODUCT_ROADMAP_PATH.read_text(encoding="utf-8")
