@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.122 - 2026-06-21
+
+- Added `archive ai-usage-plan --dry-run` to estimate explicit archive-relative
+  UTF-8 context files against a token budget without echoing file contents.
+- Added approval-gated `archive ai-usage-record --dry-run|--approve` for
+  non-secret AI runtime token usage receipts under `receipts/ai-usage/`.
+  Receipts record task id, runtime, model, purpose, input/output/total tokens,
+  optional cached/reasoning counters, and optional budget/planned-token metadata.
+- Added read-only `archive ai-usage-report --dry-run` to aggregate local AI
+  usage receipts by runtime, model, and purpose without reading prompts,
+  responses, source object bytes, provider APIs, secrets, or local absolute
+  paths.
+- Kept this as an observability baseline, not live LLM provider integration:
+  WOM-kit does not call model APIs, retrieve provider usage, price requests,
+  store prompts, store responses, or enforce hard runtime budgets in this
+  release.
+
 ## v0.3.121 - 2026-06-21
 
 - Added scoped archive validation with `archive validate --since

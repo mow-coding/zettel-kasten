@@ -110,6 +110,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         required_rows = (
             "Archive doctor",
             "AI response concept guide",
+            "AI usage observability",
             "Mint lifecycle",
             "Delegate lifecycle",
             "Block header preview",
@@ -672,6 +673,68 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, release_text)
         self.assertIn("[Operational Context](operational-context.md)", public_map_text)
         self.assertIn("[Operational Context](operational-context.md)", public_map_ko_text)
+
+    def test_ai_usage_observability_is_documented_without_prompt_logging(self) -> None:
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.122.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.122 AI usage observability checkpoint",
+            "AI usage observability",
+            "archive ai-usage-plan --dry-run",
+            "archive ai-usage-record --dry-run|--approve",
+            "archive ai-usage-report --dry-run",
+            "receipts/ai-usage/",
+            "stores no prompts or responses",
+            "calls no LLM providers",
+            "does not enforce hard runtime budgets yet",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.122 pre-release",
+            "AI token usage observability",
+            "archive ai-usage-plan --dry-run",
+            "archive ai-usage-record --approve",
+            "archive ai-usage-report --dry-run",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        for phrase in (
+            "v0.3.122 adds the first AI usage observability layer",
+            "local token-accounting ledger baseline",
+            "does not call LLM providers",
+            "store prompts",
+            "store responses",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, kit_readme_text)
+        for phrase in (
+            "v0.3.122 - 2026-06-21",
+            "ai-usage-plan",
+            "ai-usage-record",
+            "ai-usage-report",
+            "non-secret AI runtime token usage receipts",
+            "store prompts",
+            "store responses",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, changelog_text)
+        for phrase in (
+            "# v0.3.122 - AI Usage Observability Baseline",
+            "How much context did this AI task plan to read?",
+            "receipts/ai-usage/",
+            "It stores no prompt body and no response body.",
+            "archive ai-usage-report --dry-run",
+            "No archive migration is required.",
+            "does not",
+            "call LLM providers",
+            "enforce hard runtime budgets",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
 
     def test_capability_matrix_documents_closing_plan_without_product_behavior(self) -> None:
         text = MATRIX_PATH.read_text(encoding="utf-8")

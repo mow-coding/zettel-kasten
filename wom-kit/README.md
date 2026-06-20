@@ -1169,6 +1169,14 @@ flag so scoped validation can reuse unchanged body evidence. `--progress`
 streams stage/item counts, elapsed time, and ETA to stderr. Scoped validation is
 an incremental safety gate, not a permanent replacement for periodic full
 `archive validate`.
+v0.3.122 adds the first AI usage observability layer. `archive ai-usage-plan
+--dry-run` estimates explicit archive-relative context files against a token
+budget without echoing file contents. `archive ai-usage-record
+--dry-run|--approve` records reviewed non-secret runtime token counters under
+`receipts/ai-usage/`. `archive ai-usage-report --dry-run` aggregates those
+receipts by runtime, model, and purpose. This does not call LLM providers,
+retrieve live provider billing, store prompts, store responses, or enforce hard
+runtime budgets yet; it gives WOM a local token-accounting ledger baseline.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

@@ -2508,6 +2508,84 @@ def command_operational_context(args: argparse.Namespace) -> int:
     return 0 if result["ok"] else 1
 
 
+def command_ai_usage_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("ai-usage-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.ai_usage_plan(
+            Path(args.archive_root),
+            budget_tokens=args.budget_tokens,
+            include_paths=args.include_paths,
+            task_id=args.task_id,
+            purpose=args.purpose,
+            dry_run=args.dry_run,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_json(result)
+    return 0 if result["ok"] else 1
+
+
+def command_ai_usage_record(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("ai-usage-record requires --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("ai-usage-record requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.ai_usage_record(
+            Path(args.archive_root),
+            task_id=args.task_id,
+            runtime=args.runtime,
+            model=args.model,
+            purpose=args.purpose,
+            input_tokens=args.input_tokens,
+            output_tokens=args.output_tokens,
+            total_tokens=args.total_tokens,
+            cached_input_tokens=args.cached_input_tokens,
+            reasoning_tokens=args.reasoning_tokens,
+            budget_tokens=args.budget_tokens,
+            planned_tokens=args.planned_tokens,
+            context_plan_sha256=args.context_plan_sha256,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_json(result)
+    return 0 if result["ok"] else 1
+
+
+def command_ai_usage_report(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("ai-usage-report is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.ai_usage_report(
+            Path(args.archive_root),
+            task_id=args.task_id,
+            runtime=args.runtime,
+            model=args.model,
+            dry_run=args.dry_run,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_json(result)
+    return 0 if result["ok"] else 1
+
+
 def command_github_repo(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -10082,6 +10160,60 @@ def build_parser() -> argparse.ArgumentParser:
     operational_context.add_argument("--reviewed-by", help="Safe non-secret actor id required when --approve is used.")
     operational_context.add_argument("--format", choices=["json"], default="json", help="Output format.")
     operational_context.set_defaults(func=command_operational_context)
+
+    ai_usage_plan = subcommands.add_parser(
+        "ai-usage-plan",
+        help="Estimate an explicit AI context pack against a token budget without echoing content.",
+    )
+    ai_usage_plan.add_argument("archive_root", help="Archive root to inspect.")
+    ai_usage_plan.add_argument("--budget-tokens", type=int, required=True, help="Token budget for the planned AI context pack.")
+    ai_usage_plan.add_argument(
+        "--include",
+        dest="include_paths",
+        action="append",
+        default=[],
+        help="Archive-relative UTF-8 text file to include in the token estimate. May be repeated.",
+    )
+    ai_usage_plan.add_argument("--task-id", help="Safe non-secret task id for the planned AI call.")
+    ai_usage_plan.add_argument("--purpose", help="Safe non-secret purpose label for the planned AI call.")
+    ai_usage_plan.add_argument("--dry-run", action="store_true", help="Estimate only; never write files.")
+    ai_usage_plan.add_argument("--format", choices=["json"], default="json", help="Output format.")
+    ai_usage_plan.set_defaults(func=command_ai_usage_plan)
+
+    ai_usage_record = subcommands.add_parser(
+        "ai-usage-record",
+        help="Record a reviewed non-secret AI token usage receipt.",
+    )
+    ai_usage_record.add_argument("archive_root", help="Archive root to write the usage receipt into.")
+    ai_usage_record.add_argument("--task-id", required=True, help="Safe non-secret task/session id.")
+    ai_usage_record.add_argument("--runtime", required=True, help="Safe non-secret AI runtime label.")
+    ai_usage_record.add_argument("--model", required=True, help="Safe non-secret model label.")
+    ai_usage_record.add_argument("--purpose", required=True, help="Safe non-secret purpose label.")
+    ai_usage_record.add_argument("--input-tokens", type=int, required=True, help="Reported prompt/input token count.")
+    ai_usage_record.add_argument("--output-tokens", type=int, required=True, help="Reported completion/output token count.")
+    ai_usage_record.add_argument("--total-tokens", type=int, help="Reported total token count. Defaults to input + output.")
+    ai_usage_record.add_argument("--cached-input-tokens", type=int, help="Reported cached input token count, if available.")
+    ai_usage_record.add_argument("--reasoning-tokens", type=int, help="Reported reasoning token count, if available.")
+    ai_usage_record.add_argument("--budget-tokens", type=int, help="Optional budget used for the call.")
+    ai_usage_record.add_argument("--planned-tokens", type=int, help="Optional estimated context tokens from ai-usage-plan.")
+    ai_usage_record.add_argument("--context-plan-sha256", help="Optional sha256:<hex> hash for an external context plan record.")
+    ai_usage_record.add_argument("--dry-run", action="store_true", help="Preview the receipt only; never write files.")
+    ai_usage_record.add_argument("--approve", action="store_true", help="Approve writing the usage receipt.")
+    ai_usage_record.add_argument("--reviewed-by", help="Safe non-secret actor id required when --approve is used.")
+    ai_usage_record.add_argument("--format", choices=["json"], default="json", help="Output format.")
+    ai_usage_record.set_defaults(func=command_ai_usage_record)
+
+    ai_usage_report = subcommands.add_parser(
+        "ai-usage-report",
+        help="Aggregate local AI usage receipts without reading prompts or responses.",
+    )
+    ai_usage_report.add_argument("archive_root", help="Archive root to inspect.")
+    ai_usage_report.add_argument("--task-id", help="Optional safe task id filter.")
+    ai_usage_report.add_argument("--runtime", help="Optional safe runtime filter.")
+    ai_usage_report.add_argument("--model", help="Optional safe model filter.")
+    ai_usage_report.add_argument("--dry-run", action="store_true", help="Read receipts only; never write files.")
+    ai_usage_report.add_argument("--format", choices=["json"], default="json", help="Output format.")
+    ai_usage_report.set_defaults(func=command_ai_usage_report)
 
     prompt_boundary = subcommands.add_parser(
         "prompt-boundary",
