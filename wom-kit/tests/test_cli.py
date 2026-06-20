@@ -20570,6 +20570,122 @@ state:
             self.assertEqual(skip_result["summary"]["written_item_count"], 0)
             self.assertEqual(skip_result["files_written"], [])
 
+    def test_retire_draft_batch_reuses_edge_receipt_index_for_edge_evolved_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            first_id = "zet_20260620_batch_retire_edge_alpha"
+            second_id = "zet_20260620_batch_retire_edge_beta"
+            self.make_batch_ready_draft(
+                archive_root,
+                first_id,
+                "Batch retire edge alpha",
+                "Batch retire edge alpha body with enough distinct material for duplicate scanning.\n",
+            )
+            self.make_batch_ready_draft(
+                archive_root,
+                second_id,
+                "Batch retire edge beta",
+                "Batch retire edge beta body with a separate thought and enough distinct content.\n",
+            )
+            archive_services.index_archive(archive_root)
+            mint_plan_path = archive_root / "workbench" / "retire-edge-mint-setup.plan.json"
+            mint_plan_path.parent.mkdir(parents=True, exist_ok=True)
+            mint_plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/mint-zet-batch/v0.1",
+                        "policy": {"policy_id": "policy:fixture-batch-retire-edge-setup"},
+                        "items": [{"zettel_id": first_id}, {"zettel_id": second_id}],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            mint_code, mint_output = self.run_cli(
+                [
+                    "mint-zet-batch",
+                    str(archive_root),
+                    "--plan",
+                    "workbench/retire-edge-mint-setup.plan.json",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(mint_code, 0, mint_output)
+
+            for zettel_id in (first_id, second_id):
+                edge_code, edge_output = self.run_cli(
+                    [
+                        "zettel-edge",
+                        str(archive_root),
+                        "--from-zettel",
+                        zettel_id,
+                        "--target",
+                        "zet_20240505_fake_company_onboarding_insight",
+                        "--edge-type",
+                        "semantic",
+                        "--visibility",
+                        "private",
+                        "--approve",
+                        "--reviewed-by",
+                        "person:test",
+                        "--format",
+                        "json",
+                    ]
+                )
+                self.assertEqual(edge_code, 0, edge_output)
+
+            retire_plan_path = archive_root / "workbench" / "retire-edge-batch.plan.json"
+            retire_plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/retire-draft-batch/v0.1",
+                        "policy": {"policy_id": "policy:fixture-batch-retire-edge"},
+                        "items": [{"zettel_id": first_id}, {"zettel_id": second_id}],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            original_edge_index = archive_services.edge_receipts_by_source
+            edge_index_calls: list[Path] = []
+
+            def counted_edge_index(root: Path) -> dict[str, list[dict[str, Any]]]:
+                edge_index_calls.append(Path(root))
+                return original_edge_index(root)
+
+            with patch.object(archive_services, "edge_receipts_by_source", side_effect=counted_edge_index), patch.object(
+                archive_services,
+                "edge_receipts_for_source",
+                side_effect=AssertionError("retire-draft-batch should not scan edge receipts per item"),
+            ):
+                approve_code, approve_output = self.run_cli(
+                    [
+                        "retire-draft-batch",
+                        str(archive_root),
+                        "--plan",
+                        "workbench/retire-edge-batch.plan.json",
+                        "--approve",
+                        "--reviewed-by",
+                        "person:test",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertEqual(len(edge_index_calls), 1)
+            result = json.loads(approve_output)
+            self.assertEqual(result["summary"]["written_item_count"], 2)
+            for item in result["items"]:
+                self.assertTrue(
+                    any("approved zettel-edge receipts" in warning for warning in item["warnings"]),
+                    item,
+                )
+
     def test_retire_draft_dry_run_and_approve_removes_verified_minted_inbox_twin(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -20865,10 +20981,23 @@ state:
             )
             self.assertEqual(edge_code, 0, edge_output)
 
-            validate_code, validate_output = self.run_cli(["validate", str(archive_root), "--format", "json"])
+            original_edge_index = archive_services.edge_receipts_by_source
+            edge_index_calls: list[Path] = []
+
+            def counted_edge_index(root: Path) -> dict[str, list[dict[str, Any]]]:
+                edge_index_calls.append(Path(root))
+                return original_edge_index(root)
+
+            with patch.object(archive_services, "edge_receipts_by_source", side_effect=counted_edge_index), patch.object(
+                archive_services,
+                "edge_receipts_for_source",
+                side_effect=AssertionError("validate should use the Doctor edge receipt cache"),
+            ):
+                validate_code, validate_output = self.run_cli(["validate", str(archive_root), "--format", "json"])
             validate_result = json.loads(validate_output)
             codes = {item["code"] for item in validate_result["diagnostics"]}
             self.assertEqual(validate_code, 0, validate_output)
+            self.assertEqual(len(edge_index_calls), 1)
             self.assertNotIn("mint_receipt_sha_mismatch", codes)
             self.assertNotIn("mint_retired_draft_sha_mismatch", codes)
             self.assertIn("mint_receipt_target_sha_evolved_by_edge_receipts", codes)

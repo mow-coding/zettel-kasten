@@ -458,6 +458,7 @@ class Doctor:
         self.archive_config: dict[str, Any] = {}
         self.manifest_objects: dict[str, dict[str, Any]] = {}
         self.allowed_link_types = self._load_allowed_link_types()
+        self.edge_receipts_by_source: dict[str, list[dict[str, Any]]] | None = None
 
     def run(self) -> list[Diagnostic]:
         if not self.archive_root.exists():
@@ -561,32 +562,9 @@ class Doctor:
         return list(dict.fromkeys([no_blank, with_blank]))
 
     def _edge_receipts_for_source(self, source_relative: str) -> list[dict[str, Any]]:
-        root = self.archive_root / archive_services.ZETTEL_EDGE_RECEIPTS_DIR
-        if not root.is_dir():
-            return []
-        receipts: list[dict[str, Any]] = []
-        for path in sorted(root.glob("*.zettel-edge.json")):
-            if not self._path_stays_inside_archive(path):
-                continue
-            data = self._load_json_file(path)
-            if not isinstance(data, dict):
-                continue
-            if data.get("receipt_kind") != "zettel_edge_write":
-                continue
-            if data.get("source_zettel_path") != source_relative:
-                continue
-            created_at = self._parse_receipt_time(data.get("created_at"))
-            if created_at is None:
-                continue
-            receipts.append(
-                {
-                    "receipt_path": self._display_path(path),
-                    "edge_id": str(data.get("edge_id") or "").strip(),
-                    "created_at": created_at,
-                    "created_at_raw": data.get("created_at"),
-                }
-            )
-        return receipts
+        if self.edge_receipts_by_source is None:
+            self.edge_receipts_by_source = archive_services.edge_receipts_by_source(self.archive_root)
+        return self.edge_receipts_by_source.get(source_relative, [])
 
     def _target_sha_evolved_by_edge_receipts(
         self,
@@ -594,11 +572,16 @@ class Doctor:
         target_path: Path,
         expected_sha: str,
     ) -> bool:
+        try:
+            target_relative = archive_relative_path(target_path, self.archive_root)
+        except (ArchivePathError, OSError, ValueError):
+            return False
         return archive_services.target_sha_evolved_by_edge_receipts(
             self.archive_root,
             receipt_data,
             target_path,
             expected_sha,
+            edge_receipts=self._edge_receipts_for_source(target_relative),
         )
 
     def _check_required_structure(self) -> None:

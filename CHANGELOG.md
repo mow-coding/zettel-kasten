@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.120 - 2026-06-20
+
+- Added a source-zettel-path edge receipt index for mint/retire target SHA
+  evolution checks, so `retire-draft-batch` and `validate` no longer need to
+  rescan `receipts/edges/*.zettel-edge.json` once per evolved target.
+- Changed `retire-draft-batch` so approve mode reuses the successful per-item
+  retirement plan and performs O(1) current-file SHA replay checks before
+  deleting a draft and writing its retired-draft receipt, instead of rebuilding
+  the same retirement plan a second time per item.
+- Updated `validate` / `doctor` target SHA evolution checks to use a lazy
+  Doctor-level edge receipt cache. Multiple mint and retired-draft receipts that
+  point at post-edge canonical zets share the same cache.
+- Added regression coverage proving edge-evolved `retire-draft-batch` and
+  `validate` do not fall back to per-item edge receipt scans.
+
 ## v0.3.119 - 2026-06-20
 
 - Added `archive mint-zet-batch --plan <json> --dry-run|--approve`, with
