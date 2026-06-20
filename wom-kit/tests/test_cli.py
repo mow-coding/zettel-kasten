@@ -436,6 +436,25 @@ class ArchiveCliTests(unittest.TestCase):
         path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + (replacement_body if replacement_body is not None else body), encoding="utf-8")
         return path
 
+    def make_batch_ready_draft(self, archive_root: Path, zettel_id: str, title: str, body: str) -> Path:
+        template_path = archive_root / "inbox" / "zet_20260519_draft_ai_lunch_note.md"
+        text = template_path.read_text(encoding="utf-8")
+        match = archive_cli.FRONTMATTER_RE.match(text)
+        self.assertIsNotNone(match)
+        assert match is not None
+        frontmatter = archive_cli.load_yaml(match.group(1))
+        frontmatter["id"] = zettel_id
+        frontmatter["title"] = title
+        frontmatter["kind"] = "permanent_note"
+        frontmatter["promotion"] = {
+            "stage": "promotion_candidate",
+            "ready_for_promotion": True,
+            "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
+        }
+        path = archive_root / "inbox" / f"{zettel_id}.md"
+        path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+        return path
+
     def fake_lunch_canonical_body(self, archive_root: Path) -> str:
         path = archive_root / "zettels" / "zet_20240504_fake_lunch_thought.md"
         text = path.read_text(encoding="utf-8")
@@ -20272,6 +20291,284 @@ state:
 
             doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
             self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_mint_zet_batch_dry_run_approve_and_skip_existing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            first_id = "zet_20260620_batch_mint_alpha"
+            second_id = "zet_20260620_batch_mint_beta"
+            self.make_batch_ready_draft(
+                archive_root,
+                first_id,
+                "Batch mint alpha",
+                "Batch mint alpha body with enough distinct material for duplicate scanning.\n",
+            )
+            self.make_batch_ready_draft(
+                archive_root,
+                second_id,
+                "Batch mint beta",
+                "Batch mint beta body with a separate thought and enough distinct content.\n",
+            )
+            archive_services.index_archive(archive_root)
+            plan_path = archive_root / "workbench" / "mint-zet-batch.plan.json"
+            plan_path.parent.mkdir(parents=True, exist_ok=True)
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/mint-zet-batch/v0.1",
+                        "policy": {
+                            "policy_id": "policy:fixture-batch-mint",
+                            "policy_label": "Fixture batch mint",
+                            "allow_warnings": False,
+                        },
+                        "items": [
+                            {"item_id": "item:alpha", "zettel_id": first_id},
+                            {"item_id": "item:beta", "path": f"inbox/{second_id}.md"},
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            expected_batch_receipt_dir = archive_root / "receipts" / "mint" / "batches"
+            self.assertFalse((archive_root / "zettels" / f"{first_id}.md").exists())
+            self.assertFalse(expected_batch_receipt_dir.exists())
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "mint-zet-batch",
+                    str(archive_root),
+                    "--plan",
+                    "workbench/mint-zet-batch.plan.json",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            dry_result = json.loads(dry_output)
+            serialized_dry = json.dumps(dry_result, ensure_ascii=False)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertTrue(dry_result["ok"])
+            self.assertEqual(dry_result["lifecycle_action"], "mint_zet_batch_plan")
+            self.assertEqual(dry_result["write_status"], "would_write")
+            self.assertEqual(dry_result["plan_path_resolution"]["resolved_as"], "archive_relative")
+            self.assertEqual(dry_result["summary"]["candidate_item_count"], 2)
+            self.assertEqual(dry_result["summary"]["would_write_count"], 2)
+            self.assertEqual(dry_result["summary"]["failed_item_count"], 0)
+            self.assertTrue(dry_result["receipt_path"].startswith("receipts/mint/batches/"))
+            self.assertEqual(dry_result["files_written"], [])
+            self.assertTrue(dry_result["current_capability"]["single_process_batch_implemented"])
+            self.assertTrue(dry_result["current_capability"]["skip_existing_implemented"])
+            self.assertFalse(dry_result["current_capability"]["mcp_write_tool_implemented"])
+            self.assertFalse(dry_result["closed_actions"]["per_item_shell_processes_spawned"])
+            self.assertFalse(dry_result["closed_actions"]["body_text_echoed"])
+            self.assertNotIn(str(archive_root.resolve()), serialized_dry)
+            self.assertNotIn("Batch mint alpha body", serialized_dry)
+            self.assertFalse((archive_root / "zettels" / f"{first_id}.md").exists())
+            self.assertFalse((archive_root / dry_result["receipt_path"]).exists())
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "bulk-mint",
+                    str(archive_root),
+                    "--plan",
+                    "workbench/mint-zet-batch.plan.json",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            approve_result = json.loads(approve_output)
+            serialized_approve = json.dumps(approve_result, ensure_ascii=False)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"])
+            self.assertEqual(approve_result["lifecycle_action"], "mint_zet_batch_write")
+            self.assertEqual(approve_result["write_status"], "written")
+            self.assertEqual(approve_result["summary"]["written_item_count"], 2)
+            self.assertTrue(approve_result["summary"]["batch_receipt_written"])
+            self.assertIn(approve_result["receipt_path"], approve_result["files_written"])
+            self.assertTrue((archive_root / approve_result["receipt_path"]).is_file())
+            for zettel_id in (first_id, second_id):
+                self.assertTrue((archive_root / "zettels" / f"{zettel_id}.md").is_file())
+                self.assertTrue((archive_root / "receipts" / "mint" / f"{zettel_id}.mint.json").is_file())
+                self.assertTrue((archive_root / "receipts" / "mint" / "drafts" / f"{zettel_id}.draft.md").is_file())
+                self.assertTrue((archive_root / "inbox" / f"{zettel_id}.md").is_file())
+            batch_receipt = json.loads((archive_root / approve_result["receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(batch_receipt["schema_version"], "wom-kit/mint-zet-batch-receipt/v0.1")
+            self.assertEqual(batch_receipt["written_item_count"], 2)
+            self.assertEqual(len(batch_receipt["mint_receipts"]), 2)
+            self.assertFalse(batch_receipt["closed_actions"]["per_item_shell_processes_spawned"])
+            self.assertNotIn(str(archive_root.resolve()), serialized_approve)
+            self.assertNotIn("Batch mint alpha body", serialized_approve)
+
+            skip_code, skip_output = self.run_cli(
+                [
+                    "mint-zet-batch",
+                    str(archive_root),
+                    "--plan",
+                    "workbench/mint-zet-batch.plan.json",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--skip-existing",
+                    "--format",
+                    "json",
+                ]
+            )
+            skip_result = json.loads(skip_output)
+            self.assertEqual(skip_code, 0, skip_output)
+            self.assertTrue(skip_result["ok"])
+            self.assertEqual(skip_result["write_status"], "nothing_to_write")
+            self.assertEqual(skip_result["summary"]["skipped_existing_item_count"], 2)
+            self.assertEqual(skip_result["summary"]["written_item_count"], 0)
+            self.assertEqual(skip_result["files_written"], [])
+
+    def test_retire_draft_batch_dry_run_approve_and_skip_existing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            first_id = "zet_20260620_batch_retire_alpha"
+            second_id = "zet_20260620_batch_retire_beta"
+            self.make_batch_ready_draft(
+                archive_root,
+                first_id,
+                "Batch retire alpha",
+                "Batch retire alpha body with enough distinct material for duplicate scanning.\n",
+            )
+            self.make_batch_ready_draft(
+                archive_root,
+                second_id,
+                "Batch retire beta",
+                "Batch retire beta body with a separate thought and enough distinct content.\n",
+            )
+            archive_services.index_archive(archive_root)
+            mint_plan_path = archive_root / "workbench" / "retire-mint-setup.plan.json"
+            mint_plan_path.parent.mkdir(parents=True, exist_ok=True)
+            mint_plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/mint-zet-batch/v0.1",
+                        "policy": {"policy_id": "policy:fixture-batch-retire-setup"},
+                        "items": [{"zettel_id": first_id}, {"zettel_id": second_id}],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            mint_code, mint_output = self.run_cli(
+                [
+                    "mint-zet-batch",
+                    str(archive_root),
+                    "--plan",
+                    "workbench/retire-mint-setup.plan.json",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(mint_code, 0, mint_output)
+
+            retire_plan_path = archive_root / "workbench" / "retire-draft-batch.plan.json"
+            retire_plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/retire-draft-batch/v0.1",
+                        "policy": {
+                            "policy_id": "policy:fixture-batch-retire",
+                            "policy_label": "Fixture batch retire",
+                        },
+                        "items": [
+                            {"item_id": "item:alpha", "zettel_id": first_id},
+                            {"item_id": "item:beta", "path": f"inbox/{second_id}.md"},
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            expected_batch_receipt_dir = archive_root / "receipts" / "mint" / "retired-drafts" / "batches"
+            self.assertFalse(expected_batch_receipt_dir.exists())
+            dry_code, dry_output = self.run_cli(
+                [
+                    "retire-draft-batch",
+                    str(archive_root),
+                    "--plan",
+                    "workbench/retire-draft-batch.plan.json",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            dry_result = json.loads(dry_output)
+            serialized_dry = json.dumps(dry_result, ensure_ascii=False)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertTrue(dry_result["ok"])
+            self.assertEqual(dry_result["lifecycle_action"], "retire_draft_batch_plan")
+            self.assertEqual(dry_result["summary"]["would_write_count"], 2)
+            self.assertTrue(dry_result["receipt_path"].startswith("receipts/mint/retired-drafts/batches/"))
+            self.assertFalse(dry_result["closed_actions"]["per_item_shell_processes_spawned"])
+            self.assertNotIn(str(archive_root.resolve()), serialized_dry)
+            self.assertNotIn("Batch retire alpha body", serialized_dry)
+            self.assertTrue((archive_root / "inbox" / f"{first_id}.md").is_file())
+            self.assertFalse((archive_root / dry_result["receipt_path"]).exists())
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "bulk-retire",
+                    str(archive_root),
+                    "--plan",
+                    "workbench/retire-draft-batch.plan.json",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            approve_result = json.loads(approve_output)
+            serialized_approve = json.dumps(approve_result, ensure_ascii=False)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"])
+            self.assertEqual(approve_result["lifecycle_action"], "retire_draft_batch_write")
+            self.assertEqual(approve_result["write_status"], "written")
+            self.assertEqual(approve_result["summary"]["written_item_count"], 2)
+            self.assertTrue(approve_result["summary"]["batch_receipt_written"])
+            self.assertTrue((archive_root / approve_result["receipt_path"]).is_file())
+            for zettel_id in (first_id, second_id):
+                self.assertFalse((archive_root / "inbox" / f"{zettel_id}.md").exists())
+                self.assertTrue((archive_root / "receipts" / "mint" / "retired-drafts" / f"{zettel_id}.retire-draft.json").is_file())
+            batch_receipt = json.loads((archive_root / approve_result["receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(batch_receipt["schema_version"], "wom-kit/retire-draft-batch-receipt/v0.1")
+            self.assertEqual(batch_receipt["written_item_count"], 2)
+            self.assertEqual(len(batch_receipt["retire_receipts"]), 2)
+            self.assertFalse(batch_receipt["closed_actions"]["per_item_shell_processes_spawned"])
+            self.assertNotIn(str(archive_root.resolve()), serialized_approve)
+            self.assertNotIn("Batch retire alpha body", serialized_approve)
+
+            skip_code, skip_output = self.run_cli(
+                [
+                    "retire-draft-batch",
+                    str(archive_root),
+                    "--plan",
+                    "workbench/retire-draft-batch.plan.json",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--skip-existing",
+                    "--format",
+                    "json",
+                ]
+            )
+            skip_result = json.loads(skip_output)
+            self.assertEqual(skip_code, 0, skip_output)
+            self.assertTrue(skip_result["ok"])
+            self.assertEqual(skip_result["write_status"], "nothing_to_write")
+            self.assertEqual(skip_result["summary"]["skipped_existing_item_count"], 2)
+            self.assertEqual(skip_result["summary"]["written_item_count"], 0)
+            self.assertEqual(skip_result["files_written"], [])
 
     def test_retire_draft_dry_run_and_approve_removes_verified_minted_inbox_twin(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

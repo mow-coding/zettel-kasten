@@ -6,6 +6,30 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.119 - 2026-06-20
+
+- Added `archive mint-zet-batch --plan <json> --dry-run|--approve`, with
+  aliases `mint-zettel-batch`, `bulk-mint`, and `bulk-mint-zet`, so many draft
+  zets can be minted from one reviewed plan inside one WOM-kit process.
+- Added `archive retire-draft-batch --plan <json> --dry-run|--approve`, with
+  aliases `retire-minted-draft-batch`, `bulk-retire`, and
+  `bulk-retire-draft`, so many already minted inbox drafts can be retired
+  without per-item shell process loops.
+- Added batch-level idempotency controls: `--skip-existing`, `--max-items`,
+  per-item failure lists, sanitized per-item summaries, and one batch receipt
+  under `receipts/mint/batches/` or
+  `receipts/mint/retired-drafts/batches/`.
+- Documented `--dry-run --skip-existing` as the single-process status/query
+  path for large mint or retire plans, so operators do not need `find | xargs`
+  counting loops to identify already processed items.
+- Kept the existing single-item mint and retire gates underneath the batch
+  commands. A batch item still needs the same dry-run evidence, human
+  `--reviewed-by` approval on write, SHA/path checks, duplicate checks, and
+  receipt evidence as the single-item commands.
+- Added CLI regression tests for dry-run, approve, alias routing,
+  `--skip-existing`, batch receipts, no body text echo, no absolute local path
+  echo, and no per-item shell process spawning.
+
 ## v0.3.118 - 2026-06-20
 
 - Added generated-index metadata for canonical zettel count and max mtime during

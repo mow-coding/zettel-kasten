@@ -491,11 +491,23 @@ mint-zet --dry-run
 mint-zet --approve --reviewed-by
   Mint an inbox draft zet into canonical private archive memory and write a receipt plus draft snapshot.
 
+mint-zet-batch --plan --dry-run
+  Preview minting many reviewed draft zets from one JSON plan in one WOM-kit process. Aliases include bulk-mint and bulk-mint-zet.
+
+mint-zet-batch --plan --approve --reviewed-by
+  Mint plan-approved draft zets, keep per-item mint receipts, and write one batch receipt without per-item shell process loops.
+
 retire-draft --dry-run
   Verify that an inbox draft is already backed by canonical mint artifacts before cleanup. Writes nothing and deletes nothing.
 
 retire-draft --approve --reviewed-by
   Remove a verified already minted inbox draft and write a retired-draft receipt while preserving the canonical zet, mint receipt, and draft snapshot.
+
+retire-draft-batch --plan --dry-run
+  Preview retiring many already minted inbox drafts from one JSON plan in one WOM-kit process. Aliases include bulk-retire and bulk-retire-draft.
+
+retire-draft-batch --plan --approve --reviewed-by
+  Remove verified plan-approved inbox drafts, keep per-item retire receipts, and write one batch receipt without per-item shell process loops.
 
 mint-zettel
   Transitional compatibility alias for mint-zet.
@@ -695,6 +707,8 @@ This file is a rebuildable map, not the archive itself. The durable archive stil
 `archive mint-zet --dry-run` checks the minting gate using `minting_rules` in `zettel-kasten/zettel-rules.yml`, with legacy `promotion_rules` as a v0.2 fallback. It reports blockers, warnings, missing human-review items, near duplicates, `duplicate_check` metadata, the proposed canonical path, the proposed mint receipt path, and the proposed draft snapshot path. When `db/archive-index.sqlite` is current, duplicate checks use the generated index instead of rereading every canonical zet body; otherwise the command falls back to the live scan. It writes nothing. `archive mint-zettel` remains a v0.2 compatibility alias.
 
 `archive retire-draft --dry-run|--approve` closes the lifecycle gap after a draft has already been minted. Dry-run verifies that the inbox draft, canonical zet, mint receipt, draft snapshot, archive-relative paths, and SHA-256 evidence all agree. It can also accept a mint target SHA that changed only through approved post-receipt zettel-edge writes. Approved mode requires `--reviewed-by`, removes only that verified inbox draft, writes `receipts/mint/retired-drafts/*.retire-draft.json`, and preserves the canonical zet, original mint receipt, and draft snapshot.
+
+`archive mint-zet-batch --plan <json> --dry-run|--approve` and `archive retire-draft-batch --plan <json> --dry-run|--approve` are the batch-safe forms for large WOM real-use runs. They consume archive-relative JSON plans, run inside one WOM-kit process, keep the same single-item gates for each item, support `--skip-existing` and `--max-items`, return `failed_items` for partial failures, and write one batch receipt under `receipts/mint/batches/` or `receipts/mint/retired-drafts/batches/`. They do not spawn one shell process per item, call providers, read unrelated source files, or echo zettel body text.
 
 `archive source-intake --dry-run` is the safe classification step before drafting from a source/objet. It accepts exactly one locator, returns `source_refs_for_draft`, reports object storage context, and writes nothing. It does not read file bodies, hash, copy, upload, import, OCR, transcribe, extract, call provider APIs, create drafts, or mint.
 
@@ -1137,6 +1151,10 @@ current during large batches; older indexes without metadata still fall back to
 the legacy live staleness scan. The same release opens generated-index SQLite
 connections with a 30s busy timeout, uses WAL mode on index write paths, and
 keeps WAL/SHM/journal sidecars in the generated-artifact ignore/hygiene layer.
+v0.3.119 adds `mint-zet-batch` / `bulk-mint` and `retire-draft-batch` /
+`bulk-retire` so large mint and retired-draft cleanup runs can use one reviewed
+plan, one WOM-kit process, `--skip-existing`, `--max-items`, per-item failure
+lists, and one batch receipt instead of fragile per-item shell loops.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 
