@@ -25,10 +25,11 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.120 pre-release
+v0.3.121 pre-release
 ```
 
-Previous public baseline: v0.3.119 pre-release.
+Previous public baseline: v0.3.120 pre-release.
+Earlier public baseline: v0.3.119 pre-release.
 Earlier public baseline: v0.3.118 pre-release.
 Earlier public baseline: v0.3.117 pre-release.
 Earlier public baseline: v0.3.116 pre-release.
@@ -58,7 +59,7 @@ What exists today:
 - read-only WOM-kit version truth-source checks through `archive --version`, `archive version --format json`, parent project installed-version pin discovery from archive roots, and runtime-context version metadata,
 - runtime-context canonical entrypoint metadata so AI runtimes can see which archive-relative files/directories to treat as start-here and authoritative sources, plus machine-readable `ai_runtime_order`, `recommended_first_commands`, and `material_link_routes` that hand off from `runtime-context` to `AGENTS.md` and `ai-response-concept-guide`,
 - AI operational context rehydration through `ops/operational-context.yml`, runtime-context field `operational_context`, and approval-gated `archive operational-context` updates with receipts, so an AI runtime can recover mission, scope, state, gotchas, reviewed decisions, and next actions after context compression without reading broad archive bodies first,
-- private archive lifecycle tools for doctor checks, draft creation, minting with dry-run checklist guidance, generated-index-backed duplicate checks, metadata-backed mint staleness fast paths, SQLite busy-timeout/WAL hardening for generated-index write paths, and standard-id source-path fast resolution for large archives, verified minted-draft retirement, delegation, receipts, search, and metadata review,
+- private archive lifecycle tools for doctor checks, draft creation, minting with dry-run checklist guidance, generated-index-backed duplicate checks, metadata-backed mint staleness fast paths, SQLite busy-timeout/WAL hardening for generated-index write paths, standard-id source-path fast resolution for large archives, scoped `validate --since` / `validate --scope` checks with generated-index body SHA cache support and optional `--progress`, verified minted-draft retirement, delegation, receipts, search, and metadata review,
 - read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading, block headers with first-read summaries, generated index health checks, saved view health, facet role diagnostics, saved view recommendations, prompt boundaries, foreign block review, projection planning with supported-surface help, shared update review/index, shared update route pointers, and ZET would-transport planning,
 - read-only derived-text coverage/toolchain/doctor/agent-contract gates, manifest-scoped completeness signals, manifest-quality checks that block false complete claims when `tool_version` or required extraction metadata is missing, including existing derived-text records as a fallback textual signal for older prehashed manifests, non-echoed tool-hint paths for PATH-missing local extractors, plus approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
 - read-only `archive ai-response-concept-guide --dry-run` for beginner-facing AI explanation cards about sha256 object identity vs location, manifests vs zets, the objet -> derived text -> zet layer split, operational term translations for edge types, lifecycle states, and connection kinds, plus safe routing to Notion import material-clue audits and source-map material-link planning when provider locators were omitted from imported zettel bodies, without overclaiming upload, availability, or stronger tie meaning,
@@ -314,6 +315,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.121
 v0.3.120
 v0.3.119
 v0.3.118

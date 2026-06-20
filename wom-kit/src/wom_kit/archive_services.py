@@ -45546,7 +45546,12 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
               status TEXT,
               kind TEXT,
               body TEXT,
-              frontmatter_json TEXT
+              frontmatter_json TEXT,
+              file_size INTEGER,
+              file_mtime_ns INTEGER,
+              body_sha256 TEXT,
+              approved_body_sha256 TEXT,
+              forbidden_location_reference_found INTEGER
             );
             CREATE TABLE IF NOT EXISTS objects (
               object_id TEXT PRIMARY KEY,
@@ -45607,6 +45612,7 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
             DELETE FROM index_metadata;
             """
         )
+        ensure_archive_index_zettel_columns(conn)
 
         warnings: list[str] = []
         canonical_metadata_count = 0
@@ -45624,12 +45630,20 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
         for path in iter_zettel_paths(root):
             relative_path = archive_relative_path(path, root)
             try:
-                zettel_mtime_ns = path.stat().st_mtime_ns
+                zettel_stat = path.stat()
+                zettel_mtime_ns = zettel_stat.st_mtime_ns
+                zettel_size = zettel_stat.st_size
             except OSError:
                 zettel_mtime_ns = 0
-            frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
+                zettel_size = 0
+            text = path.read_text(encoding="utf-8")
+            frontmatter, body = split_zettel_text(text)
             frontmatter = json_safe(frontmatter)
             zettel_status = frontmatter.get("status")
+            draft_creation = frontmatter.get("draft_creation") if isinstance(frontmatter.get("draft_creation"), dict) else {}
+            approved_body_sha256 = draft_creation.get("approved_body_sha256")
+            if not isinstance(approved_body_sha256, str) or not SHA256_RE.match(approved_body_sha256):
+                approved_body_sha256 = None
             if relative_path.startswith("zettels/") and zettel_status == "canonical":
                 canonical_metadata_count += 1
                 canonical_metadata_max_mtime_ns = max(canonical_metadata_max_mtime_ns, zettel_mtime_ns)
@@ -45639,8 +45653,12 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
             redacted = zettel_status == "redacted"
             conn.execute(
                 """
-                INSERT OR REPLACE INTO zettels(path, zettel_id, title, status, kind, body, frontmatter_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO zettels(
+                  path, zettel_id, title, status, kind, body, frontmatter_json,
+                  file_size, file_mtime_ns, body_sha256, approved_body_sha256,
+                  forbidden_location_reference_found
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     relative_path,
@@ -45650,6 +45668,11 @@ def index_archive(archive_root: Path | str) -> dict[str, Any]:
                     frontmatter.get("kind"),
                     "" if redacted else body,
                     "" if redacted else json.dumps(frontmatter, ensure_ascii=False, default=str),
+                    zettel_size,
+                    zettel_mtime_ns,
+                    "" if redacted else sha256_text(body),
+                    "" if redacted else approved_body_sha256,
+                    1 if (not redacted and contains_forbidden_location_reference(text)) else 0,
                 ),
             )
             zettel_count += 1
@@ -45836,6 +45859,20 @@ def replace_archive_index_metadata(
         conn.execute("INSERT OR REPLACE INTO index_metadata(key, value) VALUES (?, ?)", (key, value))
 
 
+def ensure_archive_index_zettel_columns(conn: sqlite3.Connection) -> None:
+    existing = {str(row[1]) for row in conn.execute("PRAGMA table_info(zettels)").fetchall()}
+    columns = {
+        "file_size": "INTEGER",
+        "file_mtime_ns": "INTEGER",
+        "body_sha256": "TEXT",
+        "approved_body_sha256": "TEXT",
+        "forbidden_location_reference_found": "INTEGER",
+    }
+    for name, ddl_type in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE zettels ADD COLUMN {name} {ddl_type}")
+
+
 def upsert_zettel_index_entry(root: Path, zettel_path: Path, frontmatter: dict[str, Any], body: str) -> bool:
     db_path = root / INDEX_RELATIVE_PATH
     if not db_path.is_file():
@@ -45848,16 +45885,33 @@ def upsert_zettel_index_entry(root: Path, zettel_path: Path, frontmatter: dict[s
 
     conn = connect_archive_index(db_path, write=True)
     try:
+        ensure_archive_index_zettel_columns(conn)
         old_row = conn.execute("SELECT status FROM zettels WHERE path = ?", (relative,)).fetchone()
         old_is_canonical = (
             old_row is not None
             and relative.startswith("zettels/")
             and str(old_row[0] if not isinstance(old_row, sqlite3.Row) else old_row["status"]) == "canonical"
         )
+        try:
+            zettel_stat = zettel_path.stat()
+            zettel_size = zettel_stat.st_size
+            zettel_mtime_ns = zettel_stat.st_mtime_ns
+        except OSError:
+            zettel_size = 0
+            zettel_mtime_ns = 0
+        draft_creation = frontmatter.get("draft_creation") if isinstance(frontmatter.get("draft_creation"), dict) else {}
+        approved_body_sha256 = draft_creation.get("approved_body_sha256")
+        if not isinstance(approved_body_sha256, str) or not SHA256_RE.match(approved_body_sha256):
+            approved_body_sha256 = None
+        full_text = "---\n" + dump_yaml(frontmatter) + "---\n" + body
         conn.execute(
             """
-            INSERT OR REPLACE INTO zettels(path, zettel_id, title, status, kind, body, frontmatter_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO zettels(
+              path, zettel_id, title, status, kind, body, frontmatter_json,
+              file_size, file_mtime_ns, body_sha256, approved_body_sha256,
+              forbidden_location_reference_found
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 relative,
@@ -45867,6 +45921,11 @@ def upsert_zettel_index_entry(root: Path, zettel_path: Path, frontmatter: dict[s
                 frontmatter.get("kind"),
                 "" if redacted else body,
                 "" if redacted else json.dumps(json_safe(frontmatter), ensure_ascii=False, default=str),
+                zettel_size,
+                zettel_mtime_ns,
+                "" if redacted else sha256_text(body),
+                "" if redacted else approved_body_sha256,
+                1 if (not redacted and contains_forbidden_location_reference(full_text)) else 0,
             ),
         )
 

@@ -1159,6 +1159,16 @@ v0.3.120 hardens the next batch performance layer: edge-only canonical target
 SHA evolution checks now reuse a source-zettel-path edge receipt index in
 `retire-draft-batch`, and `validate` / `doctor` use a lazy edge receipt cache
 instead of rescanning edge receipts for every mint or retired-draft receipt.
+v0.3.121 adds scoped validation for the next large-archive feedback loop:
+`archive validate --since <batch-id-or-receipt>` validates the zettels and
+receipts touched by a mint, retired-draft, or zettel-edge batch receipt, while
+`archive validate --scope <facet=value>` uses a current generated index to
+validate only matching indexed zettels. Generated index rows now carry
+`body_sha256`, `approved_body_sha256`, file size/mtime, and a forbidden-location
+flag so scoped validation can reuse unchanged body evidence. `--progress`
+streams stage/item counts, elapsed time, and ETA to stderr. Scoped validation is
+an incremental safety gate, not a permanent replacement for periodic full
+`archive validate`.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

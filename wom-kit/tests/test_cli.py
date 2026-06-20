@@ -19191,6 +19191,111 @@ state:
         self.assertTrue(result["ok"])
         self.assertEqual(result["errors"], 0)
         self.assertEqual(result["warnings"], 0)
+        self.assertEqual(result["scope"]["mode"], "full")
+
+    def test_validate_since_mint_batch_limits_to_batch_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            first_id = "zet_20260621_validate_since_alpha"
+            second_id = "zet_20260621_validate_since_beta"
+            self.make_batch_ready_draft(
+                archive_root,
+                first_id,
+                "Validate since alpha",
+                "Validate since alpha body with enough distinct material.\n",
+            )
+            self.make_batch_ready_draft(
+                archive_root,
+                second_id,
+                "Validate since beta",
+                "Validate since beta body with separate batch material.\n",
+            )
+            archive_services.index_archive(archive_root)
+            plan_path = archive_root / "workbench" / "validate-since-mint.plan.json"
+            plan_path.parent.mkdir(parents=True, exist_ok=True)
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/mint-zet-batch/v0.1",
+                        "policy": {"policy_id": "policy:fixture-validate-since"},
+                        "items": [{"zettel_id": first_id}, {"zettel_id": second_id}],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            mint_code, mint_output = self.run_cli(
+                [
+                    "mint-zet-batch",
+                    str(archive_root),
+                    "--plan",
+                    "workbench/validate-since-mint.plan.json",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(mint_code, 0, mint_output)
+            mint_result = json.loads(mint_output)
+
+            broken_path = archive_root / "zettels" / "zet_20260621_unrelated_broken.md"
+            broken_path.write_text("This unrelated file has no frontmatter.\n", encoding="utf-8")
+            full_code, full_output = self.run_cli(["validate", str(archive_root), "--format", "json"])
+            self.assertEqual(full_code, 1, full_output)
+            self.assertIn("zettel_frontmatter_missing", full_output)
+
+            scoped_code, scoped_output = self.run_cli(
+                ["validate", str(archive_root), "--since", mint_result["batch_id"], "--format", "json"]
+            )
+            self.assertEqual(scoped_code, 0, scoped_output)
+            scoped = json.loads(scoped_output)
+            self.assertTrue(scoped["ok"])
+            self.assertEqual(scoped["scope"]["mode"], "since")
+            self.assertEqual(scoped["scope"]["mint_receipt_count"], 2)
+            self.assertEqual(scoped["scope"]["batch_receipt_count"], 1)
+            self.assertNotIn("zet_20260621_unrelated_broken", scoped_output)
+
+            progress_code, progress_output = self.run_cli(
+                ["validate", str(archive_root), "--since", mint_result["receipt_path"], "--progress"]
+            )
+            self.assertEqual(progress_code, 0, progress_output)
+            self.assertIn("[validate] zettels:", progress_output)
+
+    def test_validate_scope_uses_indexed_facet_subset_and_cache_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            scoped_path = archive_root / "zettels" / "zet_20240504_fake_lunch_thought.md"
+            frontmatter, body = archive_services.split_zettel_text(scoped_path.read_text(encoding="utf-8"))
+            facets = frontmatter.get("facets") if isinstance(frontmatter.get("facets"), dict) else {}
+            facets["source_database"] = "database_2_0"
+            frontmatter["facets"] = facets
+            scoped_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+            index_result = archive_services.index_archive(archive_root)
+            self.assertTrue(index_result["ok"])
+
+            broken_path = archive_root / "zettels" / "zet_20260621_scope_unrelated_broken.md"
+            broken_path.write_text("This unrelated file has no frontmatter.\n", encoding="utf-8")
+            code, output = self.run_cli(
+                ["validate", str(archive_root), "--scope", "source_database=database_2_0", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["scope"]["mode"], "facet")
+            self.assertEqual(result["scope"]["zettel_count"], 1)
+            self.assertTrue(result["scope"]["index_cache_used"])
+            self.assertNotIn("zet_20260621_scope_unrelated_broken", output)
+
+            conn = archive_services.connect_archive_index(archive_root / archive_services.INDEX_RELATIVE_PATH, row_factory=True)
+            try:
+                columns = {row["name"] for row in conn.execute("PRAGMA table_info(zettels)").fetchall()}
+            finally:
+                conn.close()
+            self.assertIn("body_sha256", columns)
+            self.assertIn("approved_body_sha256", columns)
+            self.assertIn("file_mtime_ns", columns)
 
     def test_list_zettels_json_returns_all_statuses(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"

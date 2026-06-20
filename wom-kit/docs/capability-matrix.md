@@ -1,10 +1,11 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.120 retire/validate edge receipt index checkpoint
-Date: 2026-06-20
-Version: v0.3.120, release candidate
+Status: v0.3.121 scoped validate and progress checkpoint
+Date: 2026-06-21
+Version: v0.3.121, release candidate
 
-Previous checkpoint: Status: v0.3.119 batch mint/retire lifecycle robustness checkpoint
+Previous checkpoint: Status: v0.3.120 retire/validate edge receipt index checkpoint
+Earlier batch lifecycle checkpoint: Status: v0.3.119 batch mint/retire lifecycle robustness checkpoint
 Earlier mint index checkpoint: Status: v0.3.118 mint index staleness fast path and SQLite write contention checkpoint
 Earlier runtime checkpoint: Status: v0.3.117 AI operational context rehydration checkpoint
 Earlier mint source checkpoint: Status: v0.3.116 mint source resolve fast path checkpoint
@@ -47,6 +48,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Capability | Status in current working tree | Write behavior | Notes |
 | --- | --- | --- | --- |
 | Archive doctor | `implemented local command` | read-only | `archive doctor` checks archive structure, schema, manifest, receipt, and lifecycle consistency. |
+| Archive validation | `implemented local command` | read-only | `archive validate` still performs full archive validation by default. v0.3.121 adds `archive validate --since <batch-id-or-receipt>` for mint, retired-draft, and zettel-edge batch receipts, plus repeated `archive validate --scope <facet=value>` filters backed by a current generated index. Scoped validation runs only the narrow global structure checks plus selected/touched zettels and receipts, so it is an incremental gate and not a replacement for periodic full archive validation. The generated index now stores zettel `body_sha256`, `approved_body_sha256`, file size/mtime, and `forbidden_location_reference_found`, letting scoped validation reuse unchanged indexed body evidence. `archive validate --progress` streams stage/item counts, elapsed time, and ETA to stderr. It writes nothing, performs no archive migration, calls no providers, and echoes no zettel body text. |
 | Archive `.gitignore` repair | `approval-gated write` | dry-run previews first; CLI approve appends missing safe patterns only | `archive repair-gitignore` fixes missing local-only, generated-index, harness, and content-addressed byte-store ignore patterns. It preserves existing `.gitignore` entries and does not clean files. |
 | Archive frontmatter migration | `approval-gated write` | dry-run previews first; CLI approve rewrites zettel frontmatter only; revert is blocked until snapshot receipts exist | `archive migrate --target frontmatter-v0.3` aligns older v0.2-draft-authored zettel frontmatter with the current v0.3 schema. Ambiguous or unsafe source values block for manual review. `archive migrate --target frontmatter-v0.3 --revert` is recognized but fails closed with `snapshot_receipt_required`, because lossless frontmatter rollback needs prior migration snapshot receipts. It does not guess old frontmatter from current files. |
 | Archive link type migration | `approval-gated write` | dry-run previews first; CLI approve rewrites `zettel-kasten/types.yml` and writes a migration receipt; safe revert removes receipt-listed unused base-template records only | `archive migrate --target link-types-v0.3` appends missing recommended connection edge vocabulary (`material`, `derived`, `semantic`, `embed`, `mention`, `supersedes`, `view_query`, `comment_context`) from the base WOM-kit type template into stale archive-local `zettel-kasten/types.yml` and writes a receipt under `receipts/migrations/`. `archive migrate --target link-types-v0.3 --revert --dry-run|--approve` uses that receipt's `appended_link_type_ids`, removes only those link type records when they are unused by current zettel edges and unchanged from the base template, and writes a revert receipt under `receipts/migrations/reverts/`; it blocks if the migration receipt is missing, any candidate type is used, or any candidate type is locally modified. It does not edit zets, write edges, migrate existing refs, read source exports, call providers, infer new relationship meanings, or delete edge receipts. |
