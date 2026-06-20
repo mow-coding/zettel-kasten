@@ -768,6 +768,8 @@ PROJECT_INTAKE_MAX_STRING_LENGTH = 4000
 MINT_RECEIPTS_DIR = "receipts/mint"
 MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
 MINT_RETIRED_DRAFT_RECEIPTS_DIR = "receipts/mint/retired-drafts"
+MINT_BATCH_RECEIPTS_DIR = "receipts/mint/batches"
+MINT_RETIRED_DRAFT_BATCH_RECEIPTS_DIR = "receipts/mint/retired-drafts/batches"
 ZETTEL_EDGE_RECEIPTS_DIR = "receipts/edges"
 ZETTEL_EDGE_BATCH_RECEIPTS_DIR = "receipts/edges/batches"
 ZETTEL_EDGE_REVERT_RECEIPTS_DIR = "receipts/edges/reverts"
@@ -6814,6 +6816,667 @@ def retire_minted_draft(
         }
     )
     return result
+
+
+def resolve_mint_lifecycle_batch_plan_path(
+    root: Path,
+    plan_path: Path | str,
+    blockers: list[str],
+    *,
+    label: str,
+    example: str,
+) -> tuple[Path | None, dict[str, Any]]:
+    raw = str(plan_path or "").strip()
+    resolution = {
+        "requested_path_kind": "empty" if not raw else "relative",
+        "resolved_as": None,
+        "path_echoed": False,
+        "archive_relative_path": None,
+        "resolution_order": ["archive_relative", "cwd_relative"],
+    }
+    if not raw:
+        blockers.append(f"{label} plan path is required.")
+        return None, resolution
+
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute():
+        resolution["requested_path_kind"] = "absolute"
+        resolution["resolution_order"] = ["absolute"]
+        if candidate.is_file():
+            resolution["resolved_as"] = "absolute"
+            return candidate.resolve(), resolution
+        blockers.append(f"{label} plan path not found. Use an archive-relative path like {example} or an absolute path.")
+        return None, resolution
+
+    try:
+        archive_candidate = resolve_archive_relative_path(root, raw)
+        normalized = normalize_archive_relative_path(raw)
+    except ArchivePathError:
+        archive_candidate = None
+        normalized = None
+    if archive_candidate is not None and archive_candidate.is_file():
+        resolution["resolved_as"] = "archive_relative"
+        resolution["archive_relative_path"] = normalized
+        return archive_candidate, resolution
+
+    cwd_candidate = candidate.resolve()
+    if cwd_candidate.is_file():
+        resolution["resolved_as"] = "cwd_relative"
+        return cwd_candidate, resolution
+
+    blockers.append(
+        f"{label} plan path not found. --plan is resolved archive-relative first "
+        f"(for example {example}), then CWD-relative; pass an absolute path if needed."
+    )
+    return None, resolution
+
+
+def load_mint_lifecycle_batch_plan(path: Path, blockers: list[str], *, label: str) -> dict[str, Any] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        blockers.append(f"{label} plan JSON is invalid.")
+        return None
+    except OSError:
+        blockers.append(f"{label} plan file could not be read.")
+        return None
+    if not isinstance(data, dict):
+        blockers.append(f"{label} plan JSON must contain an object.")
+        return None
+    return json_safe(data)
+
+
+def mint_lifecycle_batch_policy(plan: dict[str, Any], blockers: list[str], *, label: str) -> dict[str, Any]:
+    raw_policy = plan.get("policy")
+    if not isinstance(raw_policy, dict):
+        blockers.append(f"{label} plan must include a policy object.")
+        return {}
+    policy_id = safe_zettel_edge_batch_scalar(raw_policy.get("policy_id") or f"policy:{label}", blockers, "policy.policy_id")
+    return {
+        "policy_id": policy_id,
+        "policy_label": safe_manifest_label(raw_policy.get("policy_label"), fallback=None),
+        "allow_warnings": bool(raw_policy.get("allow_warnings")),
+    }
+
+
+def mint_lifecycle_batch_candidate_rows(plan: dict[str, Any], blockers: list[str], *, label: str) -> list[dict[str, Any]]:
+    rows = plan.get("items") or plan.get("drafts") or plan.get("zettels")
+    if rows is None and isinstance(plan.get("zettel_ids"), list):
+        rows = [{"zettel_id": value} for value in plan.get("zettel_ids", [])]
+    if rows is None and isinstance(plan.get("paths"), list):
+        rows = [{"path": value} for value in plan.get("paths", [])]
+    if not isinstance(rows, list) or not rows:
+        blockers.append(f"{label} plan must include a non-empty items list.")
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for index, row in enumerate(rows, start=1):
+        if isinstance(row, str):
+            row = {"path": row} if row.strip().endswith(".md") or "/" in row or "\\" in row else {"zettel_id": row}
+        if not isinstance(row, dict):
+            blockers.append(f"items[{index}] must be an object or scalar zettel id/path.")
+            continue
+        raw_zettel_id = row.get("zettel_id") or row.get("id")
+        raw_path = row.get("path") or row.get("draft_path")
+        if bool(raw_zettel_id) == bool(raw_path):
+            blockers.append(f"items[{index}] must include exactly one of zettel_id or path.")
+            continue
+        item_id = safe_zettel_edge_batch_scalar(row.get("item_id") or row.get("candidate_id") or f"item:{index:04d}", blockers, f"items[{index}].item_id")
+        normalized.append(
+            {
+                "index": index,
+                "item_id": item_id,
+                "zettel_id": safe_zettel_edge_batch_scalar(raw_zettel_id, blockers, f"items[{index}].zettel_id")
+                if raw_zettel_id
+                else None,
+                "path": safe_zettel_edge_batch_scalar(raw_path, blockers, f"items[{index}].path") if raw_path else None,
+            }
+        )
+    return normalized
+
+
+def mint_lifecycle_batch_item_key(row: dict[str, Any]) -> str:
+    return str(row.get("zettel_id") or row.get("path") or row.get("item_id") or "")
+
+
+def mint_batch_existing_artifacts(root: Path, row: dict[str, Any]) -> dict[str, Any] | None:
+    zettel_id = str(row.get("zettel_id") or "").strip()
+    if not zettel_id and row.get("path"):
+        try:
+            zettel_id = Path(str(row.get("path"))).stem
+        except ValueError:
+            zettel_id = ""
+    if not zettel_id:
+        return None
+    canonical_relative = f"zettels/{zettel_id}.md"
+    receipt_relative = f"{MINT_RECEIPTS_DIR}/{zettel_id}.mint.json"
+    snapshot_relative = f"{MINT_DRAFT_SNAPSHOTS_DIR}/{zettel_id}.draft.md"
+    canonical_exists = archive_internal_path(root, canonical_relative).is_file()
+    receipt_exists = archive_internal_path(root, receipt_relative).is_file()
+    snapshot_exists = archive_internal_path(root, snapshot_relative).is_file()
+    if not (canonical_exists and receipt_exists and snapshot_exists):
+        return None
+    return {
+        "index": row.get("index"),
+        "item_id": row.get("item_id"),
+        "zettel_id": zettel_id,
+        "write_status": "skipped_existing",
+        "skip_reason": "mint_artifacts_already_exist",
+        "canonical_path": canonical_relative,
+        "mint_receipt_path": receipt_relative,
+        "draft_snapshot_path": snapshot_relative,
+    }
+
+
+def retire_batch_existing_artifacts(root: Path, row: dict[str, Any]) -> dict[str, Any] | None:
+    zettel_id = str(row.get("zettel_id") or "").strip()
+    if not zettel_id and row.get("path"):
+        try:
+            zettel_id = Path(str(row.get("path"))).stem
+        except ValueError:
+            zettel_id = ""
+    if not zettel_id:
+        return None
+    retire_receipt_relative = f"{MINT_RETIRED_DRAFT_RECEIPTS_DIR}/{zettel_id}.retire-draft.json"
+    draft_relative = str(row.get("path") or f"inbox/{zettel_id}.md")
+    try:
+        draft_exists = archive_internal_path(root, draft_relative).is_file()
+    except ArchiveServiceError:
+        draft_exists = False
+    if not archive_internal_path(root, retire_receipt_relative).is_file() or draft_exists:
+        return None
+    return {
+        "index": row.get("index"),
+        "item_id": row.get("item_id"),
+        "zettel_id": zettel_id,
+        "write_status": "skipped_existing",
+        "skip_reason": "draft_already_retired",
+        "draft_path": draft_relative,
+        "retire_receipt_path": retire_receipt_relative,
+    }
+
+
+def mint_batch_receipt_relative_path(batch_id: str) -> str:
+    digest = batch_id.removeprefix("mint-batch:")
+    return f"{MINT_BATCH_RECEIPTS_DIR}/{digest[:24]}.mint-zet-batch.json"
+
+
+def retire_draft_batch_receipt_relative_path(batch_id: str) -> str:
+    digest = batch_id.removeprefix("retire-draft-batch:")
+    return f"{MINT_RETIRED_DRAFT_BATCH_RECEIPTS_DIR}/{digest[:24]}.retire-draft-batch.json"
+
+
+def mint_batch_item_summary(row: dict[str, Any], result: dict[str, Any], *, write_status: str) -> dict[str, Any]:
+    return {
+        "index": row.get("index"),
+        "item_id": row.get("item_id"),
+        "zettel_id": result.get("zettel_id") or row.get("zettel_id"),
+        "draft_path": result.get("draft_path"),
+        "canonical_path": result.get("canonical_path") or result.get("proposed_canonical_path"),
+        "mint_receipt_path": result.get("mint_receipt_path") or result.get("proposed_mint_receipt_path"),
+        "draft_snapshot_path": result.get("draft_snapshot_path") or result.get("proposed_draft_snapshot_path"),
+        "write_status": write_status,
+        "warnings": result.get("warnings", []),
+        "generated_index_updated": bool(result.get("generated_index_updated")),
+    }
+
+
+def retire_batch_item_summary(row: dict[str, Any], result: dict[str, Any], *, write_status: str) -> dict[str, Any]:
+    return {
+        "index": row.get("index"),
+        "item_id": row.get("item_id"),
+        "zettel_id": result.get("zettel_id") or row.get("zettel_id"),
+        "draft_path": result.get("draft_path"),
+        "canonical_path": result.get("canonical_path"),
+        "mint_receipt_path": result.get("mint_receipt_path"),
+        "draft_snapshot_path": result.get("draft_snapshot_path"),
+        "retire_receipt_path": result.get("retire_receipt_path"),
+        "write_status": write_status,
+        "warnings": result.get("warnings", []),
+    }
+
+
+def mint_lifecycle_batch_result(
+    *,
+    action: str,
+    archive_id: str,
+    dry_run: bool,
+    approve: bool,
+    reviewed_by: str | None,
+    policy: dict[str, Any],
+    batch_id: str | None,
+    receipt_path: str | None,
+    plan_path_resolution: dict[str, Any],
+    item_results: list[dict[str, Any]],
+    skipped_existing_items: list[dict[str, Any]],
+    failed_items: list[dict[str, Any]],
+    candidate_item_count: int | None,
+    skip_existing: bool,
+    max_items: int,
+    files_written: list[str],
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    written_count = sum(1 for item in item_results if item.get("write_status") in {"minted", "retired"})
+    would_write_count = sum(1 for item in item_results if str(item.get("write_status", "")).startswith("would_"))
+    failed_count = len(failed_items)
+    skipped_count = len(skipped_existing_items)
+    total_candidate_count = candidate_item_count if candidate_item_count is not None else len(item_results) + skipped_count + failed_count
+    if blockers:
+        write_status = "blocked"
+    elif failed_count and written_count:
+        write_status = "partial_failure"
+    elif failed_count:
+        write_status = "blocked" if dry_run else "failed"
+    elif written_count:
+        write_status = "written"
+    elif would_write_count:
+        write_status = "would_write"
+    elif skipped_count:
+        write_status = "nothing_to_write" if approve else "would_skip_existing"
+    else:
+        write_status = "nothing_to_write" if approve else "would_write"
+    return {
+        "ok": not blockers and failed_count == 0,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": f"{action}_plan" if dry_run else f"{action}_write",
+        "archive_id": archive_id,
+        "batch_id": batch_id,
+        "write_status": write_status,
+        "plan_path_resolution": plan_path_resolution,
+        "policy": {
+            "policy_id": policy.get("policy_id"),
+            "policy_label": policy.get("policy_label"),
+            "allow_warnings": bool(policy.get("allow_warnings")),
+        },
+        "summary": {
+            "candidate_item_count": total_candidate_count,
+            "would_write_count": would_write_count,
+            "written_item_count": written_count,
+            "skipped_existing_item_count": skipped_count,
+            "failed_item_count": failed_count,
+            "batch_receipt_written": bool(receipt_path and receipt_path in files_written),
+            "skip_existing_requested": bool(skip_existing),
+            "max_items": max_items,
+        },
+        "items": item_results,
+        "skipped_existing_items": skipped_existing_items,
+        "failed_items": failed_items,
+        "receipt_path": receipt_path,
+        "reviewed_by": reviewed_by if approve else None,
+        "current_capability": {
+            "single_process_batch_implemented": True,
+            "plan_file_implemented": True,
+            "skip_existing_implemented": True,
+            "batch_receipt_implemented": True,
+            "partial_failure_list_implemented": True,
+            "mcp_write_tool_implemented": False,
+            "background_worker_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "external_source_files_read": False,
+            "body_text_echoed": False,
+            "zettel_title_echoed": False,
+            "absolute_local_paths_echoed": False,
+            "secret_values_echoed": False,
+            "per_item_shell_processes_spawned": False,
+            "batch_receipt_written": bool(receipt_path and receipt_path in files_written),
+        },
+        "files_written": unique_preserve_order(files_written),
+        "next_safe_actions": [
+            "Re-run the same batch with --skip-existing after fixing failed_items." if failed_count else "Run validate after approved batch writes.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def mint_zet_batch(
+    archive_root: Path | str,
+    *,
+    plan_path: Path | str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    allow_warnings: bool = False,
+    max_items: int = 500,
+    skip_existing: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if dry_run and approve:
+        blockers.append("Use either --dry-run or --approve, not both.")
+    if not dry_run and not approve:
+        blockers.append("mint-zet-batch requires --dry-run or --approve.")
+    if approve and not reviewed_by:
+        blockers.append("mint-zet-batch --approve requires --reviewed-by.")
+    if reviewed_by and not safe_source_intake_plan_scalar(str(reviewed_by)):
+        blockers.append("reviewed_by must be a safe non-secret scalar.")
+
+    resolved_plan_path, plan_path_resolution = resolve_mint_lifecycle_batch_plan_path(
+        root,
+        plan_path,
+        blockers,
+        label="mint-zet-batch",
+        example="workbench/mint-zet-batch.plan.json",
+    )
+    plan = load_mint_lifecycle_batch_plan(resolved_plan_path, blockers, label="mint-zet-batch") if resolved_plan_path is not None else None
+    policy: dict[str, Any] = {}
+    rows: list[dict[str, Any]] = []
+    if plan is not None:
+        schema = str(plan.get("schema") or plan.get("schema_version") or "").strip()
+        if schema and schema not in {"wom-kit/mint-zet-batch/v0.1", "wom-kit/mint-zet-batch-plan/v0.1"}:
+            blockers.append("mint batch plan schema must be wom-kit/mint-zet-batch/v0.1.")
+        policy = mint_lifecycle_batch_policy(plan, blockers, label="mint-zet-batch")
+        rows = mint_lifecycle_batch_candidate_rows(plan, blockers, label="mint-zet-batch")
+        max_items = max(1, min(int(max_items), 5000))
+        if len(rows) > max_items:
+            blockers.append("mint batch plan exceeds max_items.")
+    else:
+        max_items = max(1, min(int(max_items), 5000))
+    if allow_warnings:
+        policy["allow_warnings"] = True
+
+    seen: set[str] = set()
+    item_results: list[dict[str, Any]] = []
+    skipped_existing_items: list[dict[str, Any]] = []
+    failed_items: list[dict[str, Any]] = []
+    if not blockers:
+        for row in rows:
+            key = mint_lifecycle_batch_item_key(row)
+            if key in seen:
+                failed_items.append({**row, "write_status": "failed", "blockers": ["duplicate item in mint batch plan."]})
+                continue
+            seen.add(key)
+            try:
+                dry_result = mint_zettel_dry_run(root, zettel_id=row.get("zettel_id"), relative_path=row.get("path"))
+            except (ArchiveServiceError, OSError) as exc:
+                existing = mint_batch_existing_artifacts(root, row) if skip_existing else None
+                if existing is not None:
+                    skipped_existing_items.append(existing)
+                else:
+                    failed_items.append({**row, "write_status": "failed", "blockers": [str(exc)]})
+                continue
+            if not dry_result.get("ok"):
+                existing = mint_batch_existing_artifacts(root, row) if skip_existing else None
+                if existing is not None:
+                    skipped_existing_items.append(existing)
+                else:
+                    failed_items.append({**row, "write_status": "failed", "blockers": dry_result.get("blockers", [])})
+                continue
+            if dry_run:
+                item_results.append(mint_batch_item_summary(row, dry_result, write_status="would_mint"))
+            else:
+                try:
+                    write_result = mint_zettel(
+                        root,
+                        zettel_id=row.get("zettel_id"),
+                        relative_path=row.get("path"),
+                        reviewed_by=str(reviewed_by or ""),
+                        allow_warnings=bool(policy.get("allow_warnings")),
+                    )
+                except (ArchiveServiceError, OSError) as exc:
+                    existing = mint_batch_existing_artifacts(root, row) if skip_existing else None
+                    if existing is not None:
+                        skipped_existing_items.append(existing)
+                    else:
+                        failed_items.append({**row, "write_status": "failed", "blockers": [str(exc)]})
+                    continue
+                item_results.append(mint_batch_item_summary(row, write_result, write_status="minted"))
+
+    batch_id: str | None = None
+    batch_receipt_relative: str | None = None
+    files_written: list[str] = []
+    receipt_items = [
+        item
+        for item in item_results
+        if item.get("write_status") in {"would_mint", "minted"}
+    ]
+    if receipt_items:
+        batch_id = "mint-batch:" + sha256_json_hex(
+            {
+                "archive_id": archive_id,
+                "policy": policy,
+                "items": [
+                    {
+                        "zettel_id": item.get("zettel_id"),
+                        "canonical_path": item.get("canonical_path"),
+                        "mint_receipt_path": item.get("mint_receipt_path"),
+                    }
+                    for item in receipt_items
+                ],
+            }
+        )
+        batch_receipt_relative = mint_batch_receipt_relative_path(batch_id)
+    if approve and item_results:
+        written_items = [item for item in item_results if item.get("write_status") == "minted"]
+        if written_items:
+            assert batch_receipt_relative is not None
+            batch_receipt_path = archive_internal_path(root, batch_receipt_relative)
+            batch_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            batch_receipt = {
+                "schema_version": "wom-kit/mint-zet-batch-receipt/v0.1",
+                "lifecycle_action": "mint_zet_batch_write",
+                "receipt_kind": "mint_zet_batch_write",
+                "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                "archive_id": archive_id,
+                "batch_id": batch_id,
+                "policy": {
+                    "policy_id": policy.get("policy_id"),
+                    "policy_label": policy.get("policy_label"),
+                    "allow_warnings": bool(policy.get("allow_warnings")),
+                },
+                "reviewed_by": reviewed_by,
+                "written_item_count": len(written_items),
+                "skipped_existing_item_count": len(skipped_existing_items),
+                "failed_item_count": len(failed_items),
+                "mint_receipts": [item.get("mint_receipt_path") for item in written_items],
+                "closed_actions": {
+                    "provider_api_called": False,
+                    "external_source_files_read": False,
+                    "per_item_shell_processes_spawned": False,
+                },
+            }
+            try:
+                write_json_new_file(batch_receipt_path, batch_receipt)
+                files_written.append(batch_receipt_relative)
+            except OSError as exc:
+                warnings.append(f"Batch receipt could not be written after item writes: {exc}.")
+    return mint_lifecycle_batch_result(
+        action="mint_zet_batch",
+        archive_id=archive_id,
+        dry_run=bool(dry_run),
+        approve=bool(approve),
+        reviewed_by=reviewed_by,
+        policy=policy,
+        batch_id=batch_id,
+        receipt_path=batch_receipt_relative,
+        plan_path_resolution=plan_path_resolution,
+        item_results=item_results,
+        skipped_existing_items=skipped_existing_items,
+        failed_items=failed_items,
+        candidate_item_count=len(rows),
+        skip_existing=skip_existing,
+        max_items=max_items,
+        files_written=files_written,
+        blockers=blockers,
+        warnings=warnings,
+    )
+
+
+def retire_draft_batch(
+    archive_root: Path | str,
+    *,
+    plan_path: Path | str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    max_items: int = 500,
+    skip_existing: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if dry_run and approve:
+        blockers.append("Use either --dry-run or --approve, not both.")
+    if not dry_run and not approve:
+        blockers.append("retire-draft-batch requires --dry-run or --approve.")
+    if approve and not reviewed_by:
+        blockers.append("retire-draft-batch --approve requires --reviewed-by.")
+    if reviewed_by and not safe_source_intake_plan_scalar(str(reviewed_by)):
+        blockers.append("reviewed_by must be a safe non-secret scalar.")
+
+    resolved_plan_path, plan_path_resolution = resolve_mint_lifecycle_batch_plan_path(
+        root,
+        plan_path,
+        blockers,
+        label="retire-draft-batch",
+        example="workbench/retire-draft-batch.plan.json",
+    )
+    plan = load_mint_lifecycle_batch_plan(resolved_plan_path, blockers, label="retire-draft-batch") if resolved_plan_path is not None else None
+    policy: dict[str, Any] = {}
+    rows: list[dict[str, Any]] = []
+    if plan is not None:
+        schema = str(plan.get("schema") or plan.get("schema_version") or "").strip()
+        if schema and schema not in {"wom-kit/retire-draft-batch/v0.1", "wom-kit/retire-draft-batch-plan/v0.1"}:
+            blockers.append("retire draft batch plan schema must be wom-kit/retire-draft-batch/v0.1.")
+        policy = mint_lifecycle_batch_policy(plan, blockers, label="retire-draft-batch")
+        rows = mint_lifecycle_batch_candidate_rows(plan, blockers, label="retire-draft-batch")
+        max_items = max(1, min(int(max_items), 5000))
+        if len(rows) > max_items:
+            blockers.append("retire draft batch plan exceeds max_items.")
+    else:
+        max_items = max(1, min(int(max_items), 5000))
+
+    seen: set[str] = set()
+    item_results: list[dict[str, Any]] = []
+    skipped_existing_items: list[dict[str, Any]] = []
+    failed_items: list[dict[str, Any]] = []
+    if not blockers:
+        for row in rows:
+            key = mint_lifecycle_batch_item_key(row)
+            if key in seen:
+                failed_items.append({**row, "write_status": "failed", "blockers": ["duplicate item in retire draft batch plan."]})
+                continue
+            seen.add(key)
+            try:
+                dry_result = retire_minted_draft(root, zettel_id=row.get("zettel_id"), relative_path=row.get("path"), approve=False)
+            except (ArchiveServiceError, OSError) as exc:
+                existing = retire_batch_existing_artifacts(root, row) if skip_existing else None
+                if existing is not None:
+                    skipped_existing_items.append(existing)
+                else:
+                    failed_items.append({**row, "write_status": "failed", "blockers": [str(exc)]})
+                continue
+            if not dry_result.get("ok"):
+                existing = retire_batch_existing_artifacts(root, row) if skip_existing else None
+                if existing is not None:
+                    skipped_existing_items.append(existing)
+                else:
+                    failed_items.append({**row, "write_status": "failed", "blockers": dry_result.get("blockers", [])})
+                continue
+            if dry_run:
+                item_results.append(retire_batch_item_summary(row, dry_result, write_status="would_retire"))
+            else:
+                try:
+                    write_result = retire_minted_draft(
+                        root,
+                        zettel_id=row.get("zettel_id"),
+                        relative_path=row.get("path"),
+                        reviewed_by=reviewed_by,
+                        approve=True,
+                    )
+                except (ArchiveServiceError, OSError) as exc:
+                    existing = retire_batch_existing_artifacts(root, row) if skip_existing else None
+                    if existing is not None:
+                        skipped_existing_items.append(existing)
+                    else:
+                        failed_items.append({**row, "write_status": "failed", "blockers": [str(exc)]})
+                    continue
+                item_results.append(retire_batch_item_summary(row, write_result, write_status="retired"))
+
+    batch_id: str | None = None
+    batch_receipt_relative: str | None = None
+    files_written: list[str] = []
+    receipt_items = [
+        item
+        for item in item_results
+        if item.get("write_status") in {"would_retire", "retired"}
+    ]
+    if receipt_items:
+        batch_id = "retire-draft-batch:" + sha256_json_hex(
+            {
+                "archive_id": archive_id,
+                "policy": policy,
+                "items": [
+                    {
+                        "zettel_id": item.get("zettel_id"),
+                        "draft_path": item.get("draft_path"),
+                        "retire_receipt_path": item.get("retire_receipt_path"),
+                    }
+                    for item in receipt_items
+                ],
+            }
+        )
+        batch_receipt_relative = retire_draft_batch_receipt_relative_path(batch_id)
+    if approve and item_results:
+        written_items = [item for item in item_results if item.get("write_status") == "retired"]
+        if written_items:
+            assert batch_receipt_relative is not None
+            batch_receipt_path = archive_internal_path(root, batch_receipt_relative)
+            batch_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            batch_receipt = {
+                "schema_version": "wom-kit/retire-draft-batch-receipt/v0.1",
+                "lifecycle_action": "retire_draft_batch_write",
+                "receipt_kind": "retire_draft_batch_write",
+                "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                "archive_id": archive_id,
+                "batch_id": batch_id,
+                "policy": {
+                    "policy_id": policy.get("policy_id"),
+                    "policy_label": policy.get("policy_label"),
+                },
+                "reviewed_by": reviewed_by,
+                "written_item_count": len(written_items),
+                "skipped_existing_item_count": len(skipped_existing_items),
+                "failed_item_count": len(failed_items),
+                "retire_receipts": [item.get("retire_receipt_path") for item in written_items],
+                "closed_actions": {
+                    "provider_api_called": False,
+                    "external_source_files_read": False,
+                    "per_item_shell_processes_spawned": False,
+                },
+            }
+            try:
+                write_json_new_file(batch_receipt_path, batch_receipt)
+                files_written.append(batch_receipt_relative)
+            except OSError as exc:
+                warnings.append(f"Batch receipt could not be written after item writes: {exc}.")
+    return mint_lifecycle_batch_result(
+        action="retire_draft_batch",
+        archive_id=archive_id,
+        dry_run=bool(dry_run),
+        approve=bool(approve),
+        reviewed_by=reviewed_by,
+        policy=policy,
+        batch_id=batch_id,
+        receipt_path=batch_receipt_relative,
+        plan_path_resolution=plan_path_resolution,
+        item_results=item_results,
+        skipped_existing_items=skipped_existing_items,
+        failed_items=failed_items,
+        candidate_item_count=len(rows),
+        skip_existing=skip_existing,
+        max_items=max_items,
+        files_written=files_written,
+        blockers=blockers,
+        warnings=warnings,
+    )
 
 
 def load_zettel_rules(archive_root: Path) -> dict[str, Any]:

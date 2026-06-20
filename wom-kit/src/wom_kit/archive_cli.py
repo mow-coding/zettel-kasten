@@ -5768,6 +5768,59 @@ def command_retire_draft(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_mint_zettel_batch(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.mint_zet_batch(
+            Path(args.archive_root),
+            plan_path=args.plan,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+            allow_warnings=args.allow_warnings,
+            max_items=args.max_items,
+            skip_existing=args.skip_existing,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Mint batch {result.get('write_status')} ({result['summary']['candidate_item_count']} item(s)).")
+        print(f"Receipt path: {result.get('receipt_path') or '-'}")
+        print(f"Would/write count: {result['summary']['would_write_count'] or result['summary']['written_item_count']}")
+        print(f"Skipped existing: {result['summary']['skipped_existing_item_count']}")
+        print(f"Failed: {result['summary']['failed_item_count']}")
+    return 0 if result.get("ok") else 1
+
+
+def command_retire_draft_batch(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.retire_draft_batch(
+            Path(args.archive_root),
+            plan_path=args.plan,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+            max_items=args.max_items,
+            skip_existing=args.skip_existing,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Retire draft batch {result.get('write_status')} ({result['summary']['candidate_item_count']} item(s)).")
+        print(f"Receipt path: {result.get('receipt_path') or '-'}")
+        print(f"Would/write count: {result['summary']['would_write_count'] or result['summary']['written_item_count']}")
+        print(f"Skipped existing: {result['summary']['skipped_existing_item_count']}")
+        print(f"Failed: {result['summary']['failed_item_count']}")
+    return 0 if result.get("ok") else 1
+
+
 def command_index(args: argparse.Namespace) -> int:
     try:
         result = archive_services.index_archive(Path(args.archive_root))
@@ -11476,6 +11529,22 @@ def build_parser() -> argparse.ArgumentParser:
     mint.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     mint.set_defaults(func=command_mint_zettel)
 
+    mint_batch = subcommands.add_parser(
+        "mint-zet-batch",
+        aliases=["mint-zettel-batch", "bulk-mint", "bulk-mint-zet"],
+        help="Preview or approve minting many inbox draft zets from one JSON plan in one process.",
+    )
+    mint_batch.add_argument("archive_root", help="Archive root to update.")
+    mint_batch.add_argument("--plan", required=True, help="JSON plan file with items containing zettel_id or path.")
+    mint_batch.add_argument("--dry-run", action="store_true", help="Preview the batch without writing canonical memory.")
+    mint_batch.add_argument("--approve", action="store_true", help="Mint approved batch items after gates pass.")
+    mint_batch.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
+    mint_batch.add_argument("--allow-warnings", action="store_true", help="Allow approved item mints when warnings are present.")
+    mint_batch.add_argument("--skip-existing", action="store_true", help="Skip items whose canonical, mint receipt, and draft snapshot already exist.")
+    mint_batch.add_argument("--max-items", type=int, default=500, help="Maximum item count accepted from the plan.")
+    mint_batch.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    mint_batch.set_defaults(func=command_mint_zettel_batch)
+
     retire_draft = subcommands.add_parser(
         "retire-draft",
         aliases=["retire-minted-draft"],
@@ -11490,6 +11559,21 @@ def build_parser() -> argparse.ArgumentParser:
     retire_draft.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
     retire_draft.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     retire_draft.set_defaults(func=command_retire_draft)
+
+    retire_draft_batch = subcommands.add_parser(
+        "retire-draft-batch",
+        aliases=["retire-minted-draft-batch", "bulk-retire", "bulk-retire-draft"],
+        help="Preview or approve retiring many already minted inbox drafts from one JSON plan in one process.",
+    )
+    retire_draft_batch.add_argument("archive_root", help="Archive root to update.")
+    retire_draft_batch.add_argument("--plan", required=True, help="JSON plan file with items containing zettel_id or path.")
+    retire_draft_batch.add_argument("--dry-run", action="store_true", help="Verify batch retirement evidence without writing or deleting.")
+    retire_draft_batch.add_argument("--approve", action="store_true", help="Remove verified inbox drafts and write retire receipts.")
+    retire_draft_batch.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
+    retire_draft_batch.add_argument("--skip-existing", action="store_true", help="Skip items whose draft is already gone and retire receipt exists.")
+    retire_draft_batch.add_argument("--max-items", type=int, default=500, help="Maximum item count accepted from the plan.")
+    retire_draft_batch.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    retire_draft_batch.set_defaults(func=command_retire_draft_batch)
 
     index = subcommands.add_parser("index", help="Build a generated local SQLite search index.")
     index.add_argument("archive_root", help="Archive root to index.")
