@@ -18006,6 +18006,205 @@ def notion_client_issue_verification_next_actions(summary: dict[str, Any]) -> li
     ]
 
 
+def notion_client_fixture_request_plan(
+    archive_root: Path | str,
+    *,
+    tree_path: str | None = None,
+    mirror_path: str | None = None,
+    ancestors_path: str | None = None,
+    source: str = "notion",
+    scenario: str = "missing_ancestor",
+    dry_run: bool = True,
+    max_items: int = 100000,
+    max_depth: int = 16,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("notion-client-fixture-request-plan is read-only and requires --dry-run.")
+
+    normalized_source = str(source or "").strip().lower().replace("-", "_")
+    if normalized_source not in NOTION_NESTED_TREE_SOURCES:
+        blockers.append("source must be one of: " + ", ".join(sorted(NOTION_NESTED_TREE_SOURCES)) + ".")
+        normalized_source = "notion"
+
+    normalized_scenario = str(scenario or "").strip().lower().replace("-", "_")
+    if normalized_scenario not in {"missing_ancestor", "nested_tree", "block_mirror", "ancestor_merge"}:
+        blockers.append("scenario must be one of: missing_ancestor, nested_tree, block_mirror, ancestor_merge.")
+        normalized_scenario = "missing_ancestor"
+
+    verification_preview: dict[str, Any] = {}
+    if (tree_path or mirror_path or ancestors_path) and not blockers:
+        verification_preview = notion_client_issue_verification_plan(
+            root,
+            tree_path=tree_path,
+            mirror_path=mirror_path,
+            ancestors_path=ancestors_path,
+            source=normalized_source,
+            dry_run=True,
+            max_items=max_items,
+            max_depth=max_depth,
+        )
+        warnings.extend(str(item) for item in verification_preview.get("warnings", []))
+        if not verification_preview.get("ok"):
+            blockers.extend(str(item) for item in verification_preview.get("blockers", []))
+
+    request_package = notion_client_fixture_request_package(
+        source=normalized_source,
+        scenario=normalized_scenario,
+        verification_preview=verification_preview,
+    )
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "notion_client_fixture_request_plan",
+        "archive_id": archive_id,
+        "plan_state": "client_fixture_request_with_verification_ready"
+        if verification_preview and not blockers
+        else ("client_fixture_request_ready" if not blockers else "blocked"),
+        "source": normalized_source,
+        "scenario": normalized_scenario,
+        "request_package": request_package,
+        "verification_preview": {} if blockers else verification_preview,
+        "current_capability": {
+            "client_fixture_request_package_available": True,
+            "client_sanitized_fixture_verification_available": True,
+            "provider_api_call_implemented": False,
+            "oauth_started": False,
+            "live_deep_crawl_adapter_implemented": False,
+            "fixture_writer_implemented": False,
+            "mint_or_import_writer_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "page_titles_read": False,
+            "page_bodies_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "client_message_sent": False,
+            "fixture_written": False,
+            "zettels_written": False,
+            "edges_written": False,
+            "receipts_written": False,
+            "object_manifest_updated": False,
+        },
+        "privacy_guards": notion_tree_privacy_guards(),
+        "would_change": [],
+        "next_safe_actions": [
+            "Send only the request_package fixture contract to a human or credential-bounded adapter.",
+            "Do not ask for page titles, page bodies, comments, media, provider URLs, local paths, account ids, emails, tokens, or secret values.",
+            "After a sanitized fixture is returned, run notion-client-issue-verification-plan before any recovery or minting.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def notion_client_fixture_request_package(
+    *,
+    source: str,
+    scenario: str,
+    verification_preview: dict[str, Any],
+) -> dict[str, Any]:
+    verification_state = str(verification_preview.get("plan_state") or "") if verification_preview else ""
+    if verification_state == "client_issue_reproduced_missing_ancestor_evidence_needed":
+        requested_next_fixture = "notion_ancestor_result_fixture"
+    elif verification_state == "client_issue_verified_closed_by_sanitized_ancestor_merge":
+        requested_next_fixture = "none"
+    elif scenario == "block_mirror":
+        requested_next_fixture = "notion_block_mirror_fixture"
+    else:
+        requested_next_fixture = "notion_nested_tree_fixture"
+
+    return {
+        "package_kind": "notion_client_fixture_request_package",
+        "source": source,
+        "scenario": scenario,
+        "requested_next_fixture": requested_next_fixture,
+        "accepted_fixture_kinds": [
+            "notion_nested_tree_fixture",
+            "notion_block_mirror_fixture",
+            "notion_ancestor_result_fixture",
+        ],
+        "minimal_nested_tree_fixture": {
+            "fixture_kind": "notion_nested_tree_fixture",
+            "required_top_level_fields": ["fixture_kind", "source", "generation_roots", "nodes"],
+            "optional_top_level_fields": ["minted_refs"],
+            "generation_root_fields": ["generation_id", "root_ref", "generation_label"],
+            "node_fields": [
+                "node_ref",
+                "parent_ref",
+                "node_kind",
+                "source_status",
+                "review_status",
+                "content_class",
+                "mint_state",
+                "containment_source_ref",
+                "declared_generation_id",
+            ],
+        },
+        "minimal_block_mirror_fixture": {
+            "fixture_kind": "notion_block_mirror_fixture",
+            "required_top_level_fields": ["fixture_kind", "source", "generation_roots", "blocks"],
+            "optional_top_level_fields": ["minted_refs"],
+            "record_fields": [
+                "node_ref",
+                "id",
+                "parent_ref",
+                "parent_id",
+                "parent_type",
+                "node_kind",
+                "type",
+                "block_type",
+                "source_status",
+                "archived",
+                "in_trash",
+                "trashed",
+                "mint_state",
+                "review_status",
+                "containment_source_ref",
+                "declared_generation_id",
+                "content_class",
+            ],
+        },
+        "minimal_ancestor_result_fixture": {
+            "fixture_kind": "notion_ancestor_result_fixture",
+            "required_top_level_fields": ["fixture_kind", "source", "nodes"],
+            "node_fields": [
+                "node_ref",
+                "parent_ref",
+                "node_kind",
+                "source_status",
+                "review_status",
+                "content_class",
+                "mint_state",
+                "containment_source_ref",
+                "declared_generation_id",
+            ],
+        },
+        "redaction_checklist": [
+            "Do not include page titles.",
+            "Do not include page bodies.",
+            "Do not include comments.",
+            "Do not include media, attachment bytes, thumbnails, or OCR text.",
+            "Do not include provider URLs, workspace URLs, local absolute paths, raw export paths, account ids, emails, tokens, or secret values.",
+            "Use safe synthetic refs such as page:<id>, database:<id>, view:<id>, block:<id>, or already reviewed safe refs.",
+        ],
+        "recommended_commands_after_receipt": [
+            "archive notion-client-issue-verification-plan <archive-root> --tree workbench/<client-tree>.json --source notion --dry-run --format json",
+            "archive notion-client-issue-verification-plan <archive-root> --tree workbench/<client-tree>.json --ancestors workbench/<client-ancestors>.json --source notion --dry-run --format json",
+            "archive notion-client-issue-verification-plan <archive-root> --mirror workbench/<client-mirror>.json --source notion --dry-run --format json",
+        ],
+        "current_verification_state": verification_state or "not_run",
+    }
+
+
 def read_safe_archive_json_fixture(
     root: Path,
     relative_path: str,
@@ -28054,6 +28253,10 @@ def ai_response_concept_guide(
                 "command": "archive notion-client-issue-verification-plan <archive-root> --tree workbench/notion-nested-tree.sample.json --ancestors workbench/notion-ancestor-result.sample.json --source notion --dry-run --format json",
             },
             {
+                "human_intent": "request the minimal sanitized fixtures needed to verify a client nested-tree issue",
+                "command": "archive notion-client-fixture-request-plan <archive-root> --source notion --dry-run --format json",
+            },
+            {
                 "human_intent": "upload or sync bytes",
                 "command": "future work until a later release explicitly adds an approval-gated adapter",
             },
@@ -28094,6 +28297,7 @@ def ai_response_concept_guide(
             "notion_block_mirror_tree_fixture_planning_available": True,
             "notion_ancestor_merge_replan_available": True,
             "notion_client_issue_verification_available": True,
+            "notion_client_fixture_request_package_available": True,
             "mcp_tool_available": False,
             "object_upload_adapter_implemented": False,
             "provider_availability_probe_implemented": False,
@@ -28114,6 +28318,7 @@ def ai_response_concept_guide(
             "notion-block-mirror-tree-fixture-plan",
             "notion-ancestor-merge-plan",
             "notion-client-issue-verification-plan",
+            "notion-client-fixture-request-plan",
             "beginner-setup-manual",
         ],
         "closed_actions": {

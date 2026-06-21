@@ -1682,6 +1682,25 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "notion_client_fixture_request_plan",
+        "description": "Package the sanitized fixture request contract for client Notion issue verification. Dry-run only; never sends messages, calls providers, reads titles or bodies, or writes fixtures.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "tree": {"type": "string"},
+                "mirror": {"type": "string"},
+                "ancestors": {"type": "string"},
+                "source": {"type": "string", "enum": sorted(archive_services.NOTION_NESTED_TREE_SOURCES)},
+                "scenario": {"type": "string", "enum": ["missing_ancestor", "nested_tree", "block_mirror", "ancestor_merge"], "default": "missing_ancestor"},
+                "max_items": {"type": "integer", "minimum": 1, "maximum": archive_services.NOTION_NESTED_TREE_MAX_ITEMS_LIMIT, "default": archive_services.NOTION_NESTED_TREE_MAX_ITEMS_LIMIT},
+                "max_depth": {"type": "integer", "minimum": 1, "maximum": 64, "default": 16},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "source"],
+        },
+    },
+    {
         "name": "list_sources",
         "description": "List registered source bindings and current source map status.",
         "inputSchema": {
@@ -2735,6 +2754,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_notion_ancestor_merge_plan(arguments)
     if name == "notion_client_issue_verification_plan":
         return tool_notion_client_issue_verification_plan(arguments)
+    if name == "notion_client_fixture_request_plan":
+        return tool_notion_client_fixture_request_plan(arguments)
     if name == "list_sources":
         return tool_list_sources(arguments)
     if name == "source_scan_plan":
@@ -4223,6 +4244,26 @@ def tool_notion_client_issue_verification_plan(arguments: dict[str, Any]) -> dic
     )
     state = result.get("plan_state") or ("passed" if result["ok"] else "blocked")
     return tool_success_result(f"notion_client_issue_verification_plan: {state}.", result)
+
+
+def tool_notion_client_fixture_request_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("notion_client_fixture_request_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.notion_client_fixture_request_plan,
+        archive_root,
+        tree_path=optional_string_arg(arguments, "tree"),
+        mirror_path=optional_string_arg(arguments, "mirror"),
+        ancestors_path=optional_string_arg(arguments, "ancestors"),
+        source=require_string_arg(arguments, "source"),
+        scenario=optional_string_arg(arguments, "scenario") or "missing_ancestor",
+        max_items=int(arguments.get("max_items", archive_services.NOTION_NESTED_TREE_MAX_ITEMS_LIMIT)),
+        max_depth=int(arguments.get("max_depth", 16)),
+        dry_run=True,
+    )
+    state = result.get("plan_state") or ("passed" if result["ok"] else "blocked")
+    return tool_success_result(f"notion_client_fixture_request_plan: {state}.", result)
 
 
 def tool_list_sources(arguments: dict[str, Any]) -> dict[str, Any]:
