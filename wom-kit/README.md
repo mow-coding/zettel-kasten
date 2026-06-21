@@ -213,7 +213,7 @@ external-export-plan
   Plan a text-first Notion, Google Drive, or generic workspace export before large media downloads. Dry-run only; detects the broad workspace/database export trap, returns safe text-only and targeted first-pass command shapes, starts no export, calls no providers, reads no files, downloads no attachments, writes nothing, and echoes no provider URLs or local paths.
 
 connection-import-plan
-  Plan Notion connection evidence import into WOM typed-edge candidates. Dry-run only; maps relation properties, synced block references, database view/filter snapshots, internal links, page mentions, comment context, and objet embeds to the base connection edge vocabulary without calling Notion, reading exports, writing zets, writing edges, writing receipts, or echoing provider URLs or local paths.
+  Plan Notion connection evidence import into WOM typed-edge candidates. Dry-run only; maps relation properties, synced block references, database view/filter snapshots, internal links, page mentions, comment context, objet embeds, and notion_containment child page/database/view nesting to the base connection edge vocabulary including contains, with model-gap escalation instead of forced edge-type coercion, without calling Notion, reading exports, writing zets, writing edges, writing receipts, or echoing provider URLs or local paths.
 
 connection-evidence-parser-contract
   Preview the future Notion connection evidence parser contract. Dry-run only; defines accepted input lanes, candidate edge record fields, static snapshot requirements, parser stages, and redaction rules without calling Notion, reading exports, reading comments, downloading media, executing a parser, writing candidate records, writing zets, writing edges, writing receipts, updating manifests, or echoing provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
@@ -1177,6 +1177,15 @@ budget without echoing file contents. `archive ai-usage-record
 receipts by runtime, model, and purpose. This does not call LLM providers,
 retrieve live provider billing, store prompts, store responses, or enforce hard
 runtime budgets yet; it gives WOM a local token-accounting ledger baseline.
+v0.3.123 adds a dedicated containment edge vocabulary checkpoint. The base and
+fake archive `types.yml` files now include `contains` for structural child
+page, child database, collection view, or nested archive containment.
+`connection-import-plan`, the parser contract, the sanitized fixture parser,
+and connection edge intelligence now understand `notion_containment` evidence
+and map it to `contains` instead of forcing it into `view_query`, `references`,
+`material`, or `inherited_by`. `ai-response-concept-guide` also explains this
+as a model-gap escalation rule: if no active edge type fits, pause for a
+developer decision before writing durable edges.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

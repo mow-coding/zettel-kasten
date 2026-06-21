@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.123 - 2026-06-21
+
+- Added dedicated `contains` link type definitions to the base and fake archive
+  `zettel-kasten/types.yml` files for structural child page, child database,
+  collection view, or nested archive containment.
+- Extended Notion connection planning, the parser contract, sanitized fixture
+  parsing, and connection edge intelligence with `notion_containment` evidence
+  that maps to `contains`.
+- Added a model-gap escalation guard so AI runtimes and future parsers should
+  stop and report developer decision required instead of silently coercing
+  containment into `view_query`, `references`, `material`, or `inherited_by`.
+- Updated `ai-response-concept-guide`, the capability matrix, README summaries,
+  and CLI/doc tests so beginner-facing explanations name containment as a
+  structural relation without adding provider reads or durable edge writes.
+
 ## v0.3.122 - 2026-06-21
 
 - Added `archive ai-usage-plan --dry-run` to estimate explicit archive-relative

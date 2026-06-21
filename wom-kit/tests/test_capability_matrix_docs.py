@@ -736,6 +736,73 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, release_text)
 
+    def test_containment_link_type_is_documented_with_model_gap_guardrail(self) -> None:
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.123.md").read_text(encoding="utf-8")
+        guide_text = AI_RESPONSE_CONCEPT_GUIDE_PATH.read_text(encoding="utf-8")
+        connection_text = CONNECTION_IMPORT_PLAN_PATH.read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.123 containment link type and model-gap escalation checkpoint",
+            "`contains` for structural child page/database containment",
+            "`notion_containment` child page/database/view nesting",
+            "model-gap escalation",
+            "developer decision required",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.123 pre-release",
+            "base connection edge vocabulary including `contains`",
+            "model-gap escalation when no active edge type fits",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        for phrase in (
+            "v0.3.123 adds a dedicated containment edge vocabulary checkpoint",
+            "notion_containment",
+            "contains",
+            "model-gap escalation",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, kit_readme_text)
+        for phrase in (
+            "v0.3.123 - 2026-06-21",
+            "dedicated `contains` link type",
+            "`notion_containment` evidence",
+            "developer decision required",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, changelog_text)
+        for phrase in (
+            "# v0.3.123 - Containment Link Type",
+            "parent page or zet contains child page",
+            "`notion_containment` evidence and maps it to `contains`",
+            "Report a model gap and ask for a developer decision",
+            "does not",
+            "read real exports",
+            "write durable edges by itself",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
+        for phrase in (
+            "`contains` explanation",
+            "model-gap escalation guard",
+            "structural containment has its own `contains` meaning",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, guide_text)
+        for phrase in (
+            "notion_containment",
+            "child page/database/view nesting",
+            "`contains` is for structural nesting",
+            "developer decision",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, connection_text)
+
     def test_capability_matrix_documents_closing_plan_without_product_behavior(self) -> None:
         text = MATRIX_PATH.read_text(encoding="utf-8")
         self.assertIn("v0.3.0 Boundary Status", text)
@@ -891,16 +958,20 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Status: v0.3.79 read-only connection edge vocabulary checkpoint",
             "archive connection-import-plan <archive-root>",
             "relation_property",
+            "notion_containment",
             "synced_block_reference",
             "database_view_filter",
             "internal_url_hyperlink",
             "mention_page",
             "comment_context",
             "objet_embed",
+            "`contains`",
             "`material`, `derived`",
             "`view_query`",
             "recommended edge types are allowed link types",
             "The WOM-kit base and fake archive",
+            "model gap",
+            "developer decision",
             "Dynamic Snapshot Rule",
             "call Notion",
             "write edges",
@@ -913,8 +984,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Connection import plan",
             "archive connection-import-plan --source notion --connection-kind all --dry-run",
             "MCP `connection_import_plan`",
-            "`material`, `derived`, `semantic`, `embed`, `mention`, `supersedes`, `view_query`, `comment_context`",
+            "`material`, `derived`, `semantic`, `embed`, `mention`, `contains`, `supersedes`, `view_query`, `comment_context`",
             "The base `zettel-kasten/types.yml` now defines the recommended connection edge vocabulary",
+            "notion_containment",
+            "model-gap escalation",
             "write no edges",
             "comment bodies",
         ):
@@ -947,7 +1020,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                     or phrase in release_text
                     or phrase in latest_release_text
                 )
-        for edge_type in ("material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"):
+        for edge_type in ("material", "derived", "semantic", "embed", "mention", "contains", "view_query", "comment_context"):
             with self.subTest(edge_type=edge_type):
                 self.assertIn(f"- id: {edge_type}", base_types_text)
                 self.assertIn(f"- id: {edge_type}", fake_types_text)
@@ -969,11 +1042,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "connection_evidence_parser_contract",
             "relation_property",
             "database_view_filter",
+            "notion_containment",
             "comment_context",
             "objet_embed",
             "candidate_id",
             "review_status",
             "Dynamic view/filter and comment-context evidence must include reviewed static",
+            "model-gap review",
             "execute a parser",
             "write candidate edge records",
             "comment bodies",
@@ -1049,7 +1124,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Connection evidence fixture parser",
             "archive connection-evidence-parse-fixture --evidence workbench/connection-evidence.sample.json --source notion --connection-kind all --dry-run",
             "MCP `connection_evidence_parse_fixture`",
-            "8 fixture records emit 9 candidate previews",
+            "9 fixture records emit 11 candidate previews",
             "reads no real source exports",
         ):
             with self.subTest(phrase=phrase):
@@ -1086,6 +1161,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             '"connection_kind": "database_view_filter"',
             '"connection_kind": "comment_context"',
             '"connection_kind": "objet_embed"',
+            '"connection_kind": "notion_containment"',
+            '"child_refs"',
             '"review_status": "fixture_reviewed"',
         ):
             with self.subTest(phrase=phrase):
@@ -1110,6 +1187,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "relationship_meaning",
             "Version Chain Heuristic",
             "version_replacement",
+            "structural_containment",
+            "contains",
             "supersedes",
             "Review Counters",
             "human_review_required_count",
@@ -1119,6 +1198,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "responds_to",
             "fulfills",
             "enabling",
+            "model gaps",
             "call an LLM",
             "write edges",
         ):
@@ -1131,6 +1211,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "source_mechanism",
             "relationship_meaning",
             "version_replacement",
+            "structural_containment",
             "supersedes",
             "review_summary",
             "human_review_required_count",

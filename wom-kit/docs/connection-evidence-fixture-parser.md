@@ -75,7 +75,12 @@ The sample fixture covers:
 - `internal_url_hyperlink` -> `semantic`,
 - `mention_page` -> `mention`,
 - `comment_context` -> `comment_context`,
-- `objet_embed` -> `embed`.
+- `objet_embed` -> `embed`,
+- `notion_containment` -> `contains`.
+
+The current sample has 9 fixture records and emits 11 candidate previews: the
+database-view fixture has two result refs, and the containment fixture has two
+child refs.
 
 ## Closed Actions
 

@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.3.41 pre-release
+v0.3.123 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -36,6 +36,7 @@ v0.3.41 pre-release
 - runtime context, profile, source/objet intake, block header, prompt boundary, foreign block review, projection, shared update review/index, shared update route preview, ZET would-transport planning을 위한 read-only preview layer,
 - derived-text coverage/toolchain/doctor/agent-contract read-only gate, PATH에 없는 로컬 추출 도구를 위한 비공개 tool-hint path, 그리고 사람 승인 뒤에만 동작하는 일부 local write path,
 - read-only objet reference resolution 및 zettel objet link preview,
+- Notion child page/database/view 구조를 `contains` edge type으로 다루는 read-only connection planning과, 맞는 edge type이 없을 때 AI가 억지 매핑하지 않고 model gap으로 올리는 안전 가드,
 - mail, OpenAI API, OCR API 등을 위한 read-only beginner setup manual, connected accounts bridge, credential reference planning, inventory, external store recommendation, vault onboarding planning, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, CLI-only KeePassXC write execution with non-secret execution receipts, adapter readiness planning, adapter manifest preview, adapter audit receipt preview,
 - public link, Korean product language, privacy, release readiness, branch-protection planning을 위한 local hygiene tool.
 
@@ -216,6 +217,88 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.3.123
+v0.3.122
+v0.3.121
+v0.3.120
+v0.3.119
+v0.3.118
+v0.3.117
+v0.3.116
+v0.3.115
+v0.3.114
+v0.3.113
+v0.3.112
+v0.3.111
+v0.3.110
+v0.3.109
+v0.3.108
+v0.3.107
+v0.3.106
+v0.3.105
+v0.3.104
+v0.3.103
+v0.3.102
+v0.3.101
+v0.3.100
+v0.3.99
+v0.3.98
+v0.3.97
+v0.3.96
+v0.3.95
+v0.3.94
+v0.3.93
+v0.3.92
+v0.3.91
+v0.3.90
+v0.3.89
+v0.3.88
+v0.3.87
+v0.3.86
+v0.3.85
+v0.3.84
+v0.3.83
+v0.3.82
+v0.3.81
+v0.3.80
+v0.3.79
+v0.3.78
+v0.3.77
+v0.3.76
+v0.3.75
+v0.3.74
+v0.3.73
+v0.3.72
+v0.3.71
+v0.3.70
+v0.3.69
+v0.3.68
+v0.3.67
+v0.3.66
+v0.3.65
+v0.3.64
+v0.3.63
+v0.3.62
+v0.3.61
+v0.3.60
+v0.3.59
+v0.3.58
+v0.3.57
+v0.3.56
+v0.3.55
+v0.3.54
+v0.3.53
+v0.3.52
+v0.3.51
+v0.3.50
+v0.3.49
+v0.3.48
+v0.3.47
+v0.3.46
+v0.3.45
+v0.3.44
+v0.3.43
+v0.3.42
 v0.3.41
 v0.3.38
 v0.3.37
