@@ -48,6 +48,8 @@ CONNECTION_EVIDENCE_FIXTURE_PARSER_PATH = KIT_ROOT / "docs" / "connection-eviden
 CONNECTION_EDGE_INTELLIGENCE_PATH = KIT_ROOT / "docs" / "connection-edge-intelligence-plan.md"
 NOTION_NESTED_TREE_PLAN_PATH = KIT_ROOT / "docs" / "notion-nested-tree-plan.md"
 NOTION_ANCESTOR_CRAWL_PLAN_PATH = KIT_ROOT / "docs" / "notion-ancestor-crawl-plan.md"
+NOTION_BLOCK_MIRROR_TREE_FIXTURE_PLAN_PATH = KIT_ROOT / "docs" / "notion-block-mirror-tree-fixture-plan.md"
+NOTION_ANCESTOR_MERGE_PLAN_PATH = KIT_ROOT / "docs" / "notion-ancestor-merge-plan.md"
 ZETTEL_EDGE_WRITE_PATH = KIT_ROOT / "docs" / "zettel-edge-write.md"
 ZETTEL_EDGE_BATCH_PATH = KIT_ROOT / "docs" / "zettel-edge-batch.md"
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
@@ -1290,14 +1292,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.125 pre-release",
+            "v0.3.126 pre-release",
             "read-only Notion nested tree recovery planning",
             "reports untraceable parent chains instead of guessing from partial mirrors",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "v0.3.125 pre-release",
+            "v0.3.126 pre-release",
             "read-only nested tree recovery planning",
             "추적불능 parent chain",
         ):
@@ -1357,14 +1359,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.125 pre-release",
+            "v0.3.126 pre-release",
             "read-only Notion ancestor crawl request planning",
             "blocks oversized nested-tree fixtures instead of returning partial success",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "v0.3.125 pre-release",
+            "v0.3.126 pre-release",
             "조상 crawl 요청 큐",
             "부분 성공으로 위장하지 않도록 차단",
         ):
@@ -1384,6 +1386,85 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "notion_ancestor_crawl_plan",
             "crawl_request_queue",
             "read-only `archive notion-ancestor-crawl-plan --dry-run`",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(phrase in release_text or phrase in changelog_text)
+
+    def test_notion_block_mirror_and_ancestor_merge_are_documented_as_local_recovery_loop(self) -> None:
+        mirror_text = NOTION_BLOCK_MIRROR_TREE_FIXTURE_PLAN_PATH.read_text(encoding="utf-8")
+        merge_text = NOTION_ANCESTOR_MERGE_PLAN_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.126.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.126 read-only reviewed block-mirror fixture checkpoint",
+            "archive notion-block-mirror-tree-fixture-plan",
+            "notion_block_mirror_tree_fixture_plan",
+            "nested_tree_fixture_preview",
+            "nested_tree_plan_preview",
+            "does not read page titles",
+            "write a fixture",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, mirror_text)
+        for phrase in (
+            "Status: v0.3.126 read-only sanitized ancestor merge and replan checkpoint",
+            "archive notion-ancestor-merge-plan",
+            "notion_ancestor_merge_plan",
+            "merged_tree_fixture_preview",
+            "nested_tree_plan_after_merge",
+            "does not call Notion",
+            "write or merge fixture files",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, merge_text)
+        for phrase in (
+            "Status: v0.3.126 Notion local tree fixture and ancestor merge checkpoint",
+            "Notion block mirror tree fixture plan",
+            "Notion ancestor merge plan",
+            "archive notion-block-mirror-tree-fixture-plan --mirror workbench/notion-block-mirror.sample.json --source notion --dry-run",
+            "archive notion-ancestor-merge-plan --tree workbench/notion-nested-tree.sample.json --ancestors workbench/notion-ancestor-result.sample.json --source notion --dry-run",
+            "notion_block_mirror_tree_fixture_plan",
+            "notion_ancestor_merge_plan",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.126 pre-release",
+            "builds nested tree fixture previews from reviewed block mirror metadata",
+            "merges sanitized ancestor result nodes with immediate after-merge replanning",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        for phrase in (
+            "v0.3.126 pre-release",
+            "reviewed block mirror",
+            "merge/replan",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_ko_text)
+        for phrase in (
+            "docs/notion-block-mirror-tree-fixture-plan.md",
+            "docs/notion-ancestor-merge-plan.md",
+            "notion-block-mirror-tree-fixture-plan",
+            "notion-ancestor-merge-plan",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, kit_readme_text)
+        self.assertIn("[Notion Block Mirror Tree Fixture Plan](notion-block-mirror-tree-fixture-plan.md)", public_map_text)
+        self.assertIn("[Notion Ancestor Merge Plan](notion-ancestor-merge-plan.md)", public_map_text)
+        self.assertIn("[Notion Block Mirror Tree Fixture Plan](notion-block-mirror-tree-fixture-plan.md)", public_map_ko_text)
+        self.assertIn("[Notion Ancestor Merge Plan](notion-ancestor-merge-plan.md)", public_map_ko_text)
+        for phrase in (
+            "# v0.3.126 - Notion Local Tree Fixture And Ancestor Merge",
+            "notion_block_mirror_tree_fixture_plan",
+            "notion_ancestor_merge_plan",
+            "local and read-only",
         ):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in release_text or phrase in changelog_text)

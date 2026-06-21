@@ -1610,7 +1610,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "archive_root": {"type": "string"},
                 "tree": {"type": "string"},
                 "source": {"type": "string", "enum": sorted(archive_services.NOTION_NESTED_TREE_SOURCES)},
-                "max_items": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 1000},
+                "max_items": {"type": "integer", "minimum": 1, "maximum": archive_services.NOTION_NESTED_TREE_MAX_ITEMS_LIMIT, "default": 1000},
                 "dry_run": {"type": "boolean", "default": True},
             },
             "required": ["archive_root", "tree", "source"],
@@ -1630,6 +1630,37 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "dry_run": {"type": "boolean", "default": True},
             },
             "required": ["archive_root", "tree", "source"],
+        },
+    },
+    {
+        "name": "notion_block_mirror_tree_fixture_plan",
+        "description": "Build a sanitized nested tree fixture preview from reviewed Notion block mirror metadata. Dry-run only; never calls providers, reads titles or bodies, or writes fixtures.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "mirror": {"type": "string"},
+                "source": {"type": "string", "enum": sorted(archive_services.NOTION_NESTED_TREE_SOURCES)},
+                "max_items": {"type": "integer", "minimum": 1, "maximum": archive_services.NOTION_NESTED_TREE_MAX_ITEMS_LIMIT, "default": archive_services.NOTION_NESTED_TREE_MAX_ITEMS_LIMIT},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "mirror", "source"],
+        },
+    },
+    {
+        "name": "notion_ancestor_merge_plan",
+        "description": "Merge sanitized ancestor result nodes into a nested tree fixture preview and replan. Dry-run only; never calls providers, reads titles or bodies, or writes fixtures.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "tree": {"type": "string"},
+                "ancestors": {"type": "string"},
+                "source": {"type": "string", "enum": sorted(archive_services.NOTION_NESTED_TREE_SOURCES)},
+                "max_items": {"type": "integer", "minimum": 1, "maximum": archive_services.NOTION_NESTED_TREE_MAX_ITEMS_LIMIT, "default": archive_services.NOTION_NESTED_TREE_MAX_ITEMS_LIMIT},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "tree", "ancestors", "source"],
         },
     },
     {
@@ -2680,6 +2711,10 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_notion_nested_tree_plan(arguments)
     if name == "notion_ancestor_crawl_plan":
         return tool_notion_ancestor_crawl_plan(arguments)
+    if name == "notion_block_mirror_tree_fixture_plan":
+        return tool_notion_block_mirror_tree_fixture_plan(arguments)
+    if name == "notion_ancestor_merge_plan":
+        return tool_notion_ancestor_merge_plan(arguments)
     if name == "list_sources":
         return tool_list_sources(arguments)
     if name == "source_scan_plan":
@@ -4116,6 +4151,39 @@ def tool_notion_ancestor_crawl_plan(arguments: dict[str, Any]) -> dict[str, Any]
     )
     state = result.get("plan_state") or ("passed" if result["ok"] else "blocked")
     return tool_success_result(f"notion_ancestor_crawl_plan: {state}.", result)
+
+
+def tool_notion_block_mirror_tree_fixture_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("notion_block_mirror_tree_fixture_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.notion_block_mirror_tree_fixture_plan,
+        archive_root,
+        mirror_path=require_string_arg(arguments, "mirror"),
+        source=require_string_arg(arguments, "source"),
+        max_items=int(arguments.get("max_items", archive_services.NOTION_NESTED_TREE_MAX_ITEMS_LIMIT)),
+        dry_run=True,
+    )
+    state = result.get("plan_state") or ("passed" if result["ok"] else "blocked")
+    return tool_success_result(f"notion_block_mirror_tree_fixture_plan: {state}.", result)
+
+
+def tool_notion_ancestor_merge_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("notion_ancestor_merge_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.notion_ancestor_merge_plan,
+        archive_root,
+        tree_path=require_string_arg(arguments, "tree"),
+        ancestors_path=require_string_arg(arguments, "ancestors"),
+        source=require_string_arg(arguments, "source"),
+        max_items=int(arguments.get("max_items", archive_services.NOTION_NESTED_TREE_MAX_ITEMS_LIMIT)),
+        dry_run=True,
+    )
+    state = result.get("plan_state") or ("passed" if result["ok"] else "blocked")
+    return tool_success_result(f"notion_ancestor_merge_plan: {state}.", result)
 
 
 def tool_list_sources(arguments: dict[str, Any]) -> dict[str, Any]:

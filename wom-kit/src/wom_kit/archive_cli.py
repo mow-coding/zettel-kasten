@@ -71,6 +71,10 @@ Commands:
           Plan Notion nested child-page recovery from a sanitized tree fixture.
   notion-ancestor-crawl-plan
           Plan missing Notion ancestor crawl requests from a sanitized nested tree fixture.
+  notion-block-mirror-tree-fixture-plan
+          Build a sanitized nested tree fixture preview from reviewed Notion block mirror metadata.
+  notion-ancestor-merge-plan
+          Merge sanitized ancestor result nodes into a nested tree fixture preview and replan.
   imap-mailbox-operation-request-plan
           Compose the read-only approval request package before any future IMAP mailbox operation.
   imap-mailbox-plan
@@ -3135,6 +3139,95 @@ def command_notion_ancestor_crawl_plan(args: argparse.Namespace) -> int:
             print("Next safe actions:")
             for action in result["next_safe_actions"]:
                 print(f"- {action}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_notion_block_mirror_tree_fixture_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("notion-block-mirror-tree-fixture-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.notion_block_mirror_tree_fixture_plan(
+            Path(args.archive_root),
+            mirror_path=args.mirror,
+            source=args.source,
+            dry_run=args.dry_run,
+            max_items=args.max_items,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("plan_state") or ("passed" if result.get("ok") else "blocked")
+        mirror = result.get("mirror_summary") if isinstance(result.get("mirror_summary"), dict) else {}
+        preview = result.get("nested_tree_plan_preview") if isinstance(result.get("nested_tree_plan_preview"), dict) else {}
+        summary = preview.get("recovery_summary") if isinstance(preview.get("recovery_summary"), dict) else {}
+        print(f"Notion block mirror tree fixture plan: {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source: {result.get('source') or '-'}")
+        print(f"Mirror records: {mirror.get('processed_record_count', 0)}/{mirror.get('declared_record_count', 0)}")
+        print(f"Preview leaf nodes: {summary.get('leaf_count', 0)}")
+        print(f"Preview recovery leaves: {summary.get('missing_live_content_leaf_count', 0)}")
+        print(f"Preview hold leaves: {summary.get('hold_leaf_count', 0)}")
+        print("Provider API call: no")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_notion_ancestor_merge_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("notion-ancestor-merge-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.notion_ancestor_merge_plan(
+            Path(args.archive_root),
+            tree_path=args.tree,
+            ancestors_path=args.ancestors,
+            source=args.source,
+            dry_run=args.dry_run,
+            max_items=args.max_items,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("plan_state") or ("passed" if result.get("ok") else "blocked")
+        merge = result.get("merge_summary") if isinstance(result.get("merge_summary"), dict) else {}
+        preview = result.get("nested_tree_plan_after_merge") if isinstance(result.get("nested_tree_plan_after_merge"), dict) else {}
+        summary = preview.get("recovery_summary") if isinstance(preview.get("recovery_summary"), dict) else {}
+        print(f"Notion ancestor merge plan: {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source: {result.get('source') or '-'}")
+        print(f"Added ancestors: {merge.get('added_node_count', 0)}")
+        print(f"Conflicts: {merge.get('conflict_count', 0)}")
+        print(f"After-merge recovery leaves: {summary.get('missing_live_content_leaf_count', 0)}")
+        print(f"After-merge hold leaves: {summary.get('hold_leaf_count', 0)}")
+        print("Provider API call: no")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
 
 
@@ -12787,6 +12880,73 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notion_ancestor_crawl_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     notion_ancestor_crawl_plan.set_defaults(func=command_notion_ancestor_crawl_plan)
+
+    notion_block_mirror_tree_fixture_plan = subcommands.add_parser(
+        "notion-block-mirror-tree-fixture-plan",
+        aliases=["notion-nested-tree-fixture-plan", "notion-mirror-tree-fixture-plan"],
+        help="Build a sanitized nested tree fixture preview from reviewed Notion block mirror metadata.",
+    )
+    notion_block_mirror_tree_fixture_plan.add_argument("archive_root", help="Archive root to inspect.")
+    notion_block_mirror_tree_fixture_plan.add_argument(
+        "--mirror",
+        required=True,
+        help="Archive-relative reviewed Notion block mirror fixture JSON path. Absolute paths and provider URLs are rejected.",
+    )
+    notion_block_mirror_tree_fixture_plan.add_argument(
+        "--source",
+        required=True,
+        choices=sorted(archive_services.NOTION_NESTED_TREE_SOURCES),
+        help="External block mirror source declared by the fixture.",
+    )
+    notion_block_mirror_tree_fixture_plan.add_argument(
+        "--max-items",
+        type=int,
+        default=100000,
+        help="Maximum mirror records to parse. Range 1-100000. Oversized mirrors block instead of returning partial fixtures.",
+    )
+    notion_block_mirror_tree_fixture_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Builds a sanitized fixture preview only; never calls providers, reads titles or bodies, or writes fixtures.",
+    )
+    notion_block_mirror_tree_fixture_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    notion_block_mirror_tree_fixture_plan.set_defaults(func=command_notion_block_mirror_tree_fixture_plan)
+
+    notion_ancestor_merge_plan = subcommands.add_parser(
+        "notion-ancestor-merge-plan",
+        aliases=["notion-nested-tree-merge-plan", "notion-ancestor-result-merge-plan"],
+        help="Merge sanitized ancestor result nodes into a nested tree fixture preview and replan.",
+    )
+    notion_ancestor_merge_plan.add_argument("archive_root", help="Archive root to inspect.")
+    notion_ancestor_merge_plan.add_argument(
+        "--tree",
+        required=True,
+        help="Archive-relative sanitized nested-tree fixture JSON path. Absolute paths and provider URLs are rejected.",
+    )
+    notion_ancestor_merge_plan.add_argument(
+        "--ancestors",
+        required=True,
+        help="Archive-relative sanitized ancestor result fixture JSON path. Absolute paths and provider URLs are rejected.",
+    )
+    notion_ancestor_merge_plan.add_argument(
+        "--source",
+        required=True,
+        choices=sorted(archive_services.NOTION_NESTED_TREE_SOURCES),
+        help="External source declared by both fixtures.",
+    )
+    notion_ancestor_merge_plan.add_argument(
+        "--max-items",
+        type=int,
+        default=100000,
+        help="Maximum merged fixture nodes to replan. Range 1-100000.",
+    )
+    notion_ancestor_merge_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Merges sanitized metadata in memory only; never calls providers, reads titles or bodies, or writes fixtures.",
+    )
+    notion_ancestor_merge_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    notion_ancestor_merge_plan.set_defaults(func=command_notion_ancestor_merge_plan)
 
     zettel_edge = subcommands.add_parser(
         "zettel-edge",

@@ -1,0 +1,15 @@
+{
+  "fixture_kind": "notion_ancestor_result_fixture",
+  "source": "notion",
+  "nodes": [
+    {
+      "node_ref": "page:fake:missing-parent",
+      "parent_ref": "database:fake:db3",
+      "node_kind": "page",
+      "source_status": "live",
+      "mint_state": "not_applicable",
+      "review_status": "fixture_reviewed",
+      "containment_source_ref": "block:fake:missing-parent"
+    }
+  ]
+}

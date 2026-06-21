@@ -428,6 +428,38 @@ NOTION_NESTED_TREE_NODE_FIELDS = {
     "containment_source_ref",
     "declared_generation_id",
 }
+NOTION_BLOCK_MIRROR_FIXTURE_FIELDS = {"fixture_kind", "source", "generation_roots", "minted_refs", "blocks", "nodes"}
+NOTION_BLOCK_MIRROR_RECORD_FIELDS = {
+    "node_ref",
+    "id",
+    "parent_ref",
+    "parent_id",
+    "parent_type",
+    "node_kind",
+    "type",
+    "block_type",
+    "source_status",
+    "archived",
+    "in_trash",
+    "trashed",
+    "mint_state",
+    "review_status",
+    "containment_source_ref",
+    "declared_generation_id",
+    "content_class",
+}
+NOTION_BLOCK_MIRROR_KIND_ALIASES = {
+    "page": "page",
+    "child_page": "child_page",
+    "database": "database",
+    "child_database": "child_database",
+    "data_source": "data_source",
+    "collection": "database",
+    "collection_view": "collection_view",
+    "collection_view_page": "collection_view",
+    "view": "view",
+}
+NOTION_ANCESTOR_RESULT_FIXTURE_FIELDS = {"fixture_kind", "source", "nodes"}
 EXTERNAL_IMPORT_EXTENSIONS = {".md", ".markdown", ".txt"}
 SOURCE_TYPES = {"local_folder", "external_ssd", "notion_export", "google_drive_export", "object_manifest", "imap_mailbox"}
 IMAP_MAILBOX_SOURCE_TYPE = "imap_mailbox"
@@ -17364,6 +17396,628 @@ def notion_ancestor_crawl_requests_from_nested_plan(
     return sorted(requests, key=lambda item: (str(item.get("request_reason")), str(item.get("ancestor_ref"))))
 
 
+def notion_block_mirror_tree_fixture_plan(
+    archive_root: Path | str,
+    *,
+    mirror_path: str,
+    source: str = "notion",
+    dry_run: bool = True,
+    max_items: int = 100000,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("notion-block-mirror-tree-fixture-plan is read-only and requires --dry-run.")
+
+    normalized_source = str(source or "").strip().lower().replace("-", "_")
+    if normalized_source not in NOTION_NESTED_TREE_SOURCES:
+        blockers.append("source must be one of: " + ", ".join(sorted(NOTION_NESTED_TREE_SOURCES)) + ".")
+        normalized_source = "notion"
+
+    max_items_value = notion_nested_tree_safe_max_items(max_items, blockers)
+    normalized_mirror_path, payload = read_safe_archive_json_fixture(
+        root,
+        mirror_path,
+        fixture_label="notion block mirror fixture",
+        blockers=blockers,
+    )
+
+    fixture_payload: dict[str, Any] = {
+        "fixture_kind": "notion_nested_tree_fixture",
+        "source": normalized_source,
+        "generation_roots": [],
+        "minted_refs": [],
+        "nodes": [],
+    }
+    mirror_summary: dict[str, Any] = {
+        "mirror_path": normalized_mirror_path or None,
+        "fixture_file_read": payload is not None,
+        "fixture_kind": payload.get("fixture_kind") if isinstance(payload, dict) else None,
+        "declared_source": payload.get("source") if isinstance(payload, dict) else None,
+        "declared_record_count": 0,
+        "processed_record_count": 0,
+        "remaining_record_count": 0,
+        "max_items": max_items_value,
+        "max_items_limit": NOTION_NESTED_TREE_MAX_ITEMS_LIMIT,
+        "truncated_by_max_items": False,
+        "truncation_receipt": None,
+    }
+    if isinstance(payload, dict):
+        unsupported_fields = sorted(set(payload) - NOTION_BLOCK_MIRROR_FIXTURE_FIELDS)
+        if unsupported_fields:
+            blockers.append(
+                "notion block mirror fixture contains unsupported top-level field(s) not shown in preview: "
+                + ", ".join(unsupported_fields)
+                + "."
+            )
+        fixture_kind = str(payload.get("fixture_kind") or "").strip()
+        if fixture_kind != "notion_block_mirror_fixture":
+            blockers.append("notion block mirror fixture_kind must be notion_block_mirror_fixture.")
+        declared_source = str(payload.get("source") or "").strip().lower().replace("-", "_")
+        if declared_source and declared_source != normalized_source:
+            blockers.append("notion block mirror fixture source does not match the requested source.")
+        blocks = payload.get("blocks", payload.get("nodes"))
+        if not isinstance(blocks, list) or not blocks:
+            blockers.append("notion block mirror fixture must contain a non-empty blocks or nodes list.")
+            blocks = []
+        mirror_summary["declared_record_count"] = len(blocks)
+        if len(blocks) > max_items_value:
+            remaining_count = len(blocks) - max_items_value
+            blockers.append(
+                "notion block mirror fixture exceeds max_items; partial fixture builds are blocked "
+                f"to avoid silent data loss ({len(blocks)} declared, {max_items_value} allowed, {remaining_count} remaining)."
+            )
+            mirror_summary["truncated_by_max_items"] = True
+            mirror_summary["remaining_record_count"] = remaining_count
+            mirror_summary["truncation_receipt"] = {
+                "policy": "blocked_not_partial_success",
+                "declared_record_count": len(blocks),
+                "processed_record_count_if_allowed": max_items_value,
+                "remaining_record_count": remaining_count,
+                "first_unprocessed_ref": notion_block_mirror_record_ref(blocks[max_items_value])
+                if len(blocks) > max_items_value and isinstance(blocks[max_items_value], dict)
+                else None,
+            }
+        processed_blocks = blocks[:max_items_value]
+        mirror_summary["processed_record_count"] = len(processed_blocks) if not blockers else 0
+        if not blockers:
+            fixture_payload = notion_nested_tree_fixture_from_block_mirror_payload(
+                payload,
+                processed_blocks,
+                normalized_source=normalized_source,
+                blockers=blockers,
+                warnings=warnings,
+            )
+
+    nested_preview = (
+        notion_nested_tree_preview_from_payload(
+            fixture_payload,
+            normalized_source=normalized_source,
+            max_items=max_items_value,
+            tree_path_label=f"derived:{normalized_mirror_path}" if normalized_mirror_path else "derived:block-mirror",
+            fixture_file_read=False,
+            blockers=[],
+            warnings=[],
+        )
+        if not blockers
+        else {}
+    )
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "notion_block_mirror_tree_fixture_plan",
+        "archive_id": archive_id,
+        "plan_state": "nested_tree_fixture_preview_ready" if not blockers else "blocked",
+        "source": normalized_source,
+        "mirror_summary": mirror_summary,
+        "nested_tree_fixture_preview": {} if blockers else fixture_payload,
+        "nested_tree_plan_preview": nested_preview,
+        "current_capability": {
+            "reviewed_block_mirror_parser_implemented": True,
+            "node_kind_derived_content_classification_available": True,
+            "provider_api_call_implemented": False,
+            "oauth_started": False,
+            "page_title_body_parser_implemented": False,
+            "live_deep_crawl_adapter_implemented": False,
+            "fixture_writer_implemented": False,
+            "mint_or_import_writer_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "page_titles_read": False,
+            "page_bodies_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "mirror_fixture_file_read": payload is not None,
+            "fixture_written": False,
+            "zettels_written": False,
+            "edges_written": False,
+            "receipts_written": False,
+            "object_manifest_updated": False,
+        },
+        "privacy_guards": notion_tree_privacy_guards(),
+        "would_change": [],
+        "next_safe_actions": [
+            "Review nested_tree_fixture_preview before saving or feeding it into nested-tree planning.",
+            "Use notion-ancestor-crawl-plan if nested_tree_plan_preview still reports missing ancestors.",
+            "Use notion-ancestor-merge-plan after a credential-bounded adapter returns sanitized ancestor nodes.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def notion_ancestor_merge_plan(
+    archive_root: Path | str,
+    *,
+    tree_path: str,
+    ancestors_path: str,
+    source: str = "notion",
+    dry_run: bool = True,
+    max_items: int = 100000,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("notion-ancestor-merge-plan is read-only and requires --dry-run.")
+
+    normalized_source = str(source or "").strip().lower().replace("-", "_")
+    if normalized_source not in NOTION_NESTED_TREE_SOURCES:
+        blockers.append("source must be one of: " + ", ".join(sorted(NOTION_NESTED_TREE_SOURCES)) + ".")
+        normalized_source = "notion"
+    max_items_value = notion_nested_tree_safe_max_items(max_items, blockers)
+
+    normalized_tree_path, tree_payload = read_safe_archive_json_fixture(
+        root,
+        tree_path,
+        fixture_label="notion nested tree fixture",
+        blockers=blockers,
+    )
+    normalized_ancestors_path, ancestors_payload = read_safe_archive_json_fixture(
+        root,
+        ancestors_path,
+        fixture_label="notion ancestor result fixture",
+        blockers=blockers,
+    )
+
+    if isinstance(tree_payload, dict):
+        fixture_kind = str(tree_payload.get("fixture_kind") or "").strip()
+        if fixture_kind != "notion_nested_tree_fixture":
+            blockers.append("base tree fixture_kind must be notion_nested_tree_fixture.")
+        declared_source = str(tree_payload.get("source") or "").strip().lower().replace("-", "_")
+        if declared_source and declared_source != normalized_source:
+            blockers.append("base tree fixture source does not match the requested source.")
+    if isinstance(ancestors_payload, dict):
+        unsupported_fields = sorted(set(ancestors_payload) - NOTION_ANCESTOR_RESULT_FIXTURE_FIELDS)
+        if unsupported_fields:
+            blockers.append(
+                "notion ancestor result fixture contains unsupported top-level field(s) not shown in preview: "
+                + ", ".join(unsupported_fields)
+                + "."
+            )
+        fixture_kind = str(ancestors_payload.get("fixture_kind") or "").strip()
+        if fixture_kind != "notion_ancestor_result_fixture":
+            blockers.append("ancestor result fixture_kind must be notion_ancestor_result_fixture.")
+        declared_source = str(ancestors_payload.get("source") or "").strip().lower().replace("-", "_")
+        if declared_source and declared_source != normalized_source:
+            blockers.append("ancestor result fixture source does not match the requested source.")
+
+    merged_payload: dict[str, Any] = {}
+    merge_summary: dict[str, Any] = {
+        "tree_path": normalized_tree_path or None,
+        "ancestors_path": normalized_ancestors_path or None,
+        "base_node_count": 0,
+        "ancestor_node_count": 0,
+        "merged_node_count": 0,
+        "added_node_count": 0,
+        "unchanged_duplicate_count": 0,
+        "conflict_count": 0,
+        "conflict_refs": [],
+    }
+    if isinstance(tree_payload, dict) and isinstance(ancestors_payload, dict) and not blockers:
+        merged_payload, merge_summary, merge_warnings, merge_blockers = notion_merge_ancestor_nodes_into_tree(
+            tree_payload,
+            ancestors_payload,
+            normalized_source=normalized_source,
+        )
+        warnings.extend(merge_warnings)
+        blockers.extend(merge_blockers)
+
+    nested_preview = (
+        notion_nested_tree_preview_from_payload(
+            merged_payload,
+            normalized_source=normalized_source,
+            max_items=max_items_value,
+            tree_path_label=f"merged:{normalized_tree_path}+{normalized_ancestors_path}",
+            fixture_file_read=False,
+            blockers=[],
+            warnings=[],
+        )
+        if not blockers
+        else {}
+    )
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "notion_ancestor_merge_plan",
+        "archive_id": archive_id,
+        "plan_state": "ancestor_merge_replan_ready" if not blockers else "blocked",
+        "source": normalized_source,
+        "merge_summary": merge_summary,
+        "merged_tree_fixture_preview": {} if blockers else merged_payload,
+        "nested_tree_plan_after_merge": nested_preview,
+        "current_capability": {
+            "sanitized_ancestor_merge_available": True,
+            "nested_tree_replan_after_merge_available": True,
+            "provider_api_call_implemented": False,
+            "oauth_started": False,
+            "live_deep_crawl_adapter_implemented": False,
+            "fixture_writer_implemented": False,
+            "mint_or_import_writer_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "page_titles_read": False,
+            "page_bodies_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "tree_fixture_file_read": tree_payload is not None,
+            "ancestor_result_fixture_file_read": ancestors_payload is not None,
+            "fixture_written": False,
+            "zettels_written": False,
+            "edges_written": False,
+            "receipts_written": False,
+            "object_manifest_updated": False,
+        },
+        "privacy_guards": notion_tree_privacy_guards(),
+        "would_change": [],
+        "next_safe_actions": [
+            "Review merged_tree_fixture_preview and nested_tree_plan_after_merge before any recovery.",
+            "If hold_queue remains, run notion-ancestor-crawl-plan on the merged fixture preview after saving it locally.",
+            "Recover only reviewed recovery_queue items; this command does not mint or write zets.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def read_safe_archive_json_fixture(
+    root: Path,
+    relative_path: str,
+    *,
+    fixture_label: str,
+    blockers: list[str],
+) -> tuple[str, Any | None]:
+    normalized_path = ""
+    fixture_file: Path | None = None
+    try:
+        normalized_path = normalize_archive_relative_path(relative_path)
+        fixture_file = resolve_archive_relative_path(root, normalized_path)
+    except ArchivePathError:
+        blockers.append(f"{fixture_label} path must be a safe archive-relative JSON path.")
+        return "", None
+    if fixture_file is None or not fixture_file.is_file():
+        blockers.append(f"{fixture_label} file is missing.")
+        return normalized_path, None
+    try:
+        text = fixture_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        blockers.append(f"{fixture_label} could not be read as UTF-8 ({exc.__class__.__name__}).")
+        return normalized_path, None
+    if contains_forbidden_location_reference(text) or source_intake_secret_like(text):
+        blockers.append(f"{fixture_label} contains a provider URL, local absolute path, token, or secret-like value.")
+        return normalized_path, None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        blockers.append(f"{fixture_label} must be valid JSON.")
+        return normalized_path, None
+    if not isinstance(payload, dict):
+        blockers.append(f"{fixture_label} must be a JSON object.")
+        return normalized_path, None
+    return normalized_path, payload
+
+
+def notion_nested_tree_safe_max_items(max_items: int, blockers: list[str]) -> int:
+    try:
+        max_items_value = int(max_items)
+    except (TypeError, ValueError):
+        max_items_value = 1000
+        blockers.append(f"max_items must be an integer between 1 and {NOTION_NESTED_TREE_MAX_ITEMS_LIMIT}.")
+    if max_items_value < 1 or max_items_value > NOTION_NESTED_TREE_MAX_ITEMS_LIMIT:
+        blockers.append(f"max_items must be between 1 and {NOTION_NESTED_TREE_MAX_ITEMS_LIMIT}.")
+        max_items_value = max(1, min(max_items_value, NOTION_NESTED_TREE_MAX_ITEMS_LIMIT))
+    return max_items_value
+
+
+def notion_nested_tree_fixture_from_block_mirror_payload(
+    payload: dict[str, Any],
+    records: list[Any],
+    *,
+    normalized_source: str,
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    roots = notion_nested_tree_generation_roots(payload, blockers)
+    minted_refs = sorted(notion_nested_tree_minted_refs(payload, blockers))
+    nodes: list[dict[str, Any]] = []
+    for index, item in enumerate(records, start=1):
+        if not isinstance(item, dict):
+            blockers.append(f"blocks[{index}] must be an object.")
+            continue
+        unsupported_fields = sorted(set(item) - NOTION_BLOCK_MIRROR_RECORD_FIELDS)
+        if unsupported_fields:
+            blockers.append(
+                f"blocks[{index}] contains unsupported field(s) not shown in preview: "
+                + ", ".join(unsupported_fields)
+                + "."
+            )
+            continue
+        node = notion_nested_tree_node_from_block_mirror_record(item, index=index, blockers=blockers, warnings=warnings)
+        if node:
+            nodes.append(node)
+    return {
+        "fixture_kind": "notion_nested_tree_fixture",
+        "source": normalized_source,
+        "generation_roots": list(roots.values()),
+        "minted_refs": minted_refs,
+        "nodes": nodes,
+    }
+
+
+def notion_nested_tree_node_from_block_mirror_record(
+    item: dict[str, Any],
+    *,
+    index: int,
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any] | None:
+    label = f"blocks[{index}]"
+    raw_kind = str(item.get("node_kind") or item.get("type") or item.get("block_type") or "").strip().lower().replace("-", "_")
+    node_kind = NOTION_BLOCK_MIRROR_KIND_ALIASES.get(raw_kind, raw_kind)
+    if node_kind not in NOTION_NESTED_TREE_NODE_KINDS:
+        blockers.append(f"{label}.node_kind/type must map to one of: " + ", ".join(sorted(NOTION_NESTED_TREE_NODE_KINDS)) + ".")
+        return None
+    node_ref = safe_optional_notion_nested_tree_field(item, "node_ref", label, blockers)
+    if not node_ref:
+        raw_id = safe_optional_notion_nested_tree_field(item, "id", label, blockers)
+        if not raw_id:
+            blockers.append(f"{label} must contain node_ref or id.")
+            return None
+        node_ref = notion_block_mirror_ref_from_id(raw_id, node_kind)
+        warnings.append(f"{label}.node_ref was derived from id and node_kind without reading titles or bodies.")
+    parent_ref = safe_optional_notion_nested_tree_field(item, "parent_ref", label, blockers)
+    if not parent_ref:
+        parent_id = safe_optional_notion_nested_tree_field(item, "parent_id", label, blockers)
+        if parent_id:
+            parent_ref = notion_block_mirror_parent_ref_from_id(
+                parent_id,
+                str(item.get("parent_type") or "").strip().lower().replace("-", "_"),
+            )
+            warnings.append(f"{label}.parent_ref was derived from parent_id and parent_type.")
+    source_status = notion_block_mirror_source_status(item)
+    node = {
+        "node_ref": node_ref,
+        "node_kind": node_kind,
+        "source_status": source_status,
+        "mint_state": str(item.get("mint_state") or "unknown").strip().lower().replace("-", "_"),
+        "review_status": str(item.get("review_status") or "mirror_metadata_reviewed").strip(),
+    }
+    if parent_ref:
+        node["parent_ref"] = parent_ref
+    for optional_key in ("content_class", "containment_source_ref", "declared_generation_id"):
+        value = safe_optional_notion_nested_tree_field(item, optional_key, label, blockers)
+        if value:
+            node[optional_key] = value
+    return node
+
+
+def notion_block_mirror_ref_from_id(raw_id: str, node_kind: str) -> str:
+    if node_kind in {"database", "child_database", "data_source"}:
+        return "database:" + raw_id
+    if node_kind in {"collection_view", "view"}:
+        return "view:" + raw_id
+    return "page:" + raw_id
+
+
+def notion_block_mirror_parent_ref_from_id(raw_id: str, parent_type: str) -> str:
+    if parent_type in {"database", "child_database", "data_source", "collection"}:
+        return "database:" + raw_id
+    if parent_type in {"collection_view", "view"}:
+        return "view:" + raw_id
+    return "page:" + raw_id
+
+
+def notion_block_mirror_record_ref(item: dict[str, Any]) -> str | None:
+    value = item.get("node_ref") or item.get("id")
+    text = str(value or "").strip()
+    return text or None
+
+
+def notion_block_mirror_source_status(item: dict[str, Any]) -> str:
+    explicit = str(item.get("source_status") or "").strip().lower().replace("-", "_")
+    if explicit == "trashed":
+        return "trash"
+    if explicit:
+        return explicit
+    if bool(item.get("in_trash")) or bool(item.get("trashed")):
+        return "trash"
+    if bool(item.get("archived")):
+        return "archived"
+    return "live"
+
+
+def notion_merge_ancestor_nodes_into_tree(
+    tree_payload: dict[str, Any],
+    ancestors_payload: dict[str, Any],
+    *,
+    normalized_source: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[str], list[str]]:
+    blockers: list[str] = []
+    warnings: list[str] = []
+    base_nodes = tree_payload.get("nodes")
+    ancestor_nodes = ancestors_payload.get("nodes")
+    if not isinstance(base_nodes, list) or not base_nodes:
+        blockers.append("base tree fixture must contain a non-empty nodes list.")
+        base_nodes = []
+    if not isinstance(ancestor_nodes, list) or not ancestor_nodes:
+        blockers.append("ancestor result fixture must contain a non-empty nodes list.")
+        ancestor_nodes = []
+
+    normalized_ancestors = notion_nested_tree_fixture_nodes({"nodes": ancestor_nodes}, blockers, warnings=warnings)
+    merged_nodes: list[dict[str, Any]] = [dict(node) for node in base_nodes if isinstance(node, dict)]
+    by_ref: dict[str, dict[str, Any]] = {
+        str(node.get("node_ref") or ""): node for node in merged_nodes if isinstance(node, dict) and node.get("node_ref")
+    }
+    added_count = 0
+    unchanged_duplicate_count = 0
+    conflict_refs: list[str] = []
+    for node in normalized_ancestors:
+        node_ref = str(node.get("node_ref") or "")
+        if not node_ref:
+            continue
+        existing = by_ref.get(node_ref)
+        clean_node = {
+            key: value
+            for key, value in node.items()
+            if key
+            in {
+                "node_ref",
+                "parent_ref",
+                "node_kind",
+                "content_class",
+                "source_status",
+                "mint_state",
+                "review_status",
+                "containment_source_ref",
+                "declared_generation_id",
+            }
+            and value is not None
+        }
+        if existing is None:
+            merged_nodes.append(clean_node)
+            by_ref[node_ref] = clean_node
+            added_count += 1
+            continue
+        comparable_existing = {
+            key: existing.get(key)
+            for key in clean_node
+            if key in existing and existing.get(key) is not None
+        }
+        comparable_new = {key: value for key, value in clean_node.items() if key in comparable_existing}
+        if comparable_existing == comparable_new:
+            unchanged_duplicate_count += 1
+        else:
+            conflict_refs.append(node_ref)
+
+    if conflict_refs:
+        blockers.append("ancestor result fixture conflicts with existing node_ref metadata.")
+    merged_payload = {
+        "fixture_kind": "notion_nested_tree_fixture",
+        "source": normalized_source,
+        "generation_roots": tree_payload.get("generation_roots") or [],
+        "minted_refs": tree_payload.get("minted_refs") or [],
+        "nodes": merged_nodes,
+    }
+    summary = {
+        "base_node_count": len(base_nodes),
+        "ancestor_node_count": len(ancestor_nodes),
+        "merged_node_count": len(merged_nodes),
+        "added_node_count": added_count,
+        "unchanged_duplicate_count": unchanged_duplicate_count,
+        "conflict_count": len(conflict_refs),
+        "conflict_refs": conflict_refs,
+    }
+    return merged_payload, summary, warnings, blockers
+
+
+def notion_nested_tree_preview_from_payload(
+    payload: dict[str, Any],
+    *,
+    normalized_source: str,
+    max_items: int,
+    tree_path_label: str,
+    fixture_file_read: bool,
+    blockers: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    local_blockers = list(blockers)
+    local_warnings = list(warnings)
+    raw_nodes = notion_nested_tree_fixture_nodes(payload, local_blockers, warnings=local_warnings)
+    generation_roots = notion_nested_tree_generation_roots(payload, local_blockers)
+    minted_refs = notion_nested_tree_minted_refs(payload, local_blockers)
+    declared_source = str(payload.get("source") or "").strip().lower().replace("-", "_")
+    if declared_source and declared_source != normalized_source:
+        local_blockers.append("notion nested tree fixture source does not match the requested source.")
+    fixture_kind = str(payload.get("fixture_kind") or "").strip()
+    if fixture_kind != "notion_nested_tree_fixture":
+        local_blockers.append("notion nested tree fixture_kind must be notion_nested_tree_fixture.")
+    if len(raw_nodes) > max_items:
+        remaining_count = len(raw_nodes) - max_items
+        local_blockers.append(
+            "notion nested tree fixture exceeds max_items; partial nested-tree recovery plans are blocked "
+            f"to avoid silent data loss ({len(raw_nodes)} declared, {max_items} allowed, {remaining_count} remaining)."
+        )
+    processed_nodes = raw_nodes[:max_items]
+    reports: list[dict[str, Any]] = []
+    if processed_nodes and not local_blockers:
+        reports = notion_nested_tree_leaf_reports(
+            processed_nodes,
+            generation_roots=generation_roots,
+            minted_refs=minted_refs,
+            blockers=local_blockers,
+        )
+        local_warnings.extend(notion_nested_tree_ref_format_warnings(reports, generation_roots))
+    summary = notion_nested_tree_summary(reports) if not local_blockers else {}
+    return {
+        "ok": not local_blockers,
+        "plan_state": "nested_tree_recovery_plan_ready" if not local_blockers else "blocked",
+        "tree_summary": {
+            "tree_path": tree_path_label,
+            "fixture_file_read": fixture_file_read,
+            "fixture_kind": payload.get("fixture_kind"),
+            "declared_source": payload.get("source"),
+            "declared_node_count": len(raw_nodes),
+            "processed_node_count": len(processed_nodes) if not local_blockers else 0,
+            "remaining_node_count": max(0, len(raw_nodes) - max_items),
+            "max_items": max_items,
+            "max_items_limit": NOTION_NESTED_TREE_MAX_ITEMS_LIMIT,
+            "truncated_by_max_items": len(raw_nodes) > max_items,
+        },
+        "recovery_summary": summary,
+        "recovery_queue": [] if local_blockers else [item for item in reports if item.get("canonicalization_action") == "recover_missing_live_content"],
+        "hold_queue": [] if local_blockers else [item for item in reports if item.get("canonicalization_action") in {"hold_until_ancestry_recovered", "human_review_required"}],
+        "structure_skip_queue": [] if local_blockers else [item for item in reports if item.get("canonicalization_action") == "skip_structure_or_template"],
+        "warnings": unique_preserve_order(local_warnings),
+        "blockers": unique_preserve_order(local_blockers),
+    }
+
+
+def notion_tree_privacy_guards() -> dict[str, bool]:
+    return {
+        "provider_urls_echoed": False,
+        "local_absolute_paths_echoed": False,
+        "raw_export_paths_echoed": False,
+        "page_titles_echoed": False,
+        "page_bodies_echoed": False,
+        "comment_bodies_echoed": False,
+        "account_ids_echoed": False,
+        "emails_echoed": False,
+        "secret_values_echoed": False,
+        "writes": False,
+    }
+
+
 def notion_nested_tree_generation_roots(payload: Any, blockers: list[str]) -> dict[str, dict[str, Any]]:
     if not isinstance(payload, dict):
         blockers.append("notion nested tree fixture must be a JSON object.")
@@ -27073,6 +27727,14 @@ def ai_response_concept_guide(
                 "command": "archive notion-ancestor-crawl-plan <archive-root> --tree workbench/notion-nested-tree.sample.json --source notion --dry-run --format json",
             },
             {
+                "human_intent": "build a nested tree fixture from reviewed Notion block mirror metadata",
+                "command": "archive notion-block-mirror-tree-fixture-plan <archive-root> --mirror workbench/notion-block-mirror.sample.json --source notion --dry-run --format json",
+            },
+            {
+                "human_intent": "merge sanitized ancestor results and replan nested tree recovery",
+                "command": "archive notion-ancestor-merge-plan <archive-root> --tree workbench/notion-nested-tree.sample.json --ancestors workbench/notion-ancestor-result.sample.json --source notion --dry-run --format json",
+            },
+            {
                 "human_intent": "upload or sync bytes",
                 "command": "future work until a later release explicitly adds an approval-gated adapter",
             },
@@ -27110,6 +27772,8 @@ def ai_response_concept_guide(
             "notion_import_material_clue_audit_available": True,
             "notion_nested_tree_recovery_planning_available": True,
             "notion_ancestor_crawl_request_planning_available": True,
+            "notion_block_mirror_tree_fixture_planning_available": True,
+            "notion_ancestor_merge_replan_available": True,
             "mcp_tool_available": False,
             "object_upload_adapter_implemented": False,
             "provider_availability_probe_implemented": False,
@@ -27127,6 +27791,8 @@ def ai_response_concept_guide(
             "connection-import-plan",
             "notion-nested-tree-plan",
             "notion-ancestor-crawl-plan",
+            "notion-block-mirror-tree-fixture-plan",
+            "notion-ancestor-merge-plan",
             "beginner-setup-manual",
         ],
         "closed_actions": {

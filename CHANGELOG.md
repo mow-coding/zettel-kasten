@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.126 - 2026-06-22
+
+- Added read-only `archive notion-block-mirror-tree-fixture-plan --dry-run`
+  and MCP `notion_block_mirror_tree_fixture_plan` to turn reviewed Notion block
+  mirror metadata into a sanitized nested-tree fixture preview and immediate
+  nested-tree plan preview.
+- Added read-only `archive notion-ancestor-merge-plan --dry-run` and MCP
+  `notion_ancestor_merge_plan` to merge sanitized ancestor result nodes into a
+  nested-tree fixture preview and re-run the nested tree planner in memory.
+- Added fake archive sample fixtures, CLI/MCP tests, capability matrix docs, AI
+  routing hints, README summaries, and release notes while keeping the loop
+  local and read-only: no provider calls, OAuth, page titles, page bodies,
+  media downloads, fixture writes, zettel writes, edge writes, receipts, or
+  object manifest updates.
+
 ## v0.3.125 - 2026-06-22
 
 - Added read-only `archive notion-ancestor-crawl-plan --dry-run` and MCP
