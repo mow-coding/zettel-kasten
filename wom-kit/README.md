@@ -91,6 +91,7 @@ docs/connection-import-plan.md
 docs/connection-evidence-parser-contract.md
 docs/connection-evidence-fixture-parser.md
 docs/connection-edge-intelligence-plan.md
+docs/notion-nested-tree-plan.md
 docs/zettel-edge-write.md
 docs/zettel-edge-batch.md
 docs/project-intake-session.md
@@ -223,6 +224,9 @@ connection-evidence-parse-fixture
 
 connection-edge-intelligence-plan
   Plan meaning/mechanism classification for sanitized connection fixture candidates. Dry-run only; separates relationship meaning from source mechanism, flags ambiguity and parsimony review needs, reports provisional labels such as format_variant/responds_to/fulfills/enabling/sequence, and never reads real exports, source bodies, derived-text bodies, comment bodies, calls providers or LLMs, writes candidate records, zets, edges, receipts, or manifests, or echoes provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
+
+notion-nested-tree-plan
+  Plan nested Notion child-page recovery from a sanitized tree fixture. Dry-run only; walks safe parent refs to assign each leaf to a known generation root, separates live content leaves from structure/template/view containers, reports untraceable leaves instead of guessing from a partial mirror, and never reads real exports, page titles, page bodies, comments, calls providers, writes zets, mints pages, writes edges, writes receipts, or echoes provider URLs or local paths.
 
 zettel-edge
   Preview or approve one typed edge from a source zet to one verified target zet or manifested objet. Dry-run previews first; approve requires --reviewed-by and writes only one source zettel frontmatter edge plus one receipts/edges/*.zettel-edge.json receipt. `revert-edge` can later remove that exact edge from the receipt and write receipts/edges/reverts/*.zettel-edge-revert.json while preserving the original write receipt. It is not a bulk connection importer, exposes no MCP write tool, calls no providers, reads no real exports, writes no candidate records, updates no object manifests, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
@@ -1186,6 +1190,13 @@ and map it to `contains` instead of forcing it into `view_query`, `references`,
 `material`, or `inherited_by`. `ai-response-concept-guide` also explains this
 as a model-gap escalation rule: if no active edge type fits, pause for a
 developer decision before writing durable edges.
+v0.3.124 adds a read-only Notion nested tree recovery checkpoint.
+`archive notion-nested-tree-plan --dry-run` reads only a sanitized tree fixture,
+walks parent refs to assign leaf pages to known generation roots, separates live
+content leaves from structure/template/view containers, and reports
+untraceable leaves instead of guessing from a partial mirror. It does not read
+real exports, page titles, page bodies, call providers, mint zets, or write
+edges.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

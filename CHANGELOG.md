@@ -6,6 +6,19 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.124 - 2026-06-21
+
+- Added read-only `archive notion-nested-tree-plan --dry-run` and MCP
+  `notion_nested_tree_plan` for sanitized Notion nested tree fixtures.
+- The planner walks safe parent refs from leaf pages to reviewed generation
+  roots, separates live content leaves from structure/template/view-container
+  nodes, and reports untraceable parent chains instead of guessing from a
+  partial local mirror.
+- Added fake archive fixture coverage, CLI/MCP tests, capability matrix docs,
+  and release notes while keeping the surface fixture-only: no real exports,
+  page titles, page bodies, provider calls, minting, zettel writes, edge writes,
+  receipts, or object manifest updates.
+
 ## v0.3.123 - 2026-06-21
 
 - Added dedicated `contains` link type definitions to the base and fake archive

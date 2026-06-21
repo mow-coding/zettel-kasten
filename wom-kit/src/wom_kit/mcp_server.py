@@ -1602,6 +1602,21 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "notion_nested_tree_plan",
+        "description": "Plan nested Notion child-page recovery from a sanitized tree fixture with generation assignment, content/structure classification, and untraceable reporting. Dry-run only; never reads real exports, page titles, bodies, or writes zets.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "tree": {"type": "string"},
+                "source": {"type": "string", "enum": sorted(archive_services.NOTION_NESTED_TREE_SOURCES)},
+                "max_items": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 1000},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "tree", "source"],
+        },
+    },
+    {
         "name": "list_sources",
         "description": "List registered source bindings and current source map status.",
         "inputSchema": {
@@ -2645,6 +2660,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_connection_evidence_parser_contract(arguments)
     if name == "connection_evidence_parse_fixture":
         return tool_connection_evidence_parse_fixture(arguments)
+    if name == "notion_nested_tree_plan":
+        return tool_notion_nested_tree_plan(arguments)
     if name == "list_sources":
         return tool_list_sources(arguments)
     if name == "source_scan_plan":
@@ -4048,6 +4065,22 @@ def tool_connection_evidence_parse_fixture(arguments: dict[str, Any]) -> dict[st
     )
     state = result.get("parse_state") or ("passed" if result["ok"] else "blocked")
     return tool_success_result(f"connection_evidence_parse_fixture: {state}.", result)
+
+
+def tool_notion_nested_tree_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("notion_nested_tree_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.notion_nested_tree_plan,
+        archive_root,
+        tree_path=require_string_arg(arguments, "tree"),
+        source=require_string_arg(arguments, "source"),
+        max_items=int(arguments.get("max_items", 1000)),
+        dry_run=True,
+    )
+    state = result.get("plan_state") or ("passed" if result["ok"] else "blocked")
+    return tool_success_result(f"notion_nested_tree_plan: {state}.", result)
 
 
 def tool_list_sources(arguments: dict[str, Any]) -> dict[str, Any]:

@@ -2657,6 +2657,100 @@ state:
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_notion_nested_tree_plan_assigns_generation_and_reports_untraceable_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "notion-nested-tree-plan",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree.sample.json",
+                    "--source",
+                    "notion",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "notion_nested_tree_plan")
+            self.assertEqual(result["plan_state"], "nested_tree_recovery_plan_ready")
+            self.assertEqual(result["tree_summary"]["tree_path"], "workbench/notion-nested-tree.sample.json")
+            self.assertTrue(result["tree_summary"]["fixture_file_read"])
+            self.assertEqual(result["tree_summary"]["declared_node_count"], 8)
+            self.assertEqual(result["recovery_summary"]["leaf_count"], 4)
+            self.assertEqual(result["recovery_summary"]["missing_live_content_leaf_count"], 1)
+            self.assertEqual(result["recovery_summary"]["untraceable_leaf_count"], 1)
+            self.assertEqual(result["recovery_summary"]["skip_structure_or_template_leaf_count"], 1)
+            self.assertEqual(result["recovery_summary"]["already_covered_leaf_count"], 1)
+            self.assertEqual(result["recovery_summary"]["auto_writable_count"], 0)
+            self.assertEqual(len(result["recovery_queue"]), 1)
+            self.assertEqual(result["recovery_queue"][0]["node_ref"], "page:fake:db2-nested-live-log")
+            self.assertEqual(result["recovery_queue"][0]["generation_assignment"]["generation_id"], "DB2")
+            self.assertEqual(result["recovery_queue"][0]["canonicalization_action"], "recover_missing_live_content")
+            self.assertEqual(len(result["hold_queue"]), 1)
+            self.assertEqual(result["hold_queue"][0]["generation_assignment"]["status"], "untraceable")
+            self.assertEqual(result["hold_queue"][0]["generation_assignment"]["reason"], "missing_parent_record")
+            self.assertEqual(result["hold_queue"][0]["canonicalization_action"], "hold_until_ancestry_recovered")
+            self.assertEqual(len(result["structure_skip_queue"]), 1)
+            self.assertEqual(result["structure_skip_queue"][0]["content_classification"]["content_class"], "template")
+            self.assertTrue(result["generation_assignment_contract"]["untraceable_nodes_are_reported_not_dropped"])
+            self.assertTrue(result["generation_assignment_contract"]["does_not_guess_generation_from_partial_local_mirror"])
+            self.assertFalse(result["current_capability"]["real_export_parser_implemented"])
+            self.assertFalse(result["current_capability"]["mint_or_import_writer_implemented"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["real_source_export_files_read"])
+            self.assertFalse(result["closed_actions"]["zettels_written"])
+            self.assertFalse(result["privacy_guards"]["page_titles_echoed"])
+            self.assertFalse(result["privacy_guards"]["page_bodies_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn("https://", serialized)
+            self.assertNotIn("Homebase", serialized)
+            self.assertNotIn("Template", serialized)
+
+            absolute_code, absolute_output = self.run_cli(
+                [
+                    "notion-nested-tree-plan",
+                    str(archive_root),
+                    "--tree",
+                    str((archive_root / "workbench" / "notion-nested-tree.sample.json").resolve()),
+                    "--source",
+                    "notion",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            absolute_result = json.loads(absolute_output)
+            self.assertEqual(absolute_code, 1)
+            self.assertFalse(absolute_result["ok"])
+            self.assertIn("tree_path must be a safe archive-relative fixture path", absolute_result["blockers"][0])
+            self.assertNotIn(str(archive_root.resolve()), absolute_output)
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "notion-nested-tree-plan",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree.sample.json",
+                    "--source",
+                    "notion",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_zettel_edge_resolves_notion_external_ref_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -6569,6 +6663,7 @@ state:
             self.assertTrue(any("notion-objet-import-clue-audit" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-objet-link-index" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("connection-import-plan" in route["command"] for route in result["safe_routing"]))
+            self.assertTrue(any("notion-nested-tree-plan" in route["command"] for route in result["safe_routing"]))
             self.assertFalse(result["closed_actions"]["source_bytes_read"])
             self.assertFalse(result["closed_actions"]["provider_api_called"])
             self.assertFalse(result["closed_actions"]["upload_performed"])
@@ -6582,6 +6677,7 @@ state:
             self.assertTrue(result["current_capability"]["contains_edge_type_translation_available"])
             self.assertTrue(result["current_capability"]["source_map_material_link_routing_available"])
             self.assertTrue(result["current_capability"]["notion_import_material_clue_audit_available"])
+            self.assertTrue(result["current_capability"]["notion_nested_tree_recovery_planning_available"])
             self.assertFalse(result["current_capability"]["object_upload_adapter_implemented"])
             self.assertEqual(result["would_change"], [])
             self.assertNotIn("C:\\", serialized)

@@ -252,6 +252,10 @@ Then route safely:
 - Plan Notion structural containment and other connection evidence: use
   `connection-import-plan --source notion --connection-kind all --dry-run`
   before creating durable edges.
+- Plan nested Notion child-page recovery after database-row import: use
+  `notion-nested-tree-plan --tree workbench/notion-nested-tree.sample.json
+  --source notion --dry-run` so missing parent chains are reported instead of
+  guessed.
 - Register known external hashes: use `prehashed-objet-ledger`.
 - Register already extracted text: use `derive-text capture`.
 - Check extraction completeness: use `derive-text coverage`.
@@ -299,6 +303,7 @@ This guide rephrases existing model documents for AI-human conversation:
 - [Zettel Edge Batch](zettel-edge-batch.md)
 - [Notion Objet Import Clue Audit](notion-objet-import-clue-audit.md)
 - [Notion Objet Source Map Link Plan](notion-objet-source-map-link-plan.md)
+- [Notion Nested Tree Plan](notion-nested-tree-plan.md)
 
 It does not change those underlying implementation boundaries.
 

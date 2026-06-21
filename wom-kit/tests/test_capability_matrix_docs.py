@@ -46,6 +46,7 @@ CONNECTION_IMPORT_PLAN_PATH = KIT_ROOT / "docs" / "connection-import-plan.md"
 CONNECTION_EVIDENCE_PARSER_CONTRACT_PATH = KIT_ROOT / "docs" / "connection-evidence-parser-contract.md"
 CONNECTION_EVIDENCE_FIXTURE_PARSER_PATH = KIT_ROOT / "docs" / "connection-evidence-fixture-parser.md"
 CONNECTION_EDGE_INTELLIGENCE_PATH = KIT_ROOT / "docs" / "connection-edge-intelligence-plan.md"
+NOTION_NESTED_TREE_PLAN_PATH = KIT_ROOT / "docs" / "notion-nested-tree-plan.md"
 ZETTEL_EDGE_WRITE_PATH = KIT_ROOT / "docs" / "zettel-edge-write.md"
 ZETTEL_EDGE_BATCH_PATH = KIT_ROOT / "docs" / "zettel-edge-batch.md"
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
@@ -1247,6 +1248,77 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in release_text or phrase in changelog_text)
 
+    def test_notion_nested_tree_plan_is_documented_as_read_only_recovery_gate(self) -> None:
+        text = NOTION_NESTED_TREE_PLAN_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.124.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.124 read-only nested child-page recovery checkpoint",
+            "archive notion-nested-tree-plan",
+            "notion_nested_tree_plan",
+            "generation_roots",
+            "recovery_queue",
+            "hold_queue",
+            "structure_skip_queue",
+            "untraceable",
+            "does not",
+            "read real Notion exports",
+            "read page titles",
+            "write zets",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+        for phrase in (
+            "Status: v0.3.124 Notion nested tree recovery checkpoint",
+            "Notion nested tree recovery plan",
+            "archive notion-nested-tree-plan --tree workbench/notion-nested-tree.sample.json --source notion --dry-run",
+            "DB1/DB2/DB3",
+            "untraceable",
+            "auto_writable_count: 0",
+            "reads no page titles",
+            "mints no pages",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.124 pre-release",
+            "read-only Notion nested tree recovery planning",
+            "reports untraceable parent chains instead of guessing from partial mirrors",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        for phrase in (
+            "v0.3.124 pre-release",
+            "read-only nested tree recovery planning",
+            "추적불능 parent chain",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_ko_text)
+        for phrase in (
+            "docs/notion-nested-tree-plan.md",
+            "notion-nested-tree-plan",
+            "Plan nested Notion child-page recovery",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, kit_readme_text)
+        self.assertIn("[Notion Nested Tree Plan](notion-nested-tree-plan.md)", public_map_text)
+        self.assertIn("[Notion Nested Tree Plan](notion-nested-tree-plan.md)", public_map_ko_text)
+        for phrase in (
+            "# v0.3.124 - Notion Nested Tree Recovery Plan",
+            "notion_nested_tree_plan",
+            "reports `untraceable`",
+            "read-only `archive notion-nested-tree-plan --dry-run`",
+            "partial local mirror",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(phrase in release_text or phrase in changelog_text)
+
     def test_zettel_edge_write_and_batch_are_documented_as_approval_gated_writers(self) -> None:
         text = ZETTEL_EDGE_WRITE_PATH.read_text(encoding="utf-8")
         batch_text = ZETTEL_EDGE_BATCH_PATH.read_text(encoding="utf-8")
@@ -1494,11 +1566,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "notion-objet-import-clue-audit",
             "notion-objet-source-map-link-plan",
             "notion-objet-link-index",
+            "notion-nested-tree-plan",
             "Upload/sync bytes: future work unless a later release explicitly adds",
             "[Source Object Storage Policy](source-object-storage-policy.md)",
             "[Text Provenance Hierarchy](text-provenance-hierarchy.md)",
             "[Notion Objet Import Clue Audit](notion-objet-import-clue-audit.md)",
             "[Notion Objet Source Map Link Plan](notion-objet-source-map-link-plan.md)",
+            "[Notion Nested Tree Plan](notion-nested-tree-plan.md)",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, guide_text)
@@ -1511,6 +1585,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "CLI `archive ai-response-concept-guide --topic all --locale ko-KR --dry-run`",
             "`notion-objet-import-clue-audit`",
             "`notion-objet-source-map-link-plan`",
+            "`notion-nested-tree-plan`",
             "writes nothing, adds no MCP tool, calls no providers",
         ):
             with self.subTest(phrase=phrase):
