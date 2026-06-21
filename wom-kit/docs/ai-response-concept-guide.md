@@ -267,6 +267,10 @@ Then route safely:
   `notion-ancestor-merge-plan --tree workbench/notion-nested-tree.sample.json
   --ancestors workbench/notion-ancestor-result.sample.json --source notion
   --dry-run`.
+- Verify a client nested-tree issue from sanitized local fixtures: use
+  `notion-client-issue-verification-plan --tree
+  workbench/notion-nested-tree.sample.json --ancestors
+  workbench/notion-ancestor-result.sample.json --source notion --dry-run`.
 - Register known external hashes: use `prehashed-objet-ledger`.
 - Register already extracted text: use `derive-text capture`.
 - Check extraction completeness: use `derive-text coverage`.
@@ -318,6 +322,7 @@ This guide rephrases existing model documents for AI-human conversation:
 - [Notion Ancestor Crawl Plan](notion-ancestor-crawl-plan.md)
 - [Notion Block Mirror Tree Fixture Plan](notion-block-mirror-tree-fixture-plan.md)
 - [Notion Ancestor Merge Plan](notion-ancestor-merge-plan.md)
+- [Notion Client Issue Verification Plan](notion-client-issue-verification-plan.md)
 
 It does not change those underlying implementation boundaries.
 

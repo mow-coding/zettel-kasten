@@ -155,6 +155,7 @@ Onboarding and setup plans:
 - [Notion Ancestor Crawl Plan](notion-ancestor-crawl-plan.md)
 - [Notion Block Mirror Tree Fixture Plan](notion-block-mirror-tree-fixture-plan.md)
 - [Notion Ancestor Merge Plan](notion-ancestor-merge-plan.md)
+- [Notion Client Issue Verification Plan](notion-client-issue-verification-plan.md)
 - [Zettel Edge Write](zettel-edge-write.md)
 - [Zettel Edge Batch](zettel-edge-batch.md)
 - [Object Storage Recommendations](object-storage-recommendations.md)
