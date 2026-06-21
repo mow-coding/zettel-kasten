@@ -47,6 +47,7 @@ CONNECTION_EVIDENCE_PARSER_CONTRACT_PATH = KIT_ROOT / "docs" / "connection-evide
 CONNECTION_EVIDENCE_FIXTURE_PARSER_PATH = KIT_ROOT / "docs" / "connection-evidence-fixture-parser.md"
 CONNECTION_EDGE_INTELLIGENCE_PATH = KIT_ROOT / "docs" / "connection-edge-intelligence-plan.md"
 NOTION_NESTED_TREE_PLAN_PATH = KIT_ROOT / "docs" / "notion-nested-tree-plan.md"
+NOTION_ANCESTOR_CRAWL_PLAN_PATH = KIT_ROOT / "docs" / "notion-ancestor-crawl-plan.md"
 ZETTEL_EDGE_WRITE_PATH = KIT_ROOT / "docs" / "zettel-edge-write.md"
 ZETTEL_EDGE_BATCH_PATH = KIT_ROOT / "docs" / "zettel-edge-batch.md"
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
@@ -1256,10 +1257,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
-        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.124.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.125.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.124 read-only nested child-page recovery checkpoint",
+            "Status: v0.3.125 read-only nested child-page recovery checkpoint",
             "archive notion-nested-tree-plan",
             "notion_nested_tree_plan",
             "generation_roots",
@@ -1267,6 +1268,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "hold_queue",
             "structure_skip_queue",
             "untraceable",
+            "`content_class` is now optional",
+            "blocks instead of",
             "does not",
             "read real Notion exports",
             "read page titles",
@@ -1287,14 +1290,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.124 pre-release",
+            "v0.3.125 pre-release",
             "read-only Notion nested tree recovery planning",
             "reports untraceable parent chains instead of guessing from partial mirrors",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "v0.3.124 pre-release",
+            "v0.3.125 pre-release",
             "read-only nested tree recovery planning",
             "추적불능 parent chain",
         ):
@@ -1310,11 +1313,77 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("[Notion Nested Tree Plan](notion-nested-tree-plan.md)", public_map_text)
         self.assertIn("[Notion Nested Tree Plan](notion-nested-tree-plan.md)", public_map_ko_text)
         for phrase in (
-            "# v0.3.124 - Notion Nested Tree Recovery Plan",
+            "# v0.3.125 - Notion Ancestor Crawl Request Plan",
             "notion_nested_tree_plan",
+            "notion_ancestor_crawl_plan",
             "reports `untraceable`",
-            "read-only `archive notion-nested-tree-plan --dry-run`",
-            "partial local mirror",
+            "partial success",
+            "missing ancestor",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(phrase in release_text or phrase in changelog_text)
+
+    def test_notion_ancestor_crawl_plan_is_documented_as_read_only_request_gate(self) -> None:
+        text = NOTION_ANCESTOR_CRAWL_PLAN_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.125.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.125 read-only missing ancestor crawl request checkpoint",
+            "archive notion-ancestor-crawl-plan",
+            "notion_ancestor_crawl_plan",
+            "missing_ancestor_ref",
+            "crawl_request_queue",
+            "required_return_fields",
+            "provider adapter",
+            "does not call Notion",
+            "read page titles",
+            "write zets",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+        for phrase in (
+            "Notion ancestor crawl request plan",
+            "archive notion-ancestor-crawl-plan --tree workbench/notion-nested-tree.sample.json --source notion --dry-run",
+            "crawl_request_queue",
+            "provider URLs",
+            "tokens",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.125 pre-release",
+            "read-only Notion ancestor crawl request planning",
+            "blocks oversized nested-tree fixtures instead of returning partial success",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        for phrase in (
+            "v0.3.125 pre-release",
+            "조상 crawl 요청 큐",
+            "부분 성공으로 위장하지 않도록 차단",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_ko_text)
+        for phrase in (
+            "docs/notion-ancestor-crawl-plan.md",
+            "notion-ancestor-crawl-plan",
+            "Plan missing Notion ancestor crawl requests",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, kit_readme_text)
+        self.assertIn("[Notion Ancestor Crawl Plan](notion-ancestor-crawl-plan.md)", public_map_text)
+        self.assertIn("[Notion Ancestor Crawl Plan](notion-ancestor-crawl-plan.md)", public_map_ko_text)
+        for phrase in (
+            "# v0.3.125 - Notion Ancestor Crawl Request Plan",
+            "notion_ancestor_crawl_plan",
+            "crawl_request_queue",
+            "read-only `archive notion-ancestor-crawl-plan --dry-run`",
         ):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in release_text or phrase in changelog_text)
