@@ -1617,6 +1617,22 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "notion_ancestor_crawl_plan",
+        "description": "Plan missing Notion ancestor crawl requests from a sanitized nested tree fixture. Dry-run only; never calls providers, reads titles or bodies, or writes fixtures.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "tree": {"type": "string"},
+                "source": {"type": "string", "enum": sorted(archive_services.NOTION_NESTED_TREE_SOURCES)},
+                "max_items": {"type": "integer", "minimum": 1, "maximum": archive_services.NOTION_NESTED_TREE_MAX_ITEMS_LIMIT, "default": 1000},
+                "max_depth": {"type": "integer", "minimum": 1, "maximum": 64, "default": 16},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "tree", "source"],
+        },
+    },
+    {
         "name": "list_sources",
         "description": "List registered source bindings and current source map status.",
         "inputSchema": {
@@ -2662,6 +2678,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_connection_evidence_parse_fixture(arguments)
     if name == "notion_nested_tree_plan":
         return tool_notion_nested_tree_plan(arguments)
+    if name == "notion_ancestor_crawl_plan":
+        return tool_notion_ancestor_crawl_plan(arguments)
     if name == "list_sources":
         return tool_list_sources(arguments)
     if name == "source_scan_plan":
@@ -4081,6 +4099,23 @@ def tool_notion_nested_tree_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = result.get("plan_state") or ("passed" if result["ok"] else "blocked")
     return tool_success_result(f"notion_nested_tree_plan: {state}.", result)
+
+
+def tool_notion_ancestor_crawl_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("notion_ancestor_crawl_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.notion_ancestor_crawl_plan,
+        archive_root,
+        tree_path=require_string_arg(arguments, "tree"),
+        source=require_string_arg(arguments, "source"),
+        max_items=int(arguments.get("max_items", 1000)),
+        max_depth=int(arguments.get("max_depth", 16)),
+        dry_run=True,
+    )
+    state = result.get("plan_state") or ("passed" if result["ok"] else "blocked")
+    return tool_success_result(f"notion_ancestor_crawl_plan: {state}.", result)
 
 
 def tool_list_sources(arguments: dict[str, Any]) -> dict[str, Any]:

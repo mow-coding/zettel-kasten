@@ -152,6 +152,7 @@ Onboarding and setup plans:
 - [Connection Evidence Fixture Parser](connection-evidence-fixture-parser.md)
 - [Connection Edge Intelligence Plan](connection-edge-intelligence-plan.md)
 - [Notion Nested Tree Plan](notion-nested-tree-plan.md)
+- [Notion Ancestor Crawl Plan](notion-ancestor-crawl-plan.md)
 - [Zettel Edge Write](zettel-edge-write.md)
 - [Zettel Edge Batch](zettel-edge-batch.md)
 - [Object Storage Recommendations](object-storage-recommendations.md)

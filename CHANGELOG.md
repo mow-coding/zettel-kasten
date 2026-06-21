@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.125 - 2026-06-22
+
+- Added read-only `archive notion-ancestor-crawl-plan --dry-run` and MCP
+  `notion_ancestor_crawl_plan` to package missing Notion ancestor refs from the
+  nested tree hold queue into a `crawl_request_queue` for a future
+  credential-bounded adapter.
+- Hardened `archive notion-nested-tree-plan --dry-run`: `content_class` can now
+  be derived from `node_kind`, structural-node/content conflicts route to human
+  review, duplicate `generation_id` values are allowed across unique roots,
+  `source_status=trashed` normalizes to `trash`, prefix-like ref mismatch
+  warnings are surfaced, and oversized fixtures block instead of returning
+  partial success.
+- Updated CLI/MCP tests, capability matrix docs, AI routing hints, README
+  summaries, and release notes while keeping the surface read-only: no provider
+  calls, real exports, page titles, page bodies, media downloads, zettel writes,
+  edge writes, receipts, fixture merges, or object manifest updates.
+
 ## v0.3.124 - 2026-06-21
 
 - Added read-only `archive notion-nested-tree-plan --dry-run` and MCP

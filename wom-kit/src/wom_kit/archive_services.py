@@ -398,6 +398,23 @@ NOTION_NESTED_TREE_NODE_KINDS = {
 NOTION_NESTED_TREE_CONTENT_CLASSES = {"content", "structure", "template", "view_container", "unknown"}
 NOTION_NESTED_TREE_SOURCE_STATUSES = {"live", "archived", "trash", "unknown"}
 NOTION_NESTED_TREE_MINT_STATES = {"already_minted", "missing", "not_applicable", "unknown"}
+NOTION_NESTED_TREE_MAX_ITEMS_LIMIT = 100000
+NOTION_NESTED_TREE_CONTENT_CLASS_BY_NODE_KIND = {
+    "page": "content",
+    "child_page": "content",
+    "database": "structure",
+    "child_database": "structure",
+    "data_source": "structure",
+    "collection_view": "view_container",
+    "view": "view_container",
+}
+NOTION_NESTED_TREE_STRUCTURAL_NODE_KINDS = {
+    "database",
+    "child_database",
+    "data_source",
+    "collection_view",
+    "view",
+}
 NOTION_NESTED_TREE_FIXTURE_FIELDS = {"fixture_kind", "source", "generation_roots", "minted_refs", "nodes"}
 NOTION_NESTED_TREE_GENERATION_ROOT_FIELDS = {"generation_id", "root_ref", "generation_label"}
 NOTION_NESTED_TREE_NODE_FIELDS = {
@@ -16923,10 +16940,10 @@ def notion_nested_tree_plan(
         max_items_value = int(max_items)
     except (TypeError, ValueError):
         max_items_value = 1000
-        blockers.append("max_items must be an integer between 1 and 10000.")
-    if max_items_value < 1 or max_items_value > 10000:
-        blockers.append("max_items must be between 1 and 10000.")
-        max_items_value = max(1, min(max_items_value, 10000))
+        blockers.append(f"max_items must be an integer between 1 and {NOTION_NESTED_TREE_MAX_ITEMS_LIMIT}.")
+    if max_items_value < 1 or max_items_value > NOTION_NESTED_TREE_MAX_ITEMS_LIMIT:
+        blockers.append(f"max_items must be between 1 and {NOTION_NESTED_TREE_MAX_ITEMS_LIMIT}.")
+        max_items_value = max(1, min(max_items_value, NOTION_NESTED_TREE_MAX_ITEMS_LIMIT))
 
     normalized_tree_path = ""
     tree_file: Path | None = None
@@ -16943,7 +16960,11 @@ def notion_nested_tree_plan(
         "declared_source": None,
         "declared_node_count": 0,
         "processed_node_count": 0,
+        "remaining_node_count": 0,
+        "max_items": max_items_value,
+        "max_items_limit": NOTION_NESTED_TREE_MAX_ITEMS_LIMIT,
         "truncated_by_max_items": False,
+        "truncation_receipt": None,
     }
     raw_nodes: list[dict[str, Any]] = []
     generation_roots: dict[str, dict[str, Any]] = {}
@@ -16967,7 +16988,7 @@ def notion_nested_tree_plan(
                 blockers.append("notion nested tree fixture must be valid JSON.")
                 payload = None
             if payload is not None:
-                raw_nodes = notion_nested_tree_fixture_nodes(payload, blockers)
+                raw_nodes = notion_nested_tree_fixture_nodes(payload, blockers, warnings=warnings)
                 generation_roots = notion_nested_tree_generation_roots(payload, blockers)
                 minted_refs = notion_nested_tree_minted_refs(payload, blockers)
                 tree_summary["fixture_file_read"] = True
@@ -16991,8 +17012,21 @@ def notion_nested_tree_plan(
 
     processed_nodes = raw_nodes[:max_items_value]
     if len(raw_nodes) > max_items_value:
-        warnings.append("notion nested tree fixture was truncated by max_items.")
+        remaining_count = len(raw_nodes) - max_items_value
+        blockers.append(
+            "notion nested tree fixture exceeds max_items; partial nested-tree recovery plans are blocked "
+            f"to avoid silent data loss ({len(raw_nodes)} declared, {max_items_value} allowed, {remaining_count} remaining)."
+        )
         tree_summary["truncated_by_max_items"] = True
+        tree_summary["remaining_node_count"] = remaining_count
+        tree_summary["truncation_receipt"] = {
+            "policy": "blocked_not_partial_success",
+            "declared_node_count": len(raw_nodes),
+            "processed_node_count_if_allowed": max_items_value,
+            "remaining_node_count": remaining_count,
+            "first_unprocessed_node_ref": raw_nodes[max_items_value].get("node_ref") if len(raw_nodes) > max_items_value else None,
+            "resume_guidance": "rerun with a higher --max-items value or split the reviewed fixture without dropping parent chains.",
+        }
     tree_summary["processed_node_count"] = len(processed_nodes) if not blockers else 0
 
     reports: list[dict[str, Any]] = []
@@ -17003,6 +17037,7 @@ def notion_nested_tree_plan(
             minted_refs=minted_refs,
             blockers=blockers,
         )
+        warnings.extend(notion_nested_tree_ref_format_warnings(reports, generation_roots))
     summary = notion_nested_tree_summary(reports) if not blockers else {}
 
     return {
@@ -17019,8 +17054,12 @@ def notion_nested_tree_plan(
             "complete_parent_chain_required_for_nested_non_root_pages": True,
             "untraceable_nodes_are_reported_not_dropped": True,
             "content_classification_uses_explicit_safe_signal_not_titles": True,
+            "content_classification_can_be_derived_from_node_kind": True,
+            "content_classification_conflicts_require_human_review": True,
             "does_not_guess_generation_from_partial_local_mirror": True,
             "does_not_treat_structure_or_template_as_mint_candidate": True,
+            "partial_truncation_is_blocked_not_success": True,
+            "duplicate_generation_id_roots_allowed_when_root_refs_are_unique": True,
         },
         "generation_roots": [] if blockers else list(generation_roots.values()),
         "classification_vocabulary": {
@@ -17038,6 +17077,11 @@ def notion_nested_tree_plan(
             "sanitized_nested_tree_fixture_parser_implemented": True,
             "generation_assignment_available": True,
             "content_structure_classification_available": True,
+            "node_kind_derived_content_classification_available": True,
+            "content_classification_conflict_guard_available": True,
+            "partial_truncation_blocker_available": True,
+            "root_ref_format_diagnostics_available": True,
+            "duplicate_generation_id_roots_allowed": True,
             "untraceable_reporting_available": True,
             "real_export_parser_implemented": False,
             "provider_api_call_implemented": False,
@@ -17087,6 +17131,239 @@ def notion_nested_tree_plan(
     }
 
 
+def notion_ancestor_crawl_plan(
+    archive_root: Path | str,
+    *,
+    tree_path: str,
+    source: str = "notion",
+    dry_run: bool = True,
+    max_items: int = 1000,
+    max_depth: int = 16,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("notion-ancestor-crawl-plan is read-only and requires --dry-run.")
+
+    try:
+        max_depth_value = int(max_depth)
+    except (TypeError, ValueError):
+        max_depth_value = 16
+        blockers.append("max_depth must be an integer between 1 and 64.")
+    if max_depth_value < 1 or max_depth_value > 64:
+        blockers.append("max_depth must be between 1 and 64.")
+        max_depth_value = max(1, min(max_depth_value, 64))
+
+    nested_plan = notion_nested_tree_plan(
+        root,
+        tree_path=tree_path,
+        source=source,
+        dry_run=True,
+        max_items=max_items,
+    )
+    warnings.extend(str(item) for item in nested_plan.get("warnings", []))
+    if not nested_plan.get("ok"):
+        blockers.extend(str(item) for item in nested_plan.get("blockers", []))
+
+    request_queue = [] if blockers else notion_ancestor_crawl_requests_from_nested_plan(
+        nested_plan,
+        max_depth=max_depth_value,
+    )
+    plan_state = "blocked"
+    if not blockers:
+        plan_state = "ancestor_crawl_requests_ready" if request_queue else "no_ancestor_crawl_needed"
+
+    affected_leaf_refs = unique_preserve_order(
+        leaf_ref
+        for request in request_queue
+        for leaf_ref in request.get("affected_leaf_refs", [])
+    )
+    missing_ancestor_refs = unique_preserve_order(
+        str(request.get("ancestor_ref") or "")
+        for request in request_queue
+        if request.get("request_reason") == "missing_parent_record"
+    )
+    rootless_leaf_refs = unique_preserve_order(
+        str(request.get("ancestor_ref") or "")
+        for request in request_queue
+        if request.get("request_reason") == "no_known_generation_root"
+    )
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "notion_ancestor_crawl_plan",
+        "archive_id": archive_id,
+        "plan_state": plan_state,
+        "source": nested_plan.get("source") or str(source or "").strip().lower().replace("-", "_"),
+        "tree_summary": nested_plan.get("tree_summary", {}),
+        "source_plan_state": nested_plan.get("plan_state"),
+        "source_recovery_summary": nested_plan.get("recovery_summary", {}),
+        "ancestor_crawl_contract": {
+            "consumes_missing_ancestor_refs_from_nested_tree_plan": True,
+            "groups_multiple_affected_leaves_by_same_missing_ancestor": True,
+            "crawls_parent_chain_until_generation_root_in_future_adapter": True,
+            "requires_sanitized_tree_merge_before_replanning": True,
+            "provider_transport_is_not_implemented_in_this_release": True,
+            "partial_truncated_source_plan_is_blocked": True,
+        },
+        "request_summary": {
+            "crawl_request_count": len(request_queue),
+            "missing_ancestor_ref_count": len(missing_ancestor_refs),
+            "rootless_leaf_ref_count": len(rootless_leaf_refs),
+            "affected_leaf_count": len(affected_leaf_refs),
+            "max_depth": max_depth_value,
+            "auto_writable_count": 0,
+        },
+        "missing_ancestor_refs": missing_ancestor_refs,
+        "rootless_leaf_refs": rootless_leaf_refs,
+        "affected_leaf_refs": affected_leaf_refs,
+        "crawl_request_queue": [] if blockers else request_queue,
+        "current_capability": {
+            "nested_tree_plan_reuse_available": True,
+            "ancestor_crawl_request_queue_available": True,
+            "provider_api_call_implemented": False,
+            "oauth_started": False,
+            "live_deep_crawl_adapter_implemented": False,
+            "sanitized_tree_merge_writer_implemented": False,
+            "real_export_parser_implemented": False,
+            "mint_or_import_writer_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "real_source_export_files_read": False,
+            "source_bodies_read": False,
+            "derived_text_bodies_read": False,
+            "page_titles_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "fixture_file_read": bool(nested_plan.get("closed_actions", {}).get("fixture_file_read")),
+            "fixture_parser_executed": bool(nested_plan.get("closed_actions", {}).get("fixture_parser_executed")),
+            "zettels_written": False,
+            "mint_receipts_written": False,
+            "edges_written": False,
+            "receipts_written": False,
+            "object_manifest_updated": False,
+        },
+        "privacy_guards": {
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "raw_export_paths_echoed": False,
+            "page_titles_echoed": False,
+            "page_bodies_echoed": False,
+            "comment_bodies_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "secret_values_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": [
+            "Review crawl_request_queue and keep it local; it is a provider-adapter input contract, not a public data dump.",
+            "Implement the live deep-crawl adapter only behind an explicit credential boundary and dry-run preflight.",
+            "Merge fetched ancestors back into a sanitized tree fixture with node_ref, parent_ref, node_kind, source_status, and review_status.",
+            "Rerun archive notion-nested-tree-plan after the sanitized ancestor merge before any recovery or minting.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def notion_ancestor_crawl_requests_from_nested_plan(
+    nested_plan: dict[str, Any],
+    *,
+    max_depth: int,
+) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in nested_plan.get("hold_queue", []):
+        if not isinstance(item, dict):
+            continue
+        assignment = item.get("generation_assignment") if isinstance(item.get("generation_assignment"), dict) else {}
+        reason = str(assignment.get("reason") or "")
+        ancestor_ref = ""
+        direction = ""
+        if reason == "missing_parent_record":
+            ancestor_ref = str(assignment.get("missing_ancestor_ref") or "").strip()
+            direction = "crawl_missing_parent_chain_upward"
+        elif reason == "no_known_generation_root":
+            ancestor_ref = str(item.get("node_ref") or "").strip()
+            direction = "crawl_rootless_leaf_parent_chain_upward"
+        else:
+            continue
+        if not ancestor_ref:
+            continue
+        traversed_refs = [str(value) for value in assignment.get("traversed_refs", []) if value]
+        known_child_ref = traversed_refs[-1] if traversed_refs else str(item.get("node_ref") or "")
+        key = (reason, ancestor_ref)
+        group = groups.setdefault(
+            key,
+            {
+                "request_reason": reason,
+                "ancestor_ref": ancestor_ref,
+                "suggested_direction": direction,
+                "affected_leaf_refs": [],
+                "known_child_refs": [],
+                "lineage_depths_seen": [],
+            },
+        )
+        group["affected_leaf_refs"].append(str(item.get("node_ref") or ""))
+        if known_child_ref:
+            group["known_child_refs"].append(known_child_ref)
+        if assignment.get("lineage_depth") is not None:
+            group["lineage_depths_seen"].append(int(assignment.get("lineage_depth") or 0))
+
+    requests: list[dict[str, Any]] = []
+    for group in groups.values():
+        seed = {
+            "source": nested_plan.get("source"),
+            "request_reason": group["request_reason"],
+            "ancestor_ref": group["ancestor_ref"],
+            "affected_leaf_refs": sorted(set(group["affected_leaf_refs"])),
+            "max_depth": max_depth,
+        }
+        requests.append(
+            {
+                "request_id": "ancestor-crawl:" + sha256_json_value(seed).removeprefix("sha256:")[:16],
+                "source": nested_plan.get("source"),
+                "request_reason": group["request_reason"],
+                "ancestor_ref": group["ancestor_ref"],
+                "affected_leaf_refs": unique_preserve_order(group["affected_leaf_refs"]),
+                "known_child_refs": unique_preserve_order(group["known_child_refs"]),
+                "suggested_direction": group["suggested_direction"],
+                "max_depth": max_depth,
+                "lineage_depths_seen": sorted(set(group["lineage_depths_seen"])),
+                "stop_conditions": [
+                    "known_generation_root_ref_reached",
+                    "space_or_workspace_root_reached",
+                    "max_depth_reached",
+                    "parent_ref_missing_or_ambiguous",
+                    "unsafe_ref_or_provider_secret_detected",
+                ],
+                "required_return_fields": [
+                    "node_ref",
+                    "parent_ref",
+                    "node_kind",
+                    "source_status",
+                    "review_status",
+                ],
+                "optional_return_fields": [
+                    "content_class",
+                    "mint_state",
+                    "containment_source_ref",
+                    "declared_generation_id",
+                ],
+                "merge_target": "sanitized_nested_tree_fixture",
+                "write_status": "not_written",
+            }
+        )
+    return sorted(requests, key=lambda item: (str(item.get("request_reason")), str(item.get("ancestor_ref"))))
+
+
 def notion_nested_tree_generation_roots(payload: Any, blockers: list[str]) -> dict[str, dict[str, Any]]:
     if not isinstance(payload, dict):
         blockers.append("notion nested tree fixture must be a JSON object.")
@@ -17096,7 +17373,6 @@ def notion_nested_tree_generation_roots(payload: Any, blockers: list[str]) -> di
         blockers.append("notion nested tree fixture must contain a non-empty generation_roots list.")
         return {}
     by_ref: dict[str, dict[str, Any]] = {}
-    seen_generation_ids: set[str] = set()
     for index, item in enumerate(roots, start=1):
         if not isinstance(item, dict):
             blockers.append(f"generation_roots[{index}] must be an object.")
@@ -17116,10 +17392,6 @@ def notion_nested_tree_generation_roots(payload: Any, blockers: list[str]) -> di
         if root_ref in by_ref:
             blockers.append("generation_roots contains duplicate root_ref.")
             continue
-        if generation_id in seen_generation_ids:
-            blockers.append("generation_roots contains duplicate generation_id.")
-            continue
-        seen_generation_ids.add(generation_id)
         by_ref[root_ref] = {
             "generation_id": generation_id,
             "root_ref": root_ref,
@@ -17147,7 +17419,7 @@ def notion_nested_tree_minted_refs(payload: Any, blockers: list[str]) -> set[str
     return refs
 
 
-def notion_nested_tree_fixture_nodes(payload: Any, blockers: list[str]) -> list[dict[str, Any]]:
+def notion_nested_tree_fixture_nodes(payload: Any, blockers: list[str], *, warnings: list[str]) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         blockers.append("notion nested tree fixture must be a JSON object.")
         return []
@@ -17172,20 +17444,38 @@ def notion_nested_tree_fixture_nodes(payload: Any, blockers: list[str]) -> list[
         node_ref = safe_notion_nested_tree_field(item, "node_ref", label, blockers)
         parent_ref = safe_optional_notion_nested_tree_field(item, "parent_ref", label, blockers)
         node_kind = safe_notion_nested_tree_field(item, "node_kind", label, blockers).lower().replace("-", "_")
-        content_class = safe_notion_nested_tree_field(item, "content_class", label, blockers).lower().replace("-", "_")
+        declared_content_class = safe_optional_notion_nested_tree_field(item, "content_class", label, blockers)
+        content_class, classification_basis, classification_review_required = notion_nested_tree_content_class_from_node_kind(
+            node_kind,
+            declared_content_class,
+            label=label,
+            blockers=blockers,
+            warnings=warnings,
+        )
         source_status = (safe_optional_notion_nested_tree_field(item, "source_status", label, blockers) or "unknown").lower().replace("-", "_")
+        if source_status == "trashed":
+            source_status = "trash"
+            warnings.append(f"{label}.source_status 'trashed' was normalized to 'trash'.")
         mint_state = (safe_optional_notion_nested_tree_field(item, "mint_state", label, blockers) or "unknown").lower().replace("-", "_")
         review_status = safe_notion_nested_tree_field(item, "review_status", label, blockers)
         containment_source_ref = safe_optional_notion_nested_tree_field(item, "containment_source_ref", label, blockers)
         declared_generation_id = safe_optional_notion_nested_tree_field(item, "declared_generation_id", label, blockers)
         if node_kind and node_kind not in NOTION_NESTED_TREE_NODE_KINDS:
             blockers.append(f"{label}.node_kind must be one of: " + ", ".join(sorted(NOTION_NESTED_TREE_NODE_KINDS)) + ".")
-        if content_class and content_class not in NOTION_NESTED_TREE_CONTENT_CLASSES:
-            blockers.append(f"{label}.content_class must be one of: " + ", ".join(sorted(NOTION_NESTED_TREE_CONTENT_CLASSES)) + ".")
         if source_status and source_status not in NOTION_NESTED_TREE_SOURCE_STATUSES:
-            blockers.append(f"{label}.source_status must be one of: " + ", ".join(sorted(NOTION_NESTED_TREE_SOURCE_STATUSES)) + ".")
+            warnings.append(
+                f"{label}.source_status was not recognized and was downgraded to unknown; expected one of: "
+                + ", ".join(sorted(NOTION_NESTED_TREE_SOURCE_STATUSES))
+                + "."
+            )
+            source_status = "unknown"
         if mint_state and mint_state not in NOTION_NESTED_TREE_MINT_STATES:
-            blockers.append(f"{label}.mint_state must be one of: " + ", ".join(sorted(NOTION_NESTED_TREE_MINT_STATES)) + ".")
+            warnings.append(
+                f"{label}.mint_state was not recognized and was downgraded to unknown; expected one of: "
+                + ", ".join(sorted(NOTION_NESTED_TREE_MINT_STATES))
+                + "."
+            )
+            mint_state = "unknown"
         if node_ref in seen_refs:
             blockers.append("notion nested tree fixture contains duplicate node_ref.")
             continue
@@ -17196,6 +17486,9 @@ def notion_nested_tree_fixture_nodes(payload: Any, blockers: list[str]) -> list[
                 "parent_ref": parent_ref,
                 "node_kind": node_kind,
                 "content_class": content_class,
+                "declared_content_class": declared_content_class.lower().replace("-", "_") if declared_content_class else None,
+                "content_classification_basis": classification_basis,
+                "content_classification_review_required": classification_review_required,
                 "source_status": source_status,
                 "mint_state": mint_state,
                 "review_status": review_status,
@@ -17204,6 +17497,38 @@ def notion_nested_tree_fixture_nodes(payload: Any, blockers: list[str]) -> list[
             }
         )
     return normalized
+
+
+def notion_nested_tree_content_class_from_node_kind(
+    node_kind: str,
+    declared_content_class: str | None,
+    *,
+    label: str,
+    blockers: list[str],
+    warnings: list[str],
+) -> tuple[str, str, bool]:
+    recommended = NOTION_NESTED_TREE_CONTENT_CLASS_BY_NODE_KIND.get(node_kind, "unknown")
+    declared = str(declared_content_class or "").strip().lower().replace("-", "_")
+    if declared and declared not in NOTION_NESTED_TREE_CONTENT_CLASSES:
+        warnings.append(
+            f"{label}.content_class was not recognized and was downgraded to unknown; expected one of: "
+            + ", ".join(sorted(NOTION_NESTED_TREE_CONTENT_CLASSES))
+            + "."
+        )
+        return "unknown", "caller_supplied_unrecognized_value_human_review_required", True
+    if not declared:
+        if recommended == "unknown" and node_kind:
+            blockers.append(f"{label}.node_kind cannot derive a content_class.")
+        return recommended, "derived_from_node_kind_no_title_or_body_read", recommended == "unknown"
+    if node_kind in NOTION_NESTED_TREE_STRUCTURAL_NODE_KINDS and declared == "content":
+        warnings.append(
+            f"{label}.content_class conflicts with structural node_kind {node_kind}; "
+            "the node is routed to human review instead of recovery."
+        )
+        return "unknown", "caller_supplied_conflicts_with_node_kind_human_review_required", True
+    if declared == recommended:
+        return declared, "caller_supplied_matches_node_kind_no_title_or_body_read", False
+    return declared, "caller_supplied_explicit_override_no_title_or_body_read", declared == "unknown"
 
 
 def safe_notion_nested_tree_field(record: dict[str, Any], key: str, label: str, blockers: list[str]) -> str:
@@ -17276,7 +17601,10 @@ def notion_nested_tree_leaf_reports(
             "generation_assignment": generation_assignment,
             "content_classification": {
                 "content_class": node.get("content_class"),
-                "classification_basis": "explicit_safe_fixture_signal_no_title_or_body_read",
+                "declared_content_class": node.get("declared_content_class"),
+                "classification_basis": node.get("content_classification_basis")
+                or "caller_supplied_unverified_no_title_or_body_read",
+                "human_review_required": bool(node.get("content_classification_review_required")),
             },
             "canonicalization_action": canonicalization_action,
             "write_status": "not_written",
@@ -17367,6 +17695,31 @@ def notion_nested_tree_assignment_from_root(
         "lineage_depth": depth,
         "traversed_refs": traversed_refs,
     }
+
+
+def notion_nested_tree_ref_format_warnings(
+    reports: list[dict[str, Any]],
+    generation_roots: dict[str, dict[str, Any]],
+) -> list[str]:
+    warnings: list[str] = []
+    root_refs = [str(root.get("root_ref") or "") for root in generation_roots.values() if root.get("root_ref")]
+    for report in reports:
+        assignment = report.get("generation_assignment") if isinstance(report.get("generation_assignment"), dict) else {}
+        if assignment.get("reason") != "missing_parent_record":
+            continue
+        missing_ref = str(assignment.get("missing_ancestor_ref") or "").strip()
+        if not missing_ref:
+            continue
+        for root_ref in root_refs:
+            if not root_ref or root_ref == missing_ref:
+                continue
+            if missing_ref.startswith(root_ref) or root_ref.startswith(missing_ref):
+                warnings.append(
+                    "possible_root_ref_format_mismatch: root_ref and missing_ancestor_ref look like prefix variants; "
+                    "root_ref, parent_ref, and node_ref must use the same full ref format for exact matching."
+                )
+                break
+    return unique_preserve_order(warnings)
 
 
 def notion_nested_tree_canonicalization_action(
@@ -26716,6 +27069,10 @@ def ai_response_concept_guide(
                 "command": "archive notion-nested-tree-plan <archive-root> --tree workbench/notion-nested-tree.sample.json --source notion --dry-run --format json",
             },
             {
+                "human_intent": "package missing Notion ancestors reported by nested-tree planning",
+                "command": "archive notion-ancestor-crawl-plan <archive-root> --tree workbench/notion-nested-tree.sample.json --source notion --dry-run --format json",
+            },
+            {
                 "human_intent": "upload or sync bytes",
                 "command": "future work until a later release explicitly adds an approval-gated adapter",
             },
@@ -26752,6 +27109,7 @@ def ai_response_concept_guide(
             "source_map_material_link_routing_available": True,
             "notion_import_material_clue_audit_available": True,
             "notion_nested_tree_recovery_planning_available": True,
+            "notion_ancestor_crawl_request_planning_available": True,
             "mcp_tool_available": False,
             "object_upload_adapter_implemented": False,
             "provider_availability_probe_implemented": False,
@@ -26768,6 +27126,7 @@ def ai_response_concept_guide(
             "notion-objet-link-plan",
             "connection-import-plan",
             "notion-nested-tree-plan",
+            "notion-ancestor-crawl-plan",
             "beginner-setup-manual",
         ],
         "closed_actions": {

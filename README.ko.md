@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.3.124 pre-release
+v0.3.125 pre-release
 ```
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
@@ -36,7 +36,7 @@ v0.3.124 pre-release
 - runtime context, profile, source/objet intake, block header, prompt boundary, foreign block review, projection, shared update review/index, shared update route preview, ZET would-transport planning을 위한 read-only preview layer,
 - derived-text coverage/toolchain/doctor/agent-contract read-only gate, PATH에 없는 로컬 추출 도구를 위한 비공개 tool-hint path, 그리고 사람 승인 뒤에만 동작하는 일부 local write path,
 - read-only objet reference resolution 및 zettel objet link preview,
-- Notion child page/database/view 구조를 `contains` edge type으로 다루는 read-only connection planning, 중첩 child page leaf를 세대 root에 귀속하고 content/structure/template을 분리하며 추적불능 parent chain을 버리지 않고 보고하는 read-only nested tree recovery planning, 그리고 맞는 edge type이 없을 때 AI가 억지 매핑하지 않고 model gap으로 올리는 안전 가드,
+- Notion child page/database/view 구조를 `contains` edge type으로 다루는 read-only connection planning, 중첩 child page leaf를 세대 root에 귀속하고 `node_kind` 기반 content class를 보수적으로 도출하며, 큰 fixture가 부분 성공으로 위장하지 않도록 차단하고, 추적불능 parent chain과 조상 crawl 요청 큐를 버리지 않고 보고하는 read-only nested tree recovery planning, 그리고 맞는 edge type이 없을 때 AI가 억지 매핑하지 않고 model gap으로 올리는 안전 가드,
 - mail, OpenAI API, OCR API 등을 위한 read-only beginner setup manual, connected accounts bridge, credential reference planning, inventory, external store recommendation, vault onboarding planning, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, CLI-only KeePassXC write execution with non-secret execution receipts, adapter readiness planning, adapter manifest preview, adapter audit receipt preview,
 - public link, Korean product language, privacy, release readiness, branch-protection planning을 위한 local hygiene tool.
 
@@ -217,6 +217,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.3.125
 v0.3.124
 v0.3.123
 v0.3.122

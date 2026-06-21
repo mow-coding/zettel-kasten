@@ -2751,6 +2751,190 @@ state:
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_notion_nested_tree_plan_derives_classes_blocks_truncation_and_keeps_multi_root_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture_path = archive_root / "workbench" / "notion-nested-tree-derived.sample.json"
+            fixture = {
+                "fixture_kind": "notion_nested_tree_fixture",
+                "source": "notion",
+                "generation_roots": [
+                    {"generation_id": "DB1", "root_ref": "database:fake:db1-a", "generation_label": "generation:fake:db1"},
+                    {"generation_id": "DB1", "root_ref": "database:fake:db1-b", "generation_label": "generation:fake:db1"},
+                ],
+                "nodes": [
+                    {
+                        "node_ref": "database:fake:db1-a",
+                        "node_kind": "database",
+                        "source_status": "live",
+                        "mint_state": "not_applicable",
+                        "review_status": "fixture_reviewed",
+                    },
+                    {
+                        "node_ref": "database:fake:db1-b",
+                        "node_kind": "database",
+                        "source_status": "live",
+                        "mint_state": "not_applicable",
+                        "review_status": "fixture_reviewed",
+                    },
+                    {
+                        "node_ref": "page:fake:auto-derived-content",
+                        "parent_ref": "database:fake:db1-a",
+                        "node_kind": "child_page",
+                        "source_status": "live",
+                        "mint_state": "missing",
+                        "review_status": "fixture_reviewed",
+                    },
+                    {
+                        "node_ref": "database:fake:conflicting-content",
+                        "parent_ref": "database:fake:db1-b",
+                        "node_kind": "child_database",
+                        "content_class": "content",
+                        "source_status": "trashed",
+                        "mint_state": "missing",
+                        "review_status": "fixture_reviewed",
+                    },
+                    {
+                        "node_ref": "page:fake:root-prefix-child",
+                        "parent_ref": "database:fake:db1-a-extra",
+                        "node_kind": "child_page",
+                        "source_status": "live",
+                        "mint_state": "missing",
+                        "review_status": "needs_parent_recovery",
+                    },
+                ],
+            }
+            fixture_path.write_text(json.dumps(fixture, indent=2), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "notion-nested-tree-plan",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree-derived.sample.json",
+                    "--source",
+                    "notion",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["generation_assignment_contract"]["content_classification_can_be_derived_from_node_kind"])
+            self.assertTrue(result["generation_assignment_contract"]["duplicate_generation_id_roots_allowed_when_root_refs_are_unique"])
+            self.assertEqual(len(result["generation_roots"]), 2)
+            self.assertEqual(result["generation_roots"][0]["generation_id"], "DB1")
+            self.assertEqual(result["generation_roots"][1]["generation_id"], "DB1")
+            recovered = {item["node_ref"]: item for item in result["recovery_queue"]}
+            self.assertIn("page:fake:auto-derived-content", recovered)
+            self.assertEqual(
+                recovered["page:fake:auto-derived-content"]["content_classification"]["classification_basis"],
+                "derived_from_node_kind_no_title_or_body_read",
+            )
+            self.assertEqual(
+                recovered["page:fake:auto-derived-content"]["content_classification"]["content_class"],
+                "content",
+            )
+            review_items = {item["node_ref"]: item for item in result["hold_queue"]}
+            self.assertIn("database:fake:conflicting-content", review_items)
+            self.assertEqual(review_items["database:fake:conflicting-content"]["canonicalization_action"], "human_review_required")
+            self.assertTrue(review_items["database:fake:conflicting-content"]["content_classification"]["human_review_required"])
+            self.assertEqual(review_items["database:fake:conflicting-content"]["source_status"], "trash")
+            self.assertTrue(any("normalized to 'trash'" in warning for warning in result["warnings"]))
+            self.assertTrue(any("possible_root_ref_format_mismatch" in warning for warning in result["warnings"]))
+
+            truncated_code, truncated_output = self.run_cli(
+                [
+                    "notion-nested-tree-plan",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree-derived.sample.json",
+                    "--source",
+                    "notion",
+                    "--max-items",
+                    "3",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            truncated = json.loads(truncated_output)
+            self.assertEqual(truncated_code, 1)
+            self.assertFalse(truncated["ok"])
+            self.assertEqual(truncated["plan_state"], "blocked")
+            self.assertTrue(truncated["tree_summary"]["truncated_by_max_items"])
+            self.assertEqual(truncated["tree_summary"]["remaining_node_count"], 2)
+            self.assertEqual(truncated["tree_summary"]["truncation_receipt"]["policy"], "blocked_not_partial_success")
+            self.assertEqual(truncated["recovery_queue"], [])
+
+    def test_notion_ancestor_crawl_plan_builds_missing_parent_requests_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "notion-ancestor-crawl-plan",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree.sample.json",
+                    "--source",
+                    "notion",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "notion_ancestor_crawl_plan")
+            self.assertEqual(result["plan_state"], "ancestor_crawl_requests_ready")
+            self.assertEqual(result["source_plan_state"], "nested_tree_recovery_plan_ready")
+            self.assertTrue(result["ancestor_crawl_contract"]["consumes_missing_ancestor_refs_from_nested_tree_plan"])
+            self.assertTrue(result["ancestor_crawl_contract"]["provider_transport_is_not_implemented_in_this_release"])
+            self.assertEqual(result["request_summary"]["crawl_request_count"], 1)
+            self.assertEqual(result["missing_ancestor_refs"], ["page:fake:missing-parent"])
+            self.assertEqual(result["affected_leaf_refs"], ["page:fake:db3-unknown-orphan"])
+            request = result["crawl_request_queue"][0]
+            self.assertEqual(request["request_reason"], "missing_parent_record")
+            self.assertEqual(request["ancestor_ref"], "page:fake:missing-parent")
+            self.assertEqual(request["known_child_refs"], ["page:fake:db3-unknown-orphan"])
+            self.assertEqual(request["suggested_direction"], "crawl_missing_parent_chain_upward")
+            self.assertEqual(request["merge_target"], "sanitized_nested_tree_fixture")
+            self.assertEqual(request["write_status"], "not_written")
+            self.assertIn("known_generation_root_ref_reached", request["stop_conditions"])
+            self.assertIn("node_ref", request["required_return_fields"])
+            self.assertFalse(result["current_capability"]["provider_api_call_implemented"])
+            self.assertFalse(result["current_capability"]["live_deep_crawl_adapter_implemented"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["real_source_export_files_read"])
+            self.assertFalse(result["closed_actions"]["zettels_written"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn("https://", serialized)
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "notion-ancestor-crawl-plan",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree.sample.json",
+                    "--source",
+                    "notion",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_zettel_edge_resolves_notion_external_ref_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -6664,6 +6848,7 @@ state:
             self.assertTrue(any("notion-objet-link-index" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("connection-import-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-nested-tree-plan" in route["command"] for route in result["safe_routing"]))
+            self.assertTrue(any("notion-ancestor-crawl-plan" in route["command"] for route in result["safe_routing"]))
             self.assertFalse(result["closed_actions"]["source_bytes_read"])
             self.assertFalse(result["closed_actions"]["provider_api_called"])
             self.assertFalse(result["closed_actions"]["upload_performed"])
@@ -6678,6 +6863,7 @@ state:
             self.assertTrue(result["current_capability"]["source_map_material_link_routing_available"])
             self.assertTrue(result["current_capability"]["notion_import_material_clue_audit_available"])
             self.assertTrue(result["current_capability"]["notion_nested_tree_recovery_planning_available"])
+            self.assertTrue(result["current_capability"]["notion_ancestor_crawl_request_planning_available"])
             self.assertFalse(result["current_capability"]["object_upload_adapter_implemented"])
             self.assertEqual(result["would_change"], [])
             self.assertNotIn("C:\\", serialized)

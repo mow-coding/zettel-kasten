@@ -92,6 +92,7 @@ docs/connection-evidence-parser-contract.md
 docs/connection-evidence-fixture-parser.md
 docs/connection-edge-intelligence-plan.md
 docs/notion-nested-tree-plan.md
+docs/notion-ancestor-crawl-plan.md
 docs/zettel-edge-write.md
 docs/zettel-edge-batch.md
 docs/project-intake-session.md
@@ -227,6 +228,9 @@ connection-edge-intelligence-plan
 
 notion-nested-tree-plan
   Plan nested Notion child-page recovery from a sanitized tree fixture. Dry-run only; walks safe parent refs to assign each leaf to a known generation root, separates live content leaves from structure/template/view containers, reports untraceable leaves instead of guessing from a partial mirror, and never reads real exports, page titles, page bodies, comments, calls providers, writes zets, mints pages, writes edges, writes receipts, or echoes provider URLs or local paths.
+
+notion-ancestor-crawl-plan
+  Plan missing Notion ancestor crawl requests from a sanitized nested tree fixture. Dry-run only; groups missing parent records and rootless leaves into a crawl_request_queue for a future credential-bounded adapter, and never calls providers, reads real exports, page titles, page bodies, comments, downloads media, merges fixtures, writes zets, mints pages, writes edges, writes receipts, or echoes provider URLs or local paths.
 
 zettel-edge
   Preview or approve one typed edge from a source zet to one verified target zet or manifested objet. Dry-run previews first; approve requires --reviewed-by and writes only one source zettel frontmatter edge plus one receipts/edges/*.zettel-edge.json receipt. `revert-edge` can later remove that exact edge from the receipt and write receipts/edges/reverts/*.zettel-edge-revert.json while preserving the original write receipt. It is not a bulk connection importer, exposes no MCP write tool, calls no providers, reads no real exports, writes no candidate records, updates no object manifests, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
@@ -1197,6 +1201,15 @@ content leaves from structure/template/view containers, and reports
 untraceable leaves instead of guessing from a partial mirror. It does not read
 real exports, page titles, page bodies, call providers, mint zets, or write
 edges.
+v0.3.125 adds read-only Notion ancestor crawl request planning.
+`archive notion-ancestor-crawl-plan --dry-run` groups missing ancestors from the
+nested-tree hold queue into a `crawl_request_queue` for a future
+credential-bounded adapter. The nested-tree planner also derives `content_class`
+from `node_kind` when needed, blocks oversized fixtures instead of returning
+partial success, allows shared logical `generation_id` values across unique
+roots, and warns on likely ref-format mismatches. It still does not call
+providers, read real exports, read page titles or bodies, merge fixtures, mint
+zets, write edges, or write receipts.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

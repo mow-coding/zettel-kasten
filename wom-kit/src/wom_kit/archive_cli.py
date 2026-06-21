@@ -69,6 +69,8 @@ Commands:
           Classify sanitized connection fixture candidates into meaning/mechanism review signals.
   notion-nested-tree-plan
           Plan Notion nested child-page recovery from a sanitized tree fixture.
+  notion-ancestor-crawl-plan
+          Plan missing Notion ancestor crawl requests from a sanitized nested tree fixture.
   imap-mailbox-operation-request-plan
           Compose the read-only approval request package before any future IMAP mailbox operation.
   imap-mailbox-plan
@@ -3072,6 +3074,54 @@ def command_notion_nested_tree_plan(args: argparse.Namespace) -> int:
         print(f"Structure/template skips: {summary.get('skip_structure_or_template_leaf_count', 0)}")
         print(f"Auto-writable leaves: {summary.get('auto_writable_count', 0)}")
         print("Real export parser: no")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_notion_ancestor_crawl_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("notion-ancestor-crawl-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.notion_ancestor_crawl_plan(
+            Path(args.archive_root),
+            tree_path=args.tree,
+            source=args.source,
+            dry_run=args.dry_run,
+            max_items=args.max_items,
+            max_depth=args.max_depth,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("plan_state") or ("passed" if result.get("ok") else "blocked")
+        summary = result.get("request_summary") if isinstance(result.get("request_summary"), dict) else {}
+        print(f"Notion ancestor crawl plan: {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source: {result.get('source') or '-'}")
+        print(f"Crawl requests: {summary.get('crawl_request_count', 0)}")
+        print(f"Missing ancestor refs: {summary.get('missing_ancestor_ref_count', 0)}")
+        print(f"Rootless leaf refs: {summary.get('rootless_leaf_ref_count', 0)}")
+        print(f"Affected leaves: {summary.get('affected_leaf_count', 0)}")
+        print(f"Max depth: {summary.get('max_depth', 0)}")
+        print("Provider API call: no")
         print("Writes: none")
         if result.get("blockers"):
             print("Blockers:")
@@ -12681,7 +12731,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(archive_services.NOTION_NESTED_TREE_SOURCES),
         help="External nested tree source declared by the fixture.",
     )
-    notion_nested_tree_plan.add_argument("--max-items", type=int, default=1000, help="Maximum fixture nodes to parse.")
+    notion_nested_tree_plan.add_argument(
+        "--max-items",
+        type=int,
+        default=1000,
+        help=(
+            "Maximum fixture nodes to parse. Range 1-100000. "
+            "If the fixture is larger, the command blocks instead of returning a partial success."
+        ),
+    )
     notion_nested_tree_plan.add_argument(
         "--dry-run",
         action="store_true",
@@ -12689,6 +12747,46 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notion_nested_tree_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     notion_nested_tree_plan.set_defaults(func=command_notion_nested_tree_plan)
+
+    notion_ancestor_crawl_plan = subcommands.add_parser(
+        "notion-ancestor-crawl-plan",
+        aliases=["notion-nested-ancestor-crawl-plan", "notion-parent-chain-crawl-plan"],
+        help="Plan missing Notion ancestor crawl requests from a sanitized nested tree fixture.",
+    )
+    notion_ancestor_crawl_plan.add_argument("archive_root", help="Archive root to inspect.")
+    notion_ancestor_crawl_plan.add_argument(
+        "--tree",
+        required=True,
+        help="Archive-relative sanitized nested-tree fixture JSON path. Absolute paths and provider URLs are rejected.",
+    )
+    notion_ancestor_crawl_plan.add_argument(
+        "--source",
+        required=True,
+        choices=sorted(archive_services.NOTION_NESTED_TREE_SOURCES),
+        help="External nested tree source declared by the fixture.",
+    )
+    notion_ancestor_crawl_plan.add_argument(
+        "--max-items",
+        type=int,
+        default=1000,
+        help=(
+            "Maximum fixture nodes to parse while deriving missing ancestor requests. Range 1-100000. "
+            "Oversized fixtures block instead of returning partial crawl queues."
+        ),
+    )
+    notion_ancestor_crawl_plan.add_argument(
+        "--max-depth",
+        type=int,
+        default=16,
+        help="Maximum future parent-chain crawl depth to request per missing ancestor. Range 1-64.",
+    )
+    notion_ancestor_crawl_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Packages missing ancestor crawl requests only; never calls providers, reads titles or bodies, or writes fixtures.",
+    )
+    notion_ancestor_crawl_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    notion_ancestor_crawl_plan.set_defaults(func=command_notion_ancestor_crawl_plan)
 
     zettel_edge = subcommands.add_parser(
         "zettel-edge",
