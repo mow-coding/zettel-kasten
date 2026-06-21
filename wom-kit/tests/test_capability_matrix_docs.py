@@ -51,6 +51,7 @@ NOTION_ANCESTOR_CRAWL_PLAN_PATH = KIT_ROOT / "docs" / "notion-ancestor-crawl-pla
 NOTION_BLOCK_MIRROR_TREE_FIXTURE_PLAN_PATH = KIT_ROOT / "docs" / "notion-block-mirror-tree-fixture-plan.md"
 NOTION_ANCESTOR_MERGE_PLAN_PATH = KIT_ROOT / "docs" / "notion-ancestor-merge-plan.md"
 NOTION_CLIENT_ISSUE_VERIFICATION_PLAN_PATH = KIT_ROOT / "docs" / "notion-client-issue-verification-plan.md"
+NOTION_CLIENT_FIXTURE_REQUEST_PLAN_PATH = KIT_ROOT / "docs" / "notion-client-fixture-request-plan.md"
 ZETTEL_EDGE_WRITE_PATH = KIT_ROOT / "docs" / "zettel-edge-write.md"
 ZETTEL_EDGE_BATCH_PATH = KIT_ROOT / "docs" / "zettel-edge-batch.md"
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
@@ -1293,14 +1294,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.127 pre-release",
+            "v0.3.128 pre-release",
             "read-only Notion nested tree recovery planning",
             "reports untraceable parent chains instead of guessing from partial mirrors",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "v0.3.127 pre-release",
+            "v0.3.128 pre-release",
             "read-only nested tree recovery planning",
             "추적불능 parent chain",
         ):
@@ -1360,14 +1361,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.127 pre-release",
+            "v0.3.128 pre-release",
             "read-only Notion ancestor crawl request planning",
             "blocks oversized nested-tree fixtures instead of returning partial success",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "v0.3.127 pre-release",
+            "v0.3.128 pre-release",
             "조상 crawl 요청 큐",
             "부분 성공으로 위장하지 않도록 차단",
         ):
@@ -1436,14 +1437,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.127 pre-release",
+            "v0.3.128 pre-release",
             "builds nested tree fixture previews from reviewed block mirror metadata",
             "merges sanitized ancestor result nodes with immediate after-merge replanning",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "v0.3.127 pre-release",
+            "v0.3.128 pre-release",
             "reviewed block mirror",
             "merge/replan",
         ):
@@ -1504,13 +1505,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.127 pre-release",
+            "v0.3.128 pre-release",
             "verifies client nested-tree issues from sanitized local fixture bundles",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "v0.3.127 pre-release",
+            "v0.3.128 pre-release",
             "클라이언트 nested-tree issue를 검증",
         ):
             with self.subTest(phrase=phrase):
@@ -1530,6 +1531,69 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "notion_client_issue_verification_plan",
             "local fixture bundles",
             "no live Notion transport",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(phrase in release_text or phrase in changelog_text)
+
+    def test_notion_client_fixture_request_plan_is_documented_as_read_only_request_package(self) -> None:
+        text = NOTION_CLIENT_FIXTURE_REQUEST_PLAN_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        guide_text = (KIT_ROOT / "docs" / "ai-response-concept-guide.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.128.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.128 read-only client fixture request checkpoint",
+            "archive notion-client-fixture-request-plan",
+            "notion_client_fixture_request_plan",
+            "requested_next_fixture",
+            "notion_ancestor_result_fixture",
+            "redaction checklist",
+            "does not send client messages",
+            "write request files",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+        for phrase in (
+            "Status: v0.3.128 Notion client fixture request checkpoint",
+            "Notion client fixture request plan",
+            "archive notion-client-fixture-request-plan --source notion --dry-run",
+            "notion_client_fixture_request_plan",
+            "redaction rules",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.128 pre-release",
+            "packages the minimal sanitized fixture request contract for client follow-up",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        for phrase in (
+            "v0.3.128 pre-release",
+            "최소 sanitized fixture request contract",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_ko_text)
+        for phrase in (
+            "docs/notion-client-fixture-request-plan.md",
+            "notion-client-fixture-request-plan",
+            "Package the sanitized fixture request contract",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, kit_readme_text)
+        self.assertIn("notion-client-fixture-request-plan", guide_text)
+        self.assertIn("[Notion Client Fixture Request Plan](notion-client-fixture-request-plan.md)", public_map_text)
+        self.assertIn("[Notion Client Fixture Request Plan](notion-client-fixture-request-plan.md)", public_map_ko_text)
+        for phrase in (
+            "# v0.3.128 - Notion Client Fixture Request Package",
+            "notion_client_fixture_request_plan",
+            "minimal sanitized fixture request contract",
+            "no client message sending",
         ):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in release_text or phrase in changelog_text)

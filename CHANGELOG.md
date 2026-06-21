@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.128 - 2026-06-22
+
+- Added read-only `archive notion-client-fixture-request-plan --dry-run` and
+  MCP `notion_client_fixture_request_plan` to package the minimal sanitized
+  fixture request contract for client Notion nested-tree verification.
+- The request package lists accepted fixture kinds, required safe fields,
+  redaction rules, and next verification commands; when preview fixtures are
+  supplied it reuses `notion-client-issue-verification-plan` to decide the next
+  requested fixture.
+- Added documentation, capability matrix coverage, public documentation map
+  links, release notes, CLI tests, MCP tests, and AI guide routing for the
+  client fixture request command.
+- Still closed: no client message sending, live Notion transport, OAuth,
+  provider API calls, title/body reads, media downloads, fixture writes, zettel
+  writes, edge writes, receipts, or object manifest updates.
+
 ## v0.3.127 - 2026-06-22
 
 - Added read-only `archive notion-client-issue-verification-plan --dry-run`

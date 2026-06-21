@@ -77,6 +77,8 @@ Commands:
           Merge sanitized ancestor result nodes into a nested tree fixture preview and replan.
   notion-client-issue-verification-plan
           Verify a client Notion nested-tree issue from sanitized local fixtures.
+  notion-client-fixture-request-plan
+          Package the sanitized fixture request contract for client Notion issue verification.
   imap-mailbox-operation-request-plan
           Compose the read-only approval request package before any future IMAP mailbox operation.
   imap-mailbox-plan
@@ -3268,6 +3270,55 @@ def command_notion_client_issue_verification_plan(args: argparse.Namespace) -> i
         print(f"Added ancestors: {summary.get('added_ancestor_count', 0)}")
         print(f"After-merge hold leaves: {summary.get('after_merge_hold_leaf_count', 0)}")
         print(f"Ready for reviewed recovery: {'yes' if summary.get('ready_for_reviewed_recovery') else 'no'}")
+        print("Provider API call: no")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_notion_client_fixture_request_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("notion-client-fixture-request-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.notion_client_fixture_request_plan(
+            Path(args.archive_root),
+            tree_path=args.tree,
+            mirror_path=args.mirror,
+            ancestors_path=args.ancestors,
+            source=args.source,
+            scenario=args.scenario,
+            dry_run=args.dry_run,
+            max_items=args.max_items,
+            max_depth=args.max_depth,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("plan_state") or ("passed" if result.get("ok") else "blocked")
+        package = result.get("request_package") if isinstance(result.get("request_package"), dict) else {}
+        print(f"Notion client fixture request plan: {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source: {result.get('source') or '-'}")
+        print(f"Scenario: {result.get('scenario') or '-'}")
+        print(f"Requested next fixture: {package.get('requested_next_fixture') or '-'}")
+        print(f"Current verification state: {package.get('current_verification_state') or '-'}")
         print("Provider API call: no")
         print("Writes: none")
         if result.get("blockers"):
@@ -13050,6 +13101,56 @@ def build_parser() -> argparse.ArgumentParser:
         "--format", choices=["text", "json"], default="json", help="Output format."
     )
     notion_client_issue_verification_plan.set_defaults(func=command_notion_client_issue_verification_plan)
+
+    notion_client_fixture_request_plan = subcommands.add_parser(
+        "notion-client-fixture-request-plan",
+        aliases=["notion-fixture-request-plan", "notion-client-verification-request-plan"],
+        help="Package the sanitized fixture request contract for client Notion issue verification.",
+    )
+    notion_client_fixture_request_plan.add_argument("archive_root", help="Archive root to inspect.")
+    notion_client_fixture_request_plan.add_argument(
+        "--tree",
+        help="Optional archive-relative sanitized nested-tree fixture JSON path for current-state preview.",
+    )
+    notion_client_fixture_request_plan.add_argument(
+        "--mirror",
+        help="Optional archive-relative reviewed block mirror fixture JSON path for current-state preview.",
+    )
+    notion_client_fixture_request_plan.add_argument(
+        "--ancestors",
+        help="Optional archive-relative sanitized ancestor result fixture JSON path for current-state preview.",
+    )
+    notion_client_fixture_request_plan.add_argument(
+        "--source",
+        required=True,
+        choices=sorted(archive_services.NOTION_NESTED_TREE_SOURCES),
+        help="External source declared by the future sanitized fixtures.",
+    )
+    notion_client_fixture_request_plan.add_argument(
+        "--scenario",
+        default="missing_ancestor",
+        choices=["missing_ancestor", "nested_tree", "block_mirror", "ancestor_merge"],
+        help="Client fixture request scenario.",
+    )
+    notion_client_fixture_request_plan.add_argument(
+        "--max-items",
+        type=int,
+        default=100000,
+        help="Maximum fixture nodes or mirror records to parse when preview inputs are supplied. Range 1-100000.",
+    )
+    notion_client_fixture_request_plan.add_argument(
+        "--max-depth",
+        type=int,
+        default=16,
+        help="Maximum future parent-chain crawl depth to request per missing ancestor. Range 1-64.",
+    )
+    notion_client_fixture_request_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Builds a non-secret request package only; never sends messages, calls providers, or writes fixtures.",
+    )
+    notion_client_fixture_request_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    notion_client_fixture_request_plan.set_defaults(func=command_notion_client_fixture_request_plan)
 
     zettel_edge = subcommands.add_parser(
         "zettel-edge",

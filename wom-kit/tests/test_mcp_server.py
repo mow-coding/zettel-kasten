@@ -649,6 +649,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("notion_block_mirror_tree_fixture_plan", tool_names)
             self.assertIn("notion_ancestor_merge_plan", tool_names)
             self.assertIn("notion_client_issue_verification_plan", tool_names)
+            self.assertIn("notion_client_fixture_request_plan", tool_names)
             self.assertIn("imap_mailbox_plan", tool_names)
             self.assertIn("imap_mailbox_operation_request_plan", tool_names)
             self.assertIn("imap_mailbox_adapter_readiness_plan", tool_names)
@@ -2528,17 +2529,43 @@ class McpServerTests(unittest.TestCase):
                 self.assertFalse(verification["current_capability"]["provider_api_call_implemented"])
                 self.assertFalse(verification["closed_actions"]["fixture_written"])
 
-                dry_run_response = self.send(
+                request_response = self.send(
                     process,
                     {
                         "jsonrpc": "2.0",
                         "id": 4,
                         "method": "tools/call",
                         "params": {
-                            "name": "notion_client_issue_verification_plan",
+                            "name": "notion_client_fixture_request_plan",
                             "arguments": {
                                 "archive_root": str(allowed_archive),
                                 "tree": "workbench/notion-nested-tree.sample.json",
+                                "source": "notion",
+                            },
+                        },
+                    },
+                )
+                request_result = request_response["result"]
+                self.assertFalse(request_result["isError"])
+                request = request_result["structuredContent"]
+                self.assertTrue(request["ok"])
+                self.assertEqual(request["lifecycle_action"], "notion_client_fixture_request_plan")
+                self.assertEqual(request["plan_state"], "client_fixture_request_with_verification_ready")
+                self.assertEqual(request["request_package"]["requested_next_fixture"], "notion_ancestor_result_fixture")
+                self.assertFalse(request["current_capability"]["provider_api_call_implemented"])
+                self.assertFalse(request["closed_actions"]["client_message_sent"])
+                self.assertFalse(request["closed_actions"]["fixture_written"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 5,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "notion_client_fixture_request_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
                                 "source": "notion",
                                 "dry_run": False,
                             },

@@ -3195,6 +3195,85 @@ state:
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_notion_client_fixture_request_plan_packages_non_secret_request_contract_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "notion-client-fixture-request-plan",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "notion_client_fixture_request_plan")
+            self.assertEqual(result["plan_state"], "client_fixture_request_ready")
+            package = result["request_package"]
+            self.assertEqual(package["package_kind"], "notion_client_fixture_request_package")
+            self.assertEqual(package["requested_next_fixture"], "notion_nested_tree_fixture")
+            self.assertIn("notion_ancestor_result_fixture", package["accepted_fixture_kinds"])
+            self.assertIn("node_ref", package["minimal_nested_tree_fixture"]["node_fields"])
+            self.assertIn("Do not include page titles.", package["redaction_checklist"])
+            self.assertFalse(result["closed_actions"]["client_message_sent"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["fixture_written"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn("https://", serialized)
+
+            preview_code, preview_output = self.run_cli(
+                [
+                    "notion-client-fixture-request-plan",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree.sample.json",
+                    "--source",
+                    "notion",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            preview = json.loads(preview_output)
+            preview_serialized = json.dumps(preview, ensure_ascii=False)
+
+            self.assertEqual(preview_code, 0, preview_output)
+            self.assertEqual(preview["plan_state"], "client_fixture_request_with_verification_ready")
+            self.assertEqual(preview["request_package"]["requested_next_fixture"], "notion_ancestor_result_fixture")
+            self.assertEqual(
+                preview["request_package"]["current_verification_state"],
+                "client_issue_reproduced_missing_ancestor_evidence_needed",
+            )
+            self.assertEqual(preview["verification_preview"]["verification_summary"]["crawl_request_count"], 1)
+            self.assertFalse(preview["closed_actions"]["fixture_written"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), preview_serialized)
+            self.assertNotIn("https://", preview_serialized)
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "notion-client-fixture-request-plan",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_zettel_edge_resolves_notion_external_ref_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -7112,6 +7191,7 @@ state:
             self.assertTrue(any("notion-block-mirror-tree-fixture-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-ancestor-merge-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-client-issue-verification-plan" in route["command"] for route in result["safe_routing"]))
+            self.assertTrue(any("notion-client-fixture-request-plan" in route["command"] for route in result["safe_routing"]))
             self.assertFalse(result["closed_actions"]["source_bytes_read"])
             self.assertFalse(result["closed_actions"]["provider_api_called"])
             self.assertFalse(result["closed_actions"]["upload_performed"])
@@ -7130,6 +7210,7 @@ state:
             self.assertTrue(result["current_capability"]["notion_block_mirror_tree_fixture_planning_available"])
             self.assertTrue(result["current_capability"]["notion_ancestor_merge_replan_available"])
             self.assertTrue(result["current_capability"]["notion_client_issue_verification_available"])
+            self.assertTrue(result["current_capability"]["notion_client_fixture_request_package_available"])
             self.assertFalse(result["current_capability"]["object_upload_adapter_implemented"])
             self.assertEqual(result["would_change"], [])
             self.assertNotIn("C:\\", serialized)

@@ -271,6 +271,8 @@ Then route safely:
   `notion-client-issue-verification-plan --tree
   workbench/notion-nested-tree.sample.json --ancestors
   workbench/notion-ancestor-result.sample.json --source notion --dry-run`.
+- Request the minimal sanitized fixtures needed for client verification: use
+  `notion-client-fixture-request-plan --source notion --dry-run`.
 - Register known external hashes: use `prehashed-objet-ledger`.
 - Register already extracted text: use `derive-text capture`.
 - Check extraction completeness: use `derive-text coverage`.
@@ -323,6 +325,7 @@ This guide rephrases existing model documents for AI-human conversation:
 - [Notion Block Mirror Tree Fixture Plan](notion-block-mirror-tree-fixture-plan.md)
 - [Notion Ancestor Merge Plan](notion-ancestor-merge-plan.md)
 - [Notion Client Issue Verification Plan](notion-client-issue-verification-plan.md)
+- [Notion Client Fixture Request Plan](notion-client-fixture-request-plan.md)
 
 It does not change those underlying implementation boundaries.
 
