@@ -95,6 +95,7 @@ docs/notion-nested-tree-plan.md
 docs/notion-ancestor-crawl-plan.md
 docs/notion-block-mirror-tree-fixture-plan.md
 docs/notion-ancestor-merge-plan.md
+docs/notion-client-issue-verification-plan.md
 docs/zettel-edge-write.md
 docs/zettel-edge-batch.md
 docs/project-intake-session.md
@@ -239,6 +240,9 @@ notion-block-mirror-tree-fixture-plan
 
 notion-ancestor-merge-plan
   Merge sanitized ancestor result nodes into a nested tree fixture preview and replan in memory. Dry-run only; reports merge conflicts and after-merge recovery/hold queues without writing fixtures, calling providers, reading page titles or bodies, writing zets, writing edges, or writing receipts.
+
+notion-client-issue-verification-plan
+  Verify a client Notion nested-tree issue from sanitized local fixtures. Dry-run only; orchestrates tree planning, optional block-mirror preview, missing ancestor crawl requests, and optional sanitized ancestor merge/replan, then returns a verdict without calling providers, reading page titles or bodies, writing fixtures, writing zets, writing edges, or writing receipts.
 
 zettel-edge
   Preview or approve one typed edge from a source zet to one verified target zet or manifested objet. Dry-run previews first; approve requires --reviewed-by and writes only one source zettel frontmatter edge plus one receipts/edges/*.zettel-edge.json receipt. `revert-edge` can later remove that exact edge from the receipt and write receipts/edges/reverts/*.zettel-edge-revert.json while preserving the original write receipt. It is not a bulk connection importer, exposes no MCP write tool, calls no providers, reads no real exports, writes no candidate records, updates no object manifests, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
@@ -1226,6 +1230,14 @@ merges sanitized ancestor result nodes into a tree preview and replans in
 memory. Both commands remain read-only and call no providers, read no titles or
 bodies, write no fixture files, mint no zets, write no edges, and write no
 receipts.
+v0.3.127 adds a read-only client issue verification bundle for this loop.
+`archive notion-client-issue-verification-plan --dry-run` combines a sanitized
+tree fixture, optional reviewed block mirror fixture, generated ancestor crawl
+request queue, and optional sanitized ancestor result fixture into one verdict:
+the issue is reproduced and needs ancestor evidence, closed by sanitized
+ancestor merge, still needs more ancestor evidence, or not present in the
+sanitized input. It still calls no providers, reads no titles or bodies, writes
+no fixture files, mints no zets, writes no edges, and writes no receipts.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

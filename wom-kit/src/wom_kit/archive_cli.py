@@ -75,6 +75,8 @@ Commands:
           Build a sanitized nested tree fixture preview from reviewed Notion block mirror metadata.
   notion-ancestor-merge-plan
           Merge sanitized ancestor result nodes into a nested tree fixture preview and replan.
+  notion-client-issue-verification-plan
+          Verify a client Notion nested-tree issue from sanitized local fixtures.
   imap-mailbox-operation-request-plan
           Compose the read-only approval request package before any future IMAP mailbox operation.
   imap-mailbox-plan
@@ -3228,6 +3230,58 @@ def command_notion_ancestor_merge_plan(args: argparse.Namespace) -> int:
             print("Warnings:")
             for warning in result["warnings"]:
                 print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_notion_client_issue_verification_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("notion-client-issue-verification-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.notion_client_issue_verification_plan(
+            Path(args.archive_root),
+            tree_path=args.tree,
+            mirror_path=args.mirror,
+            ancestors_path=args.ancestors,
+            source=args.source,
+            dry_run=args.dry_run,
+            max_items=args.max_items,
+            max_depth=args.max_depth,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("plan_state") or ("passed" if result.get("ok") else "blocked")
+        summary = result.get("verification_summary") if isinstance(result.get("verification_summary"), dict) else {}
+        print(f"Notion client issue verification plan: {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source: {result.get('source') or '-'}")
+        print(f"Verdict: {summary.get('verdict') or '-'}")
+        print(f"Initial hold leaves: {summary.get('initial_hold_leaf_count', 0)}")
+        print(f"Initial untraceable leaves: {summary.get('initial_untraceable_leaf_count', 0)}")
+        print(f"Crawl requests: {summary.get('crawl_request_count', 0)}")
+        print(f"Added ancestors: {summary.get('added_ancestor_count', 0)}")
+        print(f"After-merge hold leaves: {summary.get('after_merge_hold_leaf_count', 0)}")
+        print(f"Ready for reviewed recovery: {'yes' if summary.get('ready_for_reviewed_recovery') else 'no'}")
+        print("Provider API call: no")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
     return 0 if result.get("ok", True) else 1
 
 
@@ -12947,6 +13001,55 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notion_ancestor_merge_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     notion_ancestor_merge_plan.set_defaults(func=command_notion_ancestor_merge_plan)
+
+    notion_client_issue_verification_plan = subcommands.add_parser(
+        "notion-client-issue-verification-plan",
+        aliases=["notion-tree-verification-plan", "notion-nested-tree-verification-plan"],
+        help="Verify a client Notion nested-tree issue from sanitized local fixtures.",
+    )
+    notion_client_issue_verification_plan.add_argument("archive_root", help="Archive root to inspect.")
+    notion_client_issue_verification_plan.add_argument(
+        "--tree",
+        help="Optional archive-relative sanitized nested-tree fixture JSON path. Absolute paths and provider URLs are rejected.",
+    )
+    notion_client_issue_verification_plan.add_argument(
+        "--mirror",
+        help="Optional archive-relative reviewed Notion block mirror fixture JSON path. Absolute paths and provider URLs are rejected.",
+    )
+    notion_client_issue_verification_plan.add_argument(
+        "--ancestors",
+        help=(
+            "Optional archive-relative sanitized ancestor result fixture JSON path. "
+            "Requires --tree in this release; no fixture files are written."
+        ),
+    )
+    notion_client_issue_verification_plan.add_argument(
+        "--source",
+        required=True,
+        choices=sorted(archive_services.NOTION_NESTED_TREE_SOURCES),
+        help="External source declared by the sanitized fixtures.",
+    )
+    notion_client_issue_verification_plan.add_argument(
+        "--max-items",
+        type=int,
+        default=100000,
+        help="Maximum fixture nodes or mirror records to parse. Range 1-100000.",
+    )
+    notion_client_issue_verification_plan.add_argument(
+        "--max-depth",
+        type=int,
+        default=16,
+        help="Maximum future parent-chain crawl depth to request per missing ancestor. Range 1-64.",
+    )
+    notion_client_issue_verification_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Verifies sanitized fixtures only; never calls providers, reads titles or bodies, or writes fixtures.",
+    )
+    notion_client_issue_verification_plan.add_argument(
+        "--format", choices=["text", "json"], default="json", help="Output format."
+    )
+    notion_client_issue_verification_plan.set_defaults(func=command_notion_client_issue_verification_plan)
 
     zettel_edge = subcommands.add_parser(
         "zettel-edge",

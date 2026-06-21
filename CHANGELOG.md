@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.127 - 2026-06-22
+
+- Added read-only `archive notion-client-issue-verification-plan --dry-run`
+  and MCP `notion_client_issue_verification_plan` to verify a client Notion
+  nested-tree issue from sanitized local fixture bundles.
+- The verifier orchestrates sanitized nested tree planning, optional reviewed
+  block mirror preview, missing ancestor crawl request packaging, and optional
+  sanitized ancestor merge/replan into one verdict-oriented `plan_state`.
+- Added documentation, capability matrix coverage, public documentation map
+  links, release notes, CLI tests, MCP tests, and AI guide routing for the
+  client issue verification command.
+- Still closed: no live Notion transport, OAuth, provider API calls, title/body
+  reads, media downloads, fixture writes, zettel writes, edge writes, receipts,
+  or object manifest updates.
+
 ## v0.3.126 - 2026-06-22
 
 - Added read-only `archive notion-block-mirror-tree-fixture-plan --dry-run`

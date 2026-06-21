@@ -17691,6 +17691,321 @@ def notion_ancestor_merge_plan(
     }
 
 
+def notion_client_issue_verification_plan(
+    archive_root: Path | str,
+    *,
+    tree_path: str | None = None,
+    mirror_path: str | None = None,
+    ancestors_path: str | None = None,
+    source: str = "notion",
+    dry_run: bool = True,
+    max_items: int = 100000,
+    max_depth: int = 16,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("notion-client-issue-verification-plan is read-only and requires --dry-run.")
+
+    normalized_source = str(source or "").strip().lower().replace("-", "_")
+    if normalized_source not in NOTION_NESTED_TREE_SOURCES:
+        blockers.append("source must be one of: " + ", ".join(sorted(NOTION_NESTED_TREE_SOURCES)) + ".")
+        normalized_source = "notion"
+    max_items_value = notion_nested_tree_safe_max_items(max_items, blockers)
+
+    try:
+        max_depth_value = int(max_depth)
+    except (TypeError, ValueError):
+        max_depth_value = 16
+        blockers.append("max_depth must be an integer between 1 and 64.")
+    if max_depth_value < 1 or max_depth_value > 64:
+        blockers.append("max_depth must be between 1 and 64.")
+        max_depth_value = max(1, min(max_depth_value, 64))
+
+    raw_tree_path = str(tree_path or "").strip()
+    raw_mirror_path = str(mirror_path or "").strip()
+    raw_ancestors_path = str(ancestors_path or "").strip()
+    normalized_tree_path = ""
+    normalized_mirror_path = ""
+    normalized_ancestors_path = ""
+    if raw_tree_path:
+        try:
+            normalized_tree_path = normalize_archive_relative_path(raw_tree_path)
+        except ArchivePathError:
+            blockers.append("tree path must be a safe archive-relative fixture path.")
+    if raw_mirror_path:
+        try:
+            normalized_mirror_path = normalize_archive_relative_path(raw_mirror_path)
+        except ArchivePathError:
+            blockers.append("mirror path must be a safe archive-relative fixture path.")
+    if raw_ancestors_path:
+        try:
+            normalized_ancestors_path = normalize_archive_relative_path(raw_ancestors_path)
+        except ArchivePathError:
+            blockers.append("ancestors path must be a safe archive-relative fixture path.")
+    if not normalized_tree_path and not normalized_mirror_path:
+        blockers.append("notion client issue verification requires --tree or --mirror.")
+    if normalized_ancestors_path and not normalized_tree_path:
+        blockers.append(
+            "ancestor verification currently requires --tree; save and review a mirror-derived tree fixture before merging ancestors."
+        )
+
+    tree_plan: dict[str, Any] = {}
+    mirror_plan: dict[str, Any] = {}
+    base_tree_plan: dict[str, Any] = {}
+    ancestor_crawl_plan_result: dict[str, Any] = {}
+    ancestor_merge_plan_result: dict[str, Any] = {}
+    base_tree_source = "none"
+
+    if normalized_tree_path and not blockers:
+        tree_plan = notion_nested_tree_plan(
+            root,
+            tree_path=normalized_tree_path,
+            source=normalized_source,
+            dry_run=True,
+            max_items=max_items_value,
+        )
+        warnings.extend(str(item) for item in tree_plan.get("warnings", []))
+        if not tree_plan.get("ok"):
+            blockers.extend(str(item) for item in tree_plan.get("blockers", []))
+        else:
+            base_tree_plan = tree_plan
+            base_tree_source = "tree_fixture"
+
+    if normalized_mirror_path and not blockers:
+        mirror_plan = notion_block_mirror_tree_fixture_plan(
+            root,
+            mirror_path=normalized_mirror_path,
+            source=normalized_source,
+            dry_run=True,
+            max_items=max_items_value,
+        )
+        warnings.extend(str(item) for item in mirror_plan.get("warnings", []))
+        if not mirror_plan.get("ok"):
+            blockers.extend(str(item) for item in mirror_plan.get("blockers", []))
+        elif not base_tree_plan:
+            base_tree_plan = mirror_plan.get("nested_tree_plan_preview") if isinstance(mirror_plan.get("nested_tree_plan_preview"), dict) else {}
+            base_tree_source = "block_mirror_fixture_preview"
+
+    if base_tree_plan and not blockers:
+        request_queue = notion_ancestor_crawl_requests_from_nested_plan(base_tree_plan, max_depth=max_depth_value)
+        affected_leaf_refs = unique_preserve_order(
+            leaf_ref
+            for request in request_queue
+            for leaf_ref in request.get("affected_leaf_refs", [])
+        )
+        missing_ancestor_refs = unique_preserve_order(
+            str(request.get("ancestor_ref") or "")
+            for request in request_queue
+            if request.get("request_reason") == "missing_parent_record"
+        )
+        rootless_leaf_refs = unique_preserve_order(
+            str(request.get("ancestor_ref") or "")
+            for request in request_queue
+            if request.get("request_reason") == "no_known_generation_root"
+        )
+        ancestor_crawl_plan_result = {
+            "ok": True,
+            "plan_state": "ancestor_crawl_requests_ready" if request_queue else "no_ancestor_crawl_needed",
+            "source_plan_state": base_tree_plan.get("plan_state"),
+            "request_summary": {
+                "crawl_request_count": len(request_queue),
+                "missing_ancestor_ref_count": len(missing_ancestor_refs),
+                "rootless_leaf_ref_count": len(rootless_leaf_refs),
+                "affected_leaf_count": len(affected_leaf_refs),
+                "max_depth": max_depth_value,
+                "auto_writable_count": 0,
+            },
+            "missing_ancestor_refs": missing_ancestor_refs,
+            "rootless_leaf_refs": rootless_leaf_refs,
+            "affected_leaf_refs": affected_leaf_refs,
+            "crawl_request_queue": request_queue,
+        }
+
+    if normalized_ancestors_path and normalized_tree_path and not blockers:
+        ancestor_merge_plan_result = notion_ancestor_merge_plan(
+            root,
+            tree_path=normalized_tree_path,
+            ancestors_path=normalized_ancestors_path,
+            source=normalized_source,
+            dry_run=True,
+            max_items=max_items_value,
+        )
+        warnings.extend(str(item) for item in ancestor_merge_plan_result.get("warnings", []))
+        if not ancestor_merge_plan_result.get("ok"):
+            blockers.extend(str(item) for item in ancestor_merge_plan_result.get("blockers", []))
+
+    verification_summary = notion_client_issue_verification_summary(
+        base_tree_plan=base_tree_plan,
+        ancestor_crawl_plan=ancestor_crawl_plan_result,
+        ancestor_merge_plan=ancestor_merge_plan_result,
+        blockers=blockers,
+    )
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "lifecycle_action": "notion_client_issue_verification_plan",
+        "archive_id": archive_id,
+        "plan_state": verification_summary.get("issue_state") if not blockers else "blocked",
+        "source": normalized_source,
+        "verification_inputs": {
+            "tree_path": normalized_tree_path or None,
+            "mirror_path": normalized_mirror_path or None,
+            "ancestors_path": normalized_ancestors_path or None,
+            "base_tree_source": base_tree_source,
+            "max_items": max_items_value,
+            "max_depth": max_depth_value,
+        },
+        "verification_summary": verification_summary,
+        "base_tree_plan": base_tree_plan,
+        "tree_plan": tree_plan,
+        "mirror_tree_fixture_plan": mirror_plan,
+        "ancestor_crawl_plan": ancestor_crawl_plan_result,
+        "ancestor_merge_plan": ancestor_merge_plan_result,
+        "current_capability": {
+            "client_sanitized_fixture_verification_available": True,
+            "nested_tree_plan_reuse_available": True,
+            "block_mirror_preview_available": True,
+            "ancestor_crawl_request_queue_available": True,
+            "sanitized_ancestor_merge_available": True,
+            "provider_api_call_implemented": False,
+            "oauth_started": False,
+            "live_deep_crawl_adapter_implemented": False,
+            "fixture_writer_implemented": False,
+            "mint_or_import_writer_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "page_titles_read": False,
+            "page_bodies_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "tree_fixture_file_read": bool(tree_plan.get("closed_actions", {}).get("fixture_file_read")),
+            "mirror_fixture_file_read": bool(mirror_plan.get("closed_actions", {}).get("mirror_fixture_file_read")),
+            "ancestor_result_fixture_file_read": bool(
+                ancestor_merge_plan_result.get("closed_actions", {}).get("ancestor_result_fixture_file_read")
+            ),
+            "fixture_written": False,
+            "zettels_written": False,
+            "edges_written": False,
+            "receipts_written": False,
+            "object_manifest_updated": False,
+        },
+        "privacy_guards": notion_tree_privacy_guards(),
+        "would_change": [],
+        "next_safe_actions": notion_client_issue_verification_next_actions(verification_summary),
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def notion_client_issue_verification_summary(
+    *,
+    base_tree_plan: dict[str, Any],
+    ancestor_crawl_plan: dict[str, Any],
+    ancestor_merge_plan: dict[str, Any],
+    blockers: list[str],
+) -> dict[str, Any]:
+    if blockers:
+        return {
+            "issue_state": "blocked",
+            "verdict": "The sanitized verification bundle is blocked before client issue confirmation.",
+        }
+
+    base_summary = base_tree_plan.get("recovery_summary") if isinstance(base_tree_plan.get("recovery_summary"), dict) else {}
+    crawl_summary = (
+        ancestor_crawl_plan.get("request_summary") if isinstance(ancestor_crawl_plan.get("request_summary"), dict) else {}
+    )
+    after_merge_plan = (
+        ancestor_merge_plan.get("nested_tree_plan_after_merge")
+        if isinstance(ancestor_merge_plan.get("nested_tree_plan_after_merge"), dict)
+        else {}
+    )
+    after_summary = (
+        after_merge_plan.get("recovery_summary") if isinstance(after_merge_plan.get("recovery_summary"), dict) else {}
+    )
+    merge_summary = ancestor_merge_plan.get("merge_summary") if isinstance(ancestor_merge_plan.get("merge_summary"), dict) else {}
+
+    initial_hold_count = int(base_summary.get("hold_leaf_count", 0) or 0)
+    initial_untraceable_count = int(base_summary.get("untraceable_leaf_count", 0) or 0)
+    initial_recovery_count = int(base_summary.get("missing_live_content_leaf_count", 0) or 0)
+    crawl_request_count = int(crawl_summary.get("crawl_request_count", 0) or 0)
+    after_hold_count = int(after_summary.get("hold_leaf_count", 0) or 0)
+    after_untraceable_count = int(after_summary.get("untraceable_leaf_count", 0) or 0)
+    after_recovery_count = int(after_summary.get("missing_live_content_leaf_count", 0) or 0)
+    added_ancestor_count = int(merge_summary.get("added_node_count", 0) or 0)
+    conflict_count = int(merge_summary.get("conflict_count", 0) or 0)
+
+    if after_summary:
+        if after_hold_count == 0 and after_untraceable_count == 0 and conflict_count == 0:
+            issue_state = "client_issue_verified_closed_by_sanitized_ancestor_merge"
+            verdict = "The missing-ancestor problem is closed in the sanitized verification bundle; reviewed recovery can proceed."
+        else:
+            issue_state = "client_issue_still_needs_more_sanitized_ancestor_evidence"
+            verdict = "The sanitized ancestor merge reduced or checked the issue, but more ancestor evidence is still needed."
+    elif initial_hold_count > 0 or initial_untraceable_count > 0 or crawl_request_count > 0:
+        issue_state = "client_issue_reproduced_missing_ancestor_evidence_needed"
+        verdict = "The sanitized input reproduces the missing-ancestor issue and yields a crawl request contract."
+    else:
+        issue_state = "no_missing_ancestor_issue_detected_in_sanitized_input"
+        verdict = "The sanitized input does not show the missing-ancestor issue."
+
+    return {
+        "issue_state": issue_state,
+        "verdict": verdict,
+        "initial_hold_leaf_count": initial_hold_count,
+        "initial_untraceable_leaf_count": initial_untraceable_count,
+        "initial_missing_live_content_leaf_count": initial_recovery_count,
+        "crawl_request_count": crawl_request_count,
+        "after_merge_hold_leaf_count": after_hold_count,
+        "after_merge_untraceable_leaf_count": after_untraceable_count,
+        "after_merge_missing_live_content_leaf_count": after_recovery_count,
+        "added_ancestor_count": added_ancestor_count,
+        "merge_conflict_count": conflict_count,
+        "ready_for_reviewed_recovery": bool(after_summary and after_hold_count == 0 and after_untraceable_count == 0 and conflict_count == 0),
+        "requires_more_sanitized_ancestor_evidence": bool(
+            (not after_summary and crawl_request_count > 0) or (after_summary and (after_hold_count > 0 or after_untraceable_count > 0))
+        ),
+        "auto_writable_count": 0,
+    }
+
+
+def notion_client_issue_verification_next_actions(summary: dict[str, Any]) -> list[str]:
+    state = str(summary.get("issue_state") or "")
+    if state == "client_issue_verified_closed_by_sanitized_ancestor_merge":
+        return [
+            "Review ancestor_merge_plan.nested_tree_plan_after_merge before any recovery.",
+            "Recover only reviewed recovery_queue items; this command does not mint or write zets.",
+            "Keep live provider adapter work behind a separate credential boundary.",
+        ]
+    if state == "client_issue_reproduced_missing_ancestor_evidence_needed":
+        return [
+            "Send ancestor_crawl_plan.crawl_request_queue to the credential-bounded adapter or human reviewer.",
+            "Return only sanitized ancestor nodes with node_ref, parent_ref, node_kind, source_status, mint_state, and review_status.",
+            "Rerun this verification with --ancestors after the sanitized ancestor result fixture exists.",
+        ]
+    if state == "client_issue_still_needs_more_sanitized_ancestor_evidence":
+        return [
+            "Inspect ancestor_merge_plan.nested_tree_plan_after_merge.hold_queue.",
+            "Collect the next missing sanitized ancestors and rerun verification.",
+            "Do not mint or recover held leaves until hold_queue is empty.",
+        ]
+    if state == "no_missing_ancestor_issue_detected_in_sanitized_input":
+        return [
+            "Confirm that the sanitized fixture matches the client case shape.",
+            "If the client still sees the problem, request a reviewed block mirror or ancestor result fixture for that exact case.",
+        ]
+    return [
+        "Fix blockers and rerun the read-only verification plan.",
+    ]
+
+
 def read_safe_archive_json_fixture(
     root: Path,
     relative_path: str,
@@ -27735,6 +28050,10 @@ def ai_response_concept_guide(
                 "command": "archive notion-ancestor-merge-plan <archive-root> --tree workbench/notion-nested-tree.sample.json --ancestors workbench/notion-ancestor-result.sample.json --source notion --dry-run --format json",
             },
             {
+                "human_intent": "verify a client nested-tree issue from sanitized local fixtures",
+                "command": "archive notion-client-issue-verification-plan <archive-root> --tree workbench/notion-nested-tree.sample.json --ancestors workbench/notion-ancestor-result.sample.json --source notion --dry-run --format json",
+            },
+            {
                 "human_intent": "upload or sync bytes",
                 "command": "future work until a later release explicitly adds an approval-gated adapter",
             },
@@ -27774,6 +28093,7 @@ def ai_response_concept_guide(
             "notion_ancestor_crawl_request_planning_available": True,
             "notion_block_mirror_tree_fixture_planning_available": True,
             "notion_ancestor_merge_replan_available": True,
+            "notion_client_issue_verification_available": True,
             "mcp_tool_available": False,
             "object_upload_adapter_implemented": False,
             "provider_availability_probe_implemented": False,
@@ -27793,6 +28113,7 @@ def ai_response_concept_guide(
             "notion-ancestor-crawl-plan",
             "notion-block-mirror-tree-fixture-plan",
             "notion-ancestor-merge-plan",
+            "notion-client-issue-verification-plan",
             "beginner-setup-manual",
         ],
         "closed_actions": {

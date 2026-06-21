@@ -3069,6 +3069,132 @@ state:
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_notion_client_issue_verification_plan_reproduces_and_closes_sanitized_issue_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "notion-client-issue-verification-plan",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree.sample.json",
+                    "--source",
+                    "notion",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "notion_client_issue_verification_plan")
+            self.assertEqual(result["plan_state"], "client_issue_reproduced_missing_ancestor_evidence_needed")
+            self.assertEqual(result["verification_summary"]["initial_hold_leaf_count"], 1)
+            self.assertEqual(result["verification_summary"]["initial_untraceable_leaf_count"], 1)
+            self.assertEqual(result["verification_summary"]["crawl_request_count"], 1)
+            self.assertTrue(result["verification_summary"]["requires_more_sanitized_ancestor_evidence"])
+            self.assertFalse(result["verification_summary"]["ready_for_reviewed_recovery"])
+            self.assertEqual(result["ancestor_crawl_plan"]["request_summary"]["missing_ancestor_ref_count"], 1)
+            self.assertEqual(result["ancestor_crawl_plan"]["crawl_request_queue"][0]["merge_target"], "sanitized_nested_tree_fixture")
+            self.assertFalse(result["current_capability"]["provider_api_call_implemented"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["fixture_written"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn("https://", serialized)
+
+            closed_code, closed_output = self.run_cli(
+                [
+                    "notion-client-issue-verification-plan",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree.sample.json",
+                    "--ancestors",
+                    "workbench/notion-ancestor-result.sample.json",
+                    "--source",
+                    "notion",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            closed = json.loads(closed_output)
+            closed_serialized = json.dumps(closed, ensure_ascii=False)
+
+            self.assertEqual(closed_code, 0, closed_output)
+            self.assertTrue(closed["ok"])
+            self.assertEqual(closed["plan_state"], "client_issue_verified_closed_by_sanitized_ancestor_merge")
+            self.assertEqual(closed["verification_summary"]["added_ancestor_count"], 1)
+            self.assertEqual(closed["verification_summary"]["after_merge_hold_leaf_count"], 0)
+            self.assertEqual(closed["verification_summary"]["after_merge_untraceable_leaf_count"], 0)
+            self.assertTrue(closed["verification_summary"]["ready_for_reviewed_recovery"])
+            self.assertFalse(closed["verification_summary"]["requires_more_sanitized_ancestor_evidence"])
+            self.assertEqual(closed["ancestor_merge_plan"]["nested_tree_plan_after_merge"]["recovery_summary"]["hold_leaf_count"], 0)
+            self.assertEqual(closed["closed_actions"]["tree_fixture_file_read"], True)
+            self.assertEqual(closed["closed_actions"]["ancestor_result_fixture_file_read"], True)
+            self.assertFalse(closed["closed_actions"]["fixture_written"])
+            self.assertEqual(closed["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), closed_serialized)
+            self.assertNotIn("https://", closed_serialized)
+
+            mirror_code, mirror_output = self.run_cli(
+                [
+                    "notion-client-issue-verification-plan",
+                    str(archive_root),
+                    "--mirror",
+                    "workbench/notion-block-mirror.sample.json",
+                    "--source",
+                    "notion",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            mirror_result = json.loads(mirror_output)
+            self.assertEqual(mirror_code, 0, mirror_output)
+            self.assertEqual(mirror_result["verification_inputs"]["base_tree_source"], "block_mirror_fixture_preview")
+            self.assertEqual(mirror_result["plan_state"], "no_missing_ancestor_issue_detected_in_sanitized_input")
+            self.assertTrue(mirror_result["closed_actions"]["mirror_fixture_file_read"])
+            self.assertFalse(mirror_result["closed_actions"]["fixture_written"])
+
+            unsafe_code, unsafe_output = self.run_cli(
+                [
+                    "notion-client-issue-verification-plan",
+                    str(archive_root),
+                    "--tree",
+                    str((archive_root / "workbench" / "notion-nested-tree.sample.json").resolve()),
+                    "--source",
+                    "notion",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(unsafe_code, 1)
+            self.assertNotIn(str(archive_root.resolve()), unsafe_output)
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "notion-client-issue-verification-plan",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree.sample.json",
+                    "--source",
+                    "notion",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_zettel_edge_resolves_notion_external_ref_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -6985,6 +7111,7 @@ state:
             self.assertTrue(any("notion-ancestor-crawl-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-block-mirror-tree-fixture-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-ancestor-merge-plan" in route["command"] for route in result["safe_routing"]))
+            self.assertTrue(any("notion-client-issue-verification-plan" in route["command"] for route in result["safe_routing"]))
             self.assertFalse(result["closed_actions"]["source_bytes_read"])
             self.assertFalse(result["closed_actions"]["provider_api_called"])
             self.assertFalse(result["closed_actions"]["upload_performed"])
@@ -7002,6 +7129,7 @@ state:
             self.assertTrue(result["current_capability"]["notion_ancestor_crawl_request_planning_available"])
             self.assertTrue(result["current_capability"]["notion_block_mirror_tree_fixture_planning_available"])
             self.assertTrue(result["current_capability"]["notion_ancestor_merge_replan_available"])
+            self.assertTrue(result["current_capability"]["notion_client_issue_verification_available"])
             self.assertFalse(result["current_capability"]["object_upload_adapter_implemented"])
             self.assertEqual(result["would_change"], [])
             self.assertNotIn("C:\\", serialized)

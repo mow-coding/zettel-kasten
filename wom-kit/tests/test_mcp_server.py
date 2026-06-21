@@ -648,6 +648,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("notion_ancestor_crawl_plan", tool_names)
             self.assertIn("notion_block_mirror_tree_fixture_plan", tool_names)
             self.assertIn("notion_ancestor_merge_plan", tool_names)
+            self.assertIn("notion_client_issue_verification_plan", tool_names)
             self.assertIn("imap_mailbox_plan", tool_names)
             self.assertIn("imap_mailbox_operation_request_plan", tool_names)
             self.assertIn("imap_mailbox_adapter_readiness_plan", tool_names)
@@ -2499,18 +2500,45 @@ class McpServerTests(unittest.TestCase):
                 self.assertFalse(merge["current_capability"]["provider_api_call_implemented"])
                 self.assertFalse(merge["closed_actions"]["fixture_written"])
 
-                dry_run_response = self.send(
+                verification_response = self.send(
                     process,
                     {
                         "jsonrpc": "2.0",
                         "id": 3,
                         "method": "tools/call",
                         "params": {
-                            "name": "notion_ancestor_merge_plan",
+                            "name": "notion_client_issue_verification_plan",
                             "arguments": {
                                 "archive_root": str(allowed_archive),
                                 "tree": "workbench/notion-nested-tree.sample.json",
                                 "ancestors": "workbench/notion-ancestor-result.sample.json",
+                                "source": "notion",
+                            },
+                        },
+                    },
+                )
+                verification_result = verification_response["result"]
+                self.assertFalse(verification_result["isError"])
+                verification = verification_result["structuredContent"]
+                self.assertTrue(verification["ok"])
+                self.assertEqual(verification["lifecycle_action"], "notion_client_issue_verification_plan")
+                self.assertEqual(verification["plan_state"], "client_issue_verified_closed_by_sanitized_ancestor_merge")
+                self.assertTrue(verification["verification_summary"]["ready_for_reviewed_recovery"])
+                self.assertEqual(verification["verification_summary"]["added_ancestor_count"], 1)
+                self.assertFalse(verification["current_capability"]["provider_api_call_implemented"])
+                self.assertFalse(verification["closed_actions"]["fixture_written"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 4,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "notion_client_issue_verification_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "tree": "workbench/notion-nested-tree.sample.json",
                                 "source": "notion",
                                 "dry_run": False,
                             },
