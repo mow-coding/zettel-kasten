@@ -646,6 +646,8 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("connection_evidence_parse_fixture", tool_names)
             self.assertIn("notion_nested_tree_plan", tool_names)
             self.assertIn("notion_ancestor_crawl_plan", tool_names)
+            self.assertIn("notion_block_mirror_tree_fixture_plan", tool_names)
+            self.assertIn("notion_ancestor_merge_plan", tool_names)
             self.assertIn("imap_mailbox_plan", tool_names)
             self.assertIn("imap_mailbox_operation_request_plan", tool_names)
             self.assertIn("imap_mailbox_adapter_readiness_plan", tool_names)
@@ -2428,6 +2430,103 @@ class McpServerTests(unittest.TestCase):
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
                 self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_notion_block_mirror_and_ancestor_merge_tools_write_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                mirror_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "notion_block_mirror_tree_fixture_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "mirror": "workbench/notion-block-mirror.sample.json",
+                                "source": "notion",
+                            },
+                        },
+                    },
+                )
+                mirror_result = mirror_response["result"]
+                self.assertFalse(mirror_result["isError"])
+                mirror = mirror_result["structuredContent"]
+                self.assertTrue(mirror["ok"])
+                self.assertEqual(mirror["lifecycle_action"], "notion_block_mirror_tree_fixture_plan")
+                self.assertEqual(mirror["nested_tree_plan_preview"]["recovery_summary"]["missing_live_content_leaf_count"], 1)
+                self.assertFalse(mirror["current_capability"]["provider_api_call_implemented"])
+                self.assertFalse(mirror["closed_actions"]["fixture_written"])
+
+                merge_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "notion_ancestor_merge_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "tree": "workbench/notion-nested-tree.sample.json",
+                                "ancestors": "workbench/notion-ancestor-result.sample.json",
+                                "source": "notion",
+                            },
+                        },
+                    },
+                )
+                merge_result = merge_response["result"]
+                self.assertFalse(merge_result["isError"])
+                merge = merge_result["structuredContent"]
+                self.assertTrue(merge["ok"])
+                self.assertEqual(merge["lifecycle_action"], "notion_ancestor_merge_plan")
+                self.assertEqual(merge["merge_summary"]["added_node_count"], 1)
+                self.assertEqual(merge["nested_tree_plan_after_merge"]["recovery_summary"]["hold_leaf_count"], 0)
+                self.assertEqual(merge["nested_tree_plan_after_merge"]["recovery_summary"]["missing_live_content_leaf_count"], 2)
+                self.assertFalse(merge["current_capability"]["provider_api_call_implemented"])
+                self.assertFalse(merge["closed_actions"]["fixture_written"])
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "notion_ancestor_merge_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "tree": "workbench/notion-nested-tree.sample.json",
+                                "ancestors": "workbench/notion-ancestor-result.sample.json",
+                                "source": "notion",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
             finally:
                 self.stop_server(process)
 

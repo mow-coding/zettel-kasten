@@ -2935,6 +2935,140 @@ state:
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
+    def test_notion_block_mirror_tree_fixture_plan_builds_sanitized_tree_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "notion-block-mirror-tree-fixture-plan",
+                    str(archive_root),
+                    "--mirror",
+                    "workbench/notion-block-mirror.sample.json",
+                    "--source",
+                    "notion",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "notion_block_mirror_tree_fixture_plan")
+            self.assertEqual(result["plan_state"], "nested_tree_fixture_preview_ready")
+            self.assertEqual(result["mirror_summary"]["processed_record_count"], 4)
+            fixture = result["nested_tree_fixture_preview"]
+            self.assertEqual(fixture["fixture_kind"], "notion_nested_tree_fixture")
+            self.assertEqual(len(fixture["nodes"]), 4)
+            node_by_ref = {node["node_ref"]: node for node in fixture["nodes"]}
+            self.assertEqual(node_by_ref["page:fake:mirror-live-log"]["parent_ref"], "page:fake:mirror-parent")
+            self.assertEqual(node_by_ref["page:fake:mirror-live-log"]["node_kind"], "child_page")
+            preview = result["nested_tree_plan_preview"]
+            self.assertTrue(preview["ok"])
+            self.assertEqual(preview["recovery_summary"]["missing_live_content_leaf_count"], 1)
+            self.assertEqual(preview["recovery_summary"]["skip_structure_or_template_leaf_count"], 1)
+            self.assertEqual(preview["recovery_queue"][0]["node_ref"], "page:fake:mirror-live-log")
+            self.assertEqual(
+                preview["recovery_queue"][0]["content_classification"]["classification_basis"],
+                "derived_from_node_kind_no_title_or_body_read",
+            )
+            self.assertTrue(result["current_capability"]["reviewed_block_mirror_parser_implemented"])
+            self.assertFalse(result["current_capability"]["provider_api_call_implemented"])
+            self.assertFalse(result["current_capability"]["page_title_body_parser_implemented"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["page_titles_read"])
+            self.assertFalse(result["closed_actions"]["fixture_written"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn("https://", serialized)
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "notion-block-mirror-tree-fixture-plan",
+                    str(archive_root),
+                    "--mirror",
+                    "workbench/notion-block-mirror.sample.json",
+                    "--source",
+                    "notion",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
+    def test_notion_ancestor_merge_plan_replans_after_sanitized_ancestor_merge_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "notion-ancestor-merge-plan",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree.sample.json",
+                    "--ancestors",
+                    "workbench/notion-ancestor-result.sample.json",
+                    "--source",
+                    "notion",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "notion_ancestor_merge_plan")
+            self.assertEqual(result["plan_state"], "ancestor_merge_replan_ready")
+            self.assertEqual(result["merge_summary"]["base_node_count"], 8)
+            self.assertEqual(result["merge_summary"]["ancestor_node_count"], 1)
+            self.assertEqual(result["merge_summary"]["added_node_count"], 1)
+            self.assertEqual(result["merge_summary"]["conflict_count"], 0)
+            merged_nodes = {node["node_ref"]: node for node in result["merged_tree_fixture_preview"]["nodes"]}
+            self.assertEqual(merged_nodes["page:fake:missing-parent"]["parent_ref"], "database:fake:db3")
+            after_plan = result["nested_tree_plan_after_merge"]
+            self.assertTrue(after_plan["ok"])
+            self.assertEqual(after_plan["recovery_summary"]["untraceable_leaf_count"], 0)
+            self.assertEqual(after_plan["recovery_summary"]["hold_leaf_count"], 0)
+            self.assertEqual(after_plan["recovery_summary"]["missing_live_content_leaf_count"], 2)
+            recovered_refs = {item["node_ref"] for item in after_plan["recovery_queue"]}
+            self.assertIn("page:fake:db3-unknown-orphan", recovered_refs)
+            self.assertTrue(result["current_capability"]["sanitized_ancestor_merge_available"])
+            self.assertTrue(result["current_capability"]["nested_tree_replan_after_merge_available"])
+            self.assertFalse(result["current_capability"]["provider_api_call_implemented"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["fixture_written"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn("https://", serialized)
+
+            no_dry_run_code, no_dry_run_output = self.run_cli(
+                [
+                    "notion-ancestor-merge-plan",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree.sample.json",
+                    "--ancestors",
+                    "workbench/notion-ancestor-result.sample.json",
+                    "--source",
+                    "notion",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_run_code, 1)
+            self.assertIn("requires --dry-run", no_dry_run_output)
+
     def test_zettel_edge_resolves_notion_external_ref_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -6849,6 +6983,8 @@ state:
             self.assertTrue(any("connection-import-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-nested-tree-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-ancestor-crawl-plan" in route["command"] for route in result["safe_routing"]))
+            self.assertTrue(any("notion-block-mirror-tree-fixture-plan" in route["command"] for route in result["safe_routing"]))
+            self.assertTrue(any("notion-ancestor-merge-plan" in route["command"] for route in result["safe_routing"]))
             self.assertFalse(result["closed_actions"]["source_bytes_read"])
             self.assertFalse(result["closed_actions"]["provider_api_called"])
             self.assertFalse(result["closed_actions"]["upload_performed"])
@@ -6864,6 +7000,8 @@ state:
             self.assertTrue(result["current_capability"]["notion_import_material_clue_audit_available"])
             self.assertTrue(result["current_capability"]["notion_nested_tree_recovery_planning_available"])
             self.assertTrue(result["current_capability"]["notion_ancestor_crawl_request_planning_available"])
+            self.assertTrue(result["current_capability"]["notion_block_mirror_tree_fixture_planning_available"])
+            self.assertTrue(result["current_capability"]["notion_ancestor_merge_replan_available"])
             self.assertFalse(result["current_capability"]["object_upload_adapter_implemented"])
             self.assertEqual(result["would_change"], [])
             self.assertNotIn("C:\\", serialized)

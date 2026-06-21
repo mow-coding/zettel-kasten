@@ -260,6 +260,13 @@ Then route safely:
   `notion-ancestor-crawl-plan --tree workbench/notion-nested-tree.sample.json
   --source notion --dry-run` to create a local request queue for a future
   credential-bounded adapter.
+- Build a nested tree fixture from reviewed Notion block mirror metadata: use
+  `notion-block-mirror-tree-fixture-plan --mirror
+  workbench/notion-block-mirror.sample.json --source notion --dry-run`.
+- Merge sanitized ancestor results and replan: use
+  `notion-ancestor-merge-plan --tree workbench/notion-nested-tree.sample.json
+  --ancestors workbench/notion-ancestor-result.sample.json --source notion
+  --dry-run`.
 - Register known external hashes: use `prehashed-objet-ledger`.
 - Register already extracted text: use `derive-text capture`.
 - Check extraction completeness: use `derive-text coverage`.
@@ -309,6 +316,8 @@ This guide rephrases existing model documents for AI-human conversation:
 - [Notion Objet Source Map Link Plan](notion-objet-source-map-link-plan.md)
 - [Notion Nested Tree Plan](notion-nested-tree-plan.md)
 - [Notion Ancestor Crawl Plan](notion-ancestor-crawl-plan.md)
+- [Notion Block Mirror Tree Fixture Plan](notion-block-mirror-tree-fixture-plan.md)
+- [Notion Ancestor Merge Plan](notion-ancestor-merge-plan.md)
 
 It does not change those underlying implementation boundaries.
 

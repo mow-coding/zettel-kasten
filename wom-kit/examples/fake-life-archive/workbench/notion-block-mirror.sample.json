@@ -1,0 +1,42 @@
+{
+  "fixture_kind": "notion_block_mirror_fixture",
+  "source": "notion",
+  "generation_roots": [
+    {
+      "generation_id": "DB2",
+      "root_ref": "database:fake:mirror-db2",
+      "generation_label": "generation:fake:db2"
+    }
+  ],
+  "minted_refs": [],
+  "blocks": [
+    {
+      "id": "fake:mirror-db2",
+      "type": "database",
+      "review_status": "fixture_reviewed"
+    },
+    {
+      "id": "fake:mirror-parent",
+      "parent_id": "fake:mirror-db2",
+      "parent_type": "database",
+      "type": "page",
+      "review_status": "fixture_reviewed"
+    },
+    {
+      "id": "fake:mirror-live-log",
+      "parent_id": "fake:mirror-parent",
+      "parent_type": "page",
+      "type": "child_page",
+      "mint_state": "missing",
+      "review_status": "fixture_reviewed"
+    },
+    {
+      "node_ref": "view:fake:mirror-view",
+      "parent_ref": "database:fake:mirror-db2",
+      "type": "collection_view",
+      "source_status": "live",
+      "mint_state": "not_applicable",
+      "review_status": "fixture_reviewed"
+    }
+  ]
+}
