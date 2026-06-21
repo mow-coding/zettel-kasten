@@ -28,6 +28,7 @@ internal_url_hyperlink
 mention_page
 comment_context
 objet_embed
+notion_containment
 ```
 
 ## What It Plans
@@ -44,6 +45,7 @@ candidates:
 | page mention | `mention` |
 | page/block comment context | `comment_context` |
 | file/embed/object reference | `embed` |
+| child page/database/view nesting | `contains` |
 
 It also checks the current archive's `zettel-kasten/types.yml` and reports which
 recommended edge types are allowed link types. The WOM-kit base and fake archive
@@ -55,6 +57,7 @@ derived
 semantic
 embed
 mention
+contains
 supersedes
 view_query
 comment_context
@@ -64,6 +67,13 @@ This still does not write edges. It only means WOM can now name the connection
 types before a future evidence parser or approval-gated edge writer exists.
 `supersedes` is especially for reviewed version-chain evidence where a newer
 zet replaces an older one.
+
+`contains` is for structural nesting: a parent page or zet contains a child
+page, child database, collection view, or equivalent nested archive object. It
+must not be silently downgraded to `view_query`, `references`, `material`, or
+`inherited_by`. If a future import finds evidence that does not fit the active
+edge vocabulary, the parser or AI runtime should report a model gap and ask for
+a developer decision before writing durable edges.
 
 For the next pre-parser safety gate, see
 [Connection Evidence Parser Contract](connection-evidence-parser-contract.md).

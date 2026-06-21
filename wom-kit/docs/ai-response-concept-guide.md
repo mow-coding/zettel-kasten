@@ -12,6 +12,7 @@ manifest vs zet
 objet -> derived text -> zet
 operational terminology translation layer
 material-clue routing after body locator omission
+link-type model-gap escalation for structural containment
 ```
 
 It is not a new adapter, importer, uploader, or proof system. It is a read-only
@@ -21,7 +22,9 @@ term dictionary so AI responses can translate terms such as `derived_from`,
 safe routing for Notion material links when provider locators were already
 removed from imported zettel bodies. v0.3.104 adds an import material-clue audit
 route so an AI can check whether omitted-locator imports preserved or can
-recover a safe material clue.
+recover a safe material clue. v0.3.123 adds a model-gap escalation guard and a
+`contains` explanation for structural child page/database containment, so an AI
+does not silently force containment into unrelated edge types.
 
 ## Command
 
@@ -189,6 +192,7 @@ Examples:
 | `references` | "This note points to or refers to that one." |
 | `supersedes` | "This newer note replaces the older one." |
 | `semantic` | "These are meaningfully related, but the exact relation still needs a human name." |
+| `contains` | "This note or page structurally contains that child page, database, or view." |
 
 In Korean locale, the same entries return phrases such as:
 
@@ -213,8 +217,15 @@ For beginner-facing answers, the guide recommends bundling near-overlaps:
 
 - `material` and `derived_from` can be explained first as source material;
 - `semantic` and `references` can be explained first as meaning/reference links;
+- `contains` should be explained as structural nesting, not as source material,
+  view-query membership, inheritance, or a loose reference;
 - `supersedes` should be used for version chains where a newer zet replaces an
   older one.
+
+If a captured relation does not fit the active WOM edge vocabulary, the AI
+should say that a model decision is needed. It should not silently map
+structural containment to `view_query`, `references`, `material`, or
+`inherited_by` just because those edge types already exist.
 
 ## 5. What The AI Should Ask Next
 
@@ -238,6 +249,9 @@ Then route safely:
 - Index or plan remaining body-locator matches: use `notion-objet-link-index`
   or `notion-objet-link-plan` only when imported zettels still contain
   provider locator text that can be fingerprinted.
+- Plan Notion structural containment and other connection evidence: use
+  `connection-import-plan --source notion --connection-kind all --dry-run`
+  before creating durable edges.
 - Register known external hashes: use `prehashed-objet-ledger`.
 - Register already extracted text: use `derive-text capture`.
 - Check extraction completeness: use `derive-text coverage`.
@@ -259,6 +273,8 @@ The AI must not say:
 - "The URL is the identity" because the identity is the content hash.
 - "Derived text is the original" because derived text is only a representation.
 - "The zet contains the file" because the zet should cite the source object.
+- "The child database is basically a `view_query` or `references` edge" because
+  structural containment has its own `contains` meaning.
 - "The manifest row proves availability" when it only records a reviewed object
   id and safe location labels.
 

@@ -44,6 +44,7 @@ The future parser may accept only safe, reviewed evidence lanes:
 | `mention_page` | page mention metadata from rich-text or export markers | `source_export_ref`, `source_page_ref`, `mentioned_page_ref`, `mention_context_ref`, `review_status` |
 | `comment_context` | comment mirror metadata without comment bodies | `snapshot_id`, `comment_context_ref`, `page_or_block_ref`, `result_refs`, `privacy_redactions`, `review_status` |
 | `objet_embed` | object/embed refs from file blocks or resolved sha256 object refs | `source_export_ref`, `source_page_ref`, `object_id`, `review_status` |
+| `notion_containment` | child page, child database, collection view, or nested export refs | `source_export_ref`, `parent_page_ref`, `child_refs`, `containment_source`, `review_status` |
 
 Dynamic view/filter and comment-context evidence must include reviewed static
 snapshots because their source context can change after export.
@@ -77,9 +78,16 @@ derived
 semantic
 embed
 mention
+contains
 view_query
 comment_context
 ```
+
+Structural containment is a real model relation. A parser must not coerce
+`child_page`, `child_database`, or `collection_view` evidence into `view_query`,
+`references`, `material`, or `inherited_by` just because those names already
+exist. If no active edge type fits, emit a model-gap review and stop before any
+durable write.
 
 ## Parser Stages
 
@@ -87,7 +95,8 @@ A future parser must:
 
 1. locate explicit, human-scoped evidence,
 2. normalize provider refs into safe archive refs,
-3. map evidence to WOM edge types,
+3. map evidence to WOM edge types, or emit a model-gap review when no active
+   type fits,
 4. require snapshots for dynamic view/filter and comment context evidence,
 5. emit candidate records only,
 6. wait for a later approval-gated writer before durable WOM edges exist.

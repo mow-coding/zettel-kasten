@@ -265,6 +265,7 @@ CONNECTION_IMPORT_KINDS = {
     "mention_page",
     "comment_context",
     "objet_embed",
+    "notion_containment",
 }
 CONNECTION_IMPORT_RECOMMENDED_EDGE_TYPES = {
     "material",
@@ -272,6 +273,7 @@ CONNECTION_IMPORT_RECOMMENDED_EDGE_TYPES = {
     "semantic",
     "embed",
     "mention",
+    "contains",
     "supersedes",
     "view_query",
     "comment_context",
@@ -306,6 +308,12 @@ CONNECTION_EDGE_RELATIONSHIP_VOCABULARY = [
         "status": "active_mapping",
         "active_edge_type": "mention",
         "meaning": "The current zet explicitly mentions another page or zet.",
+    },
+    {
+        "meaning_id": "structural_containment",
+        "status": "active_mapping",
+        "active_edge_type": "contains",
+        "meaning": "The source structurally contains the target as a child page, child database, or nested view.",
     },
     {
         "meaning_id": "view_snapshot_context",
@@ -364,6 +372,7 @@ CONNECTION_EDGE_MECHANISM_AXIS = {
     "mention_page": "notion_page_mention",
     "comment_context": "notion_comment_context_snapshot",
     "objet_embed": "notion_or_archive_objet_embed",
+    "notion_containment": "notion_child_page_or_database_containment",
 }
 CONNECTION_EDGE_ACTIVE_MEANING_BY_EDGE_TYPE = {
     "material": "source_material",
@@ -371,6 +380,7 @@ CONNECTION_EDGE_ACTIVE_MEANING_BY_EDGE_TYPE = {
     "semantic": "weak_semantic",
     "embed": "embedded_objet",
     "mention": "explicit_mention",
+    "contains": "structural_containment",
     "supersedes": "version_replacement",
     "view_query": "view_snapshot_context",
     "comment_context": "comment_context",
@@ -1624,6 +1634,16 @@ AI_OPERATIONAL_EDGE_TYPE_TRANSLATIONS = [
         "confusion_guardrail": "A mention can be incidental; keep it only when it carries durable meaning.",
     },
     {
+        "term": "contains",
+        "plain_meaning": "The source structurally contains the target as a nested child page, child database, or view.",
+        "phrases": {
+            "ko-KR": "이 메모/페이지가 저 자식 페이지나 데이터베이스를 구조적으로 담고 있다.",
+            "en-US": "This note or page structurally contains that child page, database, or view.",
+        },
+        "metaphor": "folder containing a child folder",
+        "confusion_guardrail": "Use for structural nesting, not for source material, static view query results, references, or inheritance.",
+    },
+    {
         "term": "view_query",
         "plain_meaning": "The relation came from a reviewed static database view or filter snapshot.",
         "phrases": {
@@ -1779,6 +1799,11 @@ AI_OPERATIONAL_CONNECTION_KIND_TRANSLATIONS = [
         "term": "objet_embed",
         "phrases": {"ko-KR": "파일/객체 삽입에서 온 연결", "en-US": "connection from an embedded object"},
         "recommended_wording": "maps to embed when the object is evidence for the zet.",
+    },
+    {
+        "term": "notion_containment",
+        "phrases": {"ko-KR": "Notion 자식 페이지/데이터베이스를 담는 구조", "en-US": "Notion child page or child database containment"},
+        "recommended_wording": "maps to contains when a parent page structurally nests a child page, child database, or collection view.",
     },
 ]
 AI_OPERATIONAL_LIFECYCLE_TRANSLATIONS = [
@@ -16076,6 +16101,12 @@ def connection_import_plan(
             "present_recommended_edge_types": present_types,
             "missing_recommended_edge_types": missing_types,
         },
+        "model_gap_escalation": {
+            "required": True,
+            "rule": "If captured evidence does not fit the active edge vocabulary, do not silently map it to the nearest existing type; report developer decision required.",
+            "known_gap_promoted": "notion_containment -> contains",
+            "do_not_silently_use": ["view_query", "references", "material", "inherited_by"],
+        },
         "dynamic_snapshot_standard": connection_import_dynamic_snapshot_standard(),
         "official_source_ids": [
             "notion_data_source_properties",
@@ -16086,7 +16117,8 @@ def connection_import_plan(
         ],
         "next_safe_steps": [
             "Use the defined connection edge vocabulary before writing any future imported edges.",
-            "Build a read-only evidence parser for exported relation CSV, markdown links, mentions, comments, and objet embeds.",
+            "Escalate edge vocabulary gaps instead of forcing structural containment into unrelated edge types.",
+            "Build a read-only evidence parser for exported relation CSV, markdown links, mentions, comments, objet embeds, and containment refs.",
             "Review dynamic database view/filter results as static edge snapshots before treating them as canonical edges.",
             "Only after review, add an approval-gated edge write command with receipts.",
         ],
@@ -16185,7 +16217,7 @@ def connection_evidence_parser_contract(
             },
             {
                 "stage": "map_to_edge_type",
-                "rule": "Use the connection-import-plan mapping and base WOM edge vocabulary.",
+                "rule": "Use the connection-import-plan mapping and base WOM edge vocabulary; if no active type fits, emit a model-gap review instead of coercing the edge type.",
             },
             {
                 "stage": "require_snapshot_when_dynamic",
@@ -16356,6 +16388,18 @@ def connection_evidence_parser_input_lanes() -> list[dict[str, Any]]:
                 "review_status",
             ],
             "optional_fields": ["store_ref"],
+            "dynamic_snapshot_required": False,
+        },
+        {
+            "connection_kind": "notion_containment",
+            "accepted_evidence": "child_page, child_database, collection_view, or nested export refs without page titles or body text",
+            "required_fields": [
+                "source_export_ref",
+                "parent_page_ref",
+                "child_refs",
+                "containment_source",
+                "review_status",
+            ],
             "dynamic_snapshot_required": False,
         },
     ]
@@ -16792,6 +16836,8 @@ def connection_edge_parsimony_signal(*, edge_type: str, connection_kind: str) ->
         return "human_must_name_specific_meaning_or_drop"
     if edge_type in {"view_query", "comment_context"}:
         return "keep_as_snapshot_context_not_general_edge"
+    if edge_type == "contains":
+        return "keep_as_structural_nesting_not_reference_or_material"
     if edge_type == "mention":
         return "drop_if_only_incidental_mention"
     if edge_type == "embed":
@@ -16815,6 +16861,8 @@ def connection_edge_review_reason(
         return "semantic is intentionally weak; a human should name the specific relation or drop it."
     if confidence == "snapshot_required":
         return "snapshot-derived edges need human review so dynamic context does not become a false durable edge."
+    if edge_type == "contains":
+        return "structural containment can be kept as contains when parent and child refs resolve; durable writes still require human batch approval."
     if confidence.startswith("medium"):
         return "medium-confidence fixture mapping should be checked before durable edge writing."
     if provisional:
@@ -16968,6 +17016,24 @@ def connection_evidence_candidates_from_record(
                 snapshot_ref=None,
                 evidence_ref=safe_connection_evidence_field(record, "source_export_ref", index, blockers),
             )
+        ]
+    if connection_kind == "notion_containment":
+        safe_connection_evidence_field(record, "source_export_ref", index, blockers)
+        evidence_ref = safe_connection_evidence_field(record, "containment_source", index, blockers)
+        return [
+            build_connection_evidence_candidate(
+                record,
+                index=index,
+                blockers=blockers,
+                connection_kind=connection_kind,
+                edge_type="contains",
+                source_ref=safe_connection_evidence_field(record, "parent_page_ref", index, blockers),
+                target_ref=child_ref,
+                confidence="high_when_child_ref_resolves",
+                snapshot_ref=None,
+                evidence_ref=evidence_ref,
+            )
+            for child_ref in safe_connection_evidence_list(record, "child_refs", index, blockers)
         ]
     return []
 
@@ -18906,6 +18972,16 @@ def notion_connection_import_mappings() -> list[dict[str, Any]]:
             "snapshot_required": False,
             "official_source_ids": ["notion_block_object"],
         },
+        {
+            "connection_kind": "notion_containment",
+            "notion_evidence": "child_page, child_database, collection_view, or exported nested page/database structure",
+            "candidate_edge_types": ["contains"],
+            "target_shape": "parent_zet_to_child_zet_or_view",
+            "import_rule": "Map structural parent-to-child nesting to contains; do not silently remap it to view_query, references, material, or inherited_by.",
+            "confidence": "high_when_child_ref_resolves",
+            "snapshot_required": False,
+            "official_source_ids": ["notion_block_object"],
+        },
     ]
 
 
@@ -18935,6 +19011,11 @@ def connection_import_edge_vocabulary() -> list[dict[str, Any]]:
             "edge_type": "mention",
             "meaning": "The current zet explicitly mentions another page/zet.",
             "typical_source": "Notion @mention page reference",
+        },
+        {
+            "edge_type": "contains",
+            "meaning": "The current zet or page structurally contains the target child page, child database, or view.",
+            "typical_source": "Notion child_page, child_database, collection_view, or nested export structure",
         },
         {
             "edge_type": "view_query",
@@ -26046,6 +26127,7 @@ def ai_response_concept_guide(
             "separate_identity_from_location": True,
             "separate_evidence_from_interpretation": True,
             "requires_receipt_before_upload_or_availability_claim": True,
+            "escalate_link_type_model_gaps_before_mapping": True,
         },
         "sections": sections,
         "next_safe_question": "Are we trying to register known object ids now, verify/upload the bytes now, or draft human zets from already registered evidence?",
@@ -26083,6 +26165,10 @@ def ai_response_concept_guide(
                 "command": "archive notion-objet-link-plan <archive-root> --path <zet.md> --dry-run --format json",
             },
             {
+                "human_intent": "plan Notion structural containment or other connection evidence",
+                "command": "archive connection-import-plan <archive-root> --source notion --connection-kind all --dry-run --format json",
+            },
+            {
                 "human_intent": "upload or sync bytes",
                 "command": "future work until a later release explicitly adds an approval-gated adapter",
             },
@@ -26098,12 +26184,14 @@ def ai_response_concept_guide(
                 "Derived text is the original.",
                 "The zet contains the file.",
                 "The manifest row proves availability.",
+                "This Notion child database is basically a view_query/reference/material edge.",
             ],
             "may_say": [
                 "The identity is stable if the bytes are unchanged.",
                 "The location can change while the object id stays the same.",
                 "Upload evidence and location evidence can be added later.",
                 "A store label is safe to show; raw paths, provider URLs, account ids, and tokens are not.",
+                "Structural nesting should use contains when the archive model defines it; otherwise pause for a model decision.",
             ],
         },
         "current_capability": {
@@ -26112,6 +26200,8 @@ def ai_response_concept_guide(
             "locale_aware_korean_available": True,
             "edge_type_translation_available": True,
             "connection_kind_translation_available": True,
+            "link_type_model_gap_escalation_available": True,
+            "contains_edge_type_translation_available": True,
             "source_map_material_link_routing_available": True,
             "notion_import_material_clue_audit_available": True,
             "mcp_tool_available": False,
@@ -26128,6 +26218,7 @@ def ai_response_concept_guide(
             "notion-objet-source-map-link-plan",
             "notion-objet-link-index",
             "notion-objet-link-plan",
+            "connection-import-plan",
             "beginner-setup-manual",
         ],
         "closed_actions": {
@@ -26227,17 +26318,20 @@ def ai_response_operational_terms_section(locale: str) -> dict[str, Any]:
         "semantic_source_mechanism_note": {
             "synced_block_reference": "Currently translates through semantic unless the human names a more specific meaning.",
             "internal_url_hyperlink": "Currently translates through semantic unless the human names a more specific meaning.",
+            "notion_containment": "Use contains for structural child page/database nesting; do not coerce it into view_query, references, material, or inherited_by.",
             "decision": "Do not add new edge types only to preserve provider mechanisms; keep source_mechanism metadata separate.",
         },
         "bundling_guidance": [
             "For beginners, material and derived_from can be explained as source material before exposing direction details.",
             "For beginners, semantic and references can be explained as meaning/reference links before asking for a precise name.",
+            "For beginners, contains can be explained as one page structurally holding a child page or database.",
             "Use supersedes for version chains where a newer zet replaces an older one.",
         ],
         "do_not_say": [
             "This semantic edge proves the pages are the same thing.",
             "A Notion internal URL needs its own durable WOM edge type by default.",
             "A synced block source mechanism is already a final relationship meaning.",
+            "A child database should be forced into view_query or references when contains is missing.",
         ],
     }
 

@@ -492,6 +492,20 @@ link_types:
     to:
       - Zettel
 
+  - id: contains
+    description: The current zet structurally contains a child zet, page, database, view, or package.
+    from:
+      - Zettel
+      - View
+      - Workpack
+    to:
+      - Zettel
+      - View
+      - Workpack
+    policy_notes:
+      - Use for structural nesting such as Notion child_page, child_database, or collection_view evidence.
+      - Do not use as a fallback for source material, references, database view-query snapshots, or inheritance.
+
   - id: view_query
     description: A relation comes from a reviewed static snapshot of a database view or filter result.
     from:

@@ -2263,19 +2263,24 @@ state:
                     "mention_page",
                     "comment_context",
                     "objet_embed",
+                    "notion_containment",
                 },
             )
             edge_types = {item["edge_type"] for item in result["edge_vocabulary"]}
-            self.assertTrue({"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"} <= edge_types)
+            self.assertTrue({"material", "derived", "semantic", "embed", "mention", "contains", "view_query", "comment_context"} <= edge_types)
             relation = next(item for item in result["connection_mappings"] if item["connection_kind"] == "relation_property")
             self.assertEqual(relation["candidate_edge_types"], ["material", "derived"])
             view = next(item for item in result["connection_mappings"] if item["connection_kind"] == "database_view_filter")
             self.assertTrue(view["snapshot_required"])
             self.assertEqual(view["candidate_edge_types"], ["view_query"])
+            containment = next(item for item in result["connection_mappings"] if item["connection_kind"] == "notion_containment")
+            self.assertEqual(containment["candidate_edge_types"], ["contains"])
+            self.assertIn("view_query", result["model_gap_escalation"]["do_not_silently_use"])
+            self.assertEqual(result["model_gap_escalation"]["known_gap_promoted"], "notion_containment -> contains")
             self.assertIn("result_refs", result["dynamic_snapshot_standard"]["required_fields"])
             self.assertEqual(result["archive_link_type_status"]["missing_recommended_edge_types"], [])
             self.assertTrue(
-                {"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"}
+                {"material", "derived", "semantic", "embed", "mention", "contains", "view_query", "comment_context"}
                 <= set(result["archive_link_type_status"]["present_recommended_edge_types"])
             )
             for mapping in result["connection_mappings"]:
@@ -2329,10 +2334,12 @@ state:
                     "mention_page",
                     "comment_context",
                     "objet_embed",
+                    "notion_containment",
                 },
             )
             self.assertIn("relation_source_ref", lanes["relation_property"]["required_fields"])
             self.assertIn("object_id", lanes["objet_embed"]["required_fields"])
+            self.assertIn("child_refs", lanes["notion_containment"]["required_fields"])
             self.assertTrue(lanes["database_view_filter"]["dynamic_snapshot_required"])
             self.assertTrue(lanes["comment_context"]["dynamic_snapshot_required"])
             self.assertEqual(result["archive_link_type_status"]["missing_recommended_edge_types"], [])
@@ -2397,10 +2404,13 @@ state:
             self.assertEqual(result["parse_state"], "fixture_candidates_ready")
             self.assertEqual(result["evidence_summary"]["evidence_path"], "workbench/connection-evidence.sample.json")
             self.assertTrue(result["evidence_summary"]["fixture_file_read"])
-            self.assertEqual(result["evidence_summary"]["declared_record_count"], 8)
-            self.assertEqual(result["evidence_summary"]["candidate_count"], 9)
+            self.assertEqual(result["evidence_summary"]["declared_record_count"], 9)
+            self.assertEqual(result["evidence_summary"]["candidate_count"], 11)
             edge_types = {item["edge_type"] for item in result["candidate_edges"]}
-            self.assertTrue({"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"} <= edge_types)
+            self.assertTrue({"material", "derived", "semantic", "embed", "mention", "contains", "view_query", "comment_context"} <= edge_types)
+            containment_candidates = [item for item in result["candidate_edges"] if item["connection_kind"] == "notion_containment"]
+            self.assertEqual(len(containment_candidates), 2)
+            self.assertTrue(all(item["edge_type"] == "contains" for item in containment_candidates))
             self.assertTrue(all(item["candidate_id"].startswith("candidate:") for item in result["candidate_edges"]))
             self.assertTrue(all(item["write_status"] == "not_written" for item in result["candidate_edges"]))
             self.assertFalse(result["current_capability"]["real_export_parser_implemented"])
@@ -2502,18 +2512,21 @@ state:
             self.assertTrue(result["ok"])
             self.assertEqual(result["lifecycle_action"], "connection_edge_intelligence_plan")
             self.assertEqual(result["classification_state"], "fixture_edge_intelligence_ready")
-            self.assertEqual(result["input_summary"]["candidate_count"], 9)
-            self.assertEqual(result["classification_summary"]["candidate_count"], 9)
+            self.assertEqual(result["input_summary"]["candidate_count"], 11)
+            self.assertEqual(result["classification_summary"]["candidate_count"], 11)
             self.assertGreater(result["classification_summary"]["ambiguous_count"], 0)
             self.assertGreater(result["classification_summary"]["human_review_required_count"], 0)
             self.assertEqual(
                 result["classification_summary"]["human_review_required_count"],
                 result["review_summary"]["human_review_required_count"],
             )
-            self.assertEqual(result["review_summary"]["durable_write_human_approval_required_count"], 9)
+            self.assertEqual(result["review_summary"]["durable_write_human_approval_required_count"], 11)
             self.assertEqual(result["review_summary"]["auto_writable_count"], 0)
             self.assertIn("format_variant", result["classification_summary"]["provisional_meaning_candidate_ids"])
             self.assertIn("responds_to", result["classification_summary"]["provisional_meaning_candidate_ids"])
+            containment_suggestions = [item for item in result["classification_suggestions"] if item["current_edge_type"] == "contains"]
+            self.assertEqual(len(containment_suggestions), 2)
+            self.assertTrue(all(item["relationship_meaning"]["suggested_id"] == "structural_containment" for item in containment_suggestions))
             self.assertTrue(result["edge_intelligence_contract"]["relationship_meaning_axis_is_separate_from_source_mechanism_axis"])
             self.assertTrue(result["edge_intelligence_contract"]["type_must_be_judged_from_edge_content_not_node_category"])
             self.assertTrue(result["edge_intelligence_contract"]["parsimony_first"])
@@ -6540,18 +6553,22 @@ state:
             self.assertEqual(layer_names, ["objet", "derived_text", "zet"])
             operational_section = result["sections"][3]
             edge_terms = {term["term"]: term for term in operational_section["edge_type_terms"]}
-            self.assertEqual(len(edge_terms), 19)
+            self.assertEqual(len(edge_terms), 20)
             self.assertIn("만들어졌다", edge_terms["derived_from"]["selected_user_phrase"])
             self.assertIn("대체", edge_terms["supersedes"]["selected_user_phrase"])
             self.assertIn("가리킨다", edge_terms["references"]["selected_user_phrase"])
+            self.assertIn("구조적으로 담고 있다", edge_terms["contains"]["selected_user_phrase"])
             self.assertEqual(
                 operational_section["semantic_source_mechanism_note"]["synced_block_reference"],
                 "Currently translates through semantic unless the human names a more specific meaning.",
             )
+            self.assertIn("contains", operational_section["semantic_source_mechanism_note"]["notion_containment"])
+            self.assertTrue(result["guide_contract"]["escalate_link_type_model_gaps_before_mapping"])
             self.assertTrue(any("derive-text-coverage" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-objet-source-map-link-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-objet-import-clue-audit" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-objet-link-index" in route["command"] for route in result["safe_routing"]))
+            self.assertTrue(any("connection-import-plan" in route["command"] for route in result["safe_routing"]))
             self.assertFalse(result["closed_actions"]["source_bytes_read"])
             self.assertFalse(result["closed_actions"]["provider_api_called"])
             self.assertFalse(result["closed_actions"]["upload_performed"])
@@ -6561,6 +6578,8 @@ state:
             self.assertFalse(result["privacy_guards"]["secret_values_echoed"])
             self.assertTrue(result["current_capability"]["operational_term_translation_available"])
             self.assertTrue(result["current_capability"]["locale_aware_korean_available"])
+            self.assertTrue(result["current_capability"]["link_type_model_gap_escalation_available"])
+            self.assertTrue(result["current_capability"]["contains_edge_type_translation_available"])
             self.assertTrue(result["current_capability"]["source_map_material_link_routing_available"])
             self.assertTrue(result["current_capability"]["notion_import_material_clue_audit_available"])
             self.assertFalse(result["current_capability"]["object_upload_adapter_implemented"])
@@ -26113,7 +26132,7 @@ state:
             types_data["link_types"] = [
                 item
                 for item in types_data["link_types"]
-                if isinstance(item, dict) and item.get("id") not in {"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"}
+                if isinstance(item, dict) and item.get("id") not in {"material", "derived", "semantic", "embed", "mention", "contains", "view_query", "comment_context"}
             ]
             types_path.write_text(archive_cli.dump_yaml(types_data), encoding="utf-8")
             original_text = types_path.read_text(encoding="utf-8")
@@ -26124,7 +26143,7 @@ state:
             dry_result = json.loads(dry_output)
             self.assertEqual(dry_code, 0, dry_output)
             self.assertEqual(dry_result["lifecycle_action"], "link_types_v03_migration")
-            self.assertEqual(set(dry_result["archive_link_type_status"]["missing_recommended_edge_types"]), {"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"})
+            self.assertEqual(set(dry_result["archive_link_type_status"]["missing_recommended_edge_types"]), {"material", "derived", "semantic", "embed", "mention", "contains", "view_query", "comment_context"})
             self.assertEqual(dry_result["files_written"], [])
             self.assertEqual(types_path.read_text(encoding="utf-8"), original_text)
 
@@ -26138,7 +26157,7 @@ state:
             self.assertIn(approve_result["receipt_path"], approve_result["files_written"])
             migrated_types = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
             migrated_ids = {item["id"] for item in migrated_types["link_types"] if isinstance(item, dict)}
-            self.assertTrue({"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"} <= migrated_ids)
+            self.assertTrue({"material", "derived", "semantic", "embed", "mention", "contains", "view_query", "comment_context"} <= migrated_ids)
 
             revert_dry_code, revert_dry_output = self.run_cli(
                 ["migrate", str(archive_root), "--target", "link-types-v0.3", "--revert", "--dry-run", "--format", "json"]
@@ -26148,7 +26167,7 @@ state:
             self.assertEqual(revert_dry_result["lifecycle_action"], "link_types_v03_revert")
             self.assertEqual(
                 set(revert_dry_result["archive_link_type_status"]["revert_candidate_edge_types"]),
-                {"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"},
+                {"material", "derived", "semantic", "embed", "mention", "contains", "view_query", "comment_context"},
             )
             self.assertEqual(revert_dry_result["files_written"], [])
             self.assertEqual({item["id"] for item in migrated_types["link_types"] if isinstance(item, dict)}, migrated_ids)
@@ -26163,7 +26182,7 @@ state:
             self.assertIn(revert_result["revert_receipt_path"], revert_result["files_written"])
             reverted_types = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
             reverted_ids = {item["id"] for item in reverted_types["link_types"] if isinstance(item, dict)}
-            self.assertFalse({"material", "derived", "semantic", "embed", "mention", "view_query", "comment_context"} & reverted_ids)
+            self.assertFalse({"material", "derived", "semantic", "embed", "mention", "contains", "view_query", "comment_context"} & reverted_ids)
 
     def test_migrate_link_types_v03_revert_blocks_types_used_by_edges(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

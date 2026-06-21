@@ -12506,7 +12506,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     connection_import_plan = subcommands.add_parser(
         "connection-import-plan",
-        help="Plan Notion connection evidence import into WOM typed-edge candidates.",
+        help="Plan Notion connection evidence import into WOM typed-edge candidates, including containment.",
     )
     connection_import_plan.add_argument("archive_root", help="Archive root to inspect.")
     connection_import_plan.add_argument(

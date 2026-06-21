@@ -49,6 +49,8 @@ It keeps two axes separate:
 
 - `source_mechanism`: how the evidence appeared, such as a Notion relation,
   internal link, page mention, view snapshot, comment context, or objet embed.
+  In v0.3.123 this also includes Notion containment evidence such as child
+  pages, child databases, and collection views.
 - `relationship_meaning`: what the relation means for the zettel-kasten.
 
 That distinction matters because a provider mechanism is not always the human
@@ -84,6 +86,7 @@ derived
 semantic
 embed
 mention
+contains
 supersedes
 view_query
 comment_context
@@ -91,8 +94,13 @@ comment_context
 
 The command maps those active edge types to meaning labels such as
 `source_material`, `derived_output`, `weak_semantic`, `embedded_objet`,
-`explicit_mention`, `version_replacement`, `view_snapshot_context`, and
-`comment_context`.
+`explicit_mention`, `structural_containment`, `version_replacement`,
+`view_snapshot_context`, and `comment_context`.
+
+`contains` is an active meaning for structural nesting only. It should be used
+when a parent zet/page contains a child zet/page/database/view. It should not
+be used as a loose topical relation, and child database evidence should not be
+forced into `view_query`, `references`, `material`, or `inherited_by`.
 
 ## Version Chain Heuristic
 
@@ -163,7 +171,10 @@ The command is intentionally cautious:
 - edge type must be judged from edge content, not from node category,
 - source mechanism and relationship meaning are separate axes,
 - version-chain hints can recommend `supersedes`,
+- structural child page/database evidence can recommend `contains`,
 - AI suggestions require human approval,
 - ambiguous edges get review flags,
 - vague `semantic` links should be named more specifically or dropped,
+- unknown relationship shapes should be escalated as model gaps instead of
+  silently mapped to the nearest existing edge type,
 - provisional meanings should accumulate before becoming active edge types.

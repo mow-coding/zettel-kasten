@@ -71,6 +71,17 @@
       "object_id": "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136",
       "store_ref": "store:fake:local",
       "review_status": "fixture_reviewed"
+    },
+    {
+      "connection_kind": "notion_containment",
+      "source_export_ref": "notion-fixture-slice",
+      "parent_page_ref": "page:fake:parent",
+      "child_refs": [
+        "page:fake:child-page",
+        "database:fake:child-database"
+      ],
+      "containment_source": "block:fake:child-container",
+      "review_status": "fixture_reviewed"
     }
   ]
 }

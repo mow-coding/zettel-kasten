@@ -1547,7 +1547,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "connection_import_plan",
-        "description": "Plan Notion connection evidence import into WOM typed-edge candidates. Dry-run only; never calls Notion, reads exports, writes zets, or writes edges.",
+        "description": "Plan Notion connection evidence import into WOM typed-edge candidates, including containment-to-contains mapping and model-gap escalation. Dry-run only; never calls Notion, reads exports, writes zets, or writes edges.",
         "inputSchema": {
             "type": "object",
             "properties": {
