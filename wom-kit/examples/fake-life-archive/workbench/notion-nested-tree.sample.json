@@ -1,0 +1,100 @@
+{
+  "fixture_kind": "notion_nested_tree_fixture",
+  "source": "notion",
+  "generation_roots": [
+    {
+      "generation_id": "DB1",
+      "root_ref": "database:fake:db1",
+      "generation_label": "generation:fake:db1"
+    },
+    {
+      "generation_id": "DB2",
+      "root_ref": "database:fake:db2",
+      "generation_label": "generation:fake:db2"
+    },
+    {
+      "generation_id": "DB3",
+      "root_ref": "database:fake:db3",
+      "generation_label": "generation:fake:db3"
+    }
+  ],
+  "minted_refs": [
+    "page:fake:db1-row-already-minted"
+  ],
+  "nodes": [
+    {
+      "node_ref": "database:fake:db1",
+      "node_kind": "database",
+      "content_class": "structure",
+      "source_status": "live",
+      "mint_state": "not_applicable",
+      "review_status": "fixture_reviewed"
+    },
+    {
+      "node_ref": "page:fake:db1-row-already-minted",
+      "parent_ref": "database:fake:db1",
+      "node_kind": "page",
+      "content_class": "content",
+      "source_status": "live",
+      "mint_state": "already_minted",
+      "review_status": "fixture_reviewed",
+      "containment_source_ref": "block:fake:db1-row"
+    },
+    {
+      "node_ref": "database:fake:db2",
+      "node_kind": "database",
+      "content_class": "structure",
+      "source_status": "live",
+      "mint_state": "not_applicable",
+      "review_status": "fixture_reviewed"
+    },
+    {
+      "node_ref": "page:fake:db2-row-parent",
+      "parent_ref": "database:fake:db2",
+      "node_kind": "page",
+      "content_class": "structure",
+      "source_status": "live",
+      "mint_state": "not_applicable",
+      "review_status": "fixture_reviewed",
+      "containment_source_ref": "block:fake:db2-parent"
+    },
+    {
+      "node_ref": "page:fake:db2-nested-live-log",
+      "parent_ref": "page:fake:db2-row-parent",
+      "node_kind": "child_page",
+      "content_class": "content",
+      "source_status": "live",
+      "mint_state": "missing",
+      "review_status": "fixture_reviewed",
+      "containment_source_ref": "block:fake:db2-nested-log"
+    },
+    {
+      "node_ref": "page:fake:db2-template-leaf",
+      "parent_ref": "page:fake:db2-row-parent",
+      "node_kind": "child_page",
+      "content_class": "template",
+      "source_status": "live",
+      "mint_state": "not_applicable",
+      "review_status": "fixture_reviewed",
+      "containment_source_ref": "block:fake:db2-template"
+    },
+    {
+      "node_ref": "database:fake:db3",
+      "node_kind": "database",
+      "content_class": "structure",
+      "source_status": "live",
+      "mint_state": "not_applicable",
+      "review_status": "fixture_reviewed"
+    },
+    {
+      "node_ref": "page:fake:db3-unknown-orphan",
+      "parent_ref": "page:fake:missing-parent",
+      "node_kind": "child_page",
+      "content_class": "content",
+      "source_status": "live",
+      "mint_state": "missing",
+      "review_status": "needs_parent_recovery",
+      "containment_source_ref": "block:fake:db3-orphan"
+    }
+  ]
+}

@@ -67,6 +67,8 @@ Commands:
           Audit upload evidence receipts and manifest locations without provider calls.
   connection-edge-intelligence-plan
           Classify sanitized connection fixture candidates into meaning/mechanism review signals.
+  notion-nested-tree-plan
+          Plan Notion nested child-page recovery from a sanitized tree fixture.
   imap-mailbox-operation-request-plan
           Compose the read-only approval request package before any future IMAP mailbox operation.
   imap-mailbox-plan
@@ -3023,6 +3025,53 @@ def command_connection_edge_intelligence_plan(args: argparse.Namespace) -> int:
         print(f"Durable-write human approvals required: {review_summary.get('durable_write_human_approval_required_count', 0)}")
         print(f"Auto-writable candidates: {review_summary.get('auto_writable_count', 0)}")
         print("AI/LLM classifier: no")
+        print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_notion_nested_tree_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("notion-nested-tree-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.notion_nested_tree_plan(
+            Path(args.archive_root),
+            tree_path=args.tree,
+            source=args.source,
+            dry_run=args.dry_run,
+            max_items=args.max_items,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("plan_state") or ("passed" if result.get("ok") else "blocked")
+        summary = result.get("recovery_summary") if isinstance(result.get("recovery_summary"), dict) else {}
+        print(f"Notion nested tree plan: {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source: {result.get('source') or '-'}")
+        print(f"Leaf nodes: {summary.get('leaf_count', 0)}")
+        print(f"Missing live content leaves: {summary.get('missing_live_content_leaf_count', 0)}")
+        print(f"Untraceable leaves: {summary.get('untraceable_leaf_count', 0)}")
+        print(f"Structure/template skips: {summary.get('skip_structure_or_template_leaf_count', 0)}")
+        print(f"Auto-writable leaves: {summary.get('auto_writable_count', 0)}")
+        print("Real export parser: no")
         print("Writes: none")
         if result.get("blockers"):
             print("Blockers:")
@@ -12614,6 +12663,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     connection_edge_intelligence_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     connection_edge_intelligence_plan.set_defaults(func=command_connection_edge_intelligence_plan)
+
+    notion_nested_tree_plan = subcommands.add_parser(
+        "notion-nested-tree-plan",
+        aliases=["notion-nested-page-tree-plan", "notion-child-page-recovery-plan"],
+        help="Plan nested Notion child-page recovery from a sanitized tree fixture.",
+    )
+    notion_nested_tree_plan.add_argument("archive_root", help="Archive root to inspect.")
+    notion_nested_tree_plan.add_argument(
+        "--tree",
+        required=True,
+        help="Archive-relative sanitized nested-tree fixture JSON path. Absolute paths and provider URLs are rejected.",
+    )
+    notion_nested_tree_plan.add_argument(
+        "--source",
+        required=True,
+        choices=sorted(archive_services.NOTION_NESTED_TREE_SOURCES),
+        help="External nested tree source declared by the fixture.",
+    )
+    notion_nested_tree_plan.add_argument("--max-items", type=int, default=1000, help="Maximum fixture nodes to parse.")
+    notion_nested_tree_plan.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Parses sanitized tree metadata only; never reads real exports, writes zets, writes edges, or mints pages.",
+    )
+    notion_nested_tree_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    notion_nested_tree_plan.set_defaults(func=command_notion_nested_tree_plan)
 
     zettel_edge = subcommands.add_parser(
         "zettel-edge",
