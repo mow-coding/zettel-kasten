@@ -3938,6 +3938,97 @@ state:
             self.assertNotIn(str(archive_root.resolve()), serialized)
             self.assertNotIn("token-hidden", serialized)
 
+    def test_notion_oauth_connection_preflight_validates_local_contract_without_secret_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+            redirect_uri = "http" + "://" + "127.0.0.1" + ":37429/notion/oauth/callback"
+            client_id_ref = "env:WOM_NOTION_OAUTH_CLIENT_ID"
+            client_secret_ref = "keyring:WOM_NOTION_OAUTH_CLIENT_SECRET"
+            state_ref = "keyring:WOM_NOTION_OAUTH_STATE"
+            token_store_ref = "keyring:WOM_NOTION_OAUTH_TOKEN_STORE"
+            code, output = self.run_cli(
+                [
+                    "notion-oauth-connection-preflight",
+                    str(archive_root),
+                    "--client-id-ref",
+                    client_id_ref,
+                    "--client-secret-ref",
+                    client_secret_ref,
+                    "--redirect-uri",
+                    redirect_uri,
+                    "--state-ref",
+                    state_ref,
+                    "--token-store-ref",
+                    token_store_ref,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "notion_oauth_connection_preflight")
+            self.assertEqual(result["preflight_state"], "ready_for_trusted_local_oauth_runtime")
+            self.assertEqual(result["oauth_target"]["connection_model"], "public_connection_oauth")
+            self.assertEqual(result["input_contract"]["client_id_ref_store"], "env")
+            self.assertEqual(result["input_contract"]["client_secret_ref_store"], "keyring")
+            self.assertTrue(result["input_contract"]["token_store_ref_valid"])
+            self.assertTrue(result["callback_validation"]["redirect_uri_valid"])
+            self.assertEqual(result["callback_validation"]["host_class"], "loopback")
+            self.assertTrue(result["security_contract"]["ai_secret_blind"])
+            self.assertFalse(result["security_contract"]["authorization_code_visible_to_ai"])
+            self.assertFalse(result["implemented_now"]["browser_open"])
+            self.assertFalse(result["implemented_now"]["oauth_token_exchange"])
+            self.assertFalse(result["privacy_guards"]["provider_api_called"])
+            self.assertFalse(result["privacy_guards"]["redirect_uri_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn(redirect_uri, serialized)
+            self.assertNotIn(client_id_ref, serialized)
+            self.assertNotIn(client_secret_ref, serialized)
+            self.assertNotIn(state_ref, serialized)
+            self.assertNotIn(token_store_ref, serialized)
+
+    def test_notion_oauth_connection_preflight_rejects_env_token_store_and_external_callback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            redirect_uri = "https://example.com/oauth/callback?code=secret"
+            code, output = self.run_cli(
+                [
+                    "notion-oauth-preflight",
+                    str(archive_root),
+                    "--client-id-ref",
+                    "env:WOM_NOTION_OAUTH_CLIENT_ID",
+                    "--client-secret-ref",
+                    "env:WOM_NOTION_OAUTH_CLIENT_SECRET",
+                    "--redirect-uri",
+                    redirect_uri,
+                    "--token-store-ref",
+                    "env:WOM_NOTION_OAUTH_TOKEN_STORE",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["preflight_state"], "blocked")
+            self.assertFalse(result["callback_validation"]["redirect_uri_valid"])
+            self.assertEqual(result["callback_validation"]["host_class"], "rejected")
+            self.assertFalse(result["input_contract"]["token_store_ref_valid"])
+            self.assertIn("token_store_ref must use keyring, secret, or wallet storage", " ".join(result["blockers"]))
+            self.assertIn("redirect_uri must use http with loopback host", " ".join(result["blockers"]))
+            self.assertTrue(result["privacy_guards"]["tokens_echoed"] is False)
+            self.assertNotIn(redirect_uri, serialized)
+            self.assertNotIn("example.com", serialized)
+            self.assertNotIn("WOM_NOTION_OAUTH_TOKEN_STORE", serialized)
+
     def test_notion_recover_dry_run_auto_scopes_missing_locations_without_placeholder_chain(self) -> None:
         root_id = "a" * 32
         missing_parent_id = "b" * 32
