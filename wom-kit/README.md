@@ -1345,8 +1345,17 @@ official Tiro data surfaces and bundle contract, while
 reviewed raw Tiro recovery JSON bundle as a content-addressed WOM objet with a
 non-secret receipt. It also adds `archive zet-markdown-style-guide --dry-run`
 and wires the `A ~ B` range-tilde rule into `ai-response-concept-guide`. The
-live credential-bounded Tiro fetch adapter that creates the raw bundle remains
-future work.
+live credential-bounded Tiro fetch adapter lands in v0.3.140.
+v0.3.140 adds `archive tiro-lossless-recovery-fetch-run --dry-run|--approve`.
+The command reads an approved local `env:` Tiro credential only on approve,
+calls the official Tiro REST API, writes the private raw bundle under
+`workbench/`, and records a non-secret fetch receipt under
+`receipts/tiro/lossless-fetches/`. Command output and receipts do not echo the
+credential ref, environment variable name, token, meeting titles, transcript
+text, participant names, provider URLs, or raw provider responses. Keyring/vault
+credential reads, original audio byte retrieval where no official endpoint is
+confirmed, AI enrichment writes, derived text, zet drafting, and minting remain
+separate future layers.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

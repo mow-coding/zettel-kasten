@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.140 - 2026-06-22
+
+- Added approval-gated `archive tiro-lossless-recovery-fetch-run`, with alias
+  `archive tiro-recovery-fetch-run`, to call the official Tiro REST API from a
+  local `env:` credential ref and write a private raw recovery bundle under
+  `workbench/`.
+- The live fetch command supports dry-run preview without reading credentials,
+  approved env-token execution, pagination capture, raw bundle writing, and a
+  non-secret fetch receipt under `receipts/tiro/lossless-fetches/`.
+- Command output and receipts report counts, archive-relative paths, and gap
+  categories, but do not echo credential refs, environment variable names,
+  tokens, meeting titles, transcript text, participant names, provider URLs, or
+  raw provider responses.
+- The remaining Tiro recovery gaps are explicit: audio original byte retrieval,
+  keyring/vault credential reads, and AI enrichment writes are still separate
+  future layers after raw bundle preservation.
+
 ## v0.3.139 - 2026-06-22
 
 - Added read-only `archive tiro-lossless-recovery-plan` for the official Tiro

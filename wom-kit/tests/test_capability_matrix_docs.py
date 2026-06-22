@@ -611,20 +611,23 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
-        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.139.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.140.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.139 Tiro lossless recovery bundle contract and capture checkpoint",
+            "Status: v0.3.140 live Tiro REST fetch and lossless bundle capture checkpoint",
             "archive tiro-lossless-recovery-plan <archive-root>",
+            "archive tiro-lossless-recovery-fetch-run <archive-root>",
             "archive tiro-lossless-recovery-capture <archive-root>",
             "workspaces",
             "transcript paragraphs",
             "generated note documents",
             "word memories",
             "wiki info",
+            "base API: `https://api.tiro.ooo`",
             "600 requests per 60 seconds",
+            "receipts/tiro/lossless-fetches/*.json",
             "objects/sha256/<prefix>/<sha256>",
-            "live credential-bounded Tiro REST or CLI fetch adapter",
-            "does not yet implement",
+            "v0.3.140 implements the live credential-bounded Tiro REST fetch adapter",
+            "audio_original_bytes",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, tiro_text)
@@ -638,11 +641,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, style_text)
         for phrase in (
-            "Status: v0.3.139 Tiro lossless recovery bundle and zet Markdown tilde checkpoint",
+            "Status: v0.3.140 Tiro live lossless recovery fetch checkpoint",
             "Tiro lossless recovery",
             "archive tiro-lossless-recovery-plan",
+            "archive tiro-lossless-recovery-fetch-run",
             "archive tiro-lossless-recovery-capture",
-            "live credential-bounded Tiro REST/CLI fetch adapter that generates the bundle is not implemented yet",
+            "archive tiro-recovery-fetch-run",
+            "Keyring/vault credential reads",
             "zet Markdown style guide",
             "archive zet-markdown-style-guide",
             "A ~ B",
@@ -667,12 +672,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("[Tiro Lossless Recovery](tiro-lossless-recovery.md)", public_map_ko_text)
         self.assertIn("[zet Markdown Style Guide](zet-markdown-style-guide.md)", public_map_ko_text)
         for phrase in (
-            "v0.3.139 responds to the Tiro full-data recovery feedback",
+            "v0.3.140 turns the v0.3.139 Tiro recovery contract",
             "archive tiro-lossless-recovery-plan",
+            "archive tiro-lossless-recovery-fetch-run",
             "archive tiro-lossless-recovery-capture",
-            "archive zet-markdown-style-guide",
-            "A ~ B",
-            "does not yet implement the live credential-bounded Tiro REST/CLI fetch adapter",
+            "Dry-run fetch mode writes nothing",
+            "audio_original_bytes",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, release_text)
