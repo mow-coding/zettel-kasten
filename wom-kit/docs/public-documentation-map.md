@@ -153,6 +153,7 @@ Onboarding and setup plans:
 - [Connection Edge Intelligence Plan](connection-edge-intelligence-plan.md)
 - [Notion Nested Tree Plan](notion-nested-tree-plan.md)
 - [Notion Ancestor Crawl Plan](notion-ancestor-crawl-plan.md)
+- [Notion Ancestor Fetch Adapter Execution Contract](notion-ancestor-fetch-adapter-execution-contract.md)
 - [Notion Block Mirror Tree Fixture Plan](notion-block-mirror-tree-fixture-plan.md)
 - [Notion Ancestor Merge Plan](notion-ancestor-merge-plan.md)
 - [Notion Client Issue Verification Plan](notion-client-issue-verification-plan.md)

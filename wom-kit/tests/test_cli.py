@@ -3050,6 +3050,77 @@ state:
             self.assertEqual(miss["scope_filter"]["filtered_crawl_request_count"], 0)
             self.assertIn("ancestor_crawl_scope_filter_matched_no_requests", miss["warnings"])
 
+    def test_notion_ancestor_fetch_adapter_execution_contract_keeps_live_fetch_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+            credential_ref = "env:wom_notion_readonly"
+
+            code, output = self.run_cli(
+                [
+                    "notion-ancestor-fetch-adapter-execution-contract",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree.sample.json",
+                    "--source",
+                    "notion",
+                    "--scope-ancestor-ref",
+                    "page:fake:missing-parent",
+                    "--credential-ref",
+                    credential_ref,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "notion_ancestor_fetch_adapter_execution_contract")
+            self.assertEqual(result["contract_state"], "fetch_contract_ready")
+            self.assertEqual(result["crawl_request_summary"]["crawl_request_count"], 1)
+            self.assertTrue(result["crawl_request_summary"]["scope_filter_active"])
+            self.assertTrue(result["credential_summary"]["credential_ref_supplied"])
+            self.assertEqual(result["credential_summary"]["credential_ref_store"], "env")
+            self.assertFalse(result["credential_summary"]["credential_ref_echoed"])
+            self.assertFalse(result["credential_summary"]["credential_value_read"])
+            self.assertFalse(result["execution_contract"]["live_execution_allowed_now"])
+            self.assertTrue(result["execution_contract"]["must_consume_crawl_request_queue"])
+            self.assertEqual(result["adapter_output_contract"]["fixture_kind"], "notion_ancestor_result_fixture")
+            self.assertIn("notion-ancestor-merge-plan", result["adapter_output_contract"]["next_command"])
+            self.assertTrue(result["current_capability"]["fetch_adapter_execution_contract_available"])
+            self.assertFalse(result["current_capability"]["live_notion_fetch_adapter_implemented"])
+            self.assertFalse(result["current_capability"]["provider_api_call_implemented"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["credential_value_read"])
+            self.assertFalse(result["closed_actions"]["page_titles_read"])
+            self.assertFalse(result["closed_actions"]["ancestor_result_fixture_written"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertFalse(result["privacy_guards"]["credential_ref_echoed"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn(credential_ref, serialized)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            no_dry_code, no_dry_output = self.run_cli(
+                [
+                    "notion-ancestor-fetch-adapter-execution-contract",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree.sample.json",
+                    "--source",
+                    "notion",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_code, 1)
+            self.assertIn("requires --dry-run", no_dry_output)
+
     def test_notion_block_mirror_tree_fixture_plan_builds_sanitized_tree_without_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -7304,6 +7375,7 @@ state:
             self.assertTrue(any("notion-nested-tree-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-ancestor-crawl-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("--scope-generation-id" in route["command"] for route in result["safe_routing"]))
+            self.assertTrue(any("notion-ancestor-fetch-adapter-execution-contract" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-block-mirror-tree-fixture-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-ancestor-merge-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-client-issue-verification-plan" in route["command"] for route in result["safe_routing"]))
@@ -7324,6 +7396,7 @@ state:
             self.assertTrue(result["current_capability"]["notion_nested_tree_recovery_planning_available"])
             self.assertTrue(result["current_capability"]["notion_ancestor_crawl_request_planning_available"])
             self.assertTrue(result["current_capability"]["notion_ancestor_crawl_scope_filter_available"])
+            self.assertTrue(result["current_capability"]["notion_ancestor_fetch_adapter_execution_contract_available"])
             self.assertTrue(result["current_capability"]["notion_block_mirror_tree_fixture_planning_available"])
             self.assertTrue(result["current_capability"]["notion_ancestor_merge_replan_available"])
             self.assertTrue(result["current_capability"]["notion_client_issue_verification_available"])
