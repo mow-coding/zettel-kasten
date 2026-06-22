@@ -6,6 +6,27 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.136 - 2026-06-22
+
+- Added `archive notion-recover`, a beginner-facing one-command wrapper for
+  Notion missing-location recovery.
+- The wrapper auto-selects a reviewed missing-location tree fixture, asks for
+  local confirmation, accepts the Notion token only through a hidden local
+  terminal prompt or already available local process value, writes the
+  one-time approval receipt internally, runs the approved location fetch, writes
+  a sanitized ancestor result fixture, and returns an AI handoff sentence for
+  tidying and merge review.
+- Preserved the lower-level `notion-ancestor-crawl-plan`,
+  `credential-access-approval`, `notion-ancestor-fetch-adapter-run`, and
+  `notion-ancestor-merge-plan` commands for power users and automation.
+- Updated the beginner setup manual, capability matrix, README links, and
+  public documentation map so the human path starts with `archive
+  notion-recover` instead of page-id/env/receipt copy-paste chains.
+- Added CLI tests for dry-run auto-scope and approved approval->fetch->merge
+  chaining, including checks that token values, env names, receipt paths,
+  provider URLs, raw refs, page titles, page bodies, and local paths are not
+  echoed.
+
 ## v0.3.135 - 2026-06-22
 
 - Added read-only `archive beginner-setup-manual --topic

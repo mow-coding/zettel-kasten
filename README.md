@@ -25,10 +25,11 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.135 pre-release
+v0.3.136 pre-release
 ```
 
-Previous public baseline: v0.3.134 pre-release.
+Previous public baseline: v0.3.135 pre-release.
+Earlier public baseline: v0.3.134 pre-release.
 Earlier public baseline: v0.3.133 pre-release.
 Earlier public baseline: v0.3.132 pre-release.
 Earlier public baseline: v0.3.131 pre-release.
@@ -154,6 +155,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Credential Store Recommendations](wom-kit/docs/credential-store-recommendations.md)
 - [Credential Vault Onboarding Plan](wom-kit/docs/credential-vault-onboarding-plan.md)
 - [Beginner Setup Manual](wom-kit/docs/beginner-setup-manual.md)
+- [Notion Recover](wom-kit/docs/notion-recover.md)
 - [Connected Accounts](wom-kit/docs/connected-accounts.md)
 - [Credential Semantic Extraction Recipe](wom-kit/docs/credential-semantic-extraction-recipe.md)
 - [Credential Plaintext Migration Plan](wom-kit/docs/credential-plaintext-migration-plan.md)
@@ -330,6 +332,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.136
 v0.3.135
 v0.3.134
 v0.3.133

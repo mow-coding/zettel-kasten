@@ -3369,6 +3369,248 @@ state:
             self.assertNotIn("notion.example", approve_output)
             self.assertNotIn(str(archive_root), approve_output)
 
+    def test_notion_recover_dry_run_auto_scopes_missing_locations_without_placeholder_chain(self) -> None:
+        root_id = "a" * 32
+        missing_parent_id = "b" * 32
+        leaf_id = "c" * 32
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            tree_path = archive_root / "workbench" / "notion-live-ancestor.single-command.json"
+            tree_path.write_text(
+                json.dumps(
+                    {
+                        "fixture_kind": "notion_nested_tree_fixture",
+                        "source": "notion",
+                        "generation_roots": [
+                            {
+                                "generation_id": "DB1",
+                                "root_ref": f"database:{root_id}",
+                                "generation_label": "Reviewed DB1",
+                            }
+                        ],
+                        "minted_refs": [],
+                        "nodes": [
+                            {
+                                "node_ref": f"database:{root_id}",
+                                "node_kind": "database",
+                                "content_class": "structure",
+                                "source_status": "live",
+                                "mint_state": "not_applicable",
+                                "review_status": "reviewed_root",
+                            },
+                            {
+                                "node_ref": f"page:{leaf_id}",
+                                "parent_ref": f"page:{missing_parent_id}",
+                                "node_kind": "page",
+                                "content_class": "content",
+                                "source_status": "live",
+                                "mint_state": "missing",
+                                "review_status": "needs_recovery",
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "notion-recover",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "notion_recover")
+            self.assertEqual(result["recover_state"], "ready_for_single_command_approval")
+            self.assertEqual(result["selected_tree_path"], "workbench/notion-live-ancestor.single-command.json")
+            self.assertTrue(result["auto_scope_summary"]["tree_auto_selected"])
+            self.assertEqual(result["auto_scope_summary"]["location_request_count"], 1)
+            self.assertEqual(result["auto_scope_summary"]["affected_item_count"], 1)
+            self.assertFalse(result["auto_scope_summary"]["page_id_user_input_required"])
+            self.assertFalse(result["beginner_contract"]["env_var_name_user_input_required"])
+            self.assertFalse(result["beginner_contract"]["receipt_path_copy_required"])
+            self.assertFalse(result["beginner_contract"]["placeholder_command_chain_required"])
+            self.assertTrue(result["current_capability"]["interactive_single_command_available"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["approval_receipt_written"])
+            self.assertFalse(result["closed_actions"]["notion_location_fetch_executed"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn("<32hex", serialized)
+            self.assertNotIn("<receipt", serialized)
+            self.assertNotIn("LOCAL_NOTION_TOKEN_ENV", serialized)
+            self.assertNotIn("env:WOM_TEST_NOTION_TOKEN", serialized)
+            self.assertNotIn("WOM_TEST_NOTION_TOKEN", serialized)
+            self.assertNotIn(missing_parent_id, serialized)
+            self.assertNotIn(leaf_id, serialized)
+            self.assertNotIn("https://", serialized)
+            self.assertNotIn("C:\\", serialized)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+
+    def test_notion_recover_approve_chains_approval_fetch_and_merge_without_echoing_secret_or_receipt(self) -> None:
+        root_id = "a" * 32
+        missing_parent_id = "b" * 32
+        leaf_id = "c" * 32
+        calls: list[dict[str, Any]] = []
+
+        def fake_notion_get_json(
+            *,
+            target_kind: str,
+            target_id: str,
+            token: str,
+            notion_version: str,
+            timeout_seconds: int,
+        ) -> dict[str, Any]:
+            calls.append(
+                {
+                    "target_kind": target_kind,
+                    "target_id": target_id,
+                    "token": token,
+                    "notion_version": notion_version,
+                    "timeout_seconds": timeout_seconds,
+                }
+            )
+            if target_kind == "page" and target_id == missing_parent_id:
+                return {
+                    "object": "page",
+                    "id": missing_parent_id,
+                    "parent": {"type": "database_id", "database_id": root_id},
+                    "archived": False,
+                    "in_trash": False,
+                    "url": "https://notion.example/redacted-by-wrapper",
+                    "properties": {"title": {"title": [{"plain_text": "must not be surfaced"}]}},
+                }
+            raise AssertionError(f"unexpected fake Notion target: {target_kind}:{target_id}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            tree_path = archive_root / "workbench" / "notion-live-ancestor.single-command.json"
+            tree_path.write_text(
+                json.dumps(
+                    {
+                        "fixture_kind": "notion_nested_tree_fixture",
+                        "source": "notion",
+                        "generation_roots": [
+                            {
+                                "generation_id": "DB1",
+                                "root_ref": f"database:{root_id}",
+                                "generation_label": "Reviewed DB1",
+                            }
+                        ],
+                        "minted_refs": [],
+                        "nodes": [
+                            {
+                                "node_ref": f"database:{root_id}",
+                                "node_kind": "database",
+                                "content_class": "structure",
+                                "source_status": "live",
+                                "mint_state": "not_applicable",
+                                "review_status": "reviewed_root",
+                            },
+                            {
+                                "node_ref": f"page:{leaf_id}",
+                                "parent_ref": f"page:{missing_parent_id}",
+                                "node_kind": "page",
+                                "content_class": "content",
+                                "source_status": "live",
+                                "mint_state": "missing",
+                                "review_status": "needs_recovery",
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_TEST_NOTION_TOKEN": "notion-token-hidden"},
+                clear=False,
+            ), patch("wom_kit.archive_services.notion_api_get_json", fake_notion_get_json):
+                code, output = self.run_cli(
+                    [
+                        "notion-recover",
+                        str(archive_root),
+                        "--output",
+                        "workbench/notion-ancestor-result.single-command.json",
+                        "--credential-ref",
+                        "env:WOM_TEST_NOTION_TOKEN",
+                        "--yes",
+                        "--approve",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["recover_state"], "succeeded")
+            self.assertEqual(result["auto_scope_summary"]["location_request_count"], 1)
+            self.assertTrue(result["approval_summary"]["approval_receipt_written"])
+            self.assertFalse(result["approval_summary"]["approval_receipt_path_echoed"])
+            self.assertFalse(result["approval_summary"]["approval_receipt_path_copy_required"])
+            self.assertEqual(result["fetch_summary"]["request_count"], 1)
+            self.assertEqual(result["fetch_summary"]["fetched_location_count"], 1)
+            self.assertEqual(result["fetch_summary"]["failed_request_count"], 0)
+            self.assertEqual(
+                result["result_handoff"]["sanitized_output_path"],
+                "workbench/notion-ancestor-result.single-command.json",
+            )
+            self.assertTrue(result["result_handoff"]["merge_plan_previewed"])
+            self.assertEqual(result["result_handoff"]["remaining_missing_location_count_after_merge_preview"], 0)
+            self.assertFalse(result["result_handoff"]["merge_writer_implemented"])
+            self.assertTrue(result["closed_actions"]["provider_api_called"])
+            self.assertTrue(result["closed_actions"]["secret_value_read"])
+            self.assertTrue(result["closed_actions"]["notion_location_fetch_executed"])
+            self.assertTrue(result["closed_actions"]["notion_ancestor_result_fixture_written"])
+            self.assertTrue(result["closed_actions"]["merge_plan_executed"])
+            self.assertEqual(result["files_written_count"], 3)
+            self.assertFalse(result["receipt_paths_echoed"])
+
+            fixture_path = archive_root / "workbench" / "notion-ancestor-result.single-command.json"
+            fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+            self.assertEqual(fixture["fixture_kind"], "notion_ancestor_result_fixture")
+            self.assertEqual(fixture["nodes"][0]["node_ref"], f"page:{missing_parent_id}")
+            approval_receipts = list((archive_root / "receipts" / "credentials" / "access-approvals").glob("*.json"))
+            fetch_receipts = list((archive_root / "receipts" / "notion" / "ancestor-fetches").glob("*.json"))
+            self.assertEqual(len(approval_receipts), 1)
+            self.assertEqual(len(fetch_receipts), 1)
+            self.assertEqual(calls, [
+                {
+                    "target_kind": "page",
+                    "target_id": missing_parent_id,
+                    "token": "notion-token-hidden",
+                    "notion_version": archive_services.NOTION_API_DEFAULT_VERSION,
+                    "timeout_seconds": 30,
+                }
+            ])
+            self.assertNotIn(str(approval_receipts[0].relative_to(archive_root)).replace("\\", "/"), serialized)
+            self.assertNotIn(str(fetch_receipts[0].relative_to(archive_root)).replace("\\", "/"), serialized)
+            self.assertNotIn("env:WOM_TEST_NOTION_TOKEN", serialized)
+            self.assertNotIn("WOM_TEST_NOTION_TOKEN", serialized)
+            self.assertNotIn("notion-token-hidden", serialized)
+            self.assertNotIn("must not be surfaced", serialized)
+            self.assertNotIn(missing_parent_id, serialized)
+            self.assertNotIn(leaf_id, serialized)
+            self.assertNotIn("notion.example", serialized)
+            self.assertNotIn("https://", serialized)
+            self.assertNotIn("C:\\", serialized)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+
     def test_notion_media_fetch_adapter_execution_contract_keeps_media_bytes_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -8025,6 +8267,9 @@ state:
             self.assertIn("ask Notion again for the missing location links", serialized)
             self.assertIn("put the recovered locations back into the reviewed list", serialized)
             self.assertIn("The AI does not receive your Notion token.", section["human_explanation_script"])
+            self.assertIn("archive notion-recover", serialized)
+            self.assertIn("hidden terminal prompt", serialized)
+            self.assertIn("Please tidy and merge the recovered Notion locations", serialized)
             self.assertIn("page body", section["what_this_never_reads"])
             self.assertIn("media bytes", section["what_this_never_reads"])
             self.assertIn("raw provider responses", section["what_this_never_reads"])
@@ -8034,29 +8279,27 @@ state:
             self.assertEqual(
                 step_ids,
                 [
-                    "review_scope",
-                    "prepare_local_token_ref",
-                    "preview_one_time_approval",
-                    "write_one_time_approval",
-                    "preview_location_fetch",
-                    "run_location_fetch",
-                    "handoff_sanitized_result_to_ai",
+                    "preview_one_command_recovery",
+                    "run_one_command_recovery",
+                    "handoff_recovered_locations_to_ai",
+                    "power_user_components",
                 ],
             )
             commands = [step.get("command", "") for step in section["guided_flow"]]
-            self.assertTrue(any("credential-access-approval" in command and "--dry-run" in command for command in commands))
-            self.assertTrue(any("credential-access-approval" in command and "--approve" in command for command in commands))
-            self.assertTrue(any("notion-ancestor-fetch-adapter-run" in command and "--dry-run" in command for command in commands))
-            self.assertTrue(any("notion-ancestor-fetch-adapter-run" in command and "--approve" in command for command in commands))
-            self.assertTrue(any("notion-ancestor-merge-plan" in command for command in commands))
-            self.assertTrue(any("notion-ancestor-fetch-adapter-run" in command for command in result["command_checklist"]))
+            self.assertTrue(any("notion-recover" in command and "--dry-run" in command for command in commands))
+            self.assertTrue(any(command == "archive notion-recover <archive-root>" for command in commands))
+            self.assertTrue(any("notion-recover" in command for command in result["command_checklist"]))
+            self.assertFalse(any("<32hex" in command for command in result["command_checklist"]))
+            self.assertFalse(any("<receipt-path" in command for command in result["command_checklist"]))
+            self.assertFalse(any("LOCAL_NOTION_TOKEN_ENV" in command for command in result["command_checklist"]))
+            self.assertIn("notion-recover", result["cross_links"])
             self.assertIn("notion-ancestor-crawl-plan", result["cross_links"])
             self.assertIn("credential-access-approval", result["cross_links"])
             self.assertIn("notion-ancestor-fetch-adapter-run", result["cross_links"])
             self.assertIn("notion-ancestor-merge-plan", result["cross_links"])
             self.assertTrue(result["current_capability"]["notion_nested_recovery_guidance_available"])
             self.assertTrue(result["current_capability"]["live_notion_ancestor_structure_fetch_adapter_implemented"])
-            self.assertFalse(result["current_capability"]["guided_interactive_single_prompt_runner_implemented"])
+            self.assertTrue(result["current_capability"]["guided_interactive_single_prompt_runner_implemented"])
             self.assertFalse(result["current_capability"]["notion_media_byte_fetch_implemented"])
             self.assertFalse(result["current_capability"]["notion_page_body_capture_implemented"])
             self.assertFalse(result["closed_actions"]["approval_receipt_written"])
