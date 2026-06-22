@@ -1638,7 +1638,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "notion_ancestor_fetch_adapter_execution_contract",
-        "description": "Preview the read-only execution contract a future credential-bounded Notion ancestor fetch adapter must satisfy. Never calls providers, retrieves secrets, reads titles or bodies, downloads media, or writes fixtures.",
+        "description": "Preview the read-only execution and actor contract a future credential-bounded Notion ancestor fetch adapter must satisfy. The AI chat runtime is not the live fetch subject, and client fixture supply is only a sanitized fallback input. Never calls providers, retrieves secrets, reads titles or bodies, downloads media, or writes fixtures.",
         "inputSchema": {
             "type": "object",
             "properties": {

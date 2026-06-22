@@ -264,6 +264,10 @@ Then route safely:
   `notion-ancestor-fetch-adapter-execution-contract --tree
   workbench/notion-nested-tree.sample.json --source notion --scope-generation-id
   DB1 --dry-run` before any live credential-bounded adapter is implemented.
+  The intended live fetch subject is a future WOM local credential-bounded
+  adapter process; the AI chat runtime must not hand-roll provider crawling or
+  receive credential values, and client-supplied ancestor fixtures are only
+  sanitized safe-origin fallback input.
 - Build a nested tree fixture from reviewed Notion block mirror metadata: use
   `notion-block-mirror-tree-fixture-plan --mirror
   workbench/notion-block-mirror.sample.json --source notion --dry-run`.

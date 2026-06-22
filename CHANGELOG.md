@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.131 - 2026-06-22
+
+- Clarified the Notion ancestor fetch adapter execution subject in
+  `archive notion-ancestor-fetch-adapter-execution-contract --dry-run` and MCP
+  `notion_ancestor_fetch_adapter_execution_contract`.
+- Added `execution_actor_contract` to state that the current live fetch subject
+  is none, the intended future subject is a WOM local credential-bounded adapter
+  process, the AI chat runtime may only plan/review/verify, and credential
+  values must stay outside AI context.
+- Clarified that client-supplied `notion_ancestor_result_fixture` files are
+  accepted only as sanitized safe-origin fallback input; the contract does not
+  require clients or client-side AI to hand-roll provider crawling.
+- Still closed: no live Notion fetch adapter, OAuth, provider API calls,
+  credential value reads, title/body reads, media downloads, fixture writes,
+  zettel writes, edge writes, receipts, or object manifest updates.
+
 ## v0.3.130 - 2026-06-22
 
 - Added read-only

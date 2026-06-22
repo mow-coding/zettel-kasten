@@ -3089,9 +3089,26 @@ state:
             self.assertFalse(result["credential_summary"]["credential_value_read"])
             self.assertFalse(result["execution_contract"]["live_execution_allowed_now"])
             self.assertTrue(result["execution_contract"]["must_consume_crawl_request_queue"])
+            self.assertEqual(
+                result["execution_actor_contract"]["current_live_fetch_execution_subject"],
+                "none_contract_preview_only",
+            )
+            self.assertEqual(
+                result["execution_actor_contract"]["intended_live_fetch_execution_subject"],
+                "future_wom_local_credential_bounded_adapter_process",
+            )
+            self.assertEqual(
+                result["execution_actor_contract"]["ai_chat_runtime_role"],
+                "plan_review_verify_only_no_provider_or_secret_access",
+            )
+            self.assertFalse(result["execution_actor_contract"]["client_hand_rolled_provider_crawl_required"])
+            self.assertFalse(result["execution_actor_contract"]["ai_hand_rolled_provider_crawl_allowed"])
+            self.assertFalse(result["execution_actor_contract"]["credential_values_may_enter_ai_context"])
+            self.assertTrue(result["execution_actor_contract"]["safe_client_fixture_origin_required"])
             self.assertEqual(result["adapter_output_contract"]["fixture_kind"], "notion_ancestor_result_fixture")
             self.assertIn("notion-ancestor-merge-plan", result["adapter_output_contract"]["next_command"])
             self.assertTrue(result["current_capability"]["fetch_adapter_execution_contract_available"])
+            self.assertTrue(result["current_capability"]["fetch_execution_actor_contract_available"])
             self.assertFalse(result["current_capability"]["live_notion_fetch_adapter_implemented"])
             self.assertFalse(result["current_capability"]["provider_api_call_implemented"])
             self.assertFalse(result["closed_actions"]["provider_api_called"])

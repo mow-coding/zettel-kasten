@@ -17614,6 +17614,21 @@ def notion_ancestor_fetch_adapter_execution_contract(
             "provider_rate_limit_policy_required": True,
             "partial_fetch_must_not_be_reported_as_complete": True,
         },
+        "execution_actor_contract": {
+            "current_live_fetch_execution_subject": "none_contract_preview_only",
+            "intended_live_fetch_execution_subject": "future_wom_local_credential_bounded_adapter_process",
+            "ai_chat_runtime_role": "plan_review_verify_only_no_provider_or_secret_access",
+            "human_operator_role": "approve_scope_and_credential_ref_without_disclosing_secret_values",
+            "credential_broker_role": "resolve_approved_credential_ref_outside_ai_context",
+            "adapter_process_role": "execute_provider_fetch_after_approval_and_emit_sanitized_fixture",
+            "client_fixture_supply_role": "accepted_sanitized_fixture_input_or_fallback_not_required_hand_rolled_provider_crawl",
+            "client_hand_rolled_provider_crawl_required": False,
+            "ai_hand_rolled_provider_crawl_allowed": False,
+            "credential_values_may_enter_ai_context": False,
+            "public_repo_may_contain_credentials": False,
+            "approval_receipt_required_before_live_execution": True,
+            "safe_client_fixture_origin_required": True,
+        },
         "adapter_input_contract": {
             "source_command": "archive notion-ancestor-crawl-plan --dry-run",
             "required_request_fields": [
@@ -17678,6 +17693,7 @@ def notion_ancestor_fetch_adapter_execution_contract(
         },
         "current_capability": {
             "fetch_adapter_execution_contract_available": True,
+            "fetch_execution_actor_contract_available": True,
             "ancestor_crawl_request_queue_available": True,
             "ancestor_crawl_scope_filter_available": True,
             "live_notion_fetch_adapter_implemented": False,
@@ -17729,6 +17745,7 @@ def notion_ancestor_fetch_adapter_execution_contract(
         "next_safe_actions": [
             "Review crawl_request_summary and scope_filter before any future live adapter run.",
             "Run credential-policy-check and credential-access-approval before a live credential-bounded fetch adapter exists.",
+            "Treat client-supplied ancestor fixtures as a safe fallback input only; do not require client-side hand-rolled provider crawling.",
             "A future adapter must return only a sanitized notion_ancestor_result_fixture, then run notion-ancestor-merge-plan before recovery.",
         ],
         "warnings": unique_preserve_order(warnings),
