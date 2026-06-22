@@ -103,6 +103,8 @@ docs/notion-ancestor-merge-plan.md
 docs/notion-client-issue-verification-plan.md
 docs/notion-client-fixture-request-plan.md
 docs/tiro-import-plan.md
+docs/tiro-lossless-recovery.md
+docs/zet-markdown-style-guide.md
 docs/zettel-edge-write.md
 docs/zettel-edge-batch.md
 docs/project-intake-session.md
@@ -1336,6 +1338,15 @@ does not echo the token file path, file name, token value, transient env ref, or
 receipt path. Vault/keyring one-click handoff remains the right long-term
 credential-broker direction, but live vault/keyring reads are still closed until
 a dedicated local adapter exists.
+v0.3.139 adds Tiro lossless recovery planning plus approval-gated raw recovery
+bundle capture. `archive tiro-lossless-recovery-plan --dry-run` records the
+official Tiro data surfaces and bundle contract, while
+`archive tiro-lossless-recovery-capture --dry-run|--approve` preserves a
+reviewed raw Tiro recovery JSON bundle as a content-addressed WOM objet with a
+non-secret receipt. It also adds `archive zet-markdown-style-guide --dry-run`
+and wires the `A ~ B` range-tilde rule into `ai-response-concept-guide`. The
+live credential-bounded Tiro fetch adapter that creates the raw bundle remains
+future work.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

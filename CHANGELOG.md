@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.139 - 2026-06-22
+
+- Added read-only `archive tiro-lossless-recovery-plan` for the official Tiro
+  full-data recovery surface: workspaces, notes, paragraphs, summaries,
+  generated documents, templates, folders, word memories, wiki data, share
+  links, translations, audio availability/gaps, pagination, rate-limit, and
+  error observations.
+- Added approval-gated `archive tiro-lossless-recovery-capture` to preserve a
+  reviewed raw Tiro recovery JSON bundle as a content-addressed WOM objet with
+  a non-secret receipt and object manifest record.
+- The Tiro recovery capture path preserves raw bundle bytes exactly while
+  command output and receipts avoid echoing meeting titles, transcript text,
+  participant names, emails, provider URLs, tokens, or secret values.
+- Added read-only `archive zet-markdown-style-guide` and wired the same
+  range-tilde rule into `archive ai-response-concept-guide --topic all`: use
+  `A ~ B` for ranges, and reserve double tilde for intentional Markdown
+  strikethrough.
+
 ## v0.3.138 - 2026-06-22
 
 - Added a CLI-only `file:<path>` credential fallback to `archive

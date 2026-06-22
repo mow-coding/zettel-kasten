@@ -5761,6 +5761,122 @@ def command_tiro_import_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_tiro_lossless_recovery_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("tiro-lossless-recovery-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.tiro_lossless_recovery_plan(
+            Path(args.archive_root),
+            credential_ref=args.credential_ref,
+            workspace_guid=args.workspace_guid,
+            note_guid=args.note_guid,
+            max_notes=args.max_notes,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Tiro lossless recovery plan {result.get('plan_state') or '-'}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Endpoint categories: {len(result.get('endpoint_inventory') or [])}")
+        credential = result.get("credential_summary") if isinstance(result.get("credential_summary"), dict) else {}
+        print(f"Credential ref supplied: {bool(credential.get('credential_ref_supplied'))}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_tiro_lossless_recovery_capture(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.tiro_lossless_recovery_capture(
+            Path(args.archive_root),
+            bundle_path=args.bundle,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Tiro lossless recovery capture {result.get('capture_state') or '-'}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        obj = result.get("object") if isinstance(result.get("object"), dict) else {}
+        print(f"Object: {obj.get('object_id') or '-'}")
+        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
+        print(f"Receipt: {receipt.get('receipt_path') or receipt.get('proposed_receipt_path') or '-'}")
+        if result.get("files_written"):
+            print("Files written:")
+            for path in result["files_written"]:
+                print(f"- {path}")
+        elif result.get("would_change"):
+            print("Would change:")
+            for path in result["would_change"]:
+                print(f"- {path}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_zet_markdown_style_guide(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("zet-markdown-style-guide is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.zet_markdown_style_guide(
+            Path(args.archive_root),
+            topic=args.topic,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print("zet Markdown style guide passed." if result.get("ok") else "zet Markdown style guide blocked.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        for section in result.get("sections", []):
+            if not isinstance(section, dict):
+                continue
+            print(f"\n{section.get('title') or section.get('section_id') or 'Section'}")
+            if section.get("beginner_explanation"):
+                print(str(section["beginner_explanation"]))
+            rule = section.get("range_tilde_rule") if isinstance(section.get("range_tilde_rule"), dict) else {}
+            if rule:
+                print(f"Rule: {rule.get('required_form') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_source_intake_record(args: argparse.Namespace) -> int:
     try:
         result = archive_services.source_intake_record(
@@ -12536,6 +12652,58 @@ def build_parser() -> argparse.ArgumentParser:
     tiro_import_plan.add_argument("--dry-run", action="store_true", help="Required; write nothing.")
     tiro_import_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     tiro_import_plan.set_defaults(func=command_tiro_import_plan)
+
+    tiro_lossless_recovery_plan = subcommands.add_parser(
+        "tiro-lossless-recovery-plan",
+        aliases=["tiro-recovery-plan"],
+        help="Dry-run the Tiro full-data lossless recovery endpoint and bundle contract.",
+    )
+    tiro_lossless_recovery_plan.add_argument("archive_root", help="Archive root to inspect.")
+    tiro_lossless_recovery_plan.add_argument("--credential-ref", help="Optional env/keyring/secret/wallet ref; exact value is not echoed.")
+    tiro_lossless_recovery_plan.add_argument("--workspace-guid", help="Optional safe Tiro workspace id; exact value is not echoed.")
+    tiro_lossless_recovery_plan.add_argument("--note-guid", help="Optional safe Tiro note id; exact value is not echoed.")
+    tiro_lossless_recovery_plan.add_argument(
+        "--max-notes",
+        type=int,
+        default=200,
+        help=f"Maximum notes for a future adapter run, up to {archive_services.TIRO_LOSSLESS_RECOVERY_MAX_NOTES}.",
+    )
+    tiro_lossless_recovery_plan.add_argument("--dry-run", action="store_true", help="Required; write nothing.")
+    tiro_lossless_recovery_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    tiro_lossless_recovery_plan.set_defaults(func=command_tiro_lossless_recovery_plan)
+
+    tiro_lossless_recovery_capture = subcommands.add_parser(
+        "tiro-lossless-recovery-capture",
+        aliases=["tiro-recovery-capture"],
+        help="Preview or approve preserving a private raw Tiro recovery bundle as a WOM objet.",
+    )
+    tiro_lossless_recovery_capture.add_argument("archive_root", help="Archive root to update.")
+    tiro_lossless_recovery_capture.add_argument(
+        "--bundle",
+        required=True,
+        help="Archive-relative raw Tiro recovery bundle JSON under workbench/.",
+    )
+    tiro_lossless_recovery_capture.add_argument("--dry-run", action="store_true", help="Preview object/receipt writes.")
+    tiro_lossless_recovery_capture.add_argument("--approve", action="store_true", help="Write the reviewed raw bundle as a WOM objet.")
+    tiro_lossless_recovery_capture.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
+    tiro_lossless_recovery_capture.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    tiro_lossless_recovery_capture.set_defaults(func=command_tiro_lossless_recovery_capture)
+
+    zet_markdown_style_guide = subcommands.add_parser(
+        "zet-markdown-style-guide",
+        aliases=["zet-style-guide", "zettel-markdown-style-guide"],
+        help="Print read-only WOM zet Markdown authoring rules such as safe range tilde usage.",
+    )
+    zet_markdown_style_guide.add_argument("archive_root", help="Archive root to inspect.")
+    zet_markdown_style_guide.add_argument(
+        "--topic",
+        choices=sorted(archive_services.ZET_MARKDOWN_STYLE_GUIDE_TOPICS),
+        default="all",
+        help="Style topic.",
+    )
+    zet_markdown_style_guide.add_argument("--dry-run", action="store_true", help="Required; read-only guide.")
+    zet_markdown_style_guide.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    zet_markdown_style_guide.set_defaults(func=command_zet_markdown_style_guide)
 
     source_intake_record = subcommands.add_parser(
         "source-intake-record",

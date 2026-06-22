@@ -495,6 +495,140 @@ TIRO_IMPORT_AUDIO_FIELDS = {
 }
 TIRO_IMPORT_PARTICIPANT_FIELDS = {"speaker_id", "display_name", "person_ref", "role"}
 TIRO_IMPORT_SEGMENT_FIELDS = {"segment_id", "speaker_id", "start_ms", "end_ms", "text", "confidence"}
+TIRO_LOSSLESS_RECOVERY_BUNDLE_SCHEMA = "wom-tiro-lossless-recovery-bundle/v0.1"
+TIRO_LOSSLESS_RECOVERY_RECEIPT_SCHEMA = "wom-tiro-lossless-recovery-capture/v0.1"
+TIRO_LOSSLESS_RECOVERY_RECEIPTS_DIR = "receipts/tiro/lossless-recovery"
+TIRO_LOSSLESS_RECOVERY_MAX_NOTES = 2000
+TIRO_LOSSLESS_RECOVERY_BUNDLE_KEYS = (
+    "auth_context",
+    "workspaces",
+    "notes",
+    "note_details",
+    "paragraphs_by_note",
+    "summaries_by_note",
+    "summary_details_by_note",
+    "documents_by_note",
+    "document_details_by_note",
+    "document_templates",
+    "folders_by_note",
+    "share_links_by_note",
+    "user_word_memories",
+    "workspace_word_memories",
+    "wiki",
+    "translations_by_note",
+    "audio_files",
+    "audio_gaps",
+    "fetch_gaps",
+    "pagination",
+    "rate_limit_observations",
+    "errors",
+)
+TIRO_LOSSLESS_RECOVERY_ENDPOINTS = (
+    {
+        "category": "workspaces",
+        "method": "GET",
+        "path_template": "/v1/external/workspaces",
+        "pagination": "content_nextCursor",
+        "required_for_lossless": True,
+        "capture_key": "workspaces",
+    },
+    {
+        "category": "workspace_notes",
+        "method": "GET",
+        "path_template": "/v1/external/workspaces/{workspaceGuid}/notes",
+        "pagination": "content_nextCursor",
+        "required_for_lossless": True,
+        "capture_key": "notes",
+    },
+    {
+        "category": "note_metadata",
+        "method": "GET",
+        "path_template": "/v1/external/notes/{noteGuid}",
+        "pagination": "none",
+        "required_for_lossless": True,
+        "capture_key": "note_details",
+    },
+    {
+        "category": "paragraphs",
+        "method": "GET",
+        "path_template": "/v1/external/notes/{noteGuid}/paragraphs",
+        "pagination": "content_nextCursor",
+        "required_for_lossless": True,
+        "capture_key": "paragraphs_by_note",
+    },
+    {
+        "category": "summaries",
+        "method": "GET",
+        "path_template": "/v1/external/notes/{noteGuid}/summaries",
+        "pagination": "content_totalSize",
+        "required_for_lossless": True,
+        "capture_key": "summaries_by_note",
+    },
+    {
+        "category": "documents",
+        "method": "GET",
+        "path_template": "/v1/external/notes/{noteGuid}/documents",
+        "pagination": "content_totalSize",
+        "required_for_lossless": True,
+        "capture_key": "documents_by_note",
+    },
+    {
+        "category": "document_details",
+        "method": "GET",
+        "path_template": "/v1/external/notes/{noteGuid}/documents/{documentId}",
+        "pagination": "none",
+        "required_for_lossless": True,
+        "capture_key": "document_details_by_note",
+    },
+    {
+        "category": "document_templates",
+        "method": "GET",
+        "path_template": "/v1/external/note-document-templates/{templateId}",
+        "pagination": "none",
+        "required_for_lossless": True,
+        "capture_key": "document_templates",
+    },
+    {
+        "category": "folders_by_note",
+        "method": "GET",
+        "path_template": "/v1/external/notes/{noteGuid}/folders",
+        "pagination": "content",
+        "required_for_lossless": True,
+        "capture_key": "folders_by_note",
+    },
+    {
+        "category": "user_word_memories",
+        "method": "GET",
+        "path_template": "/v1/external/users/me/word-memories",
+        "pagination": "content_nextCursor",
+        "required_for_lossless": True,
+        "capture_key": "user_word_memories",
+    },
+    {
+        "category": "workspace_word_memories",
+        "method": "GET",
+        "path_template": "/v1/external/workspaces/{workspaceGuid}/word-memories",
+        "pagination": "content_nextCursor",
+        "required_for_lossless": True,
+        "capture_key": "workspace_word_memories",
+    },
+    {
+        "category": "wiki",
+        "method": "GET",
+        "path_template": "/v1/external/workspaces/{workspaceGuid}/wiki/*",
+        "pagination": "endpoint_specific",
+        "required_for_lossless": True,
+        "capture_key": "wiki",
+    },
+    {
+        "category": "audio_original_bytes",
+        "method": "provider_export_or_manual_download",
+        "path_template": "not_confirmed_as_public_rest_endpoint",
+        "pagination": "not_applicable",
+        "required_for_lossless": True,
+        "capture_key": "audio_files_or_audio_gaps",
+    },
+)
 EXTERNAL_IMPORT_EXTENSIONS = {".md", ".markdown", ".txt"}
 SOURCE_TYPES = {"local_folder", "external_ssd", "notion_export", "google_drive_export", "object_manifest", "imap_mailbox"}
 IMAP_MAILBOX_SOURCE_TYPE = "imap_mailbox"
@@ -1663,7 +1797,9 @@ AI_RESPONSE_CONCEPT_GUIDE_TOPICS = {
     "sha256_identity",
     "manifest_vs_zet",
     "three_layers",
+    "zet_markdown_style",
 }
+ZET_MARKDOWN_STYLE_GUIDE_TOPICS = {"all", "range_tilde"}
 AI_RESPONSE_CONCEPT_GUIDE_LOCALE_ALIASES = {
     "ko": "ko-KR",
     "ko-kr": "ko-KR",
@@ -20718,6 +20854,486 @@ def tiro_import_plan(
     )
 
 
+def tiro_lossless_recovery_endpoint_inventory() -> list[dict[str, Any]]:
+    return [copy.deepcopy(item) for item in TIRO_LOSSLESS_RECOVERY_ENDPOINTS]
+
+
+def tiro_lossless_recovery_safe_max_notes(max_notes: int, blockers: list[str]) -> int:
+    try:
+        value = int(max_notes)
+    except (TypeError, ValueError):
+        blockers.append(f"max_notes must be an integer between 1 and {TIRO_LOSSLESS_RECOVERY_MAX_NOTES}.")
+        return 200
+    if value < 1 or value > TIRO_LOSSLESS_RECOVERY_MAX_NOTES:
+        blockers.append(f"max_notes must be between 1 and {TIRO_LOSSLESS_RECOVERY_MAX_NOTES}.")
+        return max(1, min(value, TIRO_LOSSLESS_RECOVERY_MAX_NOTES))
+    return value
+
+
+def tiro_lossless_recovery_safe_ref(value: str | None, field_name: str, blockers: list[str]) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if not safe_source_intake_ref(text):
+        blockers.append(f"{field_name} must be a safe Tiro id/ref, not a URL, path, token, email, or free-text value.")
+        return None
+    return text
+
+
+def tiro_lossless_recovery_bundle_output_path(bundle_path: str, blockers: list[str]) -> tuple[str, Path | None]:
+    normalized = ""
+    try:
+        normalized = normalize_archive_relative_path(bundle_path)
+    except ArchivePathError:
+        blockers.append("bundle must be a safe archive-relative JSON path under workbench/.")
+        return "", None
+    if not normalized.startswith("workbench/") or Path(normalized).suffix.lower() != ".json":
+        blockers.append("bundle must be a safe archive-relative JSON path under workbench/.")
+        return normalized, None
+    return normalized, None
+
+
+def tiro_lossless_recovery_plan(
+    archive_root: Path | str,
+    *,
+    credential_ref: str | None = None,
+    workspace_guid: str | None = None,
+    note_guid: str | None = None,
+    max_notes: int = 200,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("tiro-lossless-recovery-plan is read-only and requires --dry-run.")
+
+    credential_store = None
+    normalized_credential_ref = str(credential_ref or "").strip()
+    if normalized_credential_ref:
+        if not safe_credential_ref(normalized_credential_ref):
+            blockers.append("credential_ref must be a safe env/keyring/secret/wallet ref and is never echoed.")
+            normalized_credential_ref = ""
+        else:
+            credential_store = credential_ref_store(normalized_credential_ref)
+
+    scoped_workspace = tiro_lossless_recovery_safe_ref(workspace_guid, "workspace_guid", blockers)
+    scoped_note = tiro_lossless_recovery_safe_ref(note_guid, "note_guid", blockers)
+    safe_max_notes = tiro_lossless_recovery_safe_max_notes(max_notes, blockers)
+
+    endpoint_inventory = tiro_lossless_recovery_endpoint_inventory()
+    required_categories = [item["category"] for item in endpoint_inventory if item.get("required_for_lossless")]
+    return json_safe(
+        {
+            "ok": not blockers,
+            "dry_run": True,
+            "lifecycle_action": "tiro_lossless_recovery_plan",
+            "archive_id": archive_id,
+            "source": TIRO_IMPORT_SOURCE,
+            "plan_state": "blocked" if blockers else "ready_for_review",
+            "scope": {
+                "workspace_guid_supplied": bool(scoped_workspace),
+                "note_guid_supplied": bool(scoped_note),
+                "workspace_guid_echoed": False,
+                "note_guid_echoed": False,
+                "max_notes": safe_max_notes,
+            },
+            "credential_summary": {
+                "credential_ref_supplied": bool(normalized_credential_ref),
+                "credential_ref_store": credential_store,
+                "credential_ref_echoed": False,
+                "credential_value_read": False,
+            },
+            "endpoint_inventory": endpoint_inventory,
+            "required_lossless_categories": required_categories,
+            "bundle_contract": {
+                "schema": TIRO_LOSSLESS_RECOVERY_BUNDLE_SCHEMA,
+                "expected_private_archive_keys": list(TIRO_LOSSLESS_RECOVERY_BUNDLE_KEYS),
+                "must_preserve_raw_provider_values_verbatim": True,
+                "must_keep_ai_enrichment_separate": True,
+                "must_report_fetch_gaps_instead_of_silent_drops": True,
+                "must_store_private_bundle_before_deriving_zets": True,
+                "public_reporting_may_summarize_without_echoing_raw_values": True,
+            },
+            "pagination_and_error_contract": {
+                "list_shape": "content[] plus nextCursor when present",
+                "rate_limit": "600 requests per 60 seconds; respect Retry-After on 429",
+                "error_shape": "error.code, error.message, error.detail when returned",
+                "idempotent_refetch_required": True,
+            },
+            "current_capability": {
+                "official_endpoint_inventory_available": True,
+                "lossless_private_bundle_contract_available": True,
+                "approval_gated_bundle_capture_available": True,
+                "live_tiro_rest_adapter_implemented": False,
+                "audio_original_byte_rest_endpoint_confirmed": False,
+                "ai_enrichment_writer_implemented": False,
+            },
+            "closed_actions": {
+                "provider_api_called": False,
+                "credential_value_read": False,
+                "files_written": False,
+                "raw_bundle_read": False,
+                "raw_values_echoed": False,
+                "derived_text_written": False,
+                "zettels_written": False,
+                "mint_run": False,
+            },
+            "privacy_guards": {
+                "credential_ref_echoed": False,
+                "credential_values_echoed": False,
+                "workspace_guid_echoed": False,
+                "note_guid_echoed": False,
+                "meeting_titles_echoed": False,
+                "transcript_text_echoed": False,
+                "participant_names_echoed": False,
+                "emails_echoed": False,
+                "provider_urls_echoed": False,
+                "tokens_echoed": False,
+                "secret_values_echoed": False,
+                "writes": False,
+            },
+            "would_change": [],
+            "next_safe_actions": [
+                "Use an approved local adapter or Tiro CLI/API export to create the private raw bundle.",
+                "Run tiro-lossless-recovery-capture on the raw bundle before deriving text or drafting zets.",
+                "Record gaps for audio bytes or undocumented surfaces instead of silently dropping them.",
+            ],
+            "warnings": unique_preserve_order(warnings),
+            "blockers": unique_preserve_order(blockers),
+        }
+    )
+
+
+def tiro_lossless_recovery_bundle_analysis(payload: dict[str, Any]) -> dict[str, Any]:
+    key_summaries: dict[str, dict[str, Any]] = {}
+    for key in TIRO_LOSSLESS_RECOVERY_BUNDLE_KEYS:
+        value = payload.get(key)
+        summary: dict[str, Any] = {
+            "present": key in payload,
+            "value_shape": type(value).__name__ if key in payload else "missing",
+            "item_count": None,
+        }
+        if isinstance(value, list):
+            summary["item_count"] = len(value)
+        elif isinstance(value, dict):
+            summary["item_count"] = len(value)
+        key_summaries[key] = summary
+    present_keys = [key for key, summary in key_summaries.items() if summary["present"]]
+    missing_recommended = [
+        item["capture_key"]
+        for item in TIRO_LOSSLESS_RECOVERY_ENDPOINTS
+        if item.get("required_for_lossless") and item.get("capture_key") not in present_keys
+    ]
+    return {
+        "schema": str(payload.get("schema") or payload.get("schema_version") or ""),
+        "source_declared": str(payload.get("source") or ""),
+        "known_key_count": len(present_keys),
+        "known_keys_present": present_keys,
+        "key_summaries": key_summaries,
+        "missing_recommended_capture_keys": unique_preserve_order(missing_recommended),
+        "fetch_gap_count": len(payload.get("fetch_gaps") or []) if isinstance(payload.get("fetch_gaps"), list) else 0,
+        "audio_gap_count": len(payload.get("audio_gaps") or []) if isinstance(payload.get("audio_gaps"), list) else 0,
+        "raw_values_echoed": False,
+    }
+
+
+def tiro_lossless_recovery_receipt_id(
+    *,
+    archive_id: str,
+    object_id: str,
+    bundle_path: str,
+    captured_at: str,
+) -> str:
+    payload = {
+        "archive_id": archive_id,
+        "object_id": object_id,
+        "bundle_path": bundle_path,
+        "captured_at": captured_at,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
+    return f"tiro-lossless-recovery-{digest}"
+
+
+def tiro_lossless_recovery_capture(
+    archive_root: Path | str,
+    *,
+    bundle_path: str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+    reviewer = safe_project_intake_actor_id(reviewed_by)
+    if approve and reviewer is None:
+        blockers.append("tiro-lossless-recovery-capture approval requires --reviewed-by with a safe actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    normalized_bundle, _ = tiro_lossless_recovery_bundle_output_path(bundle_path, blockers)
+    src = archive_internal_path(root, normalized_bundle) if normalized_bundle else None
+    raw_bytes = b""
+    payload: dict[str, Any] | None = None
+    size_bytes: int | None = None
+    digest = ""
+    if src is not None and not blockers:
+        if not is_path_within_root(src, root):
+            blockers.append("unsafe_bundle_path")
+        elif target_looks_external_live_never_touch(src):
+            blockers.append("resolved_path_never_touch")
+        else:
+            try:
+                entry_stat = os.lstat(src)
+            except FileNotFoundError:
+                blockers.append("bundle_missing")
+            except OSError:
+                blockers.append("bundle_unreadable")
+            else:
+                if stat.S_ISDIR(entry_stat.st_mode):
+                    blockers.append("bundle_is_directory")
+                elif not stat.S_ISREG(entry_stat.st_mode):
+                    blockers.append("special_file_not_allowed")
+                else:
+                    try:
+                        raw_bytes = src.read_bytes()
+                    except OSError:
+                        blockers.append("bundle_unreadable")
+                    else:
+                        size_bytes = len(raw_bytes)
+                        digest = hashlib.sha256(raw_bytes).hexdigest()
+                        if size_bytes == 0:
+                            blockers.append("bundle_empty")
+    if raw_bytes and not blockers:
+        try:
+            parsed = json.loads(raw_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            blockers.append("bundle_must_be_utf8_json")
+        else:
+            if not isinstance(parsed, dict):
+                blockers.append("bundle_must_be_json_object")
+            else:
+                payload = parsed
+                source_declared = str(parsed.get("source") or "").strip().lower()
+                if source_declared and source_declared != TIRO_IMPORT_SOURCE:
+                    warnings.append("bundle source is not declared as tiro.")
+                schema_declared = str(parsed.get("schema") or parsed.get("schema_version") or "").strip()
+                if schema_declared and schema_declared != TIRO_LOSSLESS_RECOVERY_BUNDLE_SCHEMA:
+                    warnings.append("bundle schema differs from the current Tiro lossless recovery bundle contract.")
+
+    object_id = f"sha256:{digest}" if digest else ""
+    logical_key = f"objects/sha256/{digest[:2]}/{digest}" if digest else ""
+    dest = archive_internal_path(root, logical_key) if logical_key else None
+    manifest_record_present = bool(object_id and find_manifest_record(root, object_id) is not None)
+    object_bytes_present = bool(dest and dest.is_file() and sha256_path(dest) == digest)
+    if dest is not None and dest.exists() and not object_bytes_present:
+        blockers.append("object_store_digest_collision")
+
+    captured_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    receipt_id = tiro_lossless_recovery_receipt_id(
+        archive_id=archive_id,
+        object_id=object_id or "sha256:pending",
+        bundle_path=normalized_bundle,
+        captured_at=captured_at,
+    )
+    receipt_relative = f"{TIRO_LOSSLESS_RECOVERY_RECEIPTS_DIR}/{receipt_id}.json"
+    receipt_path = archive_internal_path(root, receipt_relative)
+    if approve and receipt_path.exists():
+        blockers.append(f"Execution receipt already exists: {receipt_relative}.")
+
+    analysis = tiro_lossless_recovery_bundle_analysis(payload) if payload is not None else {}
+    would_change = []
+    if not blockers:
+        if dest is not None and not object_bytes_present:
+            would_change.append(logical_key)
+        if object_id and not manifest_record_present:
+            would_change.append("objects/manifests/files.jsonl (+1 line)")
+        would_change.append(receipt_relative)
+
+    files_written: list[str] = []
+    manifest_appended = False
+    object_written = False
+    receipt_written = False
+    if approve and not blockers and dest is not None and payload is not None:
+        created_paths: list[Path] = []
+        created_dirs = missing_parent_dirs_before_write(root, [dest, receipt_path])
+        try:
+            with _ObjetCaptureManifestLock(root):
+                if not object_bytes_present:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = dest.parent / (dest.name + ".part-" + secrets.token_hex(8))
+                    try:
+                        with tmp.open("wb") as handle:
+                            handle.write(raw_bytes)
+                            handle.flush()
+                            os.fsync(handle.fileno())
+                        if sha256_path(tmp) != digest:
+                            raise ArchiveServiceError("Tiro bundle lossless verification failed.")
+                        os.replace(tmp, dest)
+                    finally:
+                        tmp.unlink(missing_ok=True)
+                    object_written = True
+                    files_written.append(logical_key)
+                    created_paths.append(dest)
+                if object_id and not manifest_record_present:
+                    manifest_path = archive_internal_path(root, "objects/manifests/files.jsonl")
+                    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                    needs_newline = _objet_capture_manifest_needs_leading_newline(manifest_path)
+                    record = {
+                        "object_id": object_id,
+                        "sha256": digest,
+                        "logical_key": logical_key,
+                        "mime": "application/json",
+                        "size_bytes": size_bytes,
+                        "locations": [{"provider": "local", "path": logical_key, "availability": "available"}],
+                        "provenance": {
+                            "created_in": f"archive:{archive_id}",
+                            "source": "tiro_lossless_recovery_bundle_capture",
+                            "captured_at": captured_at,
+                            "captured_by": reviewer,
+                            "original_filename": PurePosixPath(normalized_bundle).name,
+                            "source_staged_path": normalized_bundle,
+                            "raw_provider_values_preserved_in_object": True,
+                            "raw_provider_values_echoed": False,
+                        },
+                    }
+                    with manifest_path.open("a", encoding="utf-8", newline="\n") as handle:
+                        if needs_newline:
+                            handle.write("\n")
+                        handle.write(json.dumps(json_safe(record), ensure_ascii=False, default=str, separators=(",", ":")) + "\n")
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    manifest_appended = True
+                    files_written.append("objects/manifests/files.jsonl")
+            receipt = {
+                "schema": TIRO_LOSSLESS_RECOVERY_RECEIPT_SCHEMA,
+                "receipt_kind": "tiro_lossless_recovery_capture",
+                "lifecycle_action": "tiro_lossless_recovery_capture",
+                "receipt_id": receipt_id,
+                "created_at": captured_at,
+                "archive_id": archive_id,
+                "reviewed_by": reviewer,
+                "source": TIRO_IMPORT_SOURCE,
+                "bundle": {
+                    "source_staged_path": normalized_bundle,
+                    "object_id": object_id,
+                    "logical_key": logical_key,
+                    "size_bytes": size_bytes,
+                    "known_key_count": analysis.get("known_key_count"),
+                    "missing_recommended_capture_keys": analysis.get("missing_recommended_capture_keys", []),
+                    "raw_values_included_in_object": True,
+                    "raw_values_included_in_receipt": False,
+                },
+                "closed_actions": {
+                    "provider_api_called": False,
+                    "raw_bundle_read": True,
+                    "object_bytes_written": object_written,
+                    "object_manifest_appended": manifest_appended,
+                    "receipt_written": True,
+                    "derived_text_written": False,
+                    "zettels_written": False,
+                },
+                "redaction": {
+                    "meeting_titles_included": False,
+                    "transcript_text_included": False,
+                    "participant_names_included": False,
+                    "emails_included": False,
+                    "provider_urls_included": False,
+                    "tokens_included": False,
+                    "secret_values_included": False,
+                },
+            }
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_new_file(receipt_path, receipt)
+            files_written.append(receipt_relative)
+            receipt_written = True
+        except Exception:
+            if receipt_written:
+                receipt_path.unlink(missing_ok=True)
+            for path in reversed(created_paths):
+                try:
+                    if path.exists() and path != dest:
+                        path.unlink()
+                except OSError:
+                    pass
+            cleanup_empty_archive_dirs(root, created_dirs)
+            raise
+
+    capture_state = "blocked" if blockers else ("captured" if approve else "ready_for_approval")
+    return json_safe(
+        {
+            "ok": not blockers,
+            "dry_run": bool(dry_run),
+            "approved": bool(approve),
+            "lifecycle_action": "tiro_lossless_recovery_capture",
+            "archive_id": archive_id,
+            "source": TIRO_IMPORT_SOURCE,
+            "capture_state": capture_state,
+            "bundle_path": normalized_bundle or None,
+            "bundle_analysis": analysis,
+            "object": {
+                "object_id": object_id or None,
+                "logical_key": logical_key or None,
+                "size_bytes": size_bytes,
+                "stored_sha256_verified": bool((object_written or object_bytes_present) and object_id),
+                "manifest_record_present_before_run": manifest_record_present,
+                "manifest_record_appended": manifest_appended,
+                "raw_values_echoed": False,
+            },
+            "receipt": {
+                "proposed_receipt_path": None if receipt_written else receipt_relative,
+                "receipt_path": receipt_relative if receipt_written else None,
+                "raw_values_included": False,
+            },
+            "current_capability": {
+                "lossless_bundle_capture_writer_implemented": True,
+                "content_addressed_object_write_implemented": True,
+                "manifest_append_implemented": True,
+                "receipt_write_implemented": True,
+                "live_tiro_rest_adapter_implemented": False,
+                "ai_enrichment_writer_implemented": False,
+            },
+            "closed_actions": {
+                "provider_api_called": False,
+                "credential_value_read": False,
+                "raw_bundle_read": payload is not None,
+                "object_bytes_written": object_written,
+                "object_manifest_appended": manifest_appended,
+                "receipt_written": receipt_written,
+                "derived_text_written": False,
+                "zettels_written": False,
+                "mint_run": False,
+                "files_written": bool(files_written),
+            },
+            "privacy_guards": {
+                "meeting_titles_echoed": False,
+                "transcript_text_echoed": False,
+                "participant_names_echoed": False,
+                "emails_echoed": False,
+                "provider_urls_echoed": False,
+                "local_absolute_paths_echoed": False,
+                "tokens_echoed": False,
+                "secret_values_echoed": False,
+                "writes": bool(files_written),
+            },
+            "would_change": [] if approve or blockers else would_change,
+            "files_written": files_written,
+            "next_safe_actions": [
+                "Run derived-text capture only after the raw Tiro bundle object is preserved.",
+                "Keep speaker correction, relationship inference, and summary cleanup in a separate AI enrichment layer.",
+                "Implement the credential-bounded live REST/CLI adapter next so the bundle is generated without a client hand-written manifest.",
+            ],
+            "warnings": unique_preserve_order(warnings),
+            "blockers": unique_preserve_order(blockers),
+        }
+    )
+
+
 def notion_nested_tree_safe_max_items(max_items: int, blockers: list[str]) -> int:
     try:
         max_items_value = int(max_items)
@@ -30704,6 +31320,7 @@ def ai_response_concept_guide(
     include_manifest = resolved_topic in {"all", "manifest_vs_zet"}
     include_layers = resolved_topic in {"all", "three_layers"}
     include_operational_terms = resolved_topic in {"all", "operational_terms"}
+    include_zet_markdown_style = resolved_topic in {"all", "zet_markdown_style"}
 
     sections: list[dict[str, Any]] = []
     if include_identity:
@@ -30778,6 +31395,8 @@ def ai_response_concept_guide(
 
     if include_operational_terms:
         sections.append(ai_response_operational_terms_section(resolved_locale))
+    if include_zet_markdown_style:
+        sections.append(zet_markdown_style_section())
 
     return {
         "ok": not blockers,
@@ -30795,6 +31414,8 @@ def ai_response_concept_guide(
             "separate_evidence_from_interpretation": True,
             "requires_receipt_before_upload_or_availability_claim": True,
             "escalate_link_type_model_gaps_before_mapping": True,
+            "range_tilde_requires_single_tilde_with_spaces": True,
+            "double_tilde_reserved_for_markdown_strikethrough": True,
         },
         "sections": sections,
         "next_safe_question": "Are we trying to register known object ids now, verify/upload the bytes now, or draft human zets from already registered evidence?",
@@ -30864,6 +31485,10 @@ def ai_response_concept_guide(
                 "command": "archive notion-client-fixture-request-plan <archive-root> --source notion --dry-run --format json",
             },
             {
+                "human_intent": "check zet Markdown authoring rules before drafting",
+                "command": "archive zet-markdown-style-guide <archive-root> --topic range_tilde --dry-run --format json",
+            },
+            {
                 "human_intent": "upload or sync bytes",
                 "command": "future work until a later release explicitly adds an approval-gated adapter",
             },
@@ -30907,6 +31532,8 @@ def ai_response_concept_guide(
             "notion_ancestor_merge_replan_available": True,
             "notion_client_issue_verification_available": True,
             "notion_client_fixture_request_package_available": True,
+            "zet_markdown_style_guide_available": True,
+            "range_tilde_strikethrough_guard_available": True,
             "mcp_tool_available": False,
             "object_upload_adapter_implemented": False,
             "provider_availability_probe_implemented": False,
@@ -30958,6 +31585,86 @@ def ai_response_concept_guide(
         "would_change": [],
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
+}
+
+
+def zet_markdown_style_section() -> dict[str, Any]:
+    return {
+        "section_id": "zet_markdown_style",
+        "title": "zet Markdown authoring style",
+        "beginner_explanation": "WOM zets are Markdown-compatible today, so AI writers must avoid Markdown punctuation that accidentally changes rendering.",
+        "range_tilde_rule": {
+            "rule_id": "range_tilde_single_spaced",
+            "plain_meaning": "When a tilde means from A to B, write one tilde with a space on both sides.",
+            "required_form": "A ~ B",
+            "good_examples": ["2026-06-01 ~ 2026-06-22", "v0.3.67 ~ v0.3.72", "source note A ~ source note B"],
+            "avoid_examples": ["A~~B", "A ~~ B", "A~B"],
+            "why": "Many Markdown renderers treat double tilde as strikethrough, so range notation must not look like a strikethrough marker.",
+        },
+        "authoring_contract": {
+            "range_tilde_requires_single_tilde_with_spaces": True,
+            "double_tilde_reserved_for_intentional_strikethrough": True,
+            "literal_tilde_inside_code_may_use_code_span": True,
+            "prefer_words_when_space_would_be_ambiguous": True,
+        },
+        "safe_script": "For ranges, write `A ~ B`. Do not write `A~~B` or `A ~~ B` unless you intentionally want Markdown strikethrough.",
+    }
+
+
+def zet_markdown_style_guide(
+    archive_root: Path | str,
+    *,
+    topic: str = "all",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("zet-markdown-style-guide is read-only and requires --dry-run.")
+    resolved_topic = (topic or "all").strip().lower().replace("-", "_")
+    if resolved_topic not in ZET_MARKDOWN_STYLE_GUIDE_TOPICS:
+        blockers.append("topic must be one of: " + ", ".join(sorted(ZET_MARKDOWN_STYLE_GUIDE_TOPICS)) + ".")
+        resolved_topic = "all"
+    sections = [zet_markdown_style_section()] if resolved_topic in {"all", "range_tilde"} else []
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "zet_markdown_style_guide",
+        "archive_id": archive_id,
+        "topic": resolved_topic,
+        "markdown_profile": {
+            "current_authoring_format": "markdown_compatible_zet_body",
+            "long_term_rendering_target": "wom_safe_html_profile",
+            "range_tilde_policy": "single_tilde_with_spaces",
+            "strikethrough_marker": "double_tilde_only_when_intentional",
+        },
+        "sections": sections,
+        "closed_actions": {
+            "files_written": False,
+            "zettels_written": False,
+            "mint_run": False,
+            "provider_api_called": False,
+        },
+        "privacy_guards": {
+            "zet_body_text_read": False,
+            "source_values_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "provider_urls_echoed": False,
+            "tokens_echoed": False,
+            "secret_values_echoed": False,
+            "writes": False,
+        },
+        "current_capability": {
+            "zet_markdown_style_guide_available": True,
+            "range_tilde_strikethrough_guard_available": True,
+            "wom_safe_html_profile_linked": True,
+            "mcp_tool_available": False,
+        },
+        "would_change": [],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
     }
 
 

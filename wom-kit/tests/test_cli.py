@@ -611,6 +611,134 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn("Facilitator", output)
             self.assertNotIn("example.invalid", output)
 
+    def test_tiro_lossless_recovery_plan_and_capture_preserve_raw_bundle_without_echoing_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before_plan = self.snapshot_archive_files(archive_root)
+            credential_ref = "env:WOM_TEST_TIRO_TOKEN"
+
+            plan_code, plan_output = self.run_cli(
+                [
+                    "tiro-lossless-recovery-plan",
+                    str(archive_root),
+                    "--credential-ref",
+                    credential_ref,
+                    "--workspace-guid",
+                    "ws_fake_workspace",
+                    "--note-guid",
+                    "note_fake_guid",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            plan = json.loads(plan_output)
+            serialized_plan = json.dumps(plan, ensure_ascii=False)
+            self.assertEqual(plan_code, 0, plan_output)
+            self.assertTrue(plan["ok"], plan)
+            self.assertEqual(plan["lifecycle_action"], "tiro_lossless_recovery_plan")
+            categories = {item["category"] for item in plan["endpoint_inventory"]}
+            self.assertIn("paragraphs", categories)
+            self.assertIn("documents", categories)
+            self.assertIn("summaries", categories)
+            self.assertIn("user_word_memories", categories)
+            self.assertTrue(plan["bundle_contract"]["must_preserve_raw_provider_values_verbatim"])
+            self.assertFalse(plan["closed_actions"]["provider_api_called"])
+            self.assertFalse(plan["closed_actions"]["credential_value_read"])
+            self.assertFalse(plan["privacy_guards"]["credential_ref_echoed"])
+            self.assertNotIn(credential_ref, serialized_plan)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before_plan)
+
+            bundle_path = archive_root / "workbench" / "tiro-lossless-raw.sample.json"
+            raw_bundle = {
+                "schema": "wom-tiro-lossless-recovery-bundle/v0.1",
+                "source": "tiro",
+                "workspaces": [{"guid": "ws_fake_workspace", "name": "Fake private workspace"}],
+                "notes": [{"guid": "note_fake_guid", "title": "Fake confidential meeting"}],
+                "note_details": {"note_fake_guid": {"webUrl": "https://tiro.example/fake/private"}},
+                "paragraphs_by_note": {
+                    "note_fake_guid": {
+                        "content": [
+                            {
+                                "uuid": "para_fake_1",
+                                "transcript": {"content": "Please keep this fake transcript intact."},
+                                "diarizedSegments": [
+                                    {
+                                        "speaker": {"label": "A", "personName": "Fake Speaker"},
+                                        "content": "Please keep this fake transcript intact.",
+                                        "timeFrom": 0,
+                                        "timeTo": 1000,
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                },
+                "documents_by_note": {"note_fake_guid": []},
+                "summaries_by_note": {"note_fake_guid": []},
+                "folders_by_note": {"note_fake_guid": []},
+                "user_word_memories": {"content": [{"entry": "FakeTerm"}]},
+                "fetch_gaps": [{"category": "audio_original_bytes", "reason": "not exposed in fake fixture"}],
+            }
+            bundle_path.write_text(json.dumps(raw_bundle, ensure_ascii=False, indent=2), encoding="utf-8")
+            raw_bytes = bundle_path.read_bytes()
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "tiro-lossless-recovery-capture",
+                    str(archive_root),
+                    "--bundle",
+                    "workbench/tiro-lossless-raw.sample.json",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            dry_result = json.loads(dry_output)
+            dry_serialized = json.dumps(dry_result, ensure_ascii=False)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertTrue(dry_result["ok"], dry_result)
+            self.assertEqual(dry_result["capture_state"], "ready_for_approval")
+            self.assertTrue(dry_result["bundle_analysis"]["key_summaries"]["paragraphs_by_note"]["present"])
+            self.assertFalse(dry_result["object"]["raw_values_echoed"])
+            self.assertFalse(dry_result["closed_actions"]["provider_api_called"])
+            self.assertNotIn("Fake confidential meeting", dry_serialized)
+            self.assertNotIn("Fake Speaker", dry_serialized)
+            self.assertNotIn("Please keep this fake transcript intact.", dry_serialized)
+            self.assertNotIn("tiro.example", dry_serialized)
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "tiro-lossless-recovery-capture",
+                    str(archive_root),
+                    "--bundle",
+                    "workbench/tiro-lossless-raw.sample.json",
+                    "--approve",
+                    "--reviewed-by",
+                    "human:tester",
+                    "--format",
+                    "json",
+                ]
+            )
+            approve_result = json.loads(approve_output)
+            approve_serialized = json.dumps(approve_result, ensure_ascii=False)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"], approve_result)
+            self.assertEqual(approve_result["capture_state"], "captured")
+            self.assertTrue(approve_result["closed_actions"]["object_bytes_written"])
+            self.assertTrue(approve_result["closed_actions"]["object_manifest_appended"])
+            self.assertTrue(approve_result["closed_actions"]["receipt_written"])
+            object_logical = approve_result["object"]["logical_key"]
+            stored = archive_root.joinpath(*object_logical.split("/"))
+            self.assertEqual(stored.read_bytes(), raw_bytes)
+            receipt_path = archive_root.joinpath(*approve_result["receipt"]["receipt_path"].split("/"))
+            receipt_text = receipt_path.read_text(encoding="utf-8")
+            self.assertNotIn("Fake confidential meeting", approve_serialized)
+            self.assertNotIn("Fake Speaker", approve_serialized)
+            self.assertNotIn("Please keep this fake transcript intact.", approve_serialized)
+            self.assertNotIn("Fake confidential meeting", receipt_text)
+            self.assertNotIn("Please keep this fake transcript intact.", receipt_text)
+
     def test_version_command_finds_parent_project_pin_from_archive_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = Path(tmp) / "project"
@@ -8197,9 +8325,11 @@ state:
             self.assertTrue(result["guide_contract"]["separate_identity_from_location"])
             self.assertTrue(result["guide_contract"]["requires_receipt_before_upload_or_availability_claim"])
             self.assertTrue(result["guide_contract"]["translate_operational_terms_before_asking_user_to_choose"])
+            self.assertTrue(result["guide_contract"]["range_tilde_requires_single_tilde_with_spaces"])
+            self.assertTrue(result["guide_contract"]["double_tilde_reserved_for_markdown_strikethrough"])
             self.assertEqual(result["locale"], "ko-KR")
             section_ids = [section["section_id"] for section in result["sections"]]
-            self.assertEqual(section_ids, ["sha256_identity", "manifest_vs_zet", "three_layers", "operational_terms"])
+            self.assertEqual(section_ids, ["sha256_identity", "manifest_vs_zet", "three_layers", "operational_terms", "zet_markdown_style"])
             identity_section = result["sections"][0]
             self.assertIn("sha256:<hex>", " ".join(identity_section["answer_order"]))
             self.assertIn("지문", identity_section["korean_script"])
@@ -8233,6 +8363,7 @@ state:
             self.assertTrue(any("notion-ancestor-merge-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-client-issue-verification-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-client-fixture-request-plan" in route["command"] for route in result["safe_routing"]))
+            self.assertTrue(any("zet-markdown-style-guide" in route["command"] for route in result["safe_routing"]))
             self.assertFalse(result["closed_actions"]["source_bytes_read"])
             self.assertFalse(result["closed_actions"]["provider_api_called"])
             self.assertFalse(result["closed_actions"]["upload_performed"])
@@ -8254,6 +8385,8 @@ state:
             self.assertTrue(result["current_capability"]["notion_ancestor_merge_replan_available"])
             self.assertTrue(result["current_capability"]["notion_client_issue_verification_available"])
             self.assertTrue(result["current_capability"]["notion_client_fixture_request_package_available"])
+            self.assertTrue(result["current_capability"]["zet_markdown_style_guide_available"])
+            self.assertTrue(result["current_capability"]["range_tilde_strikethrough_guard_available"])
             self.assertFalse(result["current_capability"]["object_upload_adapter_implemented"])
             self.assertEqual(result["would_change"], [])
             self.assertNotIn("C:\\", serialized)
@@ -8305,6 +8438,55 @@ state:
             )
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
+
+    def test_zet_markdown_style_guide_guards_range_tilde_from_strikethrough(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "zet-markdown-style-guide",
+                    str(archive_root),
+                    "--topic",
+                    "range_tilde",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "zet_markdown_style_guide")
+            self.assertEqual(result["markdown_profile"]["range_tilde_policy"], "single_tilde_with_spaces")
+            section = result["sections"][0]
+            rule = section["range_tilde_rule"]
+            self.assertEqual(rule["required_form"], "A ~ B")
+            self.assertIn("2026-06-01 ~ 2026-06-22", rule["good_examples"])
+            self.assertIn("A~~B", rule["avoid_examples"])
+            self.assertTrue(section["authoring_contract"]["range_tilde_requires_single_tilde_with_spaces"])
+            self.assertTrue(section["authoring_contract"]["double_tilde_reserved_for_intentional_strikethrough"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertFalse(result["privacy_guards"]["zet_body_text_read"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            text_code, text_output = self.run_cli(
+                [
+                    "zet-style-guide",
+                    str(archive_root),
+                    "--topic",
+                    "range_tilde",
+                    "--dry-run",
+                    "--format",
+                    "text",
+                ]
+            )
+            self.assertEqual(text_code, 0, text_output)
+            self.assertIn("A ~ B", text_output)
 
     def test_beginner_setup_manual_guides_keepassxc_bulk_migration_without_reading_csv(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

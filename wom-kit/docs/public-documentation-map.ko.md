@@ -153,6 +153,8 @@
 - [Notion Client Issue Verification Plan](notion-client-issue-verification-plan.md)
 - [Notion Client Fixture Request Plan](notion-client-fixture-request-plan.md)
 - [Tiro Import Plan](tiro-import-plan.md)
+- [Tiro Lossless Recovery](tiro-lossless-recovery.md)
+- [zet Markdown Style Guide](zet-markdown-style-guide.md)
 - [Zettel Edge Write](zettel-edge-write.md)
 - [Zettel Edge Batch](zettel-edge-batch.md)
 - [Object Storage Recommendations](object-storage-recommendations.md)
