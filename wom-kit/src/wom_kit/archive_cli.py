@@ -3111,6 +3111,10 @@ def command_notion_ancestor_crawl_plan(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             max_items=args.max_items,
             max_depth=args.max_depth,
+            scope_generation_ids=args.scope_generation_id,
+            scope_root_refs=args.scope_root_ref,
+            scope_ancestor_refs=args.scope_ancestor_ref,
+            scope_leaf_refs=args.scope_leaf_ref,
         )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
@@ -3128,7 +3132,10 @@ def command_notion_ancestor_crawl_plan(args: argparse.Namespace) -> int:
         print(f"Missing ancestor refs: {summary.get('missing_ancestor_ref_count', 0)}")
         print(f"Rootless leaf refs: {summary.get('rootless_leaf_ref_count', 0)}")
         print(f"Affected leaves: {summary.get('affected_leaf_count', 0)}")
+        print(f"Unfiltered crawl requests: {summary.get('unfiltered_crawl_request_count', 0)}")
+        print(f"Excluded by scope filter: {summary.get('excluded_crawl_request_count', 0)}")
         print(f"Max depth: {summary.get('max_depth', 0)}")
+        print(f"Scope filter: {'active' if summary.get('scope_filter_active') else 'inactive'}")
         print("Provider API call: no")
         print("Writes: none")
         if result.get("blockers"):
@@ -12977,6 +12984,26 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=16,
         help="Maximum future parent-chain crawl depth to request per missing ancestor. Range 1-64.",
+    )
+    notion_ancestor_crawl_plan.add_argument(
+        "--scope-generation-id",
+        action="append",
+        help="Optional generation id filter for broad workspace fixtures. Repeat to include more than one generation.",
+    )
+    notion_ancestor_crawl_plan.add_argument(
+        "--scope-root-ref",
+        action="append",
+        help="Optional safe root/ref filter matched against request refs before a future adapter receives the queue. Repeatable.",
+    )
+    notion_ancestor_crawl_plan.add_argument(
+        "--scope-ancestor-ref",
+        action="append",
+        help="Optional exact ancestor_ref filter. Repeatable.",
+    )
+    notion_ancestor_crawl_plan.add_argument(
+        "--scope-leaf-ref",
+        action="append",
+        help="Optional exact affected leaf ref filter. Repeatable.",
     )
     notion_ancestor_crawl_plan.add_argument(
         "--dry-run",

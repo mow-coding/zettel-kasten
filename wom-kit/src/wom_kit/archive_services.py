@@ -17171,6 +17171,10 @@ def notion_ancestor_crawl_plan(
     dry_run: bool = True,
     max_items: int = 1000,
     max_depth: int = 16,
+    scope_generation_ids: Iterable[str] | str | None = None,
+    scope_root_refs: Iterable[str] | str | None = None,
+    scope_ancestor_refs: Iterable[str] | str | None = None,
+    scope_leaf_refs: Iterable[str] | str | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -17189,6 +17193,14 @@ def notion_ancestor_crawl_plan(
         blockers.append("max_depth must be between 1 and 64.")
         max_depth_value = max(1, min(max_depth_value, 64))
 
+    scope_filter = notion_ancestor_crawl_scope_filter(
+        scope_generation_ids=scope_generation_ids,
+        scope_root_refs=scope_root_refs,
+        scope_ancestor_refs=scope_ancestor_refs,
+        scope_leaf_refs=scope_leaf_refs,
+        blockers=blockers,
+    )
+
     nested_plan = notion_nested_tree_plan(
         root,
         tree_path=tree_path,
@@ -17200,13 +17212,21 @@ def notion_ancestor_crawl_plan(
     if not nested_plan.get("ok"):
         blockers.extend(str(item) for item in nested_plan.get("blockers", []))
 
-    request_queue = [] if blockers else notion_ancestor_crawl_requests_from_nested_plan(
+    unfiltered_request_queue = [] if blockers else notion_ancestor_crawl_requests_from_nested_plan(
         nested_plan,
         max_depth=max_depth_value,
     )
+    request_queue = [] if blockers else notion_filter_ancestor_crawl_requests(unfiltered_request_queue, scope_filter)
+    if not blockers and scope_filter["active"] and unfiltered_request_queue and not request_queue:
+        warnings.append("ancestor_crawl_scope_filter_matched_no_requests")
     plan_state = "blocked"
     if not blockers:
-        plan_state = "ancestor_crawl_requests_ready" if request_queue else "no_ancestor_crawl_needed"
+        if request_queue:
+            plan_state = "ancestor_crawl_requests_ready"
+        elif scope_filter["active"] and unfiltered_request_queue:
+            plan_state = "no_matching_ancestor_crawl_requests"
+        else:
+            plan_state = "no_ancestor_crawl_needed"
 
     affected_leaf_refs = unique_preserve_order(
         leaf_ref
@@ -17241,13 +17261,24 @@ def notion_ancestor_crawl_plan(
             "requires_sanitized_tree_merge_before_replanning": True,
             "provider_transport_is_not_implemented_in_this_release": True,
             "partial_truncated_source_plan_is_blocked": True,
+            "scope_filter_narrows_request_queue_before_adapter": True,
+        },
+        "scope_filter": {
+            **scope_filter,
+            "unfiltered_crawl_request_count": len(unfiltered_request_queue),
+            "filtered_crawl_request_count": len(request_queue),
+            "excluded_crawl_request_count": max(0, len(unfiltered_request_queue) - len(request_queue)),
+            "match_semantics": "AND across supplied filter families, OR within each family.",
         },
         "request_summary": {
             "crawl_request_count": len(request_queue),
+            "unfiltered_crawl_request_count": len(unfiltered_request_queue),
+            "excluded_crawl_request_count": max(0, len(unfiltered_request_queue) - len(request_queue)),
             "missing_ancestor_ref_count": len(missing_ancestor_refs),
             "rootless_leaf_ref_count": len(rootless_leaf_refs),
             "affected_leaf_count": len(affected_leaf_refs),
             "max_depth": max_depth_value,
+            "scope_filter_active": bool(scope_filter["active"]),
             "auto_writable_count": 0,
         },
         "missing_ancestor_refs": missing_ancestor_refs,
@@ -17257,6 +17288,7 @@ def notion_ancestor_crawl_plan(
         "current_capability": {
             "nested_tree_plan_reuse_available": True,
             "ancestor_crawl_request_queue_available": True,
+            "ancestor_crawl_scope_filter_available": True,
             "provider_api_call_implemented": False,
             "oauth_started": False,
             "live_deep_crawl_adapter_implemented": False,
@@ -17297,6 +17329,7 @@ def notion_ancestor_crawl_plan(
         "would_change": [],
         "next_safe_actions": [
             "Review crawl_request_queue and keep it local; it is a provider-adapter input contract, not a public data dump.",
+            "Use scope_generation_ids, scope_root_refs, scope_ancestor_refs, or scope_leaf_refs to narrow broad workspace queues before any provider adapter receives them.",
             "Implement the live deep-crawl adapter only behind an explicit credential boundary and dry-run preflight.",
             "Merge fetched ancestors back into a sanitized tree fixture with node_ref, parent_ref, node_kind, source_status, and review_status.",
             "Rerun archive notion-nested-tree-plan after the sanitized ancestor merge before any recovery or minting.",
@@ -17340,12 +17373,24 @@ def notion_ancestor_crawl_requests_from_nested_plan(
                 "suggested_direction": direction,
                 "affected_leaf_refs": [],
                 "known_child_refs": [],
+                "affected_generation_ids": [],
+                "affected_root_refs": [],
+                "lineage_refs_seen": [],
                 "lineage_depths_seen": [],
             },
         )
         group["affected_leaf_refs"].append(str(item.get("node_ref") or ""))
         if known_child_ref:
             group["known_child_refs"].append(known_child_ref)
+        declared_generation_id = str(item.get("declared_generation_id") or "").strip()
+        assigned_generation_id = str(assignment.get("generation_id") or "").strip()
+        for generation_id in (declared_generation_id, assigned_generation_id):
+            if generation_id:
+                group["affected_generation_ids"].append(generation_id)
+        assigned_root_ref = str(assignment.get("root_ref") or "").strip()
+        if assigned_root_ref:
+            group["affected_root_refs"].append(assigned_root_ref)
+        group["lineage_refs_seen"].extend(traversed_refs)
         if assignment.get("lineage_depth") is not None:
             group["lineage_depths_seen"].append(int(assignment.get("lineage_depth") or 0))
 
@@ -17366,6 +17411,9 @@ def notion_ancestor_crawl_requests_from_nested_plan(
                 "ancestor_ref": group["ancestor_ref"],
                 "affected_leaf_refs": unique_preserve_order(group["affected_leaf_refs"]),
                 "known_child_refs": unique_preserve_order(group["known_child_refs"]),
+                "affected_generation_ids": unique_preserve_order(group["affected_generation_ids"]),
+                "affected_root_refs": unique_preserve_order(group["affected_root_refs"]),
+                "lineage_refs_seen": unique_preserve_order(group["lineage_refs_seen"]),
                 "suggested_direction": group["suggested_direction"],
                 "max_depth": max_depth,
                 "lineage_depths_seen": sorted(set(group["lineage_depths_seen"])),
@@ -17394,6 +17442,89 @@ def notion_ancestor_crawl_requests_from_nested_plan(
             }
         )
     return sorted(requests, key=lambda item: (str(item.get("request_reason")), str(item.get("ancestor_ref"))))
+
+
+def notion_ancestor_crawl_scope_filter(
+    *,
+    scope_generation_ids: Iterable[str] | str | None,
+    scope_root_refs: Iterable[str] | str | None,
+    scope_ancestor_refs: Iterable[str] | str | None,
+    scope_leaf_refs: Iterable[str] | str | None,
+    blockers: list[str],
+) -> dict[str, Any]:
+    generation_ids = notion_ancestor_crawl_scope_values(scope_generation_ids, "scope_generation_ids", blockers)
+    root_refs = notion_ancestor_crawl_scope_values(scope_root_refs, "scope_root_refs", blockers)
+    ancestor_refs = notion_ancestor_crawl_scope_values(scope_ancestor_refs, "scope_ancestor_refs", blockers)
+    leaf_refs = notion_ancestor_crawl_scope_values(scope_leaf_refs, "scope_leaf_refs", blockers)
+    return {
+        "active": bool(generation_ids or root_refs or ancestor_refs or leaf_refs),
+        "scope_generation_ids": generation_ids,
+        "scope_root_refs": root_refs,
+        "scope_ancestor_refs": ancestor_refs,
+        "scope_leaf_refs": leaf_refs,
+    }
+
+
+def notion_ancestor_crawl_scope_values(
+    values: Iterable[str] | str | None,
+    label: str,
+    blockers: list[str],
+) -> list[str]:
+    if values is None:
+        return []
+    raw_values: Iterable[Any]
+    if isinstance(values, str):
+        raw_values = [values]
+    else:
+        raw_values = values
+    normalized: list[str] = []
+    for index, value in enumerate(raw_values, start=1):
+        text = str(value or "").strip()
+        if not text:
+            continue
+        if not safe_source_intake_plan_scalar(text):
+            blockers.append(f"{label}[{index}] must be a safe non-secret scalar.")
+            continue
+        normalized.append(text)
+    return unique_preserve_order(normalized)
+
+
+def notion_filter_ancestor_crawl_requests(
+    requests: list[dict[str, Any]],
+    scope_filter: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not scope_filter.get("active"):
+        return requests
+    return [request for request in requests if notion_ancestor_crawl_request_matches_scope(request, scope_filter)]
+
+
+def notion_ancestor_crawl_request_matches_scope(
+    request: dict[str, Any],
+    scope_filter: dict[str, Any],
+) -> bool:
+    generation_ids = set(scope_filter.get("scope_generation_ids") or [])
+    if generation_ids and not generation_ids.intersection(set(request.get("affected_generation_ids") or [])):
+        return False
+
+    request_refs = set(str(value) for value in request.get("affected_root_refs", []) if value)
+    request_refs.add(str(request.get("ancestor_ref") or ""))
+    request_refs.update(str(value) for value in request.get("affected_leaf_refs", []) if value)
+    request_refs.update(str(value) for value in request.get("known_child_refs", []) if value)
+    request_refs.update(str(value) for value in request.get("lineage_refs_seen", []) if value)
+
+    root_refs = set(scope_filter.get("scope_root_refs") or [])
+    if root_refs and not root_refs.intersection(request_refs):
+        return False
+
+    ancestor_refs = set(scope_filter.get("scope_ancestor_refs") or [])
+    if ancestor_refs and str(request.get("ancestor_ref") or "") not in ancestor_refs:
+        return False
+
+    leaf_refs = set(scope_filter.get("scope_leaf_refs") or [])
+    if leaf_refs and not leaf_refs.intersection(set(request.get("affected_leaf_refs") or [])):
+        return False
+
+    return True
 
 
 def notion_block_mirror_tree_fixture_plan(
@@ -18763,6 +18894,7 @@ def notion_nested_tree_leaf_reports(
             "parent_ref": node.get("parent_ref"),
             "node_kind": node.get("node_kind"),
             "containment_source_ref": node.get("containment_source_ref"),
+            "declared_generation_id": node.get("declared_generation_id"),
             "source_status": node.get("source_status"),
             "mint_state": mint_state,
             "review_status": node.get("review_status"),
@@ -28238,7 +28370,7 @@ def ai_response_concept_guide(
             },
             {
                 "human_intent": "package missing Notion ancestors reported by nested-tree planning",
-                "command": "archive notion-ancestor-crawl-plan <archive-root> --tree workbench/notion-nested-tree.sample.json --source notion --dry-run --format json",
+                "command": "archive notion-ancestor-crawl-plan <archive-root> --tree workbench/notion-nested-tree.sample.json --source notion --scope-generation-id DB1 --dry-run --format json",
             },
             {
                 "human_intent": "build a nested tree fixture from reviewed Notion block mirror metadata",
@@ -28294,6 +28426,7 @@ def ai_response_concept_guide(
             "notion_import_material_clue_audit_available": True,
             "notion_nested_tree_recovery_planning_available": True,
             "notion_ancestor_crawl_request_planning_available": True,
+            "notion_ancestor_crawl_scope_filter_available": True,
             "notion_block_mirror_tree_fixture_planning_available": True,
             "notion_ancestor_merge_replan_available": True,
             "notion_client_issue_verification_available": True,

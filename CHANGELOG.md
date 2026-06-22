@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.129 - 2026-06-22
+
+- Added optional request-queue scope filters to read-only
+  `archive notion-ancestor-crawl-plan --dry-run` and MCP
+  `notion_ancestor_crawl_plan`.
+- The planner can now narrow broad workspace crawl queues by generation id,
+  root/ref, exact ancestor ref, or affected leaf ref before any future
+  credential-bounded adapter receives the queue.
+- Each crawl request now carries safe affected generation ids, affected root
+  refs, and lineage refs so adapter input packages can be audited without page
+  titles, bodies, comments, media, provider URLs, local paths, account ids,
+  emails, tokens, or secret values.
+- Still closed: no live Notion fetch adapter, OAuth, provider API calls,
+  title/body reads, media downloads, fixture writes, zettel writes, edge writes,
+  receipts, or object manifest updates.
+
 ## v0.3.128 - 2026-06-22
 
 - Added read-only `archive notion-client-fixture-request-plan --dry-run` and

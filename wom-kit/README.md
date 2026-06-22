@@ -234,7 +234,7 @@ notion-nested-tree-plan
   Plan nested Notion child-page recovery from a sanitized tree fixture. Dry-run only; walks safe parent refs to assign each leaf to a known generation root, separates live content leaves from structure/template/view containers, reports untraceable leaves instead of guessing from a partial mirror, and never reads real exports, page titles, page bodies, comments, calls providers, writes zets, mints pages, writes edges, writes receipts, or echoes provider URLs or local paths.
 
 notion-ancestor-crawl-plan
-  Plan missing Notion ancestor crawl requests from a sanitized nested tree fixture. Dry-run only; groups missing parent records and rootless leaves into a crawl_request_queue for a future credential-bounded adapter, and never calls providers, reads real exports, page titles, page bodies, comments, downloads media, merges fixtures, writes zets, mints pages, writes edges, writes receipts, or echoes provider URLs or local paths.
+  Plan missing Notion ancestor crawl requests from a sanitized nested tree fixture. Dry-run only; groups missing parent records and rootless leaves into a crawl_request_queue for a future credential-bounded adapter, supports generation/root/ancestor/leaf scope filters for broad workspace queues, and never calls providers, reads real exports, page titles, page bodies, comments, downloads media, merges fixtures, writes zets, mints pages, writes edges, writes receipts, or echoes provider URLs or local paths.
 
 notion-block-mirror-tree-fixture-plan
   Build a sanitized nested tree fixture preview from reviewed Notion block mirror metadata. Dry-run only; derives safe refs and content classes from structural metadata, runs a nested-tree plan preview, and never calls providers, reads page titles or bodies, writes fixtures, writes zets, writes edges, or echoes provider URLs or local paths.
@@ -1249,6 +1249,12 @@ safe fields, includes a redaction checklist, and can reuse the v0.3.127
 verification preview when local fixtures are already present. It still sends no
 message, calls no providers, reads no titles or bodies, writes no fixture files,
 mints no zets, writes no edges, and writes no receipts.
+v0.3.129 adds request-queue scope filters to the Notion ancestor crawl plan.
+`archive notion-ancestor-crawl-plan --scope-generation-id DB1 --dry-run` can
+narrow a broad workspace crawl queue by generation id, root ref, ancestor ref,
+or affected leaf ref before any future credential-bounded adapter receives it.
+It still calls no providers, starts no OAuth, reads no titles or bodies, writes
+no fixture files, mints no zets, writes no edges, and writes no receipts.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 
