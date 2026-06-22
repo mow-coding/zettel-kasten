@@ -23,10 +23,11 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.3.136 pre-release
+v0.3.137 pre-release
 ```
 
-이전 공개 기준: v0.3.135 pre-release.
+이전 공개 기준: v0.3.136 pre-release.
+더 이전 공개 기준: v0.3.135 pre-release.
 더 이전 공개 기준: v0.3.134 pre-release.
 더 이전 공개 기준: v0.3.133 pre-release.
 
@@ -103,6 +104,7 @@ v0.3.136 pre-release
 - [Credential Vault Onboarding Plan](wom-kit/docs/credential-vault-onboarding-plan.md)
 - [Beginner Setup Manual](wom-kit/docs/beginner-setup-manual.md)
 - [Notion Recover](wom-kit/docs/notion-recover.md)
+- [Tiro Import Plan](wom-kit/docs/tiro-import-plan.md)
 - [Connected Accounts](wom-kit/docs/connected-accounts.md)
 - [Credential Plaintext Migration Plan](wom-kit/docs/credential-plaintext-migration-plan.md)
 - [Credential Access Broker Plan](wom-kit/docs/credential-access-broker-plan.md)
@@ -222,6 +224,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.3.137
 v0.3.136
 v0.3.135
 v0.3.134

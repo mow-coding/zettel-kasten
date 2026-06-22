@@ -641,6 +641,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("object_storage_operation_request_plan", tool_names)
             self.assertIn("object_storage_adapter_execution_contract", tool_names)
             self.assertIn("human_artifact_store_plan", tool_names)
+            self.assertIn("tiro_import_plan", tool_names)
             self.assertIn("connection_import_plan", tool_names)
             self.assertIn("connection_evidence_parser_contract", tool_names)
             self.assertIn("connection_evidence_parse_fixture", tool_names)
@@ -6454,6 +6455,77 @@ class McpServerTests(unittest.TestCase):
                             "arguments": {
                                 "archive_root": str(outside_archive),
                                 "object_id": "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136",
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assertIn("outside allowed archive root", outside_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_tiro_import_plan_tool_writes_nothing_and_respects_allowed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "tiro_import_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "manifest": "workbench/tiro-meeting.sample.json",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "tiro_import_plan")
+                self.assertEqual(structured["state"], "ready_for_review")
+                self.assertEqual(structured["transcript_mapping"]["segments_preserved"]["segment_count"], 2)
+                self.assertFalse(structured["privacy_guards"]["segment_text_echoed"])
+                self.assertFalse(structured["closed_actions"]["files_written"])
+                self.assertFalse(structured["closed_actions"]["live_tiro_api_called"])
+                self.assertFalse(structured["closed_actions"]["audio_bytes_read"])
+                self.assertNotIn("Please keep the transcript", json.dumps(structured))
+                self.assertNotIn("example.invalid", json.dumps(structured))
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "tiro_import_plan",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "manifest": "workbench/tiro-meeting.sample.json",
                             },
                         },
                     },

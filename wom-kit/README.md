@@ -102,6 +102,7 @@ docs/notion-block-mirror-tree-fixture-plan.md
 docs/notion-ancestor-merge-plan.md
 docs/notion-client-issue-verification-plan.md
 docs/notion-client-fixture-request-plan.md
+docs/tiro-import-plan.md
 docs/zettel-edge-write.md
 docs/zettel-edge-batch.md
 docs/project-intake-session.md
@@ -176,7 +177,7 @@ Current commands:
 
 ```text
 version
-  Print the running WOM-kit CLI version and optional project pin status. When an archive root is inspected, the command can also find a parent project installed-version pin. JSON output is available for AI/runtime checks and redacts local paths by default.
+  Print the running WOM-kit CLI version and optional project pin/source mirror status. When an archive root is inspected, the command can also find a parent project installed-version pin and .zettel-kasten/source mirror, including source version and latest fetched tag drift when available. JSON output is available for AI/runtime checks and redacts local paths by default.
 
 onboard
   Plan or apply first archive setup. Dry-run writes nothing; --approve creates the archive, provider-bindings.yml, and runs strict doctor.
@@ -408,6 +409,9 @@ derive-text-agent-contract
 
 source-intake
   Classify one source/objet locator before draft creation. Dry-run only; returns safe source refs without reading bodies, hashing, copying, uploading, importing, OCR, transcription, extraction, or provider API calls. It can optionally validate a project-intake decisions receipt as session context only.
+
+tiro-import-plan
+  Plan Tiro meeting transcript and audio-objet import from an archive-internal manifest. Dry-run only; preserves meeting metadata, speaker turns, timestamps, confidence, and optional audio objet refs as structure, but echoes no transcript text, participant names, source URLs, audio filenames, local paths, account ids, emails, tokens, or secrets. It calls no Tiro API, reads no audio bytes, writes no derived text, drafts no zets, and mints nothing.
 
 source-intake-record
   Validate and record a reviewed source-intake dry-run JSON plan under receipts/sources/. Dry-run previews first; approved mode writes one redacted plan record only.
@@ -749,6 +753,8 @@ This file is a rebuildable map, not the archive itself. The durable archive stil
 `archive mint-zet-batch --plan <json> --dry-run|--approve` and `archive retire-draft-batch --plan <json> --dry-run|--approve` are the batch-safe forms for large WOM real-use runs. They consume archive-relative JSON plans, run inside one WOM-kit process, keep the same single-item gates for each item, support `--skip-existing` and `--max-items`, return `failed_items` for partial failures, and write one batch receipt under `receipts/mint/batches/` or `receipts/mint/retired-drafts/batches/`. For post-edge canonical zets, retired-draft batch validation builds one edge receipt index for the batch and approved writes reuse the verified plan with current-file SHA replay checks. They do not spawn one shell process per item, rescan edge receipts once per item, call providers, read unrelated source files, or echo zettel body text.
 
 `archive source-intake --dry-run` is the safe classification step before drafting from a source/objet. It accepts exactly one locator, returns `source_refs_for_draft`, reports object storage context, and writes nothing. It does not read file bodies, hash, copy, upload, import, OCR, transcribe, extract, call provider APIs, create drafts, or mint.
+
+`archive tiro-import-plan --manifest workbench/tiro-meeting.sample.json --dry-run` is the meeting-specific planning step before derived-text capture or drafting from a Tiro transcript. It reads only a reviewed archive-internal JSON manifest, checks meeting metadata, speaker turns, timestamps, transcript segment shape, confidence fields, and optional audio objet refs, then returns counts and safe source refs without echoing meeting titles, participant display names, transcript text, source URLs, audio filenames, local paths, account ids, emails, tokens, or secrets. It writes nothing and calls no Tiro API.
 
 `archive derive-text capture` is the safe registration step after an external parser, OCR tool, ASR tool, or vision model has already produced a UTF-8 text file. The source object must already exist in `objects/manifests/files.jsonl`. Dry-run writes nothing; approved mode stores the text body under `objects/derived-text/sha256/`, appends `objects/manifests/derived-text.jsonl`, and writes `receipts/derived-text-capture/*.json`.
 

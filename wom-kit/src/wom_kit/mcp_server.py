@@ -1419,6 +1419,26 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "tiro_import_plan",
+        "description": "Plan a Tiro meeting transcript and audio-objet import from an archive-internal manifest. Dry-run only; never calls Tiro, reads audio bytes, echoes transcript text, writes derived text, drafts, or mints.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "manifest": {"type": "string", "description": "Archive-relative Tiro manifest JSON path."},
+                "source": {"type": "string", "enum": [archive_services.TIRO_IMPORT_SOURCE], "default": archive_services.TIRO_IMPORT_SOURCE},
+                "max_segments": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": archive_services.TIRO_IMPORT_MAX_SEGMENTS,
+                    "default": 1000,
+                },
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "manifest"],
+        },
+    },
+    {
         "name": "archive_init",
         "description": "Initialize a new personal, company, or family archive from safe defaults. Target must be absent or empty.",
         "inputSchema": {
@@ -2783,6 +2803,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_project_intake_item_plan(arguments)
     if name == "source_intake_plan":
         return tool_source_intake_plan(arguments)
+    if name == "tiro_import_plan":
+        return tool_tiro_import_plan(arguments)
     if name == "archive_init":
         return tool_archive_init(arguments)
     if name == "archive_onboarding_plan":
@@ -4030,6 +4052,21 @@ def tool_source_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     add_mcp_redaction_warning(result, requested_redaction, redact_local_paths)
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"source_intake_plan: {state}.", result)
+
+
+def tool_tiro_import_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is False:
+        raise ToolError("tiro_import_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.tiro_import_plan,
+        archive_root,
+        manifest_path=require_string_arg(arguments, "manifest"),
+        source=optional_string_arg(arguments, "source") or archive_services.TIRO_IMPORT_SOURCE,
+        max_segments=int(arguments.get("max_segments", 1000)),
+    )
+    state = str(result.get("state") or ("passed" if result["ok"] else "blocked"))
+    return tool_success_result(f"tiro_import_plan: {state}.", result)
 
 
 def tool_archive_init(arguments: dict[str, Any]) -> dict[str, Any]:

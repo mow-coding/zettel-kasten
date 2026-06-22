@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -511,6 +512,104 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(ok_result["ok"])
             self.assertTrue(ok_result["project_pin"]["matches_package_version"])
             self.assertEqual(ok_result["consistency_state"], "source_checkout_match")
+
+    def test_version_command_reports_project_source_mirror_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            mirror_root = project_root / ".zettel-kasten" / "source"
+            package_dir = mirror_root / "wom-kit" / "src" / "wom_kit"
+            package_dir.mkdir(parents=True)
+            (package_dir / "__init__.py").write_text('__version__ = "0.3.109"\n', encoding="utf-8")
+            pyproject_dir = mirror_root / "wom-kit"
+            (pyproject_dir / "pyproject.toml").write_text(
+                '[project]\nname = "wom-kit"\nversion = "0.3.109"\n',
+                encoding="utf-8",
+            )
+            (mirror_root / "installed-version.txt").write_text("v0.3.109\n", encoding="utf-8")
+
+            git_available = shutil.which("git") is not None
+            if git_available:
+                subprocess.run(["git", "-C", str(mirror_root), "init"], check=True, capture_output=True, text=True)
+                subprocess.run(["git", "-C", str(mirror_root), "add", "."], check=True, capture_output=True, text=True)
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(mirror_root),
+                        "-c",
+                        "user.name=archive-test",
+                        "-c",
+                        "user.email=archive-test.invalid",
+                        "commit",
+                        "-m",
+                        "fixture",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                subprocess.run(["git", "-C", str(mirror_root), "tag", "v0.3.109"], check=True, capture_output=True, text=True)
+                subprocess.run(["git", "-C", str(mirror_root), "tag", "v0.3.136"], check=True, capture_output=True, text=True)
+
+            code, output = self.run_cli(["version", str(project_root), "--format", "json"])
+            result = json.loads(output)
+
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            mirror = result["project_source_mirror"]
+            self.assertEqual(mirror["status"], "present")
+            self.assertEqual(mirror["path"], ".zettel-kasten/source")
+            self.assertEqual(mirror["source_version"], "0.3.109")
+            self.assertEqual(mirror["pyproject_version"], "0.3.109")
+            self.assertFalse(mirror["source_matches_running_version"])
+            self.assertTrue(mirror["pin_matches_source_version"])
+            self.assertNotIn(str(project_root), output)
+            if git_available:
+                self.assertEqual(mirror["latest_fetched_tag"], "v0.3.136")
+                self.assertTrue(mirror["mirror_behind_latest_fetched_tag"])
+                self.assertEqual(result["consistency_state"], "project_source_mirror_behind_latest_fetched_tag")
+            else:
+                self.assertEqual(result["consistency_state"], "project_source_mirror_mismatch")
+
+    def test_tiro_import_plan_manifest_preserves_structure_without_echoing_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            code, output = self.run_cli(
+                [
+                    "tiro-import-plan",
+                    str(archive_root),
+                    "--manifest",
+                    "workbench/tiro-meeting.sample.json",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "tiro_import_plan")
+            self.assertEqual(result["source"], "tiro")
+            self.assertEqual(result["state"], "ready_for_review")
+            self.assertTrue(result["meeting_metadata"]["title_present"])
+            self.assertTrue(result["meeting_metadata"]["source_url_present"])
+            segments = result["transcript_mapping"]["segments_preserved"]
+            self.assertEqual(segments["segment_count"], 2)
+            self.assertEqual(segments["speaker_count_in_segments"], 2)
+            self.assertFalse(segments["transcript_text_echoed"])
+            self.assertFalse(result["privacy_guards"]["meeting_title_echoed"])
+            self.assertFalse(result["privacy_guards"]["participant_display_names_echoed"])
+            self.assertFalse(result["privacy_guards"]["source_url_echoed"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertFalse(result["closed_actions"]["live_tiro_api_called"])
+            self.assertFalse(result["closed_actions"]["audio_bytes_read"])
+            self.assertEqual(result["source_refs_for_draft"][0]["type"], "source_manifest")
+            self.assertNotIn("Please keep the transcript", output)
+            self.assertNotIn("Fake weekly archive review", output)
+            self.assertNotIn("Facilitator", output)
+            self.assertNotIn("example.invalid", output)
 
     def test_version_command_finds_parent_project_pin_from_archive_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

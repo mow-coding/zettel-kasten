@@ -5637,6 +5637,45 @@ def command_source_intake(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_tiro_import_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("Tiro import planning is dry-run only. Use --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.tiro_import_plan(
+            Path(args.archive_root),
+            manifest_path=args.manifest,
+            source=args.source,
+            max_segments=args.max_segments,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = result.get("state") or ("ready" if result.get("ok") else "blocked")
+        print(f"Tiro import plan {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Manifest: {result.get('manifest_path') or '-'}")
+        transcript = result.get("transcript_mapping") if isinstance(result.get("transcript_mapping"), dict) else {}
+        segments = transcript.get("segments_preserved") if isinstance(transcript.get("segments_preserved"), dict) else {}
+        print(f"Transcript segments: {segments.get('segment_count', 0)}")
+        print(f"Speakers: {segments.get('speaker_count_in_segments', 0)}")
+        audio = result.get("audio_source_ref") if isinstance(result.get("audio_source_ref"), dict) else {}
+        print(f"Audio objet visible: {bool(audio.get('manifest_record_found'))}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_source_intake_record(args: argparse.Namespace) -> int:
     try:
         result = archive_services.source_intake_record(
@@ -12386,6 +12425,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     source_intake.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     source_intake.set_defaults(func=command_source_intake)
+
+    tiro_import_plan = subcommands.add_parser(
+        "tiro-import-plan",
+        help="Dry-run Tiro meeting transcript/objet import planning from an archive-internal manifest.",
+    )
+    tiro_import_plan.add_argument("archive_root", help="Archive root to inspect.")
+    tiro_import_plan.add_argument(
+        "--manifest",
+        required=True,
+        help="Archive-relative Tiro manifest JSON, e.g. workbench/tiro-meeting.sample.json.",
+    )
+    tiro_import_plan.add_argument(
+        "--source",
+        default=archive_services.TIRO_IMPORT_SOURCE,
+        choices=[archive_services.TIRO_IMPORT_SOURCE],
+        help="Transcript source label.",
+    )
+    tiro_import_plan.add_argument(
+        "--max-segments",
+        type=int,
+        default=1000,
+        help=f"Maximum transcript segments to inspect, up to {archive_services.TIRO_IMPORT_MAX_SEGMENTS}.",
+    )
+    tiro_import_plan.add_argument("--dry-run", action="store_true", help="Required; write nothing.")
+    tiro_import_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    tiro_import_plan.set_defaults(func=command_tiro_import_plan)
 
     source_intake_record = subcommands.add_parser(
         "source-intake-record",
