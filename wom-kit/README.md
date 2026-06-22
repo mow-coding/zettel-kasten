@@ -237,10 +237,10 @@ notion-nested-tree-plan
   Plan nested Notion child-page recovery from a sanitized tree fixture. Dry-run only; walks safe parent refs to assign each leaf to a known generation root, separates live content leaves from structure/template/view containers, reports untraceable leaves instead of guessing from a partial mirror, and never reads real exports, page titles, page bodies, comments, calls providers, writes zets, mints pages, writes edges, writes receipts, or echoes provider URLs or local paths.
 
 notion-ancestor-crawl-plan
-  Plan missing Notion ancestor crawl requests from a sanitized nested tree fixture. Dry-run only; groups missing parent records and rootless leaves into a crawl_request_queue for a future credential-bounded adapter, supports generation/root/ancestor/leaf scope filters for broad workspace queues, and never calls providers, reads real exports, page titles, page bodies, comments, downloads media, merges fixtures, writes zets, mints pages, writes edges, writes receipts, or echoes provider URLs or local paths.
+  Plan missing Notion ancestor crawl requests from a sanitized nested tree fixture. Dry-run only; groups missing parent records and rootless leaves into a crawl_request_queue for a future credential-bounded adapter, supports generation/root/ancestor/leaf scope filters for broad workspace queues, warns that generation-id scope can miss generation-unknown untraceable leaves, and never calls providers, reads real exports, page titles, page bodies, comments, downloads media, merges fixtures, writes zets, mints pages, writes edges, writes receipts, or echoes provider URLs or local paths.
 
 notion-ancestor-fetch-adapter-execution-contract
-  Preview the read-only execution and actor contract a future credential-bounded Notion ancestor fetch adapter must satisfy. Dry-run only; reuses the scoped crawl request planner, defines sanitized input/output fields, clarifies that the future live fetch subject is a WOM local credential-bounded adapter process rather than the AI chat runtime, treats client-supplied ancestor fixtures as sanitized safe-origin fallback input rather than required hand-rolled provider crawling, reports credential ref presence without echoing exact refs, and never calls providers, retrieves secrets, reads page titles or bodies, downloads media, writes fixtures, writes receipts, writes zets, or writes edges.
+  Preview the read-only execution and actor contract a future credential-bounded Notion ancestor fetch adapter must satisfy. Dry-run only; reuses the scoped crawl request planner, requires future live adapter execution to recurse up the parent chain until a stop condition, defines sanitized input/output fields, clarifies that the future live fetch subject is a WOM local credential-bounded adapter process rather than the AI chat runtime, treats client-supplied ancestor fixtures as sanitized safe-origin fallback input rather than required hand-rolled provider crawling, reports credential ref presence without echoing exact refs, and never calls providers, retrieves secrets, reads page titles or bodies, downloads media, writes fixtures, writes receipts, writes zets, or writes edges.
 
 notion-media-fetch-adapter-execution-contract
   Preview the read-only execution and actor contract a future credential-bounded Notion media byte fetch adapter must satisfy. Dry-run only; reuses nested-tree planning to scope candidate content leaf pages, defines sanitized media result fixture fields, requires byte hashing before preservation claims, reports already_preserved/newly_preserved/fetch_failed as the preservation states, and never calls providers, retrieves secrets, refreshes signed URLs, downloads media bytes, hashes bytes, writes fixtures, updates object manifests, writes receipts, zets, or edges, or echoes provider URLs or media bytes.
@@ -1288,6 +1288,13 @@ notion-media-result-verification-plan --dry-run` checks that sanitized fixture
 against `objects/manifests/files.jsonl`. Both still call no providers, refresh
 no signed URLs, download no media bytes, hash no bytes, update no manifests, and
 write no receipts.
+v0.3.133 clarifies the last read-only contract edge before live execution:
+future Notion ancestor fetch adapters must recursively crawl parent chains from
+each crawl request seed until a stop condition, and generation-unknown
+untraceable leaf recovery should be scoped by leaf/root/ancestor refs rather
+than generation id. It still calls no providers, retrieves no secrets, starts no
+OAuth, reads no titles or bodies, writes no fixture files, mints no zets, writes
+no edges, and writes no receipts.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

@@ -17219,6 +17219,8 @@ def notion_ancestor_crawl_plan(
     request_queue = [] if blockers else notion_filter_ancestor_crawl_requests(unfiltered_request_queue, scope_filter)
     if not blockers and scope_filter["active"] and unfiltered_request_queue and not request_queue:
         warnings.append("ancestor_crawl_scope_filter_matched_no_requests")
+        if scope_filter.get("scope_generation_ids"):
+            warnings.append("scope_generation_id_may_not_match_generation_unknown_untraceable_leaf_requests")
     plan_state = "blocked"
     if not blockers:
         if request_queue:
@@ -17269,6 +17271,15 @@ def notion_ancestor_crawl_plan(
             "filtered_crawl_request_count": len(request_queue),
             "excluded_crawl_request_count": max(0, len(unfiltered_request_queue) - len(request_queue)),
             "match_semantics": "AND across supplied filter families, OR within each family.",
+            "untraceable_leaf_recovery_guidance": {
+                "scope_generation_id_can_miss_generation_unknown_requests": True,
+                "recommended_scope_fields": [
+                    "scope_leaf_refs",
+                    "scope_root_refs",
+                    "scope_ancestor_refs",
+                ],
+                "reason": "scope_generation_ids only matches crawl requests that already carry affected_generation_ids.",
+            },
         },
         "request_summary": {
             "crawl_request_count": len(request_queue),
@@ -17607,6 +17618,10 @@ def notion_ancestor_fetch_adapter_execution_contract(
             "live_execution_allowed_now": False,
             "future_live_adapter_implemented": False,
             "must_consume_crawl_request_queue": True,
+            "must_fetch_parent_chain_recursively_until_stop_condition": True,
+            "must_continue_when_fetched_parent_is_still_missing_its_parent": True,
+            "max_depth_is_parent_chain_guard": True,
+            "must_report_stop_condition_for_partial_parent_chain_fetch": True,
             "must_write_only_sanitized_ancestor_result_fixture_after_approval": True,
             "approval_receipt_must_be_verified_again": True,
             "credential_policy_check_required": True,
@@ -17628,6 +17643,22 @@ def notion_ancestor_fetch_adapter_execution_contract(
             "public_repo_may_contain_credentials": False,
             "approval_receipt_required_before_live_execution": True,
             "safe_client_fixture_origin_required": True,
+        },
+        "recursive_fetch_contract": {
+            "required_for_live_adapter": True,
+            "direction": "parent_chain_upward",
+            "starts_from": "crawl_request_queue.ancestor_ref",
+            "continues_until": [
+                "known_generation_root_ref_reached",
+                "space_or_workspace_root_reached",
+                "max_depth_reached",
+                "parent_ref_missing_or_ambiguous",
+                "unsafe_ref_or_provider_secret_detected",
+            ],
+            "must_fetch_newly_discovered_missing_parent_refs": True,
+            "must_emit_each_fetched_safe_ancestor_node_once": True,
+            "must_not_claim_complete_when_stopped_before_generation_root": True,
+            "after_fixture_merge": "rerun notion-ancestor-crawl-plan; repeat only if reviewed scope still contains crawl requests.",
         },
         "adapter_input_contract": {
             "source_command": "archive notion-ancestor-crawl-plan --dry-run",

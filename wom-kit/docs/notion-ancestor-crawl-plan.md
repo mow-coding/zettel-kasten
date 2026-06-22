@@ -1,6 +1,6 @@
 # Notion Ancestor Crawl Plan
 
-Status: v0.3.129 read-only scoped missing ancestor crawl request checkpoint
+Status: v0.3.133 read-only scoped missing ancestor crawl request checkpoint
 
 `archive notion-ancestor-crawl-plan` packages the missing ancestor refs reported
 by `archive notion-nested-tree-plan` into a reviewed crawl request queue.
@@ -115,6 +115,16 @@ The result includes `scope_filter.unfiltered_crawl_request_count`,
 `scope_filter.filtered_crawl_request_count`, and
 `scope_filter.excluded_crawl_request_count`, so a broad queue can be reduced
 explicitly before adapter execution. The command still performs no live fetch.
+
+For untraceable leaf recovery, prefer `--scope-leaf-ref`, `--scope-root-ref`,
+or `--scope-ancestor-ref`. `--scope-generation-id` only matches crawl requests
+that already carry an affected generation id, so it can legitimately return no
+requests for generation-unknown leaves that are waiting for ancestor recovery.
+When this happens, the JSON warning includes:
+
+```text
+scope_generation_id_may_not_match_generation_unknown_untraceable_leaf_requests
+```
 
 ## Fixture And Truncation Safety
 

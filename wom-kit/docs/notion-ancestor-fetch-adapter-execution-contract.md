@@ -1,6 +1,6 @@
 # Notion Ancestor Fetch Adapter Execution Contract
 
-Status: v0.3.131 read-only future fetch adapter actor-contract checkpoint
+Status: v0.3.133 read-only future recursive fetch adapter contract checkpoint
 
 `archive notion-ancestor-fetch-adapter-execution-contract` previews the contract
 that a future credential-bounded Notion ancestor fetch adapter must satisfy.
@@ -9,7 +9,7 @@ It is the safe bridge between:
 
 ```text
 notion-ancestor-crawl-plan produces a scoped crawl_request_queue
--> future credential-bounded adapter fetches ancestor metadata
+-> future credential-bounded adapter recursively fetches ancestor metadata
 -> adapter returns a sanitized notion_ancestor_result_fixture
 -> notion-ancestor-merge-plan merges and replans
 ```
@@ -20,6 +20,8 @@ comments, download media, write fixtures, write receipts, or mutate the archive.
 v0.3.131 clarifies the execution subject: the live fetch subject is a future
 WOM local credential-bounded adapter process, not the AI chat runtime and not a
 requirement that a client hand-roll provider crawling.
+v0.3.133 clarifies the required live adapter shape: ancestor fetch is recursive
+up the parent chain until a stop condition is reached.
 
 ## Command
 
@@ -74,7 +76,7 @@ The intended live path is:
 ```text
 human operator reviews scope and approves credential ref
 -> credential broker resolves the approved ref outside AI context
--> future WOM local credential-bounded adapter process calls the provider
+-> future WOM local credential-bounded adapter process recursively calls the provider
 -> adapter writes only a sanitized notion_ancestor_result_fixture
 -> notion-ancestor-merge-plan consumes the fixture
 ```
@@ -98,6 +100,26 @@ hand-roll provider crawling. Client-supplied `notion_ancestor_result_fixture`
 files are accepted only as sanitized safe-origin input or fallback evidence;
 they are not a requirement that the client or client-side AI directly crawl a
 provider with private session tokens.
+
+## Recursive Fetch Requirement
+
+The future live adapter must treat each `crawl_request_queue` item as a parent
+chain seed. It starts at `ancestor_ref`, fetches sanitized metadata, and if the
+fetched node has another missing parent, it continues upward until one of these
+stop conditions applies:
+
+```text
+known_generation_root_ref_reached
+space_or_workspace_root_reached
+max_depth_reached
+parent_ref_missing_or_ambiguous
+unsafe_ref_or_provider_secret_detected
+```
+
+The adapter must not claim full recovery if it stops before a generation root.
+After the sanitized result fixture is merged, `notion-ancestor-crawl-plan`
+should run again; if reviewed scope still contains crawl requests, the next
+adapter pass repeats from the remaining seeds.
 
 ## Adapter Input Contract
 

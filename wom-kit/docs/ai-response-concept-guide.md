@@ -259,15 +259,19 @@ Then route safely:
 - Package missing Notion ancestors reported by nested-tree planning: use
   `notion-ancestor-crawl-plan --tree workbench/notion-nested-tree.sample.json
   --source notion --scope-generation-id DB1 --dry-run` to create a scoped
-  local request queue for a future credential-bounded adapter.
+  local request queue for a future credential-bounded adapter. If the target is
+  a generation-unknown untraceable leaf, prefer `--scope-leaf-ref`,
+  `--scope-root-ref`, or `--scope-ancestor-ref`; generation-id scope only
+  matches requests that already carry affected generation ids.
 - Preview the future Notion ancestor fetch adapter contract: use
   `notion-ancestor-fetch-adapter-execution-contract --tree
   workbench/notion-nested-tree.sample.json --source notion --scope-generation-id
   DB1 --dry-run` before any live credential-bounded adapter is implemented.
   The intended live fetch subject is a future WOM local credential-bounded
   adapter process; the AI chat runtime must not hand-roll provider crawling or
-  receive credential values, and client-supplied ancestor fixtures are only
-  sanitized safe-origin fallback input.
+  receive credential values, future live adapter execution must recurse up the
+  parent chain until a stop condition, and client-supplied ancestor fixtures are
+  only sanitized safe-origin fallback input.
 - Preview the future Notion media byte fetch adapter contract: use
   `notion-media-fetch-adapter-execution-contract --tree
   workbench/notion-nested-tree.sample.json --source notion --scope-leaf-ref

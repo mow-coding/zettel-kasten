@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import unittest
 from pathlib import Path
@@ -1297,14 +1297,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.132 pre-release",
+            "v0.3.133 pre-release",
             "read-only Notion nested tree recovery planning",
             "reports untraceable parent chains instead of guessing from partial mirrors",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "v0.3.132 pre-release",
+            "v0.3.133 pre-release",
             "read-only nested tree recovery planning",
             "추적불능 parent chain",
         ):
@@ -1341,13 +1341,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.129.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.129 read-only scoped missing ancestor crawl request checkpoint",
+            "Status: v0.3.133 read-only scoped missing ancestor crawl request checkpoint",
             "archive notion-ancestor-crawl-plan",
             "notion_ancestor_crawl_plan",
             "missing_ancestor_ref",
             "crawl_request_queue",
             "--scope-generation-id",
             "scope_filter",
+            "scope_generation_id_may_not_match_generation_unknown_untraceable_leaf_requests",
             "required_return_fields",
             "provider adapter",
             "does not call Notion",
@@ -1367,14 +1368,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.132 pre-release",
+            "v0.3.133 pre-release",
             "read-only Notion ancestor crawl request planning",
             "blocks oversized nested-tree fixtures instead of returning partial success",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "v0.3.132 pre-release",
+            "v0.3.133 pre-release",
             "조상 crawl 요청 큐",
             "부분 성공으로 위장하지 않도록 차단",
         ):
@@ -1407,15 +1408,16 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         guide_text = (KIT_ROOT / "docs" / "ai-response-concept-guide.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
-        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.131.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.133.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.131 read-only future fetch adapter actor-contract checkpoint",
+            "Status: v0.3.133 read-only future recursive fetch adapter contract checkpoint",
             "archive notion-ancestor-fetch-adapter-execution-contract",
             "notion_ancestor_fetch_adapter_execution_contract",
             "adapter_input_contract",
             "adapter_output_contract",
             "execution_actor_contract",
+            "Recursive Fetch Requirement",
             "notion_ancestor_result_fixture",
             "does not call Notion",
             "retrieve credential values",
@@ -1424,26 +1426,27 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)
         for phrase in (
-            "Status: v0.3.131 Notion ancestor fetch adapter execution actor-contract checkpoint",
+            "Status: v0.3.133 Notion recursive live fetch contract checkpoint",
             "Notion ancestor fetch adapter execution contract",
             "archive notion-ancestor-fetch-adapter-execution-contract",
             "notion_ancestor_fetch_adapter_execution_contract",
             "future live fetch subject is a WOM local credential-bounded adapter process",
             "client-supplied ancestor fixtures",
+            "parent-chain fetch to recurse",
             "performs no live fetch",
             "retrieves no secrets",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.132 pre-release",
-            "future fetch adapter execution contract",
+            "v0.3.133 pre-release",
+            "recursive fetch adapter execution contract",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "v0.3.132 pre-release",
-            "future fetch adapter execution contract",
+            "v0.3.133 pre-release",
+            "future recursive fetch adapter execution contract",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_ko_text)
@@ -1464,10 +1467,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             public_map_ko_text,
         )
         for phrase in (
-            "# v0.3.131 - Notion Ancestor Fetch Execution Subject Boundary",
+            "# v0.3.133 - Notion Recursive Live Fetch Contract",
             "notion_ancestor_fetch_adapter_execution_contract",
-            "execution_actor_contract",
-            "no AI hand-rolled provider crawl",
+            "recursive_fetch_contract",
+            "scope_generation_id_may_not_match_generation_unknown_untraceable_leaf_requests",
         ):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in release_text or phrase in changelog_text)
@@ -1522,7 +1525,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.132 pre-release",
+            "v0.3.133 pre-release",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
@@ -1608,14 +1611,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.132 pre-release",
+            "v0.3.133 pre-release",
             "builds nested tree fixture previews from reviewed block mirror metadata",
             "merges sanitized ancestor result nodes with immediate after-merge replanning",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "v0.3.132 pre-release",
+            "v0.3.133 pre-release",
             "reviewed block mirror",
             "merge/replan",
         ):
@@ -1676,13 +1679,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.132 pre-release",
+            "v0.3.133 pre-release",
             "verifies client nested-tree issues from sanitized local fixture bundles",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "v0.3.132 pre-release",
+            "v0.3.133 pre-release",
             "클라이언트 nested-tree issue를 검증",
         ):
             with self.subTest(phrase=phrase):
@@ -1739,13 +1742,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.132 pre-release",
+            "v0.3.133 pre-release",
             "packages the minimal sanitized fixture request contract for client follow-up",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "v0.3.132 pre-release",
+            "v0.3.133 pre-release",
             "최소 sanitized fixture request contract",
         ):
             with self.subTest(phrase=phrase):
