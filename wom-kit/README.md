@@ -94,6 +94,7 @@ docs/connection-edge-intelligence-plan.md
 docs/notion-nested-tree-plan.md
 docs/notion-ancestor-crawl-plan.md
 docs/notion-ancestor-fetch-adapter-execution-contract.md
+docs/notion-ancestor-fetch-adapter-run.md
 docs/notion-media-fetch-adapter-execution-contract.md
 docs/notion-media-result-verification-plan.md
 docs/notion-block-mirror-tree-fixture-plan.md
@@ -1295,6 +1296,14 @@ untraceable leaf recovery should be scoped by leaf/root/ancestor refs rather
 than generation id. It still calls no providers, retrieves no secrets, starts no
 OAuth, reads no titles or bodies, writes no fixture files, mints no zets, writes
 no edges, and writes no receipts.
+v0.3.134 adds the first approval-gated local Notion ancestor structure fetch adapter.
+`archive notion-ancestor-fetch-adapter-run --dry-run|--approve`
+verifies a credential access approval receipt, supports `env:` token refs in
+the local CLI process, fetches only parent-chain structure metadata from Notion,
+and writes a sanitized `notion_ancestor_result_fixture` plus a non-secret
+execution receipt. It still does not read page titles, page bodies, comments,
+media bytes, file URLs, or raw provider responses, and it does not mint zets,
+write edges, or expose a live MCP provider-call tool.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 
