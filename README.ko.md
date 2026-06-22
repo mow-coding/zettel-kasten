@@ -23,10 +23,11 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.3.134 pre-release
+v0.3.135 pre-release
 ```
 
-이전 공개 기준: v0.3.133 pre-release.
+이전 공개 기준: v0.3.134 pre-release.
+더 이전 공개 기준: v0.3.133 pre-release.
 
 이 저장소는 공개 전시용이자 reference implementation 작업공간입니다. 아직 production-ready 제품은 아닙니다.
 
@@ -39,7 +40,7 @@ v0.3.134 pre-release
 - derived-text coverage/toolchain/doctor/agent-contract read-only gate, PATH에 없는 로컬 추출 도구를 위한 비공개 tool-hint path, 그리고 사람 승인 뒤에만 동작하는 일부 local write path,
 - read-only objet reference resolution 및 zettel objet link preview,
 - Notion child page/database/view 구조를 `contains` edge type으로 다루는 read-only connection planning, 중첩 child page leaf를 세대 root에 귀속하고 `node_kind` 기반 content class를 보수적으로 도출하며, 큰 fixture가 부분 성공으로 위장하지 않도록 차단하고, 추적불능 parent chain과 조상 crawl 요청 큐를 버리지 않고 보고하며, broad workspace 큐를 generation/ref scope filter로 좁힌 뒤 adapter 입력으로 넘길 수 있게 하고, recursive fetch adapter execution contract를 고정하며, credential approval 뒤에만 동작하는 첫 local Notion ancestor structure fetch adapter로 sanitized ancestor fixture와 non-secret receipt만 쓰고, media byte fetch와 page body capture는 별도 future gate로 남겨두며, 세대가 아직 모르는 untraceable leaf는 generation-id보다 leaf/root/ancestor ref로 좁히라고 안내하고, reviewed block mirror에서 tree fixture preview를 만들고 sanitized ancestor result를 merge/replan하고 sanitized local fixture bundle로 클라이언트 nested-tree issue를 검증하며 클라이언트 follow-up용 최소 sanitized fixture request contract를 패키징하는 read-only nested tree recovery planning, 그리고 맞는 edge type이 없을 때 AI가 억지 매핑하지 않고 model gap으로 올리는 안전 가드,
-- mail, OpenAI API, OCR API 등을 위한 read-only beginner setup manual, connected accounts bridge, credential reference planning, inventory, external store recommendation, vault onboarding planning, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, CLI-only KeePassXC write execution with non-secret execution receipts, adapter readiness planning, adapter manifest preview, adapter audit receipt preview,
+- mail, OpenAI API, OCR API 등을 위한 read-only beginner setup manual, Notion nested recovery 인간 단계 가이드, connected accounts bridge, credential reference planning, inventory, external store recommendation, vault onboarding planning, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, CLI-only KeePassXC write execution with non-secret execution receipts, adapter readiness planning, adapter manifest preview, adapter audit receipt preview,
 - public link, Korean product language, privacy, release readiness, branch-protection planning을 위한 local hygiene tool.
 
 각 기능이 실제 구현인지, read-only preview인지, 승인 write인지, 문서만 있는지 보려면 [WOM-kit Capability Matrix](wom-kit/docs/capability-matrix.md)를 보세요.
@@ -219,6 +220,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.3.135
 v0.3.134
 v0.3.133
 v0.3.132

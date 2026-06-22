@@ -1628,6 +1628,7 @@ BEGINNER_SETUP_MANUAL_TOPICS = {
     "credential_bulk_migration",
     "derived_text_tools",
     "object_storage_setup_manual",
+    "notion_nested_recovery",
 }
 AI_RESPONSE_CONCEPT_GUIDE_TOPICS = {
     "all",
@@ -29491,6 +29492,7 @@ def beginner_setup_manual(
     include_text_tools = resolved_topic in {"first_secret_and_text_tools", "derived_text_tools"}
     include_bulk_migration = resolved_topic == "credential_bulk_migration"
     include_object_storage = resolved_topic == "object_storage_setup_manual"
+    include_notion_nested_recovery = resolved_topic == "notion_nested_recovery"
 
     vault_preview: dict[str, Any] | None = None
     if include_credentials:
@@ -29647,6 +29649,120 @@ def beginner_setup_manual(
             }
         )
 
+    if include_notion_nested_recovery:
+        sections.append(
+            {
+                "section_id": "notion_nested_recovery",
+                "title": "Recover Notion item locations with a guided local run",
+                "beginner_explanation": "Use this when WOM knows some Notion-imported items but still needs to check which folder, shelf, or upper page they belonged to. The local computer reads only Notion structure needed for location recovery after human approval.",
+                "plain_language_terms": [
+                    {
+                        "internal_term": "ancestor / parent / child",
+                        "say_to_user": "folder, shelf, upper page, and item location",
+                    },
+                    {
+                        "internal_term": "fetch / crawl",
+                        "say_to_user": "ask Notion again for the missing location links",
+                    },
+                    {
+                        "internal_term": "fixture / node",
+                        "say_to_user": "review list and item",
+                    },
+                    {
+                        "internal_term": "merge",
+                        "say_to_user": "put the recovered locations back into the reviewed list",
+                    },
+                    {
+                        "internal_term": "untraceable",
+                        "say_to_user": "items whose old location is still unknown",
+                    },
+                ],
+                "what_this_reads": [
+                    "Notion page/block structure needed to find upper pages or workspace roots.",
+                    "Only the parent/location fields needed to build a sanitized recovery list.",
+                ],
+                "what_this_never_reads": [
+                    "page title",
+                    "page body",
+                    "comments",
+                    "media bytes",
+                    "signed file URLs",
+                    "raw provider responses",
+                ],
+                "human_explanation_script": [
+                    "We are checking where the last missing Notion items belonged.",
+                    "Your local computer asks Notion for structure only: upper page and location links.",
+                    "The AI does not receive your Notion token.",
+                    "The AI does not read page bodies or media in this flow.",
+                    "You approve one local run, then the AI can review the sanitized result list.",
+                ],
+                "steps": [
+                    "Review the missing-location queue before any live run.",
+                    "Put the Notion token into a private local environment variable outside chat.",
+                    "Preview a one-time credential approval receipt.",
+                    "Write that one-time approval receipt only after reviewing the preview.",
+                    "Preview the Notion location fetch with the approval receipt path.",
+                    "Run the approved local structure fetch only after confirming it reads location links, not bodies or media.",
+                    "Give the sanitized result fixture to notion-ancestor-merge-plan for AI review.",
+                ],
+                "guided_flow": [
+                    {
+                        "step_id": "review_scope",
+                        "human_action": "Check how many missing Notion items are in the reviewed crawl queue.",
+                        "command": "archive notion-ancestor-crawl-plan <archive-root> --tree workbench/<reviewed-tree>.json --source notion --scope-ancestor-ref page:<32hex-notion-page-id> --dry-run --format json",
+                    },
+                    {
+                        "step_id": "prepare_local_token_ref",
+                        "human_action": "Put the Notion integration token into a private local environment variable outside chat.",
+                        "safe_ref_label": "env:<LOCAL_NOTION_TOKEN_ENV>",
+                        "notes": [
+                            "Use a boring environment-variable name chosen locally.",
+                            "Do not paste the token, exact variable name, account email, or provider URL into chat or public files.",
+                            "The current live adapter supports env refs only.",
+                        ],
+                    },
+                    {
+                        "step_id": "preview_one_time_approval",
+                        "human_action": "Preview the non-secret approval receipt before writing it.",
+                        "command": "archive credential-access-approval <archive-root> --credential-id cred:notion-readonly --credential-ref env:<LOCAL_NOTION_TOKEN_ENV> --credential-kind provider_api_key --provider notion --store-kind environment --action-kind cli_token_auth --consumer wom:adapter:notion-ancestor-fetch --decision approve_once --reviewed-by human:local-operator --dry-run --format json",
+                    },
+                    {
+                        "step_id": "write_one_time_approval",
+                        "human_action": "Write the one-time approval receipt only after reviewing the preview.",
+                        "command": "archive credential-access-approval <archive-root> --credential-id cred:notion-readonly --credential-ref env:<LOCAL_NOTION_TOKEN_ENV> --credential-kind provider_api_key --provider notion --store-kind environment --action-kind cli_token_auth --consumer wom:adapter:notion-ancestor-fetch --decision approve_once --reviewed-by human:local-operator --approve --format json",
+                    },
+                    {
+                        "step_id": "preview_location_fetch",
+                        "human_action": "Preview the live structure run with the receipt path from the approval output.",
+                        "command": "archive notion-ancestor-fetch-adapter-run <archive-root> --tree workbench/<reviewed-tree>.json --output workbench/notion-ancestor-result.live.json --source notion --scope-ancestor-ref page:<32hex-notion-page-id> --credential-id cred:notion-readonly --credential-ref env:<LOCAL_NOTION_TOKEN_ENV> --approval-decision approve_once --approval-receipt <receipt-path-from-approval-output> --dry-run --format json",
+                    },
+                    {
+                        "step_id": "run_location_fetch",
+                        "human_action": "Run the approved local structure fetch after confirming the preview.",
+                        "command": "archive notion-ancestor-fetch-adapter-run <archive-root> --tree workbench/<reviewed-tree>.json --output workbench/notion-ancestor-result.live.json --source notion --scope-ancestor-ref page:<32hex-notion-page-id> --credential-id cred:notion-readonly --credential-ref env:<LOCAL_NOTION_TOKEN_ENV> --approval-decision approve_once --approval-receipt <receipt-path-from-approval-output> --approve --format json",
+                    },
+                    {
+                        "step_id": "handoff_sanitized_result_to_ai",
+                        "human_action": "Let the AI review the sanitized location list and plan the merge.",
+                        "command": "archive notion-ancestor-merge-plan <archive-root> --tree workbench/<reviewed-tree>.json --ancestors workbench/notion-ancestor-result.live.json --source notion --dry-run --format json",
+                    },
+                ],
+                "confirmation_prompt_template": {
+                    "question": "Proceed with one local Notion structure check for the reviewed missing-location queue? (y/N)",
+                    "default_answer": "N",
+                    "must_say_before_prompt": "This checks location links only. It does not read bodies, titles, comments, or media.",
+                },
+                "stop_rules": [
+                    "Stop if the preview says request_count is higher than the reviewed human scope.",
+                    "Stop if the approval receipt does not say approve_once.",
+                    "Stop if the command would read page bodies, titles, comments, or media.",
+                    "Stop if the command asks to paste a token into chat or a tracked repository file.",
+                    "Stop if the output path is outside workbench/.",
+                ],
+                "next_ai_step": "Use notion-ancestor-merge-plan on the sanitized result fixture, then replan remaining gaps before any further fetch.",
+            }
+        )
+
     command_checklist = []
     if include_credentials:
         command_checklist.extend(
@@ -29697,6 +29813,18 @@ def beginner_setup_manual(
                 "archive credential-ref-plan <archive-root> --credential-id cred:object-storage-r2 --credential-ref secret:keepassxc-r2-object-storage --credential-kind object_storage_token --provider cloudflare-r2 --dry-run --format json",
             ]
         )
+    if include_notion_nested_recovery:
+        command_checklist.extend(
+            [
+                "archive notion-ancestor-crawl-plan <archive-root> --tree workbench/<reviewed-tree>.json --source notion --scope-ancestor-ref page:<32hex-notion-page-id> --dry-run --format json",
+                "archive beginner-setup-manual <archive-root> --topic notion_nested_recovery --dry-run --format json",
+                "archive credential-access-approval <archive-root> --credential-id cred:notion-readonly --credential-ref env:<LOCAL_NOTION_TOKEN_ENV> --credential-kind provider_api_key --provider notion --store-kind environment --action-kind cli_token_auth --consumer wom:adapter:notion-ancestor-fetch --decision approve_once --reviewed-by human:local-operator --dry-run --format json",
+                "archive credential-access-approval <archive-root> --credential-id cred:notion-readonly --credential-ref env:<LOCAL_NOTION_TOKEN_ENV> --credential-kind provider_api_key --provider notion --store-kind environment --action-kind cli_token_auth --consumer wom:adapter:notion-ancestor-fetch --decision approve_once --reviewed-by human:local-operator --approve --format json",
+                "archive notion-ancestor-fetch-adapter-run <archive-root> --tree workbench/<reviewed-tree>.json --output workbench/notion-ancestor-result.live.json --source notion --scope-ancestor-ref page:<32hex-notion-page-id> --credential-id cred:notion-readonly --credential-ref env:<LOCAL_NOTION_TOKEN_ENV> --approval-decision approve_once --approval-receipt <receipt-path-from-approval-output> --dry-run --format json",
+                "archive notion-ancestor-fetch-adapter-run <archive-root> --tree workbench/<reviewed-tree>.json --output workbench/notion-ancestor-result.live.json --source notion --scope-ancestor-ref page:<32hex-notion-page-id> --credential-id cred:notion-readonly --credential-ref env:<LOCAL_NOTION_TOKEN_ENV> --approval-decision approve_once --approval-receipt <receipt-path-from-approval-output> --approve --format json",
+                "archive notion-ancestor-merge-plan <archive-root> --tree workbench/<reviewed-tree>.json --ancestors workbench/notion-ancestor-result.live.json --source notion --dry-run --format json",
+            ]
+        )
 
     return {
         "ok": not blockers,
@@ -29715,6 +29843,9 @@ def beginner_setup_manual(
             "ai_may_help_prepare_commands": True,
             "ai_may_not_receive_secret_values": True,
             "provider_dashboard_field_walkthrough_available": include_object_storage,
+            "notion_recovery_plain_language_available": include_notion_nested_recovery,
+            "guided_human_approval_flow_available": include_notion_nested_recovery,
+            "one_time_approval_kept_separate_from_ai_secret_access": include_notion_nested_recovery,
         },
         "sections": sections,
         "command_checklist": command_checklist,
@@ -29734,10 +29865,22 @@ def beginner_setup_manual(
                     "object-storage-recommendation" if include_object_storage else "",
                     "object-storage" if include_object_storage else "",
                     "object-storage-operation-request-plan" if include_object_storage else "",
+                    "notion-ancestor-crawl-plan" if include_notion_nested_recovery else "",
+                    "credential-access-approval" if include_notion_nested_recovery else "",
+                    "notion-ancestor-fetch-adapter-run" if include_notion_nested_recovery else "",
+                    "notion-ancestor-merge-plan" if include_notion_nested_recovery else "",
                 ]
                 if item
             ]
         ),
+        "current_capability": {
+            "notion_nested_recovery_guidance_available": include_notion_nested_recovery,
+            "plain_language_recovery_terms_available": include_notion_nested_recovery,
+            "live_notion_ancestor_structure_fetch_adapter_implemented": True,
+            "guided_interactive_single_prompt_runner_implemented": False,
+            "notion_media_byte_fetch_implemented": False,
+            "notion_page_body_capture_implemented": False,
+        },
         "closed_actions": {
             "secret_prompted_in_chat": False,
             "secret_value_read": False,
@@ -29762,11 +29905,15 @@ def beginner_setup_manual(
             "parser_run": False,
             "asr_run": False,
             "provider_api_called": False,
+            "approval_receipt_written": False,
+            "notion_location_fetch_executed": False,
+            "notion_ancestor_result_fixture_written": False,
             "files_written": False,
         },
         "privacy_guards": {
             "secret_values_echoed": False,
             "credential_ref_values_echoed": False,
+            "env_var_names_echoed": False,
             "email_addresses_echoed": False,
             "usernames_echoed": False,
             "tokens_echoed": False,

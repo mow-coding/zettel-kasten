@@ -382,7 +382,7 @@ credential-keepassxc-write
   Execute a minimal KeePassXC CLI add after verifying a credential access approval receipt. Dry-run previews first; approved mode is CLI-only, requires a local .kdbx path, invokes keepassxc-cli add --password-prompt, writes a non-secret execution receipt, blocks replay with the same approval receipt, and echoes no secret value, exact credential ref, database path, username, email, token, provider URL, or raw adapter output.
 
 beginner-setup-manual
-  Print beginner-friendly secret vault, KeePassXC CSV bulk migration, Cloudflare R2 object-storage setup, and derived-text tool setup steps. Dry-run only; explains what to do in external UIs, including R2 Korean/English label hints and the Access Key ID plus Secret Access Key pair used by S3-compatible clients, shows safe non-secret labels and dry-run commands, writes nothing, opens no vault/provider dashboard, reads no CSV, imports or merges no database, creates no bucket/API token, installs no tools, runs no extraction, deletes no temporary files, and echoes no secret values or local paths.
+  Print beginner-friendly secret vault, KeePassXC CSV bulk migration, Cloudflare R2 object-storage setup, Notion nested recovery, and derived-text tool setup steps. Dry-run only; explains what to do in external UIs and local terminals, including R2 Korean/English label hints, the Access Key ID plus Secret Access Key pair used by S3-compatible clients, and a plain-language Notion location-recovery flow before one-time approval and live structure fetch handoff. It shows safe non-secret labels and dry-run commands, writes nothing, opens no vault/provider dashboard, reads no CSV, imports or merges no database, creates no bucket/API token, writes no approval receipt, runs no Notion location fetch, installs no tools, runs no extraction, deletes no temporary files, and echoes no secret values or local paths.
 
 ai-response-concept-guide
   Print beginner-facing AI explanation cards for sha256 object identity vs location, manifests vs zets, and the objet -> derived text -> zet layer split. Dry-run only; returns safe scripts, analogies, routing hints, and overclaim guardrails without reading source bytes or derived-text bodies, writing manifests or receipts, drafting or minting zets, uploading objects, calling providers, or echoing source filenames, local paths, provider URLs, account ids, emails, tokens, or secret values.
@@ -1304,6 +1304,14 @@ and writes a sanitized `notion_ancestor_result_fixture` plus a non-secret
 execution receipt. It still does not read page titles, page bodies, comments,
 media bytes, file URLs, or raw provider responses, and it does not mint zets,
 write edges, or expose a live MCP provider-call tool.
+v0.3.135 adds a read-only beginner guide for that human-operated recovery step:
+`archive beginner-setup-manual --topic notion_nested_recovery --dry-run`
+translates the low-level ancestor/fetch/fixture/merge vocabulary into
+folder/shelf/location language, explains why the human approves the local
+Notion run, and shows the scoped review -> one-time approval -> live structure
+fetch preview/run -> merge-plan handoff chain without reading secrets, calling
+providers, writing approval receipts, running the fetch, or echoing exact env
+var names.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

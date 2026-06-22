@@ -1,7 +1,7 @@
 # Beginner Setup Manual
 
-Status: v0.3.64 read-only beginner setup manual with object storage setup screens
-Date: 2026-06-16
+Status: v0.3.135 read-only beginner setup manual with Notion recovery guidance
+Date: 2026-06-22
 
 This document is the beginner-facing bridge between recommendations and actual
 first-use setup.
@@ -38,6 +38,7 @@ Supported topics:
 - `credential_bulk_migration`
 - `derived_text_tools`
 - `object_storage_setup_manual`
+- `notion_nested_recovery`
 
 ## What It Explains
 
@@ -59,6 +60,8 @@ The manual explains:
   but not on `PATH`,
 - how to walk through Cloudflare R2 bucket and API token setup fields without
   inventing bucket names, token permissions, or public-access choices,
+- how to run the Notion nested recovery human steps in plain language before
+  the approval-gated live structure fetch,
 - which dry-run commands to run next.
 
 ## Beginner Rules
@@ -321,6 +324,66 @@ object-storage-recommendation
 The manual still does not open Cloudflare, create a bucket, create an API token,
 read secrets, write secrets, upload files, call provider APIs, or write files.
 
+## Notion Nested Recovery
+
+For a beginner-facing Notion recovery guide, run:
+
+```bash
+archive beginner-setup-manual <archive-root> \
+  --topic notion_nested_recovery \
+  --dry-run \
+  --format json
+```
+
+This topic exists because the live Notion structure fetch adapter is useful only
+when the human can understand and approve the human-operated step.
+
+The guide uses plain user language before internal terms:
+
+```text
+ancestor / parent / child -> folder, shelf, upper page, and item location
+fetch / crawl              -> ask Notion again for the missing location links
+fixture / node             -> review list and item
+merge                      -> put the recovered locations back into the reviewed list
+untraceable                -> items whose old location is still unknown
+```
+
+The beginner explanation is:
+
+```text
+We are checking where the last missing Notion items belonged.
+Your local computer asks Notion for structure only: upper page and location links.
+The AI does not receive your Notion token.
+The AI does not read page bodies or media in this flow.
+You approve one local run, then the AI can review the sanitized result list.
+```
+
+The guided flow is:
+
+```text
+review the missing-location scope
+-> put the Notion token into a private local environment variable outside chat
+-> preview a one-time credential approval receipt
+-> write that one-time approval receipt after human review
+-> preview the live structure fetch with that receipt
+-> run the approved local structure fetch
+-> hand the sanitized result fixture to notion-ancestor-merge-plan
+```
+
+The guide still keeps the v0.3.134 actor boundary:
+
+- the human approves one local run,
+- the local CLI reads the approved env ref during the approved run,
+- the AI receives only sanitized result metadata,
+- Notion page titles, page bodies, comments, media bytes, signed file URLs, raw
+  provider responses, token values, exact env var names, account emails, and
+  provider URLs are not returned.
+
+Stop if the preview asks for a broader scope than the human reviewed, if the
+approval is not `approve_once`, if any command would read titles/bodies/comments
+or media, if a token is requested in chat or in a tracked repository file, or if
+the output path is outside `workbench/`.
+
 ## Related Dry-Run Chain
 
 Credential setup:
@@ -355,6 +418,18 @@ object-storage-recommendation
 -> object-storage-operation-request-plan
 ```
 
+Notion nested recovery:
+
+```text
+notion-ancestor-crawl-plan
+-> beginner-setup-manual --topic notion_nested_recovery
+-> credential-access-approval --dry-run
+-> credential-access-approval --approve
+-> notion-ancestor-fetch-adapter-run --dry-run
+-> notion-ancestor-fetch-adapter-run --approve
+-> notion-ancestor-merge-plan --dry-run
+```
+
 ## Closed Actions
 
 `beginner-setup-manual` does not:
@@ -369,6 +444,8 @@ object-storage-recommendation
 - open provider dashboards,
 - create buckets,
 - create API tokens,
+- write approval receipts,
+- run Notion location fetches,
 - install tools,
 - execute tools,
 - write a tool-hints file,
