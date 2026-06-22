@@ -938,6 +938,163 @@ class ArchiveCliTests(unittest.TestCase):
                 with self.subTest(secret_fragment=secret_fragment):
                     self.assertNotIn(secret_fragment, receipt_text)
 
+    def test_tiro_lossless_recovery_fetch_run_reads_windows_keyring_ref_without_echoing_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            credential_ref = "keyring:tiro-test-token"
+            secret_value = "tiro_fake_keyring_secret_value"
+            output_relative = "workbench/tiro-lossless-recovery.keyring-test.json"
+            before_fetch = self.snapshot_archive_files(archive_root)
+            called_paths: list[str] = []
+
+            def fake_tiro_request(
+                path: str,
+                *,
+                token: str,
+                method: str = "GET",
+                body: dict[str, Any] | None = None,
+                query: dict[str, Any] | None = None,
+                timeout_seconds: int = 30,
+            ) -> dict[str, Any]:
+                self.assertEqual(token, secret_value)
+                self.assertEqual(method, "GET")
+                self.assertIsNone(body)
+                called_paths.append(path)
+                if path == "/v1/external/workspaces":
+                    return {"workspaces": [{"guid": "ws_fake_workspace", "name": "Fake private workspace"}]}
+                if path == "/v1/external/workspaces/ws_fake_workspace/notes":
+                    return {"content": [{"guid": "note_fake_guid", "title": "Fake confidential meeting"}], "nextCursor": None}
+                if path == "/v1/external/notes/note_fake_guid":
+                    return {"guid": "note_fake_guid", "title": "Fake confidential meeting"}
+                if path == "/v1/external/notes/note_fake_guid/paragraphs":
+                    return {
+                        "content": [
+                            {
+                                "uuid": "para_fake_1",
+                                "transcript": {"content": "Please keep this fake transcript intact."},
+                            }
+                        ],
+                        "nextCursor": None,
+                    }
+                if path == "/v1/external/notes/note_fake_guid/summaries":
+                    return {"content": [], "nextCursor": None}
+                if path == "/v1/external/notes/note_fake_guid/documents":
+                    return {"content": [], "nextCursor": None}
+                if path == "/v1/external/notes/note_fake_guid/folders":
+                    return {"content": [], "nextCursor": None}
+                if path == "/v1/external/users/me/word-memories":
+                    return {"content": [], "nextCursor": None}
+                if path == "/v1/external/workspaces/ws_fake_workspace/word-memories":
+                    return {"content": [], "nextCursor": None}
+                if path == "/v1/external/workspaces/ws_fake_workspace/wiki/info":
+                    return {}
+                raise archive_services.ArchiveServiceError("unexpected fake Tiro path")
+
+            with patch.object(
+                archive_services,
+                "tiro_windows_credential_manager_read_secret",
+                return_value=(
+                    json.dumps({"access_token": secret_value}),
+                    {
+                        "store_kind": "windows_credential_manager",
+                        "exact_target_match": False,
+                        "auto_detection_attempted": True,
+                        "auto_detection_used": True,
+                        "match_count": 1,
+                        "target_echoed": False,
+                    },
+                ),
+            ) as keyring_read, patch.object(
+                archive_services,
+                "tiro_api_request_json",
+                side_effect=fake_tiro_request,
+            ):
+                dry_code, dry_output = self.run_cli(
+                    [
+                        "tiro-lossless-recovery-fetch-run",
+                        str(archive_root),
+                        "--credential-ref",
+                        credential_ref,
+                        "--workspace-guid",
+                        "ws_fake_workspace",
+                        "--output",
+                        output_relative,
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+                dry_result = json.loads(dry_output)
+                dry_serialized = json.dumps(dry_result, ensure_ascii=False)
+                self.assertEqual(dry_code, 0, dry_output)
+                self.assertTrue(dry_result["ok"], dry_result)
+                self.assertEqual(dry_result["fetch_state"], "ready_for_approval")
+                self.assertEqual(dry_result["credential_resolution"]["credential_ref_store"], "keyring")
+                self.assertTrue(dry_result["credential_resolution"]["keyring_ref_store_supported_now"])
+                self.assertFalse(dry_result["closed_actions"]["credential_value_read"])
+                self.assertFalse(dry_result["closed_actions"]["os_keyring_opened"])
+                self.assertFalse(dry_result["closed_actions"]["provider_api_called"])
+                self.assertEqual(keyring_read.call_count, 0)
+                self.assertEqual(called_paths, [])
+                self.assertEqual(self.snapshot_archive_files(archive_root), before_fetch)
+                self.assertNotIn(credential_ref, dry_serialized)
+                self.assertNotIn(secret_value, dry_serialized)
+
+                approve_code, approve_output = self.run_cli(
+                    [
+                        "tiro-lossless-recovery-fetch-run",
+                        str(archive_root),
+                        "--credential-ref",
+                        credential_ref,
+                        "--workspace-guid",
+                        "ws_fake_workspace",
+                        "--output",
+                        output_relative,
+                        "--approve",
+                        "--reviewed-by",
+                        "human:tester",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            approve_result = json.loads(approve_output)
+            approve_serialized = json.dumps(approve_result, ensure_ascii=False)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"], approve_result)
+            self.assertEqual(approve_result["fetch_state"], "fetched")
+            self.assertEqual(approve_result["execution_status"], "succeeded")
+            self.assertTrue(approve_result["closed_actions"]["credential_value_read"])
+            self.assertFalse(approve_result["closed_actions"]["environment_read"])
+            self.assertTrue(approve_result["closed_actions"]["os_keyring_opened"])
+            self.assertTrue(approve_result["closed_actions"]["os_keyring_auto_detection_attempted"])
+            self.assertTrue(approve_result["closed_actions"]["provider_api_called"])
+            self.assertTrue(approve_result["current_capability"]["keyring_credential_ref_read_implemented"])
+            self.assertTrue(approve_result["current_capability"]["windows_credential_manager_ref_read_implemented"])
+            self.assertEqual(approve_result["credential_resolution"]["credential_read_source"], "os_keyring")
+            self.assertTrue(approve_result["credential_resolution"]["os_keyring_auto_detection_used"])
+            self.assertFalse(approve_result["credential_resolution"]["os_keyring_target_echoed"])
+            self.assertEqual(keyring_read.call_count, 1)
+            self.assertIn("/v1/external/workspaces", called_paths)
+            self.assertIn("/v1/external/notes/note_fake_guid/paragraphs", called_paths)
+            for secret_fragment in (
+                credential_ref,
+                "tiro-test-token",
+                secret_value,
+                "Fake confidential meeting",
+                "Please keep this fake transcript intact.",
+            ):
+                with self.subTest(secret_fragment=secret_fragment):
+                    self.assertNotIn(secret_fragment, approve_serialized)
+
+            bundle_text = (archive_root / output_relative).read_text(encoding="utf-8")
+            self.assertIn("Fake confidential meeting", bundle_text)
+            self.assertNotIn(secret_value, bundle_text)
+            receipt_path = archive_root.joinpath(*approve_result["receipt"]["receipt_path"].split("/"))
+            receipt_text = receipt_path.read_text(encoding="utf-8")
+            self.assertNotIn(credential_ref, receipt_text)
+            self.assertNotIn(secret_value, receipt_text)
+
     def test_version_command_finds_parent_project_pin_from_archive_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = Path(tmp) / "project"

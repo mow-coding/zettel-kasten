@@ -613,12 +613,15 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
-        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.140.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.143.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.140 live Tiro REST fetch and lossless bundle capture checkpoint",
+            "Status: v0.3.143 live Tiro REST fetch with OS credential-store read checkpoint",
             "archive tiro-lossless-recovery-plan <archive-root>",
             "archive tiro-lossless-recovery-fetch-run <archive-root>",
             "archive tiro-lossless-recovery-capture <archive-root>",
+            "keyring:<safe-tiro-label>",
+            "credential-manager:<safe-tiro-label>",
+            "Windows Credential Manager",
             "workspaces",
             "transcript paragraphs",
             "generated note documents",
@@ -628,7 +631,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "600 requests per 60 seconds",
             "receipts/tiro/lossless-fetches/*.json",
             "objects/sha256/<prefix>/<sha256>",
-            "v0.3.140 implements the live credential-bounded Tiro REST fetch adapter",
+            "v0.3.143 implements the live credential-bounded Tiro REST fetch adapter",
+            "auto-detect exactly one Windows generic credential target",
             "audio_original_bytes",
         ):
             with self.subTest(phrase=phrase):
@@ -643,13 +647,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, style_text)
         for phrase in (
-            "Status: v0.3.140 Tiro live lossless recovery fetch checkpoint",
+            "Status: v0.3.143 Tiro OS credential-store read checkpoint",
             "Tiro lossless recovery",
             "archive tiro-lossless-recovery-plan",
             "archive tiro-lossless-recovery-fetch-run",
             "archive tiro-lossless-recovery-capture",
             "archive tiro-recovery-fetch-run",
-            "Keyring/vault credential reads",
+            "credential-manager:<safe-label>",
+            "Windows Credential Manager-backed",
             "zet Markdown style guide",
             "archive zet-markdown-style-guide",
             "A ~ B",
@@ -674,11 +679,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("[Tiro Lossless Recovery](tiro-lossless-recovery.md)", public_map_ko_text)
         self.assertIn("[zet Markdown Style Guide](zet-markdown-style-guide.md)", public_map_ko_text)
         for phrase in (
-            "v0.3.140 turns the v0.3.139 Tiro recovery contract",
+            "v0.3.143 removes the last `env:`-only blocker",
             "archive tiro-lossless-recovery-plan",
             "archive tiro-lossless-recovery-fetch-run",
             "archive tiro-lossless-recovery-capture",
-            "Dry-run fetch mode writes nothing",
+            "Dry-run still reads no credential value",
+            "Windows Credential Manager",
             "audio_original_bytes",
         ):
             with self.subTest(phrase=phrase):

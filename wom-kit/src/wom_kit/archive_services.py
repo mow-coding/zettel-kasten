@@ -1727,7 +1727,7 @@ IMAP_MAILBOX_OPERATION_MAX_MESSAGES_DEFAULT = 100
 IMAP_MAILBOX_OPERATION_MAX_MESSAGES_LIMIT = 2000
 IMAP_MAILBOX_OPERATION_SINCE_DAYS_LIMIT = 3650
 IMAP_MAILBOX_ADAPTER_REQUIRED_MODULES = ("imaplib", "email")
-CREDENTIAL_REF_PREFIXES = ("env:", "keyring:", "secret:", "wallet:")
+CREDENTIAL_REF_PREFIXES = ("env:", "keyring:", "credential-manager:", "secret:", "wallet:")
 CREDENTIAL_REF_ALLOWED_KINDS = {
     "mail_username",
     "mail_app_password",
@@ -21863,6 +21863,217 @@ def tiro_env_ref_name(ref: str) -> str | None:
     return env_name if safe_environment_ref_name(env_name) else None
 
 
+def tiro_credential_ref_label(ref: str) -> str | None:
+    text = str(ref or "").strip()
+    if not safe_credential_ref(text) or ":" not in text:
+        return None
+    label = text.split(":", 1)[1].strip()
+    return label if label else None
+
+
+def tiro_secret_text_from_windows_credential_blob(blob: bytes) -> str:
+    raw = blob.rstrip(b"\x00")
+    if not raw:
+        return ""
+    candidates: list[str] = []
+    if b"\x00" in raw and len(raw) % 2 == 0:
+        try:
+            candidates.append(raw.decode("utf-16-le").strip("\ufeff\x00\r\n\t "))
+        except UnicodeDecodeError:
+            pass
+    try:
+        candidates.append(raw.decode("utf-8").strip("\ufeff\x00\r\n\t "))
+    except UnicodeDecodeError:
+        pass
+    if len(raw) % 2 == 0:
+        try:
+            candidates.append(raw.decode("utf-16-le").strip("\ufeff\x00\r\n\t "))
+        except UnicodeDecodeError:
+            pass
+    for candidate in candidates:
+        if candidate and "\ufffd" not in candidate:
+            return candidate
+    return ""
+
+
+def tiro_token_from_credential_value(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.lower().startswith("bearer "):
+        return text.split(None, 1)[1].strip()
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+    preferred_keys = (
+        "access_token",
+        "accessToken",
+        "bearer_token",
+        "bearerToken",
+        "api_key",
+        "apiKey",
+        "token",
+        "secret",
+        "value",
+    )
+
+    def walk(item: Any) -> str:
+        if isinstance(item, dict):
+            for key in preferred_keys:
+                candidate = item.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate.strip()
+            for candidate in item.values():
+                found = walk(candidate)
+                if found:
+                    return found
+        elif isinstance(item, list):
+            for candidate in item:
+                found = walk(candidate)
+                if found:
+                    return found
+        return ""
+
+    return walk(payload) or text
+
+
+def tiro_windows_credential_manager_read_secret(target_label: str) -> tuple[str, dict[str, Any]]:
+    label = str(target_label or "").strip()
+    if os.name != "nt":
+        raise ArchiveServiceError("Tiro OS credential read currently supports Windows Credential Manager only.")
+    if not label or not label.isascii() or len(label) < 3:
+        raise ArchiveServiceError("Tiro OS credential ref label must be a safe ASCII label of at least 3 characters.")
+
+    import ctypes
+    from ctypes import wintypes
+
+    class CREDENTIALW(ctypes.Structure):
+        _fields_ = [
+            ("Flags", wintypes.DWORD),
+            ("Type", wintypes.DWORD),
+            ("TargetName", wintypes.LPWSTR),
+            ("Comment", wintypes.LPWSTR),
+            ("LastWritten", wintypes.FILETIME),
+            ("CredentialBlobSize", wintypes.DWORD),
+            ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)),
+            ("Persist", wintypes.DWORD),
+            ("AttributeCount", wintypes.DWORD),
+            ("Attributes", ctypes.c_void_p),
+            ("TargetAlias", wintypes.LPWSTR),
+            ("UserName", wintypes.LPWSTR),
+        ]
+
+    PCREDENTIALW = ctypes.POINTER(CREDENTIALW)
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    advapi32.CredReadW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(PCREDENTIALW)]
+    advapi32.CredReadW.restype = wintypes.BOOL
+    advapi32.CredEnumerateW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(ctypes.POINTER(PCREDENTIALW))]
+    advapi32.CredEnumerateW.restype = wintypes.BOOL
+    advapi32.CredFree.argtypes = [ctypes.c_void_p]
+    advapi32.CredFree.restype = None
+
+    CRED_TYPE_GENERIC = 1
+    ERROR_NOT_FOUND = 1168
+
+    def secret_from_credential(credential: CREDENTIALW) -> str:
+        size = int(credential.CredentialBlobSize or 0)
+        if size <= 0 or not credential.CredentialBlob:
+            return ""
+        blob = ctypes.string_at(credential.CredentialBlob, size)
+        return tiro_secret_text_from_windows_credential_blob(blob)
+
+    credential_ptr = PCREDENTIALW()
+    if advapi32.CredReadW(label, CRED_TYPE_GENERIC, 0, ctypes.byref(credential_ptr)):
+        try:
+            secret = secret_from_credential(credential_ptr.contents)
+        finally:
+            advapi32.CredFree(credential_ptr)
+        if not secret:
+            raise ArchiveServiceError("Tiro OS credential entry was found but contained no readable secret value.")
+        return secret, {
+            "store_kind": "windows_credential_manager",
+            "exact_target_match": True,
+            "auto_detection_attempted": False,
+            "auto_detection_used": False,
+            "match_count": 1,
+            "target_echoed": False,
+        }
+
+    last_error = ctypes.get_last_error()
+    if last_error != ERROR_NOT_FOUND:
+        raise ArchiveServiceError("Tiro OS credential read failed; raw OS credential error is not echoed.")
+
+    count = wintypes.DWORD(0)
+    credentials = ctypes.POINTER(PCREDENTIALW)()
+    if not advapi32.CredEnumerateW(None, 0, ctypes.byref(count), ctypes.byref(credentials)):
+        raise ArchiveServiceError("Tiro OS credential auto-detection failed; raw OS credential error is not echoed.")
+
+    matches: list[PCREDENTIALW] = []
+    label_lower = label.lower()
+    try:
+        for index in range(int(count.value)):
+            candidate = credentials[index]
+            if not candidate:
+                continue
+            credential = candidate.contents
+            target = str(credential.TargetName or "")
+            if int(credential.Type or 0) == CRED_TYPE_GENERIC and label_lower in target.lower():
+                matches.append(candidate)
+        if len(matches) != 1:
+            if not matches:
+                raise ArchiveServiceError("No matching Tiro OS credential entry was found for the safe ref label.")
+            raise ArchiveServiceError("Multiple matching Tiro OS credential entries were found; use a more specific safe ref label.")
+        secret = secret_from_credential(matches[0].contents)
+    finally:
+        advapi32.CredFree(credentials)
+
+    if not secret:
+        raise ArchiveServiceError("Tiro OS credential entry was found but contained no readable secret value.")
+    return secret, {
+        "store_kind": "windows_credential_manager",
+        "exact_target_match": False,
+        "auto_detection_attempted": True,
+        "auto_detection_used": True,
+        "match_count": 1,
+        "target_echoed": False,
+    }
+
+
+def tiro_read_credential_value(
+    credential_ref: str,
+    credential_store: str | None,
+) -> tuple[str | None, dict[str, Any]]:
+    if credential_store == "env":
+        env_name = tiro_env_ref_name(credential_ref)
+        if not env_name:
+            return None, {"read_source": "environment", "environment_read": True, "os_keyring_opened": False}
+        return os.environ.get(env_name), {
+            "read_source": "environment",
+            "environment_read": True,
+            "os_keyring_opened": False,
+            "os_keyring_auto_detection_attempted": False,
+            "os_keyring_auto_detection_used": False,
+            "os_keyring_target_echoed": False,
+        }
+    if credential_store in {"keyring", "credential-manager"}:
+        label = tiro_credential_ref_label(credential_ref)
+        if not label:
+            raise ArchiveServiceError("Tiro OS credential ref label was not safe.")
+        secret, keyring_summary = tiro_windows_credential_manager_read_secret(label)
+        keyring_summary.update(
+            {
+                "read_source": "os_keyring",
+                "environment_read": False,
+                "os_keyring_opened": True,
+                "credential_value_echoed": False,
+            }
+        )
+        return secret, keyring_summary
+    raise ArchiveServiceError("Tiro credential ref store is not supported for approved live fetch.")
+
+
 def tiro_lossless_recovery_fetch_receipt_id(
     *,
     archive_id: str,
@@ -22028,9 +22239,9 @@ def tiro_lossless_recovery_fetch_run(
             normalized_credential_ref = ""
         else:
             credential_store = credential_ref_store(normalized_credential_ref)
-    env_name = tiro_env_ref_name(normalized_credential_ref)
-    if approve and (not normalized_credential_ref or credential_store != "env" or not env_name):
-        blockers.append("tiro-lossless-recovery-fetch-run currently supports only env: credential refs for approved live fetch.")
+    supported_live_credential_stores = {"env", "keyring", "credential-manager"}
+    if approve and (not normalized_credential_ref or credential_store not in supported_live_credential_stores):
+        blockers.append("tiro-lossless-recovery-fetch-run requires an env:, keyring:, or credential-manager: credential ref for approved live fetch.")
 
     scoped_workspace = tiro_lossless_recovery_safe_ref(workspace_guid, "workspace_guid", blockers)
     scoped_note = tiro_lossless_recovery_safe_ref(note_guid, "note_guid", blockers)
@@ -22055,6 +22266,11 @@ def tiro_lossless_recovery_fetch_run(
     token: str | None = None
     credential_value_read = False
     environment_read = False
+    os_keyring_opened = False
+    os_keyring_auto_detection_attempted = False
+    os_keyring_auto_detection_used = False
+    os_keyring_match_count: int | None = None
+    credential_read_source: str | None = None
     provider_api_called = False
     bundle_written = False
     receipt_written = False
@@ -22066,11 +22282,26 @@ def tiro_lossless_recovery_fetch_run(
     execution_status = "not_run"
 
     if approve and not blockers:
-        environment_read = True
         credential_value_read = True
-        token = os.environ.get(env_name or "")
+        try:
+            raw_credential_value, credential_read_summary = tiro_read_credential_value(
+                normalized_credential_ref,
+                credential_store,
+            )
+        except ArchiveServiceError as exc:
+            blockers.append(str(exc))
+            raw_credential_value = None
+            credential_read_summary = {}
+        environment_read = bool(credential_read_summary.get("environment_read"))
+        os_keyring_opened = bool(credential_read_summary.get("os_keyring_opened"))
+        os_keyring_auto_detection_attempted = bool(credential_read_summary.get("auto_detection_attempted") or credential_read_summary.get("os_keyring_auto_detection_attempted"))
+        os_keyring_auto_detection_used = bool(credential_read_summary.get("auto_detection_used") or credential_read_summary.get("os_keyring_auto_detection_used"))
+        if credential_read_summary.get("match_count") is not None:
+            os_keyring_match_count = int(credential_read_summary.get("match_count") or 0)
+        credential_read_source = credential_read_summary.get("read_source") if isinstance(credential_read_summary.get("read_source"), str) else None
+        token = tiro_token_from_credential_value(str(raw_credential_value or ""))
         if not token:
-            blockers.append("Tiro token environment variable was not available.")
+            blockers.append("Tiro credential value was not available from the approved local credential ref.")
 
     if approve and not blockers:
         execution_status = "running"
@@ -22268,6 +22499,7 @@ def tiro_lossless_recovery_fetch_run(
                     "provider_api_called": provider_api_called,
                     "credential_value_read": credential_value_read,
                     "environment_read": environment_read,
+                    "os_keyring_opened": os_keyring_opened,
                     "raw_bundle_written": True,
                     "receipt_written": True,
                     "object_manifest_updated": False,
@@ -22328,14 +22560,21 @@ def tiro_lossless_recovery_fetch_run(
                 "max_notes": safe_max_notes,
             },
             "credential_resolution": {
-                "supported_ref_store": "env",
+                "supported_ref_stores": sorted(supported_live_credential_stores),
                 "credential_ref_supplied": bool(normalized_credential_ref),
                 "credential_ref_store": credential_store,
                 "env_ref_supported_now": True,
-                "keyring_ref_store_supported_now": False,
+                "keyring_ref_store_supported_now": True,
+                "credential_manager_ref_store_supported_now": True,
                 "secret_manager_ref_store_supported_now": False,
                 "credential_ref_echoed": False,
                 "credential_values_echoed": False,
+                "credential_read_source": credential_read_source,
+                "os_keyring_opened": os_keyring_opened,
+                "os_keyring_auto_detection_attempted": os_keyring_auto_detection_attempted,
+                "os_keyring_auto_detection_used": os_keyring_auto_detection_used,
+                "os_keyring_match_count": os_keyring_match_count,
+                "os_keyring_target_echoed": False,
             },
             "provider_fetch": {
                 "provider": "tiro",
@@ -22360,10 +22599,11 @@ def tiro_lossless_recovery_fetch_run(
             "current_capability": {
                 "live_tiro_rest_fetch_adapter_implemented": True,
                 "env_credential_ref_read_implemented": True,
+                "keyring_credential_ref_read_implemented": True,
+                "windows_credential_manager_ref_read_implemented": True,
                 "raw_bundle_writer_implemented": True,
                 "fetch_receipt_writer_implemented": True,
                 "lossless_bundle_capture_writer_implemented": True,
-                "keyring_credential_ref_read_implemented": False,
                 "audio_original_byte_fetch_implemented": False,
                 "ai_enrichment_writer_implemented": False,
             },
@@ -22371,6 +22611,8 @@ def tiro_lossless_recovery_fetch_run(
                 "provider_api_called": provider_api_called,
                 "credential_value_read": credential_value_read,
                 "environment_read": environment_read,
+                "os_keyring_opened": os_keyring_opened,
+                "os_keyring_auto_detection_attempted": os_keyring_auto_detection_attempted,
                 "raw_bundle_written": bundle_written,
                 "receipt_written": receipt_written,
                 "object_manifest_updated": False,
@@ -22383,6 +22625,7 @@ def tiro_lossless_recovery_fetch_run(
                 "credential_ref_echoed": False,
                 "credential_values_echoed": False,
                 "env_var_names_echoed": False,
+                "os_keyring_target_echoed": False,
                 "workspace_guid_echoed": False,
                 "note_guid_echoed": False,
                 "meeting_titles_echoed": False,

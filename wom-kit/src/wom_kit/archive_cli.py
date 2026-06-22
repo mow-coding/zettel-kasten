@@ -12817,7 +12817,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Preview or approve a credential-bounded Tiro REST fetch into a private raw recovery bundle.",
     )
     tiro_lossless_recovery_fetch_run.add_argument("archive_root", help="Archive root to update.")
-    tiro_lossless_recovery_fetch_run.add_argument("--credential-ref", help="env: credential ref for approved live fetch; exact value is not echoed.")
+    tiro_lossless_recovery_fetch_run.add_argument(
+        "--credential-ref",
+        help="env:/keyring:/credential-manager: credential ref for approved live fetch; exact value is not echoed.",
+    )
     tiro_lossless_recovery_fetch_run.add_argument("--workspace-guid", help="Optional safe Tiro workspace id; exact value is not echoed.")
     tiro_lossless_recovery_fetch_run.add_argument("--note-guid", help="Optional safe Tiro note id; exact value is not echoed.")
     tiro_lossless_recovery_fetch_run.add_argument(
