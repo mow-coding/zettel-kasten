@@ -1,6 +1,6 @@
 # Notion Connection Plan
 
-Status: v0.3.141 one-click Notion connection contract and actionable failure classification checkpoint
+Status: v0.3.142 one-click Notion connection contract plus OAuth preflight checkpoint
 Date: 2026-06-22
 
 `archive notion-connection-plan` is a read-only product-contract command for
@@ -58,7 +58,7 @@ path. Personal access tokens may be a trusted local stopgap. Internal
 connection tokens should remain a power-user fallback, not the beginner
 default.
 
-## What v0.3.141 Implements
+## What v0.3.141 Implemented
 
 v0.3.141 implements:
 
@@ -88,6 +88,23 @@ That means the human likely needs to share the top-level recovery page or
 database with the connection, or WOM needs to move to the planned OAuth/PAT
 connection path.
 
+## What v0.3.142 Adds
+
+v0.3.142 adds `archive notion-oauth-connection-preflight`, a read-only bridge
+between this product plan and the future live OAuth runtime.
+
+The new preflight checks the safe shape of:
+
+- client id and client secret refs,
+- a local loopback callback URI,
+- optional one-time state storage,
+- a keyring/secret/wallet token store.
+
+It still does not open a browser, start a callback server, generate an
+authorization URL, exchange a code, store tokens, or call Notion. It exists so
+the eventual "Connect Notion" command has a locked actor boundary before any
+secret or authorization code can move.
+
 ## What Is Still Not Implemented
 
 This command does not implement the one-click connection yet. It deliberately
@@ -102,6 +119,12 @@ Still future:
 - Notion page picker handoff,
 - automatic connection repair,
 - UI button surface.
+
+The current next command for local readiness is:
+
+```powershell
+archive notion-oauth-connection-preflight <archive-root> --dry-run --format json
+```
 
 ## Safety Boundary
 

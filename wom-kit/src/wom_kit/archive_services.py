@@ -17874,6 +17874,239 @@ def notion_connection_plan(
     )
 
 
+def notion_oauth_callback_uri_summary(redirect_uri: str | None, blockers: list[str]) -> dict[str, Any]:
+    text = str(redirect_uri or "").strip()
+    summary: dict[str, Any] = {
+        "redirect_uri_supplied": bool(text),
+        "redirect_uri_valid": False,
+        "redirect_uri_echoed": False,
+        "scheme": "http" if text.lower().startswith("http://") else "",
+        "host_class": "",
+        "explicit_port_supplied": False,
+        "path_supplied": False,
+        "query_or_fragment_supplied": False,
+        "safe_for_local_preflight": False,
+    }
+    if not text:
+        blockers.append("redirect_uri is required and must be a local loopback HTTP callback URI.")
+        return summary
+    if not text.isascii():
+        blockers.append("redirect_uri must be ASCII and is never echoed.")
+        return summary
+
+    parsed = urllib.parse.urlparse(text)
+    hostname = (parsed.hostname or "").lower()
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+
+    summary["scheme"] = parsed.scheme
+    summary["host_class"] = "loopback" if hostname in {"127.0.0.1", "localhost"} else "rejected"
+    summary["explicit_port_supplied"] = port is not None
+    summary["path_supplied"] = bool(parsed.path and parsed.path != "/")
+    summary["query_or_fragment_supplied"] = bool(parsed.query or parsed.fragment)
+
+    if parsed.scheme != "http" or hostname not in {"127.0.0.1", "localhost"}:
+        blockers.append("redirect_uri must use http with loopback host localhost or 127.0.0.1.")
+    if parsed.username or parsed.password or parsed.params or parsed.query or parsed.fragment:
+        blockers.append("redirect_uri must not include query, fragment, params, username, or password.")
+    if port is None or port < 1024 or port > 65535:
+        blockers.append("redirect_uri must include an explicit port between 1024 and 65535.")
+    path = parsed.path or ""
+    if not path or path == "/" or ".." in path or not re.match(r"^/[A-Za-z0-9/_\-.]{1,120}$", path):
+        blockers.append("redirect_uri path must be a short absolute ASCII callback path without traversal.")
+
+    valid = not any("redirect_uri" in blocker for blocker in blockers)
+    summary["redirect_uri_valid"] = valid
+    summary["safe_for_local_preflight"] = valid
+    return summary
+
+
+def notion_oauth_connection_preflight(
+    archive_root: Path | str,
+    *,
+    client_id_ref: str | None = None,
+    client_secret_ref: str | None = None,
+    redirect_uri: str | None = None,
+    state_ref: str | None = None,
+    token_store_ref: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("notion-oauth-connection-preflight is read-only and requires --dry-run.")
+
+    def validate_ref(name: str, value: str | None, *, required: bool = True) -> tuple[bool, str | None]:
+        text = str(value or "").strip()
+        if not text:
+            if required:
+                blockers.append(f"{name} is required and must be a safe env/keyring/secret/wallet ref.")
+            return False, None
+        if not safe_credential_ref(text):
+            blockers.append(f"{name} must be a safe env/keyring/secret/wallet ref and is never echoed.")
+            return False, None
+        return True, credential_ref_store(text)
+
+    client_id_ok, client_id_store = validate_ref("client_id_ref", client_id_ref)
+    client_secret_ok, client_secret_store = validate_ref("client_secret_ref", client_secret_ref)
+    state_ok, state_store = validate_ref("state_ref", state_ref, required=False)
+    token_store_ok, token_store = validate_ref("token_store_ref", token_store_ref)
+    if token_store_ok and token_store == "env":
+        blockers.append("token_store_ref must use keyring, secret, or wallet storage; OAuth access and refresh tokens must not be stored in env vars or repo files.")
+        token_store_ok = False
+    if not state_ok and not str(state_ref or "").strip():
+        warnings.append("No state_ref was supplied; the live runtime must generate and store a one-time high-entropy OAuth state before opening the browser.")
+
+    callback_summary = notion_oauth_callback_uri_summary(redirect_uri, blockers)
+    ready = (
+        bool(dry_run)
+        and client_id_ok
+        and client_secret_ok
+        and token_store_ok
+        and callback_summary.get("redirect_uri_valid")
+        and not blockers
+    )
+    return json_safe(
+        {
+            "ok": ready,
+            "dry_run": bool(dry_run),
+            "lifecycle_action": "notion_oauth_connection_preflight",
+            "archive_id": archive_id,
+            "preflight_state": "ready_for_trusted_local_oauth_runtime" if ready else "blocked",
+            "oauth_target": {
+                "provider": "notion",
+                "connection_model": "public_connection_oauth",
+                "human_first_action": "Connect Notion",
+                "authorization_experience": "human_approves_once_in_browser",
+                "page_access_experience": "human_selects_pages_or_databases_during_notion_authorization",
+                "ai_role": "plan_explain_and_review_without_secret_or_code_access",
+                "trusted_local_runtime_role": "open_browser_receive_callback_exchange_code_store_tokens_and_run_adapter",
+            },
+            "input_contract": {
+                "client_id_ref_supplied": bool(client_id_ref),
+                "client_id_ref_valid": client_id_ok,
+                "client_id_ref_store": client_id_store,
+                "client_id_ref_echoed": False,
+                "client_secret_ref_supplied": bool(client_secret_ref),
+                "client_secret_ref_valid": client_secret_ok,
+                "client_secret_ref_store": client_secret_store,
+                "client_secret_ref_echoed": False,
+                "state_ref_supplied": bool(state_ref),
+                "state_ref_valid": state_ok if state_ref else False,
+                "state_ref_store": state_store,
+                "state_ref_echoed": False,
+                "token_store_ref_supplied": bool(token_store_ref),
+                "token_store_ref_valid": token_store_ok,
+                "token_store_ref_store": token_store,
+                "token_store_ref_echoed": False,
+                "redirect_uri_echoed": False,
+            },
+            "callback_validation": callback_summary,
+            "security_contract": {
+                "ai_secret_blind": True,
+                "client_secret_visible_to_ai": False,
+                "authorization_code_visible_to_ai": False,
+                "access_token_visible_to_ai": False,
+                "refresh_token_visible_to_ai": False,
+                "oauth_state_required": True,
+                "oauth_state_must_be_one_time_high_entropy": True,
+                "callback_host_must_be_loopback": True,
+                "token_exchange_actor": "trusted_local_runtime_only",
+                "token_storage_actor": "trusted_local_keyring_or_vault",
+                "token_storage_must_not_be_repo_file": True,
+                "token_storage_must_not_be_plain_env_var": True,
+            },
+            "official_flow_contract": [
+                {
+                    "step": "prepare_authorization",
+                    "actor": "trusted_local_runtime",
+                    "secret_or_code_visible_to_ai": False,
+                    "notes": "Construct the authorization request from local refs and a one-time state.",
+                },
+                {
+                    "step": "human_authorizes",
+                    "actor": "human_browser_session",
+                    "secret_or_code_visible_to_ai": False,
+                    "notes": "Human selects the allowed Notion pages or databases in the provider UI.",
+                },
+                {
+                    "step": "receive_callback",
+                    "actor": "trusted_local_runtime",
+                    "secret_or_code_visible_to_ai": False,
+                    "notes": "Validate state before any token exchange.",
+                },
+                {
+                    "step": "exchange_and_store_tokens",
+                    "actor": "trusted_local_runtime",
+                    "secret_or_code_visible_to_ai": False,
+                    "notes": "Store access and refresh tokens in a local keyring or vault, not in the repo.",
+                },
+                {
+                    "step": "run_recovery_adapter",
+                    "actor": "trusted_local_runtime",
+                    "secret_or_code_visible_to_ai": False,
+                    "notes": "Pass only sanitized recovery results back to AI.",
+                },
+            ],
+            "implemented_now": {
+                "preflight_contract": True,
+                "safe_ref_validation": True,
+                "loopback_redirect_validation": True,
+                "secret_blind_runtime_boundary": True,
+                "browser_open": False,
+                "callback_server": False,
+                "authorization_url_materialization": False,
+                "oauth_token_exchange": False,
+                "token_storage": False,
+                "provider_api_call": False,
+            },
+            "failure_categories_for_future_live_flow": [
+                "oauth_access_denied_by_human",
+                "oauth_state_mismatch",
+                "oauth_callback_timeout",
+                "oauth_redirect_uri_mismatch",
+                "oauth_token_exchange_failed",
+                "oauth_token_storage_unavailable",
+                "notion_page_selection_missing",
+            ],
+            "privacy_guards": {
+                "writes": False,
+                "provider_api_called": False,
+                "browser_opened": False,
+                "callback_server_started": False,
+                "credential_value_read": False,
+                "credential_ref_echoed": False,
+                "client_id_ref_echoed": False,
+                "client_secret_ref_echoed": False,
+                "state_ref_echoed": False,
+                "token_store_ref_echoed": False,
+                "redirect_uri_echoed": False,
+                "authorization_code_echoed": False,
+                "tokens_echoed": False,
+                "provider_urls_echoed": False,
+                "local_absolute_paths_echoed": False,
+                "raw_provider_responses_echoed": False,
+                "page_titles_echoed": False,
+                "page_bodies_echoed": False,
+                "account_ids_echoed": False,
+                "emails_echoed": False,
+            },
+            "would_change": [],
+            "next_safe_actions": [
+                "Register a Notion public connection redirect URI that matches the local loopback callback before live execution.",
+                "Implement a trusted local OAuth runtime that opens the browser, validates state, exchanges the code, and stores tokens outside the repo.",
+                "Keep archive notion-recover env/file token handoff as a power-user fallback until the OAuth runtime is live.",
+            ],
+            "warnings": unique_preserve_order(warnings),
+            "blockers": unique_preserve_order(blockers),
+        }
+    )
+
+
 def notion_recover_select_tree_fixture(
     archive_root: Path,
     *,

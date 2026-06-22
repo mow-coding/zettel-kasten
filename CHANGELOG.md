@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.142 - 2026-06-22
+
+- Added read-only `archive notion-oauth-connection-preflight`, with aliases
+  `archive notion-oauth-preflight` and
+  `archive notion-connect-oauth-preflight`, to validate the secret-blind local
+  OAuth runtime contract before a future live Notion browser connection flow.
+- The preflight checks safe client id/client secret refs, local loopback
+  callback URI shape, optional one-time state storage, and keyring/secret/wallet
+  token-store intent while rejecting plain env token storage for OAuth access
+  and refresh tokens.
+- The output keeps the AI secret-blind: it does not read credentials, open a
+  browser, start a callback server, generate an authorization URL, exchange a
+  code, store tokens, call Notion, or echo exact refs, redirect URI, provider
+  URLs, tokens, account ids, or emails.
+- Updated the Notion connection plan, capability matrix, README links, public
+  documentation maps, release notes, and tests.
+
 ## v0.3.141 - 2026-06-22
 
 - Added read-only `archive notion-connection-plan`, with aliases

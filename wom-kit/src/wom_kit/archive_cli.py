@@ -3758,6 +3758,45 @@ def command_notion_connection_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_notion_oauth_connection_preflight(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("notion-oauth-connection-preflight is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.notion_oauth_connection_preflight(
+            Path(args.archive_root),
+            client_id_ref=args.client_id_ref,
+            client_secret_ref=args.client_secret_ref,
+            redirect_uri=args.redirect_uri,
+            state_ref=args.state_ref,
+            token_store_ref=args.token_store_ref,
+            dry_run=args.dry_run,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Notion OAuth preflight: {result.get('preflight_state') or '-'}")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        callback = result.get("callback_validation") if isinstance(result.get("callback_validation"), dict) else {}
+        print(f"Callback host: {callback.get('host_class') or '-'}")
+        print(f"Callback valid: {callback.get('redirect_uri_valid')}")
+        security = result.get("security_contract") if isinstance(result.get("security_contract"), dict) else {}
+        print(f"AI secret-blind: {security.get('ai_secret_blind')}")
+        print(f"Token exchange actor: {security.get('token_exchange_actor') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_notion_media_fetch_adapter_execution_contract(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("notion-media-fetch-adapter-execution-contract is read-only and requires --dry-run.", file=sys.stderr)
@@ -14342,6 +14381,41 @@ def build_parser() -> argparse.ArgumentParser:
     notion_connection_plan.add_argument("--dry-run", action="store_true", help="Required; writes nothing and calls no provider.")
     notion_connection_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     notion_connection_plan.set_defaults(func=command_notion_connection_plan)
+
+    notion_oauth_preflight = subcommands.add_parser(
+        "notion-oauth-connection-preflight",
+        aliases=["notion-oauth-preflight", "notion-connect-oauth-preflight"],
+        help="Validate the secret-blind local OAuth connection contract before a future live Notion browser flow.",
+    )
+    notion_oauth_preflight.add_argument(
+        "archive_root",
+        nargs="?",
+        default=".",
+        help="Archive root to inspect. Defaults to the current directory.",
+    )
+    notion_oauth_preflight.add_argument(
+        "--client-id-ref",
+        help="Safe env/keyring/secret/wallet ref for the Notion OAuth client id. The exact ref is validated but never echoed.",
+    )
+    notion_oauth_preflight.add_argument(
+        "--client-secret-ref",
+        help="Safe env/keyring/secret/wallet ref for the Notion OAuth client secret. The exact ref is validated but never echoed.",
+    )
+    notion_oauth_preflight.add_argument(
+        "--redirect-uri",
+        help="Local loopback callback URI to validate. The exact URI is never echoed.",
+    )
+    notion_oauth_preflight.add_argument(
+        "--state-ref",
+        help="Optional safe ref where a live runtime would store a one-time OAuth state. The exact ref is never echoed.",
+    )
+    notion_oauth_preflight.add_argument(
+        "--token-store-ref",
+        help="Safe keyring/secret/wallet ref for future access and refresh tokens. Env refs are rejected for token storage.",
+    )
+    notion_oauth_preflight.add_argument("--dry-run", action="store_true", help="Required; writes nothing and calls no provider.")
+    notion_oauth_preflight.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    notion_oauth_preflight.set_defaults(func=command_notion_oauth_connection_preflight)
 
     notion_media_fetch_contract = subcommands.add_parser(
         "notion-media-fetch-adapter-execution-contract",

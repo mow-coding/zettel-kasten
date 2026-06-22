@@ -96,6 +96,7 @@ docs/notion-ancestor-crawl-plan.md
 docs/notion-ancestor-fetch-adapter-execution-contract.md
 docs/notion-ancestor-fetch-adapter-run.md
 docs/notion-connection-plan.md
+docs/notion-oauth-connection-preflight.md
 docs/notion-recover.md
 docs/notion-media-fetch-adapter-execution-contract.md
 docs/notion-media-result-verification-plan.md
@@ -1367,6 +1368,13 @@ or unshared object, rate limit, network/timeout, or temporary provider outage
 without echoing raw provider errors. Browser OAuth, managed local callback
 storage, keyring/vault reads, page picker authorization, and UI buttons remain
 future layers; env/file token handoff stays a power-user fallback.
+v0.3.142 adds `archive notion-oauth-connection-preflight --dry-run`, a
+secret-blind local OAuth runtime contract check before any future browser,
+callback, authorization-code exchange, token storage, or provider call. The
+preflight validates safe refs, local loopback callback shape, and keyring,
+secret, or wallet token-store intent while rejecting plain env token storage.
+It writes nothing and echoes no refs, redirect URI, tokens, provider URLs,
+account ids, or emails.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

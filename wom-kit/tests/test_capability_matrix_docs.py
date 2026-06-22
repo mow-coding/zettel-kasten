@@ -51,6 +51,7 @@ NOTION_ANCESTOR_CRAWL_PLAN_PATH = KIT_ROOT / "docs" / "notion-ancestor-crawl-pla
 NOTION_ANCESTOR_FETCH_ADAPTER_EXECUTION_CONTRACT_PATH = KIT_ROOT / "docs" / "notion-ancestor-fetch-adapter-execution-contract.md"
 NOTION_ANCESTOR_FETCH_ADAPTER_RUN_PATH = KIT_ROOT / "docs" / "notion-ancestor-fetch-adapter-run.md"
 NOTION_CONNECTION_PLAN_PATH = KIT_ROOT / "docs" / "notion-connection-plan.md"
+NOTION_OAUTH_CONNECTION_PREFLIGHT_PATH = KIT_ROOT / "docs" / "notion-oauth-connection-preflight.md"
 NOTION_RECOVER_PATH = KIT_ROOT / "docs" / "notion-recover.md"
 NOTION_MEDIA_FETCH_ADAPTER_EXECUTION_CONTRACT_PATH = KIT_ROOT / "docs" / "notion-media-fetch-adapter-execution-contract.md"
 NOTION_MEDIA_RESULT_VERIFICATION_PLAN_PATH = KIT_ROOT / "docs" / "notion-media-result-verification-plan.md"
@@ -1794,13 +1795,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.141.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.141 one-click Notion connection contract and actionable failure classification checkpoint",
+            "Status: v0.3.142 one-click Notion connection contract plus OAuth preflight checkpoint",
             "archive notion-connection-plan <archive-root> --dry-run --format json",
             "notion-connect-plan",
             "Connect Notion -> human approves once in browser",
             "Internal connections use a static installation token",
             "Personal access tokens are user-scoped static tokens",
             "Public connections use OAuth 2.0",
+            "archive notion-oauth-connection-preflight",
             "notion_connection_not_shared_or_permission_denied",
             "browser OAuth authorization",
             "writes nothing, calls no provider, opens no browser",
@@ -1823,10 +1825,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, fetch_text)
         for phrase in (
-            "Status: v0.3.141 Notion one-click connection contract and actionable failure classification checkpoint",
+            "Status: v0.3.142 Notion OAuth connection preflight checkpoint",
             "Notion connection plan",
+            "Notion OAuth connection preflight",
             "archive notion-connection-plan",
             "archive notion-connect-plan",
+            "archive notion-oauth-connection-preflight",
             "notion_connection_not_shared_or_permission_denied",
             "Vault/keyring/OAuth one-click handoff remains planned",
         ):
@@ -1843,6 +1847,66 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "token_invalid_or_expired",
             "notion_connection_not_shared_or_permission_denied",
             "browser OAuth authorization",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(phrase in release_text or phrase in changelog_text)
+
+    def test_notion_oauth_connection_preflight_docs_explain_secret_blind_local_runtime_boundary(self) -> None:
+        preflight_text = NOTION_OAUTH_CONNECTION_PREFLIGHT_PATH.read_text(encoding="utf-8")
+        connection_text = NOTION_CONNECTION_PLAN_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.142.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.142 secret-blind Notion OAuth connection preflight checkpoint",
+            "archive notion-oauth-connection-preflight <archive-root>",
+            "notion-oauth-preflight",
+            "notion-connect-oauth-preflight",
+            "Connect Notion -> human approves once in browser -> trusted local runtime stores tokens",
+            "the callback URI is local loopback HTTP only",
+            "OAuth state is required for the future live flow",
+            "the future access/refresh token store is keyring",
+            "oauth_state_mismatch",
+            "starts no callback server",
+            "echoes no credential refs, redirect URI",
+            "https://developers.notion.com/guides/get-started/authorization",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, preflight_text)
+        for phrase in (
+            "What v0.3.142 Adds",
+            "archive notion-oauth-connection-preflight",
+            "The current next command for local readiness",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, connection_text)
+        for phrase in (
+            "Status: v0.3.142 Notion OAuth connection preflight checkpoint",
+            "Notion OAuth connection preflight",
+            "archive notion-oauth-connection-preflight",
+            "archive notion-oauth-preflight",
+            "secret-blind local OAuth runtime contract",
+            "rejecting plain env token storage",
+            "writes nothing, calls no provider, opens no browser",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        self.assertIn("[Notion OAuth Connection Preflight](wom-kit/docs/notion-oauth-connection-preflight.md)", readme_text)
+        self.assertIn("[Notion OAuth Connection Preflight](wom-kit/docs/notion-oauth-connection-preflight.md)", readme_ko_text)
+        self.assertIn("docs/notion-oauth-connection-preflight.md", kit_readme_text)
+        self.assertIn("[Notion OAuth Connection Preflight](notion-oauth-connection-preflight.md)", public_map_text)
+        self.assertIn("[Notion OAuth Connection Preflight](notion-oauth-connection-preflight.md)", public_map_ko_text)
+        for phrase in (
+            "# v0.3.142 - Notion OAuth Connection Preflight",
+            "archive notion-oauth-connection-preflight",
+            "secret-blind local OAuth runtime contract",
+            "OAuth token exchange",
+            "No archive migration is required.",
         ):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in release_text or phrase in changelog_text)
