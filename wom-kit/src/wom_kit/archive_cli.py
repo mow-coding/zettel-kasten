@@ -412,6 +412,8 @@ RECOMMENDED_GITIGNORE_PATTERNS = [
     "credentials.json",
     "token.json",
     "tmp/",
+    ".wom-scratch/",
+    "workbench/ai-scratch/",
     "/collab/",
     "/.mow-harness/",
     "**/db/archive-index.sqlite",
@@ -7597,6 +7599,93 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_zet_self_contained_check(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("zet-self-contained-check is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.zet_self_contained_check(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            relative_path=args.path,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "self-contained" if result.get("self_contained") else "needs revision"
+        print(f"Zet self-contained check {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Zet: {result.get('zettel_id') or result.get('zettel_path') or '-'}")
+        check = result.get("self_contained_check") if isinstance(result.get("self_contained_check"), dict) else {}
+        print(f"Scratch refs: {check.get('scratch_reference_count', 0)}")
+        print(f"External citation URLs: {check.get('external_citation_url_count', 0)}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_ai_scratch_gc(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("ai-scratch-gc requires --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("ai-scratch-gc requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.ai_scratch_gc_for_zettel(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            relative_path=args.path,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "cleaned" if args.approve else "planned"
+        if not result.get("ok", True):
+            state = "blocked"
+        print(f"AI scratch GC {state}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Zet: {result.get('zettel_id') or result.get('zettel_path') or '-'}")
+        plan = result.get("cleanup_plan") if isinstance(result.get("cleanup_plan"), dict) else {}
+        print(f"Candidates: {plan.get('candidate_count', 0)}")
+        if result.get("receipt_path"):
+            print(f"Receipt: {result['receipt_path']}")
+        if result.get("deleted"):
+            print("Deleted:")
+            for item in result["deleted"]:
+                print(f"- {item.get('path')}")
+        elif result.get("would_change"):
+            print("Would change:")
+            for path in result["would_change"]:
+                print(f"- {path}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_retire_draft(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -10947,6 +11036,8 @@ def write_safe_gitignore(target: Path) -> None:
                 "credentials.json",
                 "token.json",
                 "tmp/",
+                ".wom-scratch/",
+                "workbench/ai-scratch/",
                 "",
                 "# Local-only collaboration and harness state",
                 "/collab/",
@@ -13578,6 +13669,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mint.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     mint.set_defaults(func=command_mint_zettel)
+
+    self_contained = subcommands.add_parser(
+        "zet-self-contained-check",
+        aliases=["zettel-self-contained-check"],
+        help="Read-only check that a zet does not depend on AI scratch files or private provider locators.",
+    )
+    self_contained.add_argument("archive_root", help="Archive root to inspect.")
+    self_contained_target = self_contained.add_mutually_exclusive_group(required=True)
+    self_contained_target.add_argument("--zettel-id", help="Zet id to inspect.")
+    self_contained_target.add_argument("--path", help="Archive-relative zet path to inspect.")
+    self_contained.add_argument("--dry-run", action="store_true", help="Required; read-only check.")
+    self_contained.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    self_contained.set_defaults(func=command_zet_self_contained_check)
+
+    ai_scratch_gc = subcommands.add_parser(
+        "ai-scratch-gc",
+        aliases=["ai-residue-cleanup", "scratch-gc"],
+        help="Preview or approve deleting explicit AI scratch files used by one zet.",
+    )
+    ai_scratch_gc.add_argument("archive_root", help="Archive root to inspect.")
+    ai_scratch_gc_target = ai_scratch_gc.add_mutually_exclusive_group(required=True)
+    ai_scratch_gc_target.add_argument("--zettel-id", help="Zet id whose explicit scratch refs should be cleaned.")
+    ai_scratch_gc_target.add_argument("--path", help="Archive-relative zet path whose explicit scratch refs should be cleaned.")
+    ai_scratch_gc.add_argument("--dry-run", action="store_true", help="Preview cleanup without deleting scratch files.")
+    ai_scratch_gc.add_argument("--approve", action="store_true", help="Delete explicit scratch files and write a cleanup receipt.")
+    ai_scratch_gc.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
+    ai_scratch_gc.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    ai_scratch_gc.set_defaults(func=command_ai_scratch_gc)
 
     mint_batch = subcommands.add_parser(
         "mint-zet-batch",

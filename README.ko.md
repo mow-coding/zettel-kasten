@@ -23,10 +23,11 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.3.143 pre-release
+v0.3.144 pre-release
 ```
 
-이전 공개 기준: v0.3.137 pre-release.
+이전 공개 기준: v0.3.143 pre-release.
+더 이전 공개 기준: v0.3.137 pre-release.
 더 이전 공개 기준: v0.3.136 pre-release.
 더 이전 공개 기준: v0.3.135 pre-release.
 더 이전 공개 기준: v0.3.134 pre-release.
@@ -39,6 +40,7 @@ v0.3.143 pre-release
 - WOM / zet / ZET 설계 기준, specs, schemas, fake archive, release notes, work logs,
 - `wom-kit/` 안의 local CLI와 MCP tooling,
 - doctor, draft, mint, delegate, receipt, search, metadata review 같은 private archive lifecycle 도구,
+- `zet-self-contained-check`와 AI scratch lifecycle 관리. 공개 외부 인용 URL은 zet 본문이나 `source_refs`에 남길 수 있고, private provider locator와 원본 파일 위치는 여전히 durable WOM ref가 필요하며, `.wom-scratch/`와 `workbench/ai-scratch/`는 git-ignore되는 scratch 영역입니다. 승인된 mint는 명시된 scratch ref를 canonical zet에서 제거하고 cleanup receipt를 남기며 해당 scratch 파일을 소비할 수 있습니다.
 - runtime context, profile, source/objet intake, block header, prompt boundary, foreign block review, projection, shared update review/index, shared update route preview, ZET would-transport planning을 위한 read-only preview layer,
 - derived-text coverage/toolchain/doctor/agent-contract read-only gate, PATH에 없는 로컬 추출 도구를 위한 비공개 tool-hint path, 그리고 사람 승인 뒤에만 동작하는 일부 local write path,
 - read-only objet reference resolution 및 zettel objet link preview,
@@ -227,6 +229,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.3.144
 v0.3.143
 v0.3.137
 v0.3.136

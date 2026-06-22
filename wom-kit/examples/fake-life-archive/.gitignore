@@ -17,6 +17,8 @@ rclone.conf
 credentials.json
 token.json
 tmp/
+.wom-scratch/
+workbench/ai-scratch/
 tmp-*/
 
 # Local-only collaboration and harness state

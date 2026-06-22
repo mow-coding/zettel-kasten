@@ -37,6 +37,8 @@ REQUIRED_ARCHIVE_GITIGNORE_PATTERNS: tuple[str, ...] = (
     "credentials.json",
     "token.json",
     "tmp/",
+    ".wom-scratch/",
+    "workbench/ai-scratch/",
     "/collab/",
     "/.mow-harness/",
     "**/db/archive-index.sqlite",
@@ -137,6 +139,8 @@ def classify_artifact(relative_path: str) -> ArtifactObservation:
 
     if lower == "tmp" or lower.startswith("tmp/") or has_part_starting_with(path, "tmp-"):
         return ArtifactObservation(path, DISPOSABLE_AFTER_REVIEW, "temporary artifact; cleanup requires review")
+    if lower == ".wom-scratch" or lower.startswith(".wom-scratch/") or starts_with_path(path, "workbench/ai-scratch"):
+        return ArtifactObservation(path, DISPOSABLE_AFTER_REVIEW, "AI scratch artifact; cleanup requires review")
     if "dry-run" in lower or "sandbox" in lower:
         return ArtifactObservation(path, DISPOSABLE_AFTER_REVIEW, "sandbox or dry-run artifact; cleanup requires review")
 

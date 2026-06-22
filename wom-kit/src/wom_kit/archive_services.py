@@ -2265,6 +2265,15 @@ ZETTEL_OVERVIEW_GIST_CHAR_LIMIT = 360
 ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("gist", "summary", "abstract", "description", "overview")
 ZETTEL_EDGE_EXTERNAL_REF_RE = re.compile(r"^zet:(?P<source>[A-Za-z0-9_-]+):(?P<external_id>[A-Za-z0-9_-]+)$")
 MACHINE_ENFORCED_CHECKLIST_ITEMS = {"object_id_only", "allowed_edges"}
+ZETTEL_PRIVATE_PROVIDER_LOCATOR_RE = re.compile(
+    r"(?i)\bhttps?://(?:[^/\s\"'<>)]*\.)?(?:app\.notion\.com|notion\.so|api\.notion\.com|tiro\.ooo|api\.tiro\.ooo)(?:[/?#:]|$)"
+)
+AI_SCRATCH_REF_TYPES = {"ai_scratch", "scratch", "scratch_file", "wom_scratch"}
+AI_SCRATCH_ROOT_PREFIXES = (".wom-scratch/", "workbench/ai-scratch/")
+AI_SCRATCH_REFERENCE_RE = re.compile(
+    r"(?<![A-Za-z0-9_./-])(?P<path>(?:\.wom-scratch|workbench/ai-scratch)/[A-Za-z0-9._/@+=,-]+)"
+)
+AI_SCRATCH_GC_RECEIPTS_DIR = "receipts/scratch-gc"
 
 
 class ArchiveServiceError(Exception):
@@ -6012,8 +6021,8 @@ def create_draft_zettel(
         elif expected_hash != body_sha256:
             blockers.append("Expected body SHA-256 does not match the draft body.")
 
-    if contains_forbidden_location_reference(body) or source_intake_has_provider_url(body):
-        blockers.append("Draft body appears to contain a provider URL or local absolute path.")
+    if zettel_body_has_forbidden_location_reference(body):
+        blockers.append("Draft body appears to contain a private provider locator or local absolute path.")
     if DRAFT_SECRET_VALUE_RE.search(body):
         blockers.append("Draft body appears to contain a secret-like value.")
 
@@ -6241,8 +6250,8 @@ def promote_zettel_dry_run(
         blockers.append("Title must be present.")
     if not body.strip():
         blockers.append("Body must be present.")
-    if contains_forbidden_location_reference(body) or source_intake_has_provider_url(body):
-        blockers.append("Body appears to contain a provider URL or local absolute path.")
+    if zettel_body_has_forbidden_location_reference(body):
+        blockers.append("Body appears to contain a private provider locator or local absolute path.")
 
     provenance = frontmatter.get("provenance")
     if not isinstance(provenance, dict):
@@ -6455,7 +6464,7 @@ def mint_zettel_dry_run(
     root = require_existing_archive_root(archive_root)
     promotion_dry_run = promote_zettel_dry_run(root, zettel_id=zettel_id, relative_path=relative_path)
     source_path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
-    source_frontmatter, _body = split_zettel_text(source_path.read_text(encoding="utf-8"))
+    source_frontmatter, body = split_zettel_text(source_path.read_text(encoding="utf-8"))
     source_frontmatter = json_safe(source_frontmatter)
 
     zettel_id_value = str(source_frontmatter.get("id") or source_path.stem)
@@ -6486,6 +6495,9 @@ def mint_zettel_dry_run(
         blockers=blockers,
         warnings=warnings,
     )
+    self_contained_check = zettel_self_contained_assessment(source_frontmatter, body)
+    scratch_cleanup = build_ai_scratch_gc_plan(root, source_path, source_frontmatter, body)
+    scratch_would_change = [] if scratch_cleanup.get("blockers") else scratch_cleanup.get("would_change", [])
     return {
         "ok": not blockers,
         "dry_run": True,
@@ -6502,6 +6514,8 @@ def mint_zettel_dry_run(
         "mint_checklist_guidance": mint_checklist_guidance(promotion_dry_run["checklist"]),
         "duplicate_check": promotion_dry_run.get("duplicate_check", {}),
         "near_duplicates": promotion_dry_run["near_duplicates"],
+        "self_contained_check": self_contained_check,
+        "scratch_cleanup": scratch_cleanup,
         "receipt_preview": receipt_preview,
         "would_change": [
             "status -> canonical",
@@ -6512,6 +6526,7 @@ def mint_zettel_dry_run(
             f"write {promotion_dry_run['proposed_canonical_path']}",
             f"write {receipt_relative}",
             f"write {snapshot_relative}",
+            *scratch_would_change,
         ],
     }
 
@@ -6583,6 +6598,12 @@ def mint_zettel(
     canonical_frontmatter["updated_at"] = now
     canonical_frontmatter["mint"] = mint
     canonical_frontmatter["promotion"] = promotion
+    canonical_source_refs = zettel_source_refs_without_ai_scratch(source_frontmatter)
+    if canonical_source_refs is not None:
+        if canonical_source_refs:
+            canonical_frontmatter["source_refs"] = canonical_source_refs
+        else:
+            canonical_frontmatter.pop("source_refs", None)
     canonical_text = "---\n" + dump_yaml(canonical_frontmatter) + "---\n\n" + body.rstrip() + "\n"
 
     zettel_id_value = str(source_frontmatter.get("id") or source_path.stem)
@@ -6662,6 +6683,24 @@ def mint_zettel(
             generated_index_updated = False
             dry_run["warnings"].append("Generated index update failed after mint; run archive index before the next large mint batch.")
 
+    try:
+        scratch_cleanup_result = ai_scratch_gc_for_zettel(
+            root,
+            relative_path=dry_run["draft_path"],
+            dry_run=False,
+            approve=True,
+            reviewed_by=reviewer,
+            mint_receipt_path=receipt_relative,
+        )
+    except (ArchiveServiceError, OSError) as exc:
+        scratch_cleanup_result = {
+            "ok": False,
+            "lifecycle_action": "ai_scratch_gc",
+            "blockers": ["scratch_cleanup_failed_after_mint"],
+            "warnings": [str(exc)],
+        }
+        dry_run["warnings"].append("AI scratch cleanup failed after mint; run archive ai-scratch-gc manually.")
+
     return {
         "ok": True,
         "dry_run": False,
@@ -6677,6 +6716,8 @@ def mint_zettel(
         "duplicate_check": duplicate_check,
         "generated_index_updated": generated_index_updated,
         "near_duplicates": dry_run["near_duplicates"],
+        "self_contained_check": dry_run.get("self_contained_check", {}),
+        "scratch_cleanup": scratch_cleanup_result,
         "checklist": dry_run["checklist"],
         "created_paths": created_paths,
         "receipt": json_safe(receipt),
@@ -8126,9 +8167,9 @@ def infer_promotion_checklist_item(
             return "passed", "Provenance includes a source."
         return "blocked", "Provenance source is missing."
     if item_id == "object_id_only":
-        if contains_forbidden_location_reference(body) or source_intake_has_provider_url(body):
-            return "blocked", "Body contains a provider URL or local absolute path."
-        return "passed", "No provider URL or local absolute path was detected."
+        if zettel_body_has_forbidden_location_reference(body):
+            return "blocked", "Body contains a private provider locator or local absolute path."
+        return "passed", "No private provider locator or local absolute path was detected."
     if item_id == "stable_facets":
         if isinstance(facets, dict) and bool(facets):
             return "passed", "Facets are present."
@@ -8664,6 +8705,335 @@ def extract_mint_local_ai_sessions(frontmatter: dict[str, Any]) -> list[dict[str
     if isinstance(session, dict):
         return [json_safe(session)]
     return []
+
+
+def normalize_ai_scratch_relative_path(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        normalized = normalize_archive_relative_path(value)
+    except ArchivePathError:
+        return None
+    if normalized in {prefix.rstrip("/") for prefix in AI_SCRATCH_ROOT_PREFIXES}:
+        return None
+    if any(normalized.startswith(prefix) for prefix in AI_SCRATCH_ROOT_PREFIXES):
+        return normalized
+    return None
+
+
+def source_ref_is_ai_scratch(item: dict[str, Any]) -> bool:
+    ref_type = str(item.get("type") or "").strip().lower().replace("-", "_")
+    value = str(item.get("value") or "").strip()
+    return ref_type in AI_SCRATCH_REF_TYPES or normalize_ai_scratch_relative_path(value) is not None
+
+
+def zettel_ai_scratch_references(frontmatter: dict[str, Any], body: str) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    source_refs = frontmatter.get("source_refs")
+    if isinstance(source_refs, list):
+        for index, item in enumerate(source_refs):
+            if not isinstance(item, dict):
+                continue
+            normalized = normalize_ai_scratch_relative_path(str(item.get("value") or ""))
+            if normalized and source_ref_is_ai_scratch(item):
+                refs.append({"path": normalized, "source": "source_refs", "index": index})
+    for match in AI_SCRATCH_REFERENCE_RE.finditer(body):
+        normalized = normalize_ai_scratch_relative_path(match.group("path"))
+        if normalized:
+            refs.append({"path": normalized, "source": "body"})
+
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for ref in refs:
+        path = str(ref.get("path") or "")
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        unique.append(ref)
+    return unique
+
+
+def zettel_source_refs_without_ai_scratch(frontmatter: dict[str, Any]) -> list[dict[str, Any]] | None:
+    source_refs = frontmatter.get("source_refs")
+    if not isinstance(source_refs, list):
+        return None
+    kept = [item for item in source_refs if not (isinstance(item, dict) and source_ref_is_ai_scratch(item))]
+    return [json_safe(item) if isinstance(item, dict) else {"value": str(item)} for item in kept]
+
+
+def zettel_self_contained_assessment(frontmatter: dict[str, Any], body: str) -> dict[str, Any]:
+    scratch_refs = zettel_ai_scratch_references(frontmatter, body)
+    private_provider_locator_found = zettel_body_has_private_provider_locator(body)
+    local_or_object_store_locator_found = contains_forbidden_location_reference(body)
+    external_citation_url_count = len(re.findall(r"(?i)\bhttps?://[^\s<>'\")]+", body))
+    source_refs = frontmatter.get("source_refs") if isinstance(frontmatter.get("source_refs"), list) else []
+    warnings: list[str] = []
+    if scratch_refs:
+        warnings.append("Zet references AI scratch material; mint should inline the needed information and consume scratch refs.")
+    if private_provider_locator_found:
+        warnings.append("Zet body contains a private provider locator; convert it to a durable objet/source ref or external citation.")
+    if local_or_object_store_locator_found:
+        warnings.append("Zet body contains a local path or object-store locator; use object_id for original files.")
+    return {
+        "status": "needs_revision" if warnings else "self_contained",
+        "scratch_reference_count": len(scratch_refs),
+        "external_citation_url_count": external_citation_url_count,
+        "external_citation_urls_allowed": True,
+        "private_provider_locator_found": private_provider_locator_found,
+        "local_or_object_store_locator_found": local_or_object_store_locator_found,
+        "canonical_source_refs_removed_on_mint": len(
+            [item for item in source_refs if isinstance(item, dict) and source_ref_is_ai_scratch(item)]
+        ),
+        "warnings": warnings,
+        "privacy_guards": {
+            "body_text_echoed": False,
+            "source_ref_values_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+        },
+    }
+
+
+def ai_scratch_path_is_plain_file(path: Path) -> bool:
+    try:
+        stat_result = os.lstat(path)
+    except OSError:
+        return False
+    if stat.S_ISLNK(stat_result.st_mode):
+        return False
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if reparse_flag and getattr(stat_result, "st_file_attributes", 0) & reparse_flag:
+        return False
+    return stat.S_ISREG(stat_result.st_mode)
+
+
+def cleanup_empty_ai_scratch_dirs(root: Path, paths: list[Path]) -> None:
+    scratch_roots = {
+        (root / ".wom-scratch").resolve(),
+        (root / "workbench" / "ai-scratch").resolve(),
+    }
+    for path in sorted({item.parent for item in paths}, key=lambda item: len(item.parts), reverse=True):
+        current = path
+        while current != root and is_path_within_root(current, root):
+            resolved = current.resolve()
+            if resolved in scratch_roots:
+                break
+            if not any(resolved.is_relative_to(scratch_root) for scratch_root in scratch_roots if scratch_root.exists()):
+                break
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            current = current.parent
+
+
+def ai_scratch_gc_receipt_path(zettel_id: str) -> str:
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", zettel_id).strip("._-") or "zet"
+    stamp = datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%f%z")
+    return f"{AI_SCRATCH_GC_RECEIPTS_DIR}/{safe_id}.{stamp}.scratch-gc.json"
+
+
+def build_ai_scratch_gc_plan(
+    root: Path,
+    zettel_path: Path,
+    frontmatter: dict[str, Any],
+    body: str,
+    *,
+    receipt_relative: str | None = None,
+) -> dict[str, Any]:
+    zettel_id = str(frontmatter.get("id") or zettel_path.stem)
+    refs = zettel_ai_scratch_references(frontmatter, body)
+    candidates: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
+    blockers: list[str] = []
+    for ref in refs:
+        relative = str(ref.get("path") or "")
+        try:
+            path = resolve_archive_relative_path(root, relative)
+        except ArchivePathError:
+            blockers.append("scratch_reference_path_unsafe")
+            continue
+        if not is_path_within_root(path, root):
+            blockers.append("scratch_reference_escapes_archive")
+            continue
+        if not path.exists():
+            missing.append({"path": relative, "state": "missing"})
+            continue
+        if not ai_scratch_path_is_plain_file(path):
+            blockers.append("scratch_reference_not_plain_file")
+            candidates.append({"path": relative, "state": "blocked_non_plain_file"})
+            continue
+        candidates.append(
+            {
+                "path": relative,
+                "state": "ready",
+                "sha256": sha256_path(path),
+                "bytes": path.stat().st_size,
+            }
+        )
+    receipt_path = receipt_relative or ai_scratch_gc_receipt_path(zettel_id)
+    ready_candidates = [item for item in candidates if item.get("state") == "ready"]
+    return {
+        "zettel_id": zettel_id,
+        "zettel_path": archive_relative_path(zettel_path, root),
+        "receipt_path": receipt_path,
+        "scratch_reference_count": len(refs),
+        "candidates": candidates,
+        "missing": missing,
+        "safe_to_cleanup": bool(ready_candidates) and not blockers,
+        "candidate_count": len(ready_candidates),
+        "blockers": unique_preserve_order(blockers),
+        "would_change": [f"delete {item['path']}" for item in ready_candidates]
+        + ([f"write {receipt_path}"] if ready_candidates and not blockers else []),
+    }
+
+
+def ai_scratch_gc_for_zettel(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    dry_run: bool = True,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    mint_receipt_path: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
+    frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
+    frontmatter = json_safe(frontmatter)
+    blockers: list[str] = []
+    if dry_run and approve:
+        blockers.append("Use either --dry-run or --approve, not both.")
+    if not dry_run and not approve:
+        blockers.append("ai-scratch-gc requires --dry-run or --approve.")
+    reviewer = (reviewed_by or "").strip()
+    if approve and not reviewer:
+        blockers.append("ai-scratch-gc requires --reviewed-by when --approve is used.")
+
+    plan = build_ai_scratch_gc_plan(root, path, frontmatter, body)
+    blockers.extend(plan["blockers"])
+    ready = [item for item in plan["candidates"] if item.get("state") == "ready"]
+    result = {
+        "ok": not blockers,
+        "dry_run": not approve,
+        "lifecycle_action": "ai_scratch_gc_plan" if not approve else "ai_scratch_gc",
+        "archive_id": read_archive_id(root),
+        "zettel_id": plan["zettel_id"],
+        "zettel_path": plan["zettel_path"],
+        "self_contained_check": zettel_self_contained_assessment(frontmatter, body),
+        "cleanup_plan": plan,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": [],
+        "would_change": [] if blockers else plan["would_change"],
+        "privacy_guards": {
+            "body_text_echoed": False,
+            "source_ref_values_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "deleted_only_explicit_scratch_refs": True,
+        },
+    }
+    if blockers or not approve:
+        return result
+    if not ready:
+        return {
+            **result,
+            "ok": True,
+            "dry_run": False,
+            "cleanup_plan": {**plan, "safe_to_cleanup": False, "would_change": []},
+            "deleted": [],
+            "created_paths": [],
+            "would_change": [],
+            "receipt": None,
+        }
+
+    deleted: list[dict[str, Any]] = []
+    deleted_paths: list[Path] = []
+    for item in ready:
+        relative = str(item["path"])
+        path_to_delete = resolve_archive_relative_path(root, relative)
+        if not path_to_delete.is_file() or not ai_scratch_path_is_plain_file(path_to_delete):
+            result["warnings"].append(f"Skipped non-plain scratch file during cleanup: {relative}.")
+            continue
+        path_to_delete.unlink()
+        deleted_paths.append(path_to_delete)
+        deleted.append({"path": relative, "sha256": item.get("sha256"), "bytes": item.get("bytes")})
+    cleanup_empty_ai_scratch_dirs(root, deleted_paths)
+
+    receipt_relative = str(plan["receipt_path"])
+    receipt_path = resolve_archive_relative_path(root, receipt_relative)
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    receipt = {
+        "schema_version": "wom-kit/ai-scratch-gc-receipt/v0.1",
+        "receipt_id": f"receipt:ai-scratch-gc:{plan['zettel_id']}",
+        "receipt_path": receipt_relative,
+        "action": "ai_scratch_gc",
+        "timestamp": datetime.now().astimezone().replace(microsecond=0).isoformat(),
+        "archive_id": read_archive_id(root),
+        "reviewed_by": reviewer,
+        "zettel": {"id": plan["zettel_id"], "path": plan["zettel_path"]},
+        "mint_receipt_path": mint_receipt_path,
+        "deleted": deleted,
+        "missing": plan["missing"],
+        "safety": {
+            "roots": list(AI_SCRATCH_ROOT_PREFIXES),
+            "deleted_only_plain_files": True,
+            "objet_store_touched": False,
+            "provider_api_called": False,
+        },
+    }
+    write_json_new_file(receipt_path, receipt)
+    return {
+        **result,
+        "ok": True,
+        "dry_run": False,
+        "cleanup_plan": {**plan, "safe_to_cleanup": False, "would_change": []},
+        "deleted": deleted,
+        "receipt_path": receipt_relative,
+        "created_paths": [receipt_relative],
+        "would_change": [],
+        "receipt": json_safe(receipt),
+    }
+
+
+def zet_self_contained_check(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
+    frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
+    frontmatter = json_safe(frontmatter)
+    blockers: list[str] = []
+    if not dry_run:
+        blockers.append("zet-self-contained-check is read-only and requires --dry-run.")
+    assessment = zettel_self_contained_assessment(frontmatter, body)
+    cleanup_plan = build_ai_scratch_gc_plan(root, path, frontmatter, body)
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "zet_self_contained_check",
+        "archive_id": read_archive_id(root),
+        "zettel_id": str(frontmatter.get("id") or path.stem),
+        "zettel_path": archive_relative_path(path, root),
+        "self_contained": assessment.get("status") == "self_contained",
+        "self_contained_check": assessment,
+        "scratch_cleanup_plan": cleanup_plan,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": assessment.get("warnings", []),
+        "would_change": [],
+        "privacy_guards": {
+            "body_text_echoed": False,
+            "source_ref_values_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "writes": False,
+        },
+    }
 
 
 def normalize_text_for_block_hash(text: str) -> str:
@@ -52118,6 +52488,14 @@ def safe_source_intake_artifact_kind(value: str) -> bool:
 
 def source_intake_has_provider_url(value: str) -> bool:
     return bool(re.search(r"(?i)\b(?:s3|b2|r2|gs)://|://", value))
+
+
+def zettel_body_has_private_provider_locator(value: str) -> bool:
+    return bool(ZETTEL_PRIVATE_PROVIDER_LOCATOR_RE.search(value))
+
+
+def zettel_body_has_forbidden_location_reference(value: str) -> bool:
+    return contains_forbidden_location_reference(value) or zettel_body_has_private_provider_locator(value)
 
 
 def source_intake_secret_like(value: str) -> bool:
