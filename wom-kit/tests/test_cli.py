@@ -3539,7 +3539,14 @@ state:
             self.assertFalse(result["beginner_contract"]["env_var_name_user_input_required"])
             self.assertFalse(result["beginner_contract"]["receipt_path_copy_required"])
             self.assertFalse(result["beginner_contract"]["placeholder_command_chain_required"])
+            self.assertTrue(result["credential_entry"]["file_credential_ref_available"])
+            self.assertFalse(result["credential_entry"]["vault_or_keyring_click_handoff_available_now"])
+            self.assertFalse(result["credential_entry"]["terminal_paste_required_when_file_ref_or_env_ref_is_available"])
+            self.assertFalse(result["credential_entry"]["credential_file_path_echoed"])
             self.assertTrue(result["current_capability"]["interactive_single_command_available"])
+            self.assertTrue(result["current_capability"]["file_credential_ref_read_implemented"])
+            self.assertFalse(result["current_capability"]["vault_click_handoff_implemented"])
+            self.assertFalse(result["current_capability"]["os_keyring_click_handoff_implemented"])
             self.assertFalse(result["closed_actions"]["provider_api_called"])
             self.assertFalse(result["closed_actions"]["approval_receipt_written"])
             self.assertFalse(result["closed_actions"]["notion_location_fetch_executed"])
@@ -3709,6 +3716,119 @@ state:
             self.assertNotIn("https://", serialized)
             self.assertNotIn("C:\\", serialized)
             self.assertNotIn(str(archive_root.resolve()), serialized)
+
+    def test_notion_recover_file_ref_reads_local_token_without_echoing_path_or_secret(self) -> None:
+        root_id = "a" * 32
+        missing_parent_id = "b" * 32
+        leaf_id = "c" * 32
+        token_value = "ntn_" + "x" * 32
+        calls: list[dict[str, Any]] = []
+
+        def fake_notion_get_json(
+            *,
+            target_kind: str,
+            target_id: str,
+            token: str,
+            notion_version: str,
+            timeout_seconds: int,
+        ) -> dict[str, Any]:
+            calls.append(
+                {
+                    "target_kind": target_kind,
+                    "target_id": target_id,
+                    "token": token,
+                    "notion_version": notion_version,
+                    "timeout_seconds": timeout_seconds,
+                }
+            )
+            return {
+                "object": "page",
+                "id": missing_parent_id,
+                "parent": {"type": "database_id", "database_id": root_id},
+                "archived": False,
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            archive_root = self.copy_fake_archive(tmp_path / "archive")
+            token_file = tmp_path / "Notion API backup workspace.txt"
+            token_file.write_text(f"Notion integration token: {token_value}\n", encoding="utf-8")
+            tree_path = archive_root / "workbench" / "notion-live-ancestor.file-ref.json"
+            tree_path.write_text(
+                json.dumps(
+                    {
+                        "fixture_kind": "notion_nested_tree_fixture",
+                        "source": "notion",
+                        "generation_roots": [
+                            {
+                                "generation_id": "DB1",
+                                "root_ref": f"database:{root_id}",
+                            }
+                        ],
+                        "minted_refs": [],
+                        "nodes": [
+                            {
+                                "node_ref": f"database:{root_id}",
+                                "node_kind": "database",
+                                "content_class": "structure",
+                                "source_status": "live",
+                                "mint_state": "not_applicable",
+                                "review_status": "reviewed_root",
+                            },
+                            {
+                                "node_ref": f"page:{leaf_id}",
+                                "parent_ref": f"page:{missing_parent_id}",
+                                "node_kind": "page",
+                                "content_class": "content",
+                                "source_status": "live",
+                                "mint_state": "missing",
+                                "review_status": "needs_recovery",
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("wom_kit.archive_services.notion_api_get_json", fake_notion_get_json):
+                code, output = self.run_cli(
+                    [
+                        "notion-recover",
+                        str(archive_root),
+                        "--tree",
+                        "workbench/notion-live-ancestor.file-ref.json",
+                        "--output",
+                        "workbench/notion-ancestor-result.file-ref.json",
+                        "--credential-ref",
+                        f"file:{token_file}",
+                        "--yes",
+                        "--approve",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["recover_state"], "succeeded")
+            self.assertEqual(result["credential_handoff"]["source"], "local_file_ref")
+            self.assertTrue(result["credential_handoff"]["file_ref_supported_now"])
+            self.assertFalse(result["credential_handoff"]["vault_or_keyring_click_handoff_supported_now"])
+            self.assertFalse(result["credential_handoff"]["credential_file_path_echoed"])
+            self.assertFalse(result["credential_handoff"]["credential_value_echoed"])
+            self.assertTrue(result["credential_handoff"]["transient_local_injection_only"])
+            self.assertEqual(calls[0]["token"], token_value)
+            self.assertNotIn(token_value, serialized)
+            self.assertNotIn(str(token_file), serialized)
+            self.assertNotIn(str(token_file).replace("\\", "/"), serialized)
+            self.assertNotIn(token_file.name, serialized)
+            self.assertNotIn("WOM_NOTION_RECOVER_INTERACTIVE_TOKEN", serialized)
+            self.assertNotIn("file:", serialized)
+            self.assertNotIn("C:\\", serialized)
 
     def test_notion_media_fetch_adapter_execution_contract_keeps_media_bytes_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

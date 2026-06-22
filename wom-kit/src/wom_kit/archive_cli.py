@@ -3305,12 +3305,40 @@ def command_notion_recover(args: argparse.Namespace) -> int:
 
     credential_ref = args.credential_ref or archive_services.NOTION_RECOVER_INTERACTIVE_CREDENTIAL_REF
     cleanup_env_name = None
+    cleanup_env_previous_value: str | None = None
+    credential_handoff_source = "environment"
+    if notion_recover_is_file_ref(credential_ref):
+        token_result = notion_recover_read_file_ref_token(credential_ref)
+        if not token_result.get("ok"):
+            result = notion_recover_blocked_result(
+                plan,
+                str(token_result.get("blocker") or "The local credential file could not be used."),
+            )
+            print_notion_recover_result(result, args.format)
+            return 1
+        credential_ref = archive_services.NOTION_RECOVER_INTERACTIVE_CREDENTIAL_REF
+        env_name = archive_services.notion_env_ref_name(credential_ref)
+        if not env_name:
+            result = notion_recover_blocked_result(plan, "The internal transient credential ref was not available.")
+            print_notion_recover_result(result, args.format)
+            return 1
+        cleanup_env_previous_value = archive_services.os.environ.get(env_name)
+        archive_services.os.environ[env_name] = str(token_result.get("token") or "")
+        cleanup_env_name = env_name
+        credential_handoff_source = "local_file_ref"
     env_name = archive_services.notion_env_ref_name(credential_ref)
     if not env_name:
-        result = notion_recover_blocked_result(plan, "A local env credential ref is required for this first Notion recovery wrapper.")
+        ref_store = archive_services.credential_ref_store(credential_ref) if credential_ref else None
+        if ref_store in {"keyring", "secret", "wallet"}:
+            result = notion_recover_blocked_result(
+                plan,
+                "Vault/keyring credential refs are planned for one-click handoff, but this live wrapper currently supports env refs and file refs only.",
+            )
+        else:
+            result = notion_recover_blocked_result(plan, "A local env or file credential ref is required for this Notion recovery wrapper.")
         print_notion_recover_result(result, args.format)
         return 1
-    if not archive_services.os.environ.get(env_name):
+    if cleanup_env_name is None and not archive_services.os.environ.get(env_name):
         if args.credential_ref and not sys.stdin.isatty():
             result = notion_recover_blocked_result(plan, "The local token value was not available in this process environment.")
             print_notion_recover_result(result, args.format)
@@ -3329,21 +3357,66 @@ def command_notion_recover(args: argparse.Namespace) -> int:
             return 1
         archive_services.os.environ[env_name] = token.strip()
         cleanup_env_name = env_name
+        credential_handoff_source = "hidden_local_prompt"
+    elif cleanup_env_name is None:
+        credential_handoff_source = "environment"
 
     try:
-        result = run_approved_notion_recover(args, plan, credential_ref)
+        result = run_approved_notion_recover(args, plan, credential_ref, credential_handoff_source=credential_handoff_source)
     finally:
         if cleanup_env_name:
-            archive_services.os.environ.pop(cleanup_env_name, None)
+            if cleanup_env_previous_value is None:
+                archive_services.os.environ.pop(cleanup_env_name, None)
+            else:
+                archive_services.os.environ[cleanup_env_name] = cleanup_env_previous_value
 
     print_notion_recover_result(result, args.format)
     return 0 if result.get("ok", True) else 1
+
+
+def notion_recover_is_file_ref(credential_ref: str) -> bool:
+    return str(credential_ref or "").strip().lower().startswith("file:")
+
+
+def notion_recover_read_file_ref_token(credential_ref: str) -> dict[str, Any]:
+    raw_path = str(credential_ref or "").strip()[5:].strip()
+    if not raw_path:
+        return {"ok": False, "blocker": "The file credential ref did not include a local file path."}
+    if any(char in raw_path for char in ["\n", "\r", "\x00"]):
+        return {"ok": False, "blocker": "The file credential ref path was not a single local path."}
+    try:
+        path = Path(raw_path).expanduser()
+        if not path.is_file():
+            return {"ok": False, "blocker": "The local credential file was not found or was not a regular file."}
+        if path.stat().st_size > 65536:
+            return {"ok": False, "blocker": "The local credential file was too large for a token handoff."}
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return {"ok": False, "blocker": "The local credential file could not be read as UTF-8 text."}
+
+    token = notion_recover_extract_notion_token(text)
+    if not token:
+        return {"ok": False, "blocker": "No Notion integration token was found in the local credential file."}
+    return {"ok": True, "token": token}
+
+
+def notion_recover_extract_notion_token(text: str) -> str | None:
+    for pattern in (r"\bntn_[A-Za-z0-9_-]{20,}\b", r"\bsecret_[A-Za-z0-9_-]{20,}\b"):
+        match = re.search(pattern, text or "")
+        if match:
+            return match.group(0)
+    stripped = (text or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]{20,}", stripped):
+        return stripped
+    return None
 
 
 def run_approved_notion_recover(
     args: argparse.Namespace,
     plan: dict[str, Any],
     credential_ref: str,
+    *,
+    credential_handoff_source: str = "environment",
 ) -> dict[str, Any]:
     archive_root = Path(args.archive_root)
     selected_tree_path = str(plan.get("selected_tree_path") or "")
@@ -3454,6 +3527,7 @@ def run_approved_notion_recover(
         approval_reused=approval_reused,
         fetch_result=fetch_result,
         merge_result=merge_result,
+        credential_handoff_source=credential_handoff_source,
     )
 
 
@@ -3490,6 +3564,7 @@ def notion_recover_execution_result(
     approval_reused: bool,
     fetch_result: dict[str, Any],
     merge_result: dict[str, Any],
+    credential_handoff_source: str = "environment",
 ) -> dict[str, Any]:
     fetch_summary = fetch_result.get("fetch_summary") if isinstance(fetch_result.get("fetch_summary"), dict) else {}
     fixture = fetch_result.get("fixture") if isinstance(fetch_result.get("fixture"), dict) else {}
@@ -3518,6 +3593,15 @@ def notion_recover_execution_result(
             "approval_receipt_path_echoed": False,
             "approval_receipt_path_copy_required": False,
             "decision": "approve_once",
+        },
+        "credential_handoff": {
+            "source": credential_handoff_source,
+            "file_ref_supported_now": True,
+            "vault_or_keyring_click_handoff_supported_now": False,
+            "secret_value_returned_to_ai": False,
+            "credential_file_path_echoed": False,
+            "credential_value_echoed": False,
+            "transient_local_injection_only": credential_handoff_source in {"local_file_ref", "hidden_local_prompt"},
         },
         "fetch_summary": {
             "request_count": int(fetch_summary.get("request_count", 0) or 0),
@@ -3566,6 +3650,7 @@ def notion_recover_execution_result(
             "provider_urls_echoed": False,
             "workspace_urls_echoed": False,
             "local_absolute_paths_echoed": False,
+            "credential_file_paths_echoed": False,
             "page_titles_echoed": False,
             "page_bodies_echoed": False,
             "comment_bodies_echoed": False,
@@ -13920,7 +14005,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notion_recover.add_argument(
         "--credential-ref",
-        help="Power-user/testing only. Normally omit this; exact env ref names are not echoed.",
+        help="Optional local credential handoff. Supports env refs and CLI-only file:<path> fallback; exact refs, paths, and values are not echoed.",
     )
     notion_recover.add_argument("--reviewed-by", default="human:local-operator", help="Safe reviewer label for the local approval receipt.")
     notion_recover.add_argument(

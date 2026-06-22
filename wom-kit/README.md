@@ -1329,6 +1329,13 @@ result fixture, and returns the AI handoff sentence for tidying and merging.
 It still does not read page titles, page bodies, comments, media bytes, signed
 file URLs, raw provider responses, or expose exact credential refs, env var
 names, approval receipt paths, tokens, provider URLs, account ids, or emails.
+v0.3.138 adds a CLI-only `file:<path>` fallback to that wrapper for users who
+already have the Notion token in a local text file. The wrapper extracts the
+token locally, passes it through the same approval-gated adapter chain, and
+does not echo the token file path, file name, token value, transient env ref, or
+receipt path. Vault/keyring one-click handoff remains the right long-term
+credential-broker direction, but live vault/keyring reads are still closed until
+a dedicated local adapter exists.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

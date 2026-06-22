@@ -1,6 +1,6 @@
 # Beginner Setup Manual
 
-Status: v0.3.136 beginner setup manual with Notion one-command recovery guidance
+Status: v0.3.138 beginner setup manual with Notion file-ref recovery credential guidance
 Date: 2026-06-22
 
 This document is the beginner-facing bridge between recommendations and actual
@@ -337,11 +337,25 @@ archive beginner-setup-manual <archive-root> \
 
 This topic exists because the live Notion structure fetch adapter is useful only
 when the human can understand and approve the human-operated step. v0.3.136 adds
-the beginner-facing wrapper for that step:
+the beginner-facing wrapper for that step, and v0.3.138 adds a local
+`file:<path>` credential fallback so a user with an existing token file does not
+need to paste a token or build an environment-variable command:
 
 ```bash
 archive notion-recover <archive-root>
 ```
+
+If the token is already in a local text file, a short fallback is:
+
+```bash
+archive notion-recover <archive-root> --credential-ref file:<local-token-file>
+```
+
+Use that file ref as a local bridge only. The recommended long-term home for
+the token is a password vault or OS keyring entry with a safe label such as
+`Notion API - backup workspace`. Current WOM output does not echo the file path,
+file name, or token value; live vault/keyring one-click reads are still a future
+adapter boundary, not an implemented provider call.
 
 For a no-write preview:
 
@@ -375,7 +389,8 @@ The guided flow is:
 preview archive notion-recover
 -> run archive notion-recover
 -> confirm the local prompt
--> paste the token only into the hidden local terminal prompt if asked
+-> use a local file:<path> ref or existing local process value if available
+-> paste the token only into the hidden local terminal prompt if no safer local handoff exists
 -> let WOM chain approval, fetch, and sanitized merge preview internally
 -> ask AI to tidy and merge the recovered locations
 ```
@@ -388,6 +403,7 @@ The guide still keeps the v0.3.134 actor boundary:
 - Notion page titles, page bodies, comments, media bytes, signed file URLs, raw
   provider responses, token values, exact credential refs, account emails, and
   provider URLs are not returned,
+- local credential file paths and filenames are not returned,
 - the user does not copy approval receipt paths between commands.
 
 Stop if the preview asks for a broader scope than the human reviewed, if any

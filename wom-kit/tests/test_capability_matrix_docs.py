@@ -1645,16 +1645,23 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
-        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.136.md").read_text(encoding="utf-8")
+        release_text = (
+            (KIT_ROOT / "docs" / "releases" / "v0.3.138.md").read_text(encoding="utf-8")
+            + "\n"
+            + (KIT_ROOT / "docs" / "releases" / "v0.3.136.md").read_text(encoding="utf-8")
+        )
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.136 beginner-friendly one-command local Notion location recovery",
+            "Status: v0.3.138 beginner-friendly one-command local Notion location recovery with file-ref credential fallback",
             "archive notion-recover",
             "auto-selects the reviewed Notion tree fixture",
+            "file:<path>",
             "hidden local terminal prompt",
+            "Vault/keyring refs",
             "choose a page id",
             "create or name an environment variable",
             "copy an approval receipt path",
+            "echo the local token-file path",
             "read page titles",
             "read page bodies",
             "download media bytes",
@@ -1666,13 +1673,16 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Notion recover",
             "approval-gated write",
             "archive notion-recover",
+            "file:<path>",
             "hidden local terminal prompt",
+            "live vault/keyring reads are not implemented",
             "does not require beginners to choose a page id",
             "echo approval receipt paths",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         self.assertIn("archive notion-recover", manual_text)
+        self.assertIn("file:<path>", manual_text)
         self.assertIn("hidden local terminal prompt", manual_text)
         self.assertIn("[Notion Recover](wom-kit/docs/notion-recover.md)", readme_text)
         self.assertIn("[Notion Recover](wom-kit/docs/notion-recover.md)", readme_ko_text)
@@ -1680,8 +1690,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("[Notion Recover](notion-recover.md)", public_map_text)
         self.assertIn("[Notion Recover](notion-recover.md)", public_map_ko_text)
         for phrase in (
+            "# v0.3.138 - Notion Recover File-Ref Credential Handoff",
             "# v0.3.136 - Notion Recover One-Command Wrapper",
             "archive notion-recover",
+            "file:<path>",
             "approval->fetch->merge-preview",
         ):
             with self.subTest(phrase=phrase):
@@ -4173,7 +4185,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.136 beginner setup manual with Notion one-command recovery guidance",
+            "Status: v0.3.138 beginner setup manual with Notion file-ref recovery credential guidance",
             "archive beginner-setup-manual",
             "archive notion-recover",
             "first-use-setup-manual",
@@ -4201,7 +4213,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "does not execute the tools",
             "folder, shelf, upper page, and item location",
             "ask Notion again for the missing location links",
+            "file:<path>",
             "hidden local terminal prompt",
+            "live vault/keyring one-click reads are still a future",
             "ask AI to tidy and merge the recovered locations",
             "The AI does not receive your Notion token.",
             "run Notion location fetches",
