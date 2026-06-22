@@ -50,6 +50,7 @@ NOTION_NESTED_TREE_PLAN_PATH = KIT_ROOT / "docs" / "notion-nested-tree-plan.md"
 NOTION_ANCESTOR_CRAWL_PLAN_PATH = KIT_ROOT / "docs" / "notion-ancestor-crawl-plan.md"
 NOTION_ANCESTOR_FETCH_ADAPTER_EXECUTION_CONTRACT_PATH = KIT_ROOT / "docs" / "notion-ancestor-fetch-adapter-execution-contract.md"
 NOTION_ANCESTOR_FETCH_ADAPTER_RUN_PATH = KIT_ROOT / "docs" / "notion-ancestor-fetch-adapter-run.md"
+NOTION_RECOVER_PATH = KIT_ROOT / "docs" / "notion-recover.md"
 NOTION_MEDIA_FETCH_ADAPTER_EXECUTION_CONTRACT_PATH = KIT_ROOT / "docs" / "notion-media-fetch-adapter-execution-contract.md"
 NOTION_MEDIA_RESULT_VERIFICATION_PLAN_PATH = KIT_ROOT / "docs" / "notion-media-result-verification-plan.md"
 NOTION_BLOCK_MIRROR_TREE_FIXTURE_PLAN_PATH = KIT_ROOT / "docs" / "notion-block-mirror-tree-fixture-plan.md"
@@ -1553,6 +1554,57 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "env:",
             "Notion API",
             "no MCP live provider-call tool",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(phrase in release_text or phrase in changelog_text)
+
+    def test_notion_recover_doc_and_matrix_explain_one_command_wrapper(self) -> None:
+        text = NOTION_RECOVER_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        manual_text = BEGINNER_SETUP_MANUAL_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.136.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.136 beginner-friendly one-command local Notion location recovery",
+            "archive notion-recover",
+            "auto-selects the reviewed Notion tree fixture",
+            "hidden local terminal prompt",
+            "choose a page id",
+            "create or name an environment variable",
+            "copy an approval receipt path",
+            "read page titles",
+            "read page bodies",
+            "download media bytes",
+            "Power-user commands",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+        for phrase in (
+            "Notion recover",
+            "approval-gated write",
+            "archive notion-recover",
+            "hidden local terminal prompt",
+            "does not require beginners to choose a page id",
+            "echo approval receipt paths",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        self.assertIn("archive notion-recover", manual_text)
+        self.assertIn("hidden local terminal prompt", manual_text)
+        self.assertIn("[Notion Recover](wom-kit/docs/notion-recover.md)", readme_text)
+        self.assertIn("[Notion Recover](wom-kit/docs/notion-recover.md)", readme_ko_text)
+        self.assertIn("docs/notion-recover.md", kit_readme_text)
+        self.assertIn("[Notion Recover](notion-recover.md)", public_map_text)
+        self.assertIn("[Notion Recover](notion-recover.md)", public_map_ko_text)
+        for phrase in (
+            "# v0.3.136 - Notion Recover One-Command Wrapper",
+            "archive notion-recover",
+            "approval->fetch->merge-preview",
         ):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in release_text or phrase in changelog_text)
@@ -4043,8 +4095,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.135 read-only beginner setup manual with Notion recovery guidance",
+            "Status: v0.3.136 beginner setup manual with Notion one-command recovery guidance",
             "archive beginner-setup-manual",
+            "archive notion-recover",
             "first-use-setup-manual",
             "setup-manual",
             "first_secret_and_text_tools",
@@ -4070,7 +4123,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "does not execute the tools",
             "folder, shelf, upper page, and item location",
             "ask Notion again for the missing location links",
-            "notion-ancestor-fetch-adapter-run --approve",
+            "hidden local terminal prompt",
+            "ask AI to tidy and merge the recovered locations",
             "The AI does not receive your Notion token.",
             "run Notion location fetches",
             "It is a human setup guide and command checklist",
@@ -4088,6 +4142,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("--topic object_storage_setup_manual", matrix_text)
         self.assertIn("--topic notion_nested_recovery", matrix_text)
         self.assertIn("Notion nested recovery human-step guidance", matrix_text)
+        self.assertIn("Notion recover", matrix_text)
+        self.assertIn("archive notion-recover", matrix_text)
         self.assertIn("writes no approval receipts", matrix_text)
         self.assertIn("runs no Notion location fetches", matrix_text)
         self.assertIn("Cloudflare R2 bucket/API-token screen guidance", matrix_text)

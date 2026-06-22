@@ -75,6 +75,8 @@ Commands:
           Preview the read-only execution contract for a future Notion ancestor fetch adapter.
   notion-ancestor-fetch-adapter-run
           Run the approval-gated local Notion ancestor structure fetch adapter.
+  notion-recover
+          Run the beginner-friendly one-command Notion missing-location recovery wrapper.
   notion-media-fetch-adapter-execution-contract
           Preview the read-only execution contract for a future Notion media byte fetch adapter.
   notion-media-result-verification-plan
@@ -265,6 +267,7 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import getpass
 import hashlib
 import json
 import os
@@ -3257,6 +3260,380 @@ def command_notion_ancestor_fetch_adapter_run(args: argparse.Namespace) -> int:
             for warning in result["warnings"]:
                 print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
+
+
+def command_notion_recover(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        print("Choose at most one mode: --dry-run or --approve.", file=sys.stderr)
+        return 1
+
+    interactive_execution = not args.dry_run and not args.approve
+    try:
+        plan = archive_services.notion_recover_plan(
+            Path(args.archive_root),
+            tree_path=args.tree,
+            output_path=args.output,
+            source=args.source,
+            dry_run=True,
+            max_items=args.max_items,
+            max_depth=args.max_depth,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.dry_run or not plan.get("ok") or plan.get("recover_state") == "no_missing_locations":
+        print_notion_recover_result(plan, args.format)
+        return 0 if plan.get("ok", True) else 1
+
+    if interactive_execution and not sys.stdin.isatty():
+        result = notion_recover_blocked_result(
+            plan,
+            "archive notion-recover needs an interactive terminal for local confirmation; use --dry-run to preview or --approve --yes for automation.",
+        )
+        print_notion_recover_result(result, args.format)
+        return 1
+
+    if not args.yes:
+        print_notion_recover_confirmation(plan)
+        answer = input("Proceed with this local Notion location check? (y/N): ").strip().lower()
+        if answer not in {"y", "yes", "예", "네"}:
+            result = notion_recover_blocked_result(plan, "Human cancelled before any secret read, provider call, or file write.")
+            result["recover_state"] = "cancelled_by_human"
+            print_notion_recover_result(result, args.format)
+            return 1
+
+    credential_ref = args.credential_ref or archive_services.NOTION_RECOVER_INTERACTIVE_CREDENTIAL_REF
+    cleanup_env_name = None
+    env_name = archive_services.notion_env_ref_name(credential_ref)
+    if not env_name:
+        result = notion_recover_blocked_result(plan, "A local env credential ref is required for this first Notion recovery wrapper.")
+        print_notion_recover_result(result, args.format)
+        return 1
+    if not archive_services.os.environ.get(env_name):
+        if args.credential_ref and not sys.stdin.isatty():
+            result = notion_recover_blocked_result(plan, "The local token value was not available in this process environment.")
+            print_notion_recover_result(result, args.format)
+            return 1
+        if not sys.stdin.isatty():
+            result = notion_recover_blocked_result(
+                plan,
+                "A hidden local token prompt needs an interactive terminal; no token was read.",
+            )
+            print_notion_recover_result(result, args.format)
+            return 1
+        token = getpass.getpass("Paste Notion integration token (hidden; not echoed): ")
+        if not token.strip():
+            result = notion_recover_blocked_result(plan, "No token was entered; no provider call was made.")
+            print_notion_recover_result(result, args.format)
+            return 1
+        archive_services.os.environ[env_name] = token.strip()
+        cleanup_env_name = env_name
+
+    try:
+        result = run_approved_notion_recover(args, plan, credential_ref)
+    finally:
+        if cleanup_env_name:
+            archive_services.os.environ.pop(cleanup_env_name, None)
+
+    print_notion_recover_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def run_approved_notion_recover(
+    args: argparse.Namespace,
+    plan: dict[str, Any],
+    credential_ref: str,
+) -> dict[str, Any]:
+    archive_root = Path(args.archive_root)
+    selected_tree_path = str(plan.get("selected_tree_path") or "")
+    request_count = int(plan.get("auto_scope_summary", {}).get("location_request_count", 0) or 0)
+    if not selected_tree_path:
+        return notion_recover_blocked_result(plan, "No selected Notion tree fixture was available.")
+    if request_count <= 0:
+        result = dict(plan)
+        result["recover_state"] = "no_missing_locations"
+        return result
+
+    approval_preview = archive_services.credential_access_approval_plan(
+        archive_root,
+        credential_id="cred:notion-readonly",
+        credential_ref=credential_ref,
+        credential_kind="provider_api_key",
+        provider="notion",
+        action_kind="cli_token_auth",
+        decision="approve_once",
+        store_kind="environment",
+        consumer="wom:adapter:notion-ancestor-fetch",
+        reviewed_by=args.reviewed_by,
+        dry_run=True,
+        approve=False,
+    )
+    if not approval_preview.get("ok"):
+        return notion_recover_blocked_result(
+            plan,
+            "The one-time local approval preview was blocked.",
+            nested_blockers=approval_preview.get("blockers", []),
+        )
+
+    approval_receipt = str(approval_preview.get("proposed_receipt_path") or "")
+    approval_written = False
+    approval_reused = bool(approval_preview.get("receipt_exists"))
+    if not approval_reused:
+        approval_result = archive_services.credential_access_approval_plan(
+            archive_root,
+            credential_id="cred:notion-readonly",
+            credential_ref=credential_ref,
+            credential_kind="provider_api_key",
+            provider="notion",
+            action_kind="cli_token_auth",
+            decision="approve_once",
+            store_kind="environment",
+            consumer="wom:adapter:notion-ancestor-fetch",
+            reviewed_by=args.reviewed_by,
+            dry_run=False,
+            approve=True,
+        )
+        if not approval_result.get("ok"):
+            return notion_recover_blocked_result(
+                plan,
+                "The one-time local approval receipt could not be written.",
+                nested_blockers=approval_result.get("blockers", []),
+            )
+        approval_receipt = str(approval_result.get("receipt_path") or approval_receipt)
+        approval_written = True
+
+    fetch_result = archive_services.notion_ancestor_fetch_adapter_run(
+        archive_root,
+        tree_path=selected_tree_path,
+        output_path=args.output,
+        source=args.source,
+        credential_id="cred:notion-readonly",
+        credential_ref=credential_ref,
+        credential_kind="provider_api_key",
+        credential_provider="notion",
+        store_kind="environment",
+        adapter_kind="environment_injection",
+        approval_decision="approve_once",
+        approval_receipt=approval_receipt,
+        consumer="wom:adapter:notion-ancestor-fetch",
+        reviewed_by=args.reviewed_by,
+        platform=args.platform,
+        notion_version=args.notion_version,
+        timeout_seconds=args.timeout_seconds,
+        dry_run=False,
+        approve=True,
+        max_items=args.max_items,
+        max_depth=args.max_depth,
+    )
+    if not fetch_result.get("ok"):
+        return notion_recover_execution_result(
+            plan,
+            approval_written=approval_written,
+            approval_reused=approval_reused,
+            fetch_result=fetch_result,
+            merge_result={},
+        )
+
+    fixture = fetch_result.get("fixture") if isinstance(fetch_result.get("fixture"), dict) else {}
+    output_path = str(fixture.get("output_path") or args.output)
+    merge_result: dict[str, Any] = {}
+    if output_path:
+        merge_result = archive_services.notion_ancestor_merge_plan(
+            archive_root,
+            tree_path=selected_tree_path,
+            ancestors_path=output_path,
+            source=args.source,
+            dry_run=True,
+            max_items=100000,
+        )
+
+    return notion_recover_execution_result(
+        plan,
+        approval_written=approval_written,
+        approval_reused=approval_reused,
+        fetch_result=fetch_result,
+        merge_result=merge_result,
+    )
+
+
+def notion_recover_blocked_result(
+    plan: dict[str, Any],
+    blocker: str,
+    *,
+    nested_blockers: list[Any] | None = None,
+) -> dict[str, Any]:
+    result = dict(plan)
+    blockers = list(result.get("blockers") or [])
+    blockers.append(blocker)
+    blockers.extend(str(item) for item in (nested_blockers or []))
+    result["ok"] = False
+    result["recover_state"] = "blocked"
+    result["blockers"] = archive_services.unique_preserve_order(blockers)
+    closed = dict(result.get("closed_actions") or {})
+    closed.update(
+        {
+            "provider_api_called": False,
+            "notion_location_fetch_executed": False,
+            "notion_ancestor_result_fixture_written": False,
+            "files_written": False,
+        }
+    )
+    result["closed_actions"] = closed
+    return result
+
+
+def notion_recover_execution_result(
+    plan: dict[str, Any],
+    *,
+    approval_written: bool,
+    approval_reused: bool,
+    fetch_result: dict[str, Any],
+    merge_result: dict[str, Any],
+) -> dict[str, Any]:
+    fetch_summary = fetch_result.get("fetch_summary") if isinstance(fetch_result.get("fetch_summary"), dict) else {}
+    fixture = fetch_result.get("fixture") if isinstance(fetch_result.get("fixture"), dict) else {}
+    merge_summary = merge_result.get("merge_summary") if isinstance(merge_result.get("merge_summary"), dict) else {}
+    after_merge = merge_result.get("nested_tree_plan_after_merge") if isinstance(merge_result.get("nested_tree_plan_after_merge"), dict) else {}
+    after_recovery = after_merge.get("recovery_summary") if isinstance(after_merge.get("recovery_summary"), dict) else {}
+    fetch_ok = bool(fetch_result.get("ok"))
+    merge_ok = bool(merge_result.get("ok", True)) if merge_result else True
+    files_written_count = len(fetch_result.get("files_written") or []) + (1 if approval_written else 0)
+    result = {
+        "ok": fetch_ok and merge_ok,
+        "dry_run": False,
+        "approved": True,
+        "lifecycle_action": "notion_recover",
+        "mode": "single_command_interactive_wrapper",
+        "archive_id": plan.get("archive_id"),
+        "recover_state": "succeeded" if fetch_ok and merge_ok else "blocked_after_partial_execution",
+        "source": plan.get("source"),
+        "selected_tree_path": plan.get("selected_tree_path"),
+        "selected_tree_path_kind": plan.get("selected_tree_path_kind"),
+        "auto_scope_summary": plan.get("auto_scope_summary", {}),
+        "approval_summary": {
+            "approval_required_before_provider_call": True,
+            "approval_receipt_written": approval_written,
+            "approval_receipt_reused": approval_reused,
+            "approval_receipt_path_echoed": False,
+            "approval_receipt_path_copy_required": False,
+            "decision": "approve_once",
+        },
+        "fetch_summary": {
+            "request_count": int(fetch_summary.get("request_count", 0) or 0),
+            "fetched_location_count": int(fetch_summary.get("fetched_node_count", 0) or 0),
+            "partial_request_count": int(fetch_summary.get("partial_request_count", 0) or 0),
+            "failed_request_count": int(fetch_summary.get("failed_request_count", 0) or 0),
+            "page_titles_returned": False,
+            "page_bodies_returned": False,
+            "media_bytes_returned": False,
+        },
+        "result_handoff": {
+            "sanitized_output_path": fixture.get("output_path"),
+            "sanitized_output_path_kind": fixture.get("output_path_kind"),
+            "merge_plan_previewed": bool(merge_result),
+            "merge_plan_state": merge_result.get("plan_state") if merge_result else None,
+            "merged_added_location_count": int(merge_summary.get("added_node_count", 0) or 0),
+            "remaining_missing_location_count_after_merge_preview": int(after_recovery.get("hold_leaf_count", 0) or 0)
+            if after_recovery
+            else None,
+            "merge_writer_implemented": False,
+            "say_to_ai_after_success": "Please tidy and merge the recovered Notion locations into the reviewed list.",
+        },
+        "current_capability": plan.get("current_capability", {}),
+        "closed_actions": {
+            "provider_api_called": bool(fetch_result.get("closed_actions", {}).get("provider_api_called")),
+            "notion_connection_opened": bool(fetch_result.get("closed_actions", {}).get("notion_connection_opened")),
+            "secret_value_read": bool(fetch_result.get("closed_actions", {}).get("secret_value_read")),
+            "environment_read": bool(fetch_result.get("closed_actions", {}).get("environment_read")),
+            "approval_receipt_written": approval_written,
+            "notion_location_fetch_executed": bool(fetch_result.get("closed_actions", {}).get("live_adapter_executed")),
+            "notion_ancestor_result_fixture_written": bool(
+                fetch_result.get("closed_actions", {}).get("ancestor_result_fixture_written")
+            ),
+            "merge_plan_executed": bool(merge_result),
+            "zettels_written": False,
+            "edges_written": False,
+            "media_downloaded": False,
+            "files_written": files_written_count > 0,
+        },
+        "privacy_guards": {
+            "credential_ref_echoed": False,
+            "credential_values_echoed": False,
+            "env_var_names_echoed": False,
+            "approval_receipt_path_echoed": False,
+            "raw_provider_refs_echoed": False,
+            "provider_urls_echoed": False,
+            "workspace_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "page_titles_echoed": False,
+            "page_bodies_echoed": False,
+            "comment_bodies_echoed": False,
+            "media_bytes_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "tokens_echoed": False,
+            "secret_values_echoed": False,
+            "writes": files_written_count > 0,
+        },
+        "files_written_count": files_written_count,
+        "receipt_paths_echoed": False,
+        "next_safe_actions": [
+            "Ask AI to tidy and merge the recovered Notion locations into the reviewed list.",
+            "Rerun archive notion-recover only if the merge preview still shows missing locations.",
+            "Keep page body and media byte recovery behind their separate approval gates.",
+        ],
+        "warnings": archive_services.unique_preserve_order(
+            [*list(plan.get("warnings") or []), *list(fetch_result.get("warnings") or []), *list(merge_result.get("warnings") or [])]
+        ),
+        "blockers": archive_services.unique_preserve_order(
+            [*list(fetch_result.get("blockers") or []), *list(merge_result.get("blockers") or [])]
+        ),
+    }
+    if result["blockers"]:
+        result["ok"] = False
+        result["recover_state"] = "blocked_after_partial_execution" if files_written_count else "blocked"
+    return result
+
+
+def print_notion_recover_confirmation(result: dict[str, Any]) -> None:
+    scope = result.get("auto_scope_summary") if isinstance(result.get("auto_scope_summary"), dict) else {}
+    print("Notion recovery is ready.")
+    print(f"Location checks: {scope.get('location_request_count', 0)}")
+    print(f"Items affected: {scope.get('affected_item_count', 0)}")
+    print("Reads: folder/shelf/location links only.")
+    print("Does not read: page titles, page bodies, comments, or media.")
+    print("Your token stays in the local terminal. The AI does not receive it.")
+
+
+def print_notion_recover_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    scope = result.get("auto_scope_summary") if isinstance(result.get("auto_scope_summary"), dict) else {}
+    fetch = result.get("fetch_summary") if isinstance(result.get("fetch_summary"), dict) else {}
+    handoff = result.get("result_handoff") if isinstance(result.get("result_handoff"), dict) else {}
+    print(f"Notion recovery: {result.get('recover_state') or '-'}")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Tree: {result.get('selected_tree_path') or '-'}")
+    print(f"Location checks: {scope.get('location_request_count', 0)}")
+    print(f"Items affected: {scope.get('affected_item_count', 0)}")
+    if fetch:
+        print(f"Recovered locations: {fetch.get('fetched_location_count', 0)}")
+        print(f"Failed checks: {fetch.get('failed_request_count', 0)}")
+    print("Reads: folder/shelf/location links only")
+    print("Does not read: page titles, page bodies, comments, or media")
+    if handoff.get("sanitized_output_path"):
+        print(f"Sanitized result: {handoff.get('sanitized_output_path')}")
+    print("Next: ask AI to tidy and merge the recovered Notion locations.")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
 
 
 def command_notion_media_fetch_adapter_execution_contract(args: argparse.Namespace) -> int:
@@ -13449,6 +13826,79 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notion_ancestor_fetch_run.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     notion_ancestor_fetch_run.set_defaults(func=command_notion_ancestor_fetch_adapter_run)
+
+    notion_recover = subcommands.add_parser(
+        "notion-recover",
+        aliases=["notion-location-recover", "notion-recovery"],
+        help="Beginner-friendly one-command Notion missing-location recovery wrapper.",
+    )
+    notion_recover.add_argument(
+        "archive_root",
+        nargs="?",
+        default=".",
+        help="Archive root to update. Defaults to the current directory so `archive notion-recover` works from an archive root.",
+    )
+    notion_recover.add_argument(
+        "--tree",
+        help="Optional archive-relative sanitized nested-tree fixture. Usually omitted; WOM auto-selects the one missing-location fixture.",
+    )
+    notion_recover.add_argument(
+        "--output",
+        default=archive_services.NOTION_RECOVER_DEFAULT_OUTPUT_PATH,
+        help="Archive-relative sanitized ancestor result fixture path under workbench/. Existing files are not overwritten.",
+    )
+    notion_recover.add_argument(
+        "--source",
+        default="notion",
+        choices=sorted(archive_services.NOTION_NESTED_TREE_SOURCES),
+        help="External nested tree source declared by the fixture.",
+    )
+    notion_recover.add_argument(
+        "--credential-ref",
+        help="Power-user/testing only. Normally omit this; exact env ref names are not echoed.",
+    )
+    notion_recover.add_argument("--reviewed-by", default="human:local-operator", help="Safe reviewer label for the local approval receipt.")
+    notion_recover.add_argument(
+        "--platform",
+        default="windows",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        help="Credential platform policy label.",
+    )
+    notion_recover.add_argument(
+        "--notion-version",
+        default=archive_services.NOTION_API_DEFAULT_VERSION,
+        help="Notion API version header. Defaults to the conservative stable version.",
+    )
+    notion_recover.add_argument("--timeout-seconds", type=int, default=30, help="Provider request timeout, 1-120 seconds.")
+    notion_recover.add_argument(
+        "--max-items",
+        type=int,
+        default=1000,
+        help="Maximum fixture nodes to parse while deriving missing ancestor requests. Oversized fixtures block.",
+    )
+    notion_recover.add_argument(
+        "--max-depth",
+        type=int,
+        default=16,
+        help="Maximum parent-chain crawl depth per missing ancestor. Range 1-64.",
+    )
+    notion_recover.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview the one-command recovery without reading environment variables, calling Notion, or writing files.",
+    )
+    notion_recover.add_argument(
+        "--approve",
+        action="store_true",
+        help="Run the one-command local recovery wrapper. Without --yes, an interactive terminal confirmation is required.",
+    )
+    notion_recover.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt for local automation. Secrets are still never echoed.",
+    )
+    notion_recover.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    notion_recover.set_defaults(func=command_notion_recover)
 
     notion_media_fetch_contract = subcommands.add_parser(
         "notion-media-fetch-adapter-execution-contract",

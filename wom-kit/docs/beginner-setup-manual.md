@@ -1,6 +1,6 @@
 # Beginner Setup Manual
 
-Status: v0.3.135 read-only beginner setup manual with Notion recovery guidance
+Status: v0.3.136 beginner setup manual with Notion one-command recovery guidance
 Date: 2026-06-22
 
 This document is the beginner-facing bridge between recommendations and actual
@@ -336,7 +336,18 @@ archive beginner-setup-manual <archive-root> \
 ```
 
 This topic exists because the live Notion structure fetch adapter is useful only
-when the human can understand and approve the human-operated step.
+when the human can understand and approve the human-operated step. v0.3.136 adds
+the beginner-facing wrapper for that step:
+
+```bash
+archive notion-recover <archive-root>
+```
+
+For a no-write preview:
+
+```bash
+archive notion-recover <archive-root> --dry-run --format json
+```
 
 The guide uses plain user language before internal terms:
 
@@ -361,28 +372,28 @@ You approve one local run, then the AI can review the sanitized result list.
 The guided flow is:
 
 ```text
-review the missing-location scope
--> put the Notion token into a private local environment variable outside chat
--> preview a one-time credential approval receipt
--> write that one-time approval receipt after human review
--> preview the live structure fetch with that receipt
--> run the approved local structure fetch
--> hand the sanitized result fixture to notion-ancestor-merge-plan
+preview archive notion-recover
+-> run archive notion-recover
+-> confirm the local prompt
+-> paste the token only into the hidden local terminal prompt if asked
+-> let WOM chain approval, fetch, and sanitized merge preview internally
+-> ask AI to tidy and merge the recovered locations
 ```
 
 The guide still keeps the v0.3.134 actor boundary:
 
 - the human approves one local run,
-- the local CLI reads the approved env ref during the approved run,
+- the local CLI reads the approved local token value during the approved run,
 - the AI receives only sanitized result metadata,
 - Notion page titles, page bodies, comments, media bytes, signed file URLs, raw
-  provider responses, token values, exact env var names, account emails, and
-  provider URLs are not returned.
+  provider responses, token values, exact credential refs, account emails, and
+  provider URLs are not returned,
+- the user does not copy approval receipt paths between commands.
 
-Stop if the preview asks for a broader scope than the human reviewed, if the
-approval is not `approve_once`, if any command would read titles/bodies/comments
-or media, if a token is requested in chat or in a tracked repository file, or if
-the output path is outside `workbench/`.
+Stop if the preview asks for a broader scope than the human reviewed, if any
+command would read titles/bodies/comments or media, if a token is requested in
+chat or in a tracked repository file, or if the output path is outside
+`workbench/`.
 
 ## Related Dry-Run Chain
 
@@ -421,14 +432,14 @@ object-storage-recommendation
 Notion nested recovery:
 
 ```text
-notion-ancestor-crawl-plan
--> beginner-setup-manual --topic notion_nested_recovery
--> credential-access-approval --dry-run
--> credential-access-approval --approve
--> notion-ancestor-fetch-adapter-run --dry-run
--> notion-ancestor-fetch-adapter-run --approve
--> notion-ancestor-merge-plan --dry-run
+beginner-setup-manual --topic notion_nested_recovery
+-> notion-recover --dry-run
+-> notion-recover
+-> ask AI to tidy and merge the recovered locations
 ```
+
+Power users can still use the lower-level crawl, credential approval, live fetch,
+and merge-plan commands when automation needs explicit pieces.
 
 ## Closed Actions
 

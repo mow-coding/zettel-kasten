@@ -95,6 +95,7 @@ docs/notion-nested-tree-plan.md
 docs/notion-ancestor-crawl-plan.md
 docs/notion-ancestor-fetch-adapter-execution-contract.md
 docs/notion-ancestor-fetch-adapter-run.md
+docs/notion-recover.md
 docs/notion-media-fetch-adapter-execution-contract.md
 docs/notion-media-result-verification-plan.md
 docs/notion-block-mirror-tree-fixture-plan.md
@@ -1312,6 +1313,16 @@ Notion run, and shows the scoped review -> one-time approval -> live structure
 fetch preview/run -> merge-plan handoff chain without reading secrets, calling
 providers, writing approval receipts, running the fetch, or echoing exact env
 var names.
+v0.3.136 adds the beginner-facing wrapper for the same recovery path:
+`archive notion-recover`.
+It auto-selects the reviewed missing-location queue, asks for local
+confirmation, accepts the token only through a hidden local terminal prompt or
+an already available local process value, writes the one-time approval receipt
+internally, runs the approved location fetch, writes the sanitized ancestor
+result fixture, and returns the AI handoff sentence for tidying and merging.
+It still does not read page titles, page bodies, comments, media bytes, signed
+file URLs, raw provider responses, or expose exact credential refs, env var
+names, approval receipt paths, tokens, provider URLs, account ids, or emails.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 
