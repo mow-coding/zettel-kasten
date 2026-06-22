@@ -238,7 +238,7 @@ notion-ancestor-crawl-plan
   Plan missing Notion ancestor crawl requests from a sanitized nested tree fixture. Dry-run only; groups missing parent records and rootless leaves into a crawl_request_queue for a future credential-bounded adapter, supports generation/root/ancestor/leaf scope filters for broad workspace queues, and never calls providers, reads real exports, page titles, page bodies, comments, downloads media, merges fixtures, writes zets, mints pages, writes edges, writes receipts, or echoes provider URLs or local paths.
 
 notion-ancestor-fetch-adapter-execution-contract
-  Preview the read-only execution contract a future credential-bounded Notion ancestor fetch adapter must satisfy. Dry-run only; reuses the scoped crawl request planner, defines sanitized input/output fields, reports credential ref presence without echoing exact refs, and never calls providers, retrieves secrets, reads page titles or bodies, downloads media, writes fixtures, writes receipts, writes zets, or writes edges.
+  Preview the read-only execution and actor contract a future credential-bounded Notion ancestor fetch adapter must satisfy. Dry-run only; reuses the scoped crawl request planner, defines sanitized input/output fields, clarifies that the future live fetch subject is a WOM local credential-bounded adapter process rather than the AI chat runtime, treats client-supplied ancestor fixtures as sanitized safe-origin fallback input rather than required hand-rolled provider crawling, reports credential ref presence without echoing exact refs, and never calls providers, retrieves secrets, reads page titles or bodies, downloads media, writes fixtures, writes receipts, writes zets, or writes edges.
 
 notion-block-mirror-tree-fixture-plan
   Build a sanitized nested tree fixture preview from reviewed Notion block mirror metadata. Dry-run only; derives safe refs and content classes from structural metadata, runs a nested-tree plan preview, and never calls providers, reads page titles or bodies, writes fixtures, writes zets, writes edges, or echoes provider URLs or local paths.
@@ -1266,6 +1266,12 @@ output contract, credential approval boundary, and next merge/replan command. It
 still calls no providers, retrieves no secrets, starts no OAuth, reads no titles
 or bodies, writes no fixture files, mints no zets, writes no edges, and writes
 no receipts.
+v0.3.131 clarifies that contract's live fetch execution subject. The intended
+future executor is a WOM local credential-bounded adapter process after human
+scope review and credential approval, not the AI chat runtime. Client-supplied
+ancestor fixtures remain accepted as sanitized safe-origin fallback input, but
+the contract does not require clients or client-side AI to hand-roll provider
+crawling.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

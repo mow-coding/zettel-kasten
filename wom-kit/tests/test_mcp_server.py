@@ -2480,6 +2480,17 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(structured["contract_state"], "fetch_contract_ready")
                 self.assertEqual(structured["crawl_request_summary"]["crawl_request_count"], 1)
                 self.assertFalse(structured["execution_contract"]["live_execution_allowed_now"])
+                self.assertEqual(
+                    structured["execution_actor_contract"]["current_live_fetch_execution_subject"],
+                    "none_contract_preview_only",
+                )
+                self.assertEqual(
+                    structured["execution_actor_contract"]["intended_live_fetch_execution_subject"],
+                    "future_wom_local_credential_bounded_adapter_process",
+                )
+                self.assertFalse(structured["execution_actor_contract"]["client_hand_rolled_provider_crawl_required"])
+                self.assertFalse(structured["execution_actor_contract"]["ai_hand_rolled_provider_crawl_allowed"])
+                self.assertFalse(structured["execution_actor_contract"]["credential_values_may_enter_ai_context"])
                 self.assertFalse(structured["current_capability"]["live_notion_fetch_adapter_implemented"])
                 self.assertFalse(structured["closed_actions"]["provider_api_called"])
                 self.assertFalse(structured["closed_actions"]["credential_value_read"])

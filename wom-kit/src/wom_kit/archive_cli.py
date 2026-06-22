@@ -3232,6 +3232,7 @@ def print_notion_ancestor_fetch_adapter_execution_contract_result(result: dict[s
         return
     summary = result.get("crawl_request_summary") if isinstance(result.get("crawl_request_summary"), dict) else {}
     credential = result.get("credential_summary") if isinstance(result.get("credential_summary"), dict) else {}
+    actor = result.get("execution_actor_contract") if isinstance(result.get("execution_actor_contract"), dict) else {}
     print(f"Notion ancestor fetch adapter execution contract: {result.get('contract_state') or '-'}")
     print(f"Archive: {result.get('archive_id') or '-'}")
     print(f"Source: {result.get('source') or '-'}")
@@ -3241,6 +3242,10 @@ def print_notion_ancestor_fetch_adapter_execution_contract_result(result: dict[s
     print(f"Scope filter: {'active' if summary.get('scope_filter_active') else 'inactive'}")
     print(f"Credential ref supplied: {credential.get('credential_ref_supplied', False)}")
     print("Live execution allowed now: no")
+    print(f"Current execution subject: {actor.get('current_live_fetch_execution_subject') or 'none_contract_preview_only'}")
+    print(f"Intended future execution subject: {actor.get('intended_live_fetch_execution_subject') or 'future_wom_local_credential_bounded_adapter_process'}")
+    print("Client hand-rolled provider crawl required: no")
+    print("AI hand-rolled provider crawl allowed: no")
     print("Provider API called: no")
     print("Writes: none")
     if result.get("blockers"):
