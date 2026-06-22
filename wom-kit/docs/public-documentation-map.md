@@ -155,6 +155,7 @@ Onboarding and setup plans:
 - [Notion Ancestor Crawl Plan](notion-ancestor-crawl-plan.md)
 - [Notion Ancestor Fetch Adapter Execution Contract](notion-ancestor-fetch-adapter-execution-contract.md)
 - [Notion Ancestor Fetch Adapter Run](notion-ancestor-fetch-adapter-run.md)
+- [Notion Connection Plan](notion-connection-plan.md)
 - [Notion Recover](notion-recover.md)
 - [Notion Media Fetch Adapter Execution Contract](notion-media-fetch-adapter-execution-contract.md)
 - [Notion Media Result Verification Plan](notion-media-result-verification-plan.md)

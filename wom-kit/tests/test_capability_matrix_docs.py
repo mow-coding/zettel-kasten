@@ -50,6 +50,7 @@ NOTION_NESTED_TREE_PLAN_PATH = KIT_ROOT / "docs" / "notion-nested-tree-plan.md"
 NOTION_ANCESTOR_CRAWL_PLAN_PATH = KIT_ROOT / "docs" / "notion-ancestor-crawl-plan.md"
 NOTION_ANCESTOR_FETCH_ADAPTER_EXECUTION_CONTRACT_PATH = KIT_ROOT / "docs" / "notion-ancestor-fetch-adapter-execution-contract.md"
 NOTION_ANCESTOR_FETCH_ADAPTER_RUN_PATH = KIT_ROOT / "docs" / "notion-ancestor-fetch-adapter-run.md"
+NOTION_CONNECTION_PLAN_PATH = KIT_ROOT / "docs" / "notion-connection-plan.md"
 NOTION_RECOVER_PATH = KIT_ROOT / "docs" / "notion-recover.md"
 NOTION_MEDIA_FETCH_ADAPTER_EXECUTION_CONTRACT_PATH = KIT_ROOT / "docs" / "notion-media-fetch-adapter-execution-contract.md"
 NOTION_MEDIA_RESULT_VERIFICATION_PLAN_PATH = KIT_ROOT / "docs" / "notion-media-result-verification-plan.md"
@@ -1650,7 +1651,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.134.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.134 approval-gated local Notion ancestor structure fetch checkpoint",
+            "Status: v0.3.141 approval-gated local Notion ancestor structure fetch with actionable provider failure classification",
             "archive notion-ancestor-fetch-adapter-run",
             "credential access approval receipt",
             "notion_ancestor_result_fixture",
@@ -1733,7 +1734,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.138 beginner-friendly one-command local Notion location recovery with file-ref credential fallback",
+            "Status: v0.3.141 beginner-friendly one-command local Notion location recovery with actionable failure classification",
             "archive notion-recover",
             "auto-selects the reviewed Notion tree fixture",
             "file:<path>",
@@ -1756,7 +1757,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "archive notion-recover",
             "file:<path>",
             "hidden local terminal prompt",
-            "live vault/keyring reads are not implemented",
+            "live vault/keyring/OAuth reads are not implemented",
             "does not require beginners to choose a page id",
             "echo approval receipt paths",
         ):
@@ -1776,6 +1777,72 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "archive notion-recover",
             "file:<path>",
             "approval->fetch->merge-preview",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(phrase in release_text or phrase in changelog_text)
+
+    def test_notion_connection_plan_docs_explain_one_click_contract_and_actionable_failures(self) -> None:
+        text = NOTION_CONNECTION_PLAN_PATH.read_text(encoding="utf-8")
+        recover_text = NOTION_RECOVER_PATH.read_text(encoding="utf-8")
+        fetch_text = NOTION_ANCESTOR_FETCH_ADAPTER_RUN_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.141.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.141 one-click Notion connection contract and actionable failure classification checkpoint",
+            "archive notion-connection-plan <archive-root> --dry-run --format json",
+            "notion-connect-plan",
+            "Connect Notion -> human approves once in browser",
+            "Internal connections use a static installation token",
+            "Personal access tokens are user-scoped static tokens",
+            "Public connections use OAuth 2.0",
+            "notion_connection_not_shared_or_permission_denied",
+            "browser OAuth authorization",
+            "writes nothing, calls no provider, opens no browser",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+        for phrase in (
+            "Status: v0.3.141 beginner-friendly one-command local Notion location recovery with actionable failure classification",
+            "Failure Categories",
+            "notion_connection_not_shared_or_permission_denied",
+            "notion-connection-plan",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, recover_text)
+        for phrase in (
+            "Status: v0.3.141 approval-gated local Notion ancestor structure fetch with actionable provider failure classification",
+            "provider_permission_denied_connection_not_shared_raw_error_redacted",
+            "provider_network_or_timeout_raw_error_redacted",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, fetch_text)
+        for phrase in (
+            "Status: v0.3.141 Notion one-click connection contract and actionable failure classification checkpoint",
+            "Notion connection plan",
+            "archive notion-connection-plan",
+            "archive notion-connect-plan",
+            "notion_connection_not_shared_or_permission_denied",
+            "Vault/keyring/OAuth one-click handoff remains planned",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        self.assertIn("[Notion Connection Plan](wom-kit/docs/notion-connection-plan.md)", readme_text)
+        self.assertIn("[Notion Connection Plan](wom-kit/docs/notion-connection-plan.md)", readme_ko_text)
+        self.assertIn("docs/notion-connection-plan.md", kit_readme_text)
+        self.assertIn("[Notion Connection Plan](notion-connection-plan.md)", public_map_text)
+        self.assertIn("[Notion Connection Plan](notion-connection-plan.md)", public_map_ko_text)
+        for phrase in (
+            "# v0.3.141 - Notion One-Click Connection Contract And Actionable Failures",
+            "archive notion-connection-plan",
+            "token_invalid_or_expired",
+            "notion_connection_not_shared_or_permission_denied",
+            "browser OAuth authorization",
         ):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in release_text or phrase in changelog_text)

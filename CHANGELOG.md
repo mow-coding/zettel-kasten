@@ -6,6 +6,24 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.141 - 2026-06-22
+
+- Added read-only `archive notion-connection-plan`, with aliases
+  `archive notion-connect-plan` and `archive notion-one-click-connection-plan`,
+  to record the one-click Notion connection product contract after the
+  beta-tester recovery UX breakdown.
+- The plan separates Notion internal connections, personal access tokens, and
+  public OAuth connections, and names public OAuth/managed local connection as
+  the target product direction while keeping env/file token handoff as a
+  power-user fallback.
+- Notion live ancestor fetch failures now keep raw provider errors redacted but
+  classify safe action categories such as invalid token, permission/page-share
+  gap, missing or unshared object, rate limit, network timeout, and temporary
+  provider outage.
+- `archive notion-recover` now surfaces those safe categories and suggested
+  human actions in its fetch summary instead of only saying that every provider
+  check failed.
+
 ## v0.3.140 - 2026-06-22
 
 - Added approval-gated `archive tiro-lossless-recovery-fetch-run`, with alias
