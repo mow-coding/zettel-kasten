@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.138 - 2026-06-22
+
+- Added a CLI-only `file:<path>` credential fallback to `archive
+  notion-recover`, so a human who already has a local Notion token text file can
+  point to it without pasting the token into a hidden prompt or building an
+  environment-variable command.
+- The wrapper reads the token locally, passes it through the existing
+  approval-gated Notion ancestor fetch adapter chain, restores any prior
+  transient process value afterward, and keeps the AI outside the secret path.
+- Updated dry-run output, beginner setup guidance, the capability matrix, README
+  summaries, and release notes to distinguish implemented file-ref fallback from
+  planned vault/keyring one-click live reads.
+- Added CLI coverage proving `file:<path>` succeeds against the fake Notion
+  adapter while command output does not include the token file path, file name,
+  transient env ref, token value, receipt paths, provider URLs, local paths,
+  account ids, emails, tokens, or secret values.
+
 ## v0.3.137 - 2026-06-22
 
 - Added read-only `archive tiro-import-plan` and MCP `tiro_import_plan` for
