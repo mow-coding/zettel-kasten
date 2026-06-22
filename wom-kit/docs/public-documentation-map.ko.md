@@ -144,6 +144,8 @@
 - [Notion Nested Tree Plan](notion-nested-tree-plan.md)
 - [Notion Ancestor Crawl Plan](notion-ancestor-crawl-plan.md)
 - [Notion Ancestor Fetch Adapter Execution Contract](notion-ancestor-fetch-adapter-execution-contract.md)
+- [Notion Media Fetch Adapter Execution Contract](notion-media-fetch-adapter-execution-contract.md)
+- [Notion Media Result Verification Plan](notion-media-result-verification-plan.md)
 - [Notion Block Mirror Tree Fixture Plan](notion-block-mirror-tree-fixture-plan.md)
 - [Notion Ancestor Merge Plan](notion-ancestor-merge-plan.md)
 - [Notion Client Issue Verification Plan](notion-client-issue-verification-plan.md)

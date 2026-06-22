@@ -94,6 +94,8 @@ docs/connection-edge-intelligence-plan.md
 docs/notion-nested-tree-plan.md
 docs/notion-ancestor-crawl-plan.md
 docs/notion-ancestor-fetch-adapter-execution-contract.md
+docs/notion-media-fetch-adapter-execution-contract.md
+docs/notion-media-result-verification-plan.md
 docs/notion-block-mirror-tree-fixture-plan.md
 docs/notion-ancestor-merge-plan.md
 docs/notion-client-issue-verification-plan.md
@@ -239,6 +241,12 @@ notion-ancestor-crawl-plan
 
 notion-ancestor-fetch-adapter-execution-contract
   Preview the read-only execution and actor contract a future credential-bounded Notion ancestor fetch adapter must satisfy. Dry-run only; reuses the scoped crawl request planner, defines sanitized input/output fields, clarifies that the future live fetch subject is a WOM local credential-bounded adapter process rather than the AI chat runtime, treats client-supplied ancestor fixtures as sanitized safe-origin fallback input rather than required hand-rolled provider crawling, reports credential ref presence without echoing exact refs, and never calls providers, retrieves secrets, reads page titles or bodies, downloads media, writes fixtures, writes receipts, writes zets, or writes edges.
+
+notion-media-fetch-adapter-execution-contract
+  Preview the read-only execution and actor contract a future credential-bounded Notion media byte fetch adapter must satisfy. Dry-run only; reuses nested-tree planning to scope candidate content leaf pages, defines sanitized media result fixture fields, requires byte hashing before preservation claims, reports already_preserved/newly_preserved/fetch_failed as the preservation states, and never calls providers, retrieves secrets, refreshes signed URLs, downloads media bytes, hashes bytes, writes fixtures, updates object manifests, writes receipts, zets, or edges, or echoes provider URLs or media bytes.
+
+notion-media-result-verification-plan
+  Verify a sanitized notion_media_result_fixture against objects/manifests/files.jsonl. Dry-run only; checks fixture kind, source, object_id/sha256 agreement, preservation status, and manifest presence without calling providers, refreshing signed URLs, downloading media bytes, hashing bytes, reading object bytes, updating manifests, writing receipts, or echoing provider URLs, local paths, page titles, comments, tokens, secret values, or media bytes.
 
 notion-block-mirror-tree-fixture-plan
   Build a sanitized nested tree fixture preview from reviewed Notion block mirror metadata. Dry-run only; derives safe refs and content classes from structural metadata, runs a nested-tree plan preview, and never calls providers, reads page titles or bodies, writes fixtures, writes zets, writes edges, or echoes provider URLs or local paths.
@@ -1272,6 +1280,14 @@ scope review and credential approval, not the AI chat runtime. Client-supplied
 ancestor fixtures remain accepted as sanitized safe-origin fallback input, but
 the contract does not require clients or client-side AI to hand-roll provider
 crawling.
+v0.3.132 adds the read-only Notion media byte fetch adapter contract and media
+result verification plan. `archive notion-media-fetch-adapter-execution-contract
+--dry-run` scopes candidate nested content leaf pages and defines the future
+sanitized `notion_media_result_fixture`; `archive
+notion-media-result-verification-plan --dry-run` checks that sanitized fixture
+against `objects/manifests/files.jsonl`. Both still call no providers, refresh
+no signed URLs, download no media bytes, hash no bytes, update no manifests, and
+write no receipts.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

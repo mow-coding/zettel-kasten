@@ -17753,6 +17753,597 @@ def notion_ancestor_fetch_adapter_execution_contract(
     }
 
 
+def notion_media_fetch_adapter_execution_contract(
+    archive_root: Path | str,
+    *,
+    tree_path: str,
+    source: str = "notion",
+    credential_ref: str | None = None,
+    dry_run: bool = True,
+    max_items: int = 1000,
+    scope_generation_ids: Iterable[str] | str | None = None,
+    scope_root_refs: Iterable[str] | str | None = None,
+    scope_leaf_refs: Iterable[str] | str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("notion-media-fetch-adapter-execution-contract is read-only and requires --dry-run.")
+
+    normalized_credential_ref = str(credential_ref or "").strip()
+    credential_store = None
+    if normalized_credential_ref:
+        if not safe_credential_ref(normalized_credential_ref):
+            blockers.append("credential_ref must be a safe env/keyring/secret/wallet ref and is never echoed.")
+            normalized_credential_ref = ""
+        else:
+            credential_store = credential_ref_store(normalized_credential_ref)
+
+    nested_plan = notion_nested_tree_plan(
+        root,
+        tree_path=tree_path,
+        source=source,
+        dry_run=True,
+        max_items=max_items,
+    )
+    warnings.extend(str(item) for item in nested_plan.get("warnings") or [])
+    if not nested_plan.get("ok"):
+        blockers.extend(str(item) for item in nested_plan.get("blockers") or [])
+
+    scope_filter = notion_ancestor_crawl_scope_filter(
+        scope_generation_ids=scope_generation_ids,
+        scope_root_refs=scope_root_refs,
+        scope_ancestor_refs=None,
+        scope_leaf_refs=scope_leaf_refs,
+        blockers=blockers,
+    )
+    unfiltered_request_queue = [] if blockers else notion_media_fetch_requests_from_nested_plan(nested_plan)
+    request_queue = [] if blockers else notion_filter_media_fetch_requests(unfiltered_request_queue, scope_filter)
+    if not blockers and scope_filter["active"] and unfiltered_request_queue and not request_queue:
+        warnings.append("notion_media_fetch_scope_filter_matched_no_pages")
+
+    contract_state = "blocked"
+    if not blockers:
+        contract_state = "media_fetch_contract_ready" if request_queue else "no_media_fetch_pages_ready"
+
+    content_leaf_count = int(nested_plan.get("recovery_summary", {}).get("content_leaf_count", 0) or 0)
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "notion_media_fetch_adapter_execution_contract",
+        "archive_id": archive_id,
+        "contract_state": contract_state,
+        "source": nested_plan.get("source") or str(source or "").strip().lower().replace("-", "_"),
+        "credential_summary": {
+            "credential_ref_supplied": bool(normalized_credential_ref),
+            "credential_ref_store": credential_store,
+            "credential_ref_echoed": False,
+            "credential_value_read": False,
+            "credential_required_for_live_execution": True,
+        },
+        "media_request_summary": {
+            "source_plan_state": nested_plan.get("plan_state"),
+            "candidate_page_count": len(request_queue),
+            "unfiltered_candidate_page_count": len(unfiltered_request_queue),
+            "excluded_by_scope_filter_count": max(0, len(unfiltered_request_queue) - len(request_queue)),
+            "content_leaf_count": content_leaf_count,
+            "media_block_count_known_now": False,
+            "media_block_count": None,
+            "media_block_count_requires_live_page_or_block_fetch": True,
+            "already_preserved_count_known_now": False,
+            "already_preserved_count": None,
+            "scope_filter_active": bool(scope_filter["active"]),
+        },
+        "scope_filter": {
+            **scope_filter,
+            "unfiltered_candidate_page_count": len(unfiltered_request_queue),
+            "filtered_candidate_page_count": len(request_queue),
+            "excluded_by_scope_filter_count": max(0, len(unfiltered_request_queue) - len(request_queue)),
+            "match_semantics": "AND across supplied filter families, OR within each family.",
+        },
+        "execution_contract": {
+            "adapter_mode": "future_credential_bounded_notion_media_fetch_adapter",
+            "live_execution_allowed_now": False,
+            "future_live_adapter_implemented": False,
+            "must_discover_media_blocks_from_live_page_or_block_data": True,
+            "must_refresh_expiring_provider_file_urls": True,
+            "must_hash_bytes_before_manifest_or_fixture_claims": True,
+            "must_preserve_media_as_sha256_objets": True,
+            "must_report_already_preserved_newly_preserved_or_fetch_failed": True,
+            "partial_fetch_must_not_be_reported_as_complete": True,
+            "credential_policy_check_required": True,
+            "human_scope_review_required_before_live_fetch": True,
+            "provider_rate_limit_policy_required": True,
+        },
+        "execution_actor_contract": {
+            "current_live_fetch_execution_subject": "none_contract_preview_only",
+            "intended_live_fetch_execution_subject": "future_wom_local_credential_bounded_adapter_process",
+            "ai_chat_runtime_role": "plan_review_verify_only_no_provider_or_secret_access",
+            "human_operator_role": "approve_scope_and_credential_ref_without_disclosing_secret_values",
+            "credential_broker_role": "resolve_approved_credential_ref_outside_ai_context",
+            "adapter_process_role": "execute_provider_fetch_hash_bytes_and_emit_sanitized_fixture",
+            "client_fixture_supply_role": "accepted_sanitized_fixture_input_or_fallback_not_required_hand_rolled_provider_crawl",
+            "client_hand_rolled_provider_crawl_required": False,
+            "ai_hand_rolled_provider_crawl_allowed": False,
+            "credential_values_may_enter_ai_context": False,
+            "public_repo_may_contain_credentials": False,
+            "approval_receipt_required_before_live_execution": True,
+            "safe_client_fixture_origin_required": True,
+        },
+        "adapter_input_contract": {
+            "source_command": "archive notion-nested-tree-plan --dry-run",
+            "required_page_request_fields": [
+                "request_id",
+                "source",
+                "page_ref",
+                "containment_source_ref",
+                "fetch_reason",
+                "required_live_discovery_fields",
+                "required_return_fields",
+            ],
+            "optional_page_request_fields": [
+                "affected_generation_id",
+                "affected_root_ref",
+                "parent_ref",
+                "canonicalization_action",
+            ],
+            "required_live_discovery_fields": [
+                "media_block_ref",
+                "media_kind",
+                "fresh_provider_download_url_or_file_ref",
+                "mime",
+                "ext",
+                "byte_stream",
+            ],
+            "must_not_include": [
+                "page_titles",
+                "page_bodies",
+                "comment_bodies",
+                "provider_urls_in_output",
+                "workspace_urls",
+                "account_ids",
+                "emails",
+                "tokens",
+                "secret_values",
+            ],
+        },
+        "adapter_output_contract": {
+            "fixture_kind": "notion_media_result_fixture",
+            "manifest_target": "objects/manifests/files.jsonl",
+            "next_command": "archive notion-media-result-verification-plan <archive-root> --media-result <media-result.json> --source notion --dry-run --format json",
+            "required_media_fields": [
+                "page_ref",
+                "block_ref",
+                "media_kind",
+                "object_id",
+                "sha256",
+                "size_bytes",
+                "ext",
+                "mime",
+                "source_status",
+                "preservation_status",
+                "review_status",
+            ],
+            "preservation_statuses": [
+                "already_preserved",
+                "newly_preserved",
+                "fetch_failed",
+            ],
+            "optional_media_fields": [
+                "dedupe_of_object_id",
+                "fetch_error_class",
+                "fetch_attempt_count",
+                "provider_file_ref_fingerprint",
+            ],
+            "must_not_include": [
+                "page_titles",
+                "page_bodies",
+                "comment_bodies",
+                "media_bytes",
+                "provider_urls",
+                "local_absolute_paths",
+                "raw_provider_responses",
+                "credential_refs",
+                "secret_values",
+            ],
+        },
+        "media_fetch_request_queue": [] if blockers else request_queue,
+        "current_capability": {
+            "media_fetch_adapter_execution_contract_available": True,
+            "nested_tree_plan_reuse_available": True,
+            "media_page_scope_filter_available": True,
+            "live_notion_media_fetch_adapter_implemented": False,
+            "provider_api_call_implemented": False,
+            "oauth_started": False,
+            "credential_secret_retrieval_implemented": False,
+            "fresh_provider_file_url_retrieval_implemented": False,
+            "media_bytes_download_implemented": False,
+            "media_byte_hashing_implemented": False,
+            "object_manifest_writer_implemented": False,
+            "media_result_fixture_writer_implemented": False,
+            "media_result_verification_plan_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "fresh_provider_file_url_retrieved": False,
+            "media_bytes_downloaded": False,
+            "media_bytes_hashed": False,
+            "page_titles_read": False,
+            "page_bodies_read": False,
+            "comments_read": False,
+            "fixture_file_read": bool(nested_plan.get("closed_actions", {}).get("fixture_file_read")),
+            "fixture_parser_executed": bool(nested_plan.get("closed_actions", {}).get("fixture_parser_executed")),
+            "media_result_fixture_written": False,
+            "object_manifest_updated": False,
+            "receipts_written": False,
+            "zettels_written": False,
+            "edges_written": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "credential_ref_echoed": False,
+            "credential_values_echoed": False,
+            "provider_urls_echoed": False,
+            "workspace_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "raw_export_paths_echoed": False,
+            "page_titles_echoed": False,
+            "page_bodies_echoed": False,
+            "comment_bodies_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "tokens_echoed": False,
+            "secret_values_echoed": False,
+            "media_bytes_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": [
+            "Review media_request_summary and scope_filter before any future live media adapter run.",
+            "Pair this media byte contract with notion-ancestor-fetch-adapter-execution-contract when nested leaves need both structure and media recovery.",
+            "Run credential-policy-check and credential-access-approval before a live credential-bounded media fetch adapter exists.",
+            "A future adapter must hash fetched bytes before claiming already_preserved or newly_preserved status.",
+            "Do not require client-side hand-rolled provider crawling; accept only sanitized safe-origin fixtures as fallback evidence.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def notion_media_fetch_requests_from_nested_plan(nested_plan: dict[str, Any]) -> list[dict[str, Any]]:
+    requests: list[dict[str, Any]] = []
+    for item in nested_plan.get("leaf_reports", []):
+        if not isinstance(item, dict):
+            continue
+        classification = item.get("content_classification") if isinstance(item.get("content_classification"), dict) else {}
+        content_class = str(classification.get("content_class") or "").strip()
+        source_status = str(item.get("source_status") or "").strip()
+        node_ref = str(item.get("node_ref") or "").strip()
+        if content_class != "content" or source_status != "live" or not node_ref:
+            continue
+        assignment = item.get("generation_assignment") if isinstance(item.get("generation_assignment"), dict) else {}
+        seed = {
+            "source": nested_plan.get("source"),
+            "page_ref": node_ref,
+            "containment_source_ref": str(item.get("containment_source_ref") or ""),
+        }
+        requests.append(
+            {
+                "request_id": "notion-media-fetch:" + sha256_json_value(seed).removeprefix("sha256:")[:16],
+                "source": nested_plan.get("source"),
+                "page_ref": node_ref,
+                "parent_ref": str(item.get("parent_ref") or ""),
+                "containment_source_ref": str(item.get("containment_source_ref") or ""),
+                "affected_generation_id": str(assignment.get("generation_id") or ""),
+                "affected_root_ref": str(assignment.get("root_ref") or ""),
+                "canonicalization_action": str(item.get("canonicalization_action") or ""),
+                "fetch_reason": "discover_and_preserve_media_blocks_for_nested_leaf",
+                "required_live_discovery_fields": [
+                    "media_block_ref",
+                    "media_kind",
+                    "fresh_provider_download_url_or_file_ref",
+                    "mime",
+                    "ext",
+                    "byte_stream",
+                ],
+                "required_return_fields": [
+                    "page_ref",
+                    "block_ref",
+                    "media_kind",
+                    "object_id",
+                    "sha256",
+                    "size_bytes",
+                    "ext",
+                    "mime",
+                    "source_status",
+                    "preservation_status",
+                    "review_status",
+                ],
+                "verification_statuses": [
+                    "already_preserved",
+                    "newly_preserved",
+                    "fetch_failed",
+                ],
+                "write_status": "not_written",
+            }
+        )
+    return sorted(requests, key=lambda item: (str(item.get("affected_generation_id")), str(item.get("page_ref"))))
+
+
+def notion_filter_media_fetch_requests(
+    requests: list[dict[str, Any]],
+    scope_filter: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not scope_filter.get("active"):
+        return requests
+    return [request for request in requests if notion_media_fetch_request_matches_scope(request, scope_filter)]
+
+
+def notion_media_fetch_request_matches_scope(
+    request: dict[str, Any],
+    scope_filter: dict[str, Any],
+) -> bool:
+    generation_ids = set(scope_filter.get("scope_generation_ids") or [])
+    if generation_ids and str(request.get("affected_generation_id") or "") not in generation_ids:
+        return False
+
+    request_refs = {
+        str(request.get("page_ref") or ""),
+        str(request.get("parent_ref") or ""),
+        str(request.get("containment_source_ref") or ""),
+        str(request.get("affected_root_ref") or ""),
+    }
+
+    root_refs = set(scope_filter.get("scope_root_refs") or [])
+    if root_refs and not root_refs.intersection(request_refs):
+        return False
+
+    leaf_refs = set(scope_filter.get("scope_leaf_refs") or [])
+    if leaf_refs and str(request.get("page_ref") or "") not in leaf_refs:
+        return False
+
+    return True
+
+
+def notion_media_result_verification_plan(
+    archive_root: Path | str,
+    *,
+    media_result_path: str,
+    source: str = "notion",
+    dry_run: bool = True,
+    max_items: int = 1000,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("notion-media-result-verification-plan is read-only and requires --dry-run.")
+
+    normalized_source = str(source or "").strip().lower().replace("-", "_")
+    if normalized_source not in NOTION_NESTED_TREE_SOURCES:
+        blockers.append("source must be one of: " + ", ".join(sorted(NOTION_NESTED_TREE_SOURCES)) + ".")
+
+    max_items_value = notion_nested_tree_safe_max_items(max_items, blockers)
+    normalized_media_result_path, payload = read_safe_archive_json_fixture(
+        root,
+        media_result_path,
+        fixture_label="media result fixture",
+        blockers=blockers,
+    )
+
+    media_rows: list[dict[str, Any]] = []
+    if isinstance(payload, dict):
+        fixture_kind = str(payload.get("fixture_kind") or "").strip()
+        declared_source = str(payload.get("source") or "").strip().lower().replace("-", "_")
+        if fixture_kind != "notion_media_result_fixture":
+            blockers.append("media result fixture_kind must be notion_media_result_fixture.")
+        if declared_source and declared_source != normalized_source:
+            blockers.append("media result fixture source must match --source.")
+        raw_media = payload.get("media")
+        if not isinstance(raw_media, list):
+            blockers.append("media result fixture must include a media list.")
+        else:
+            if len(raw_media) > max_items_value:
+                blockers.append("media result fixture has more items than max_items; rerun with a reviewed larger limit.")
+            for row in raw_media[:max_items_value]:
+                if isinstance(row, dict):
+                    media_rows.append(row)
+                else:
+                    blockers.append("each media result item must be an object.")
+
+    manifest_index, manifest_warnings = notion_media_manifest_index(root)
+    warnings.extend(manifest_warnings)
+    item_results: list[dict[str, Any]] = []
+    status_counts = {"already_preserved": 0, "newly_preserved": 0, "fetch_failed": 0, "invalid": 0}
+    manifest_match_count = 0
+    manifest_missing_count = 0
+    required_fields = ["page_ref", "block_ref", "media_kind", "source_status", "preservation_status", "review_status"]
+    byte_identity_fields = ["object_id", "sha256", "size_bytes", "ext", "mime"]
+    allowed_statuses = {"already_preserved", "newly_preserved", "fetch_failed"}
+
+    if not blockers:
+        for index, row in enumerate(media_rows, start=1):
+            row_blockers: list[str] = []
+            row_warnings: list[str] = []
+            for field in required_fields:
+                if not str(row.get(field) or "").strip():
+                    row_blockers.append(f"{field} is required.")
+            status = str(row.get("preservation_status") or "").strip()
+            if status not in allowed_statuses:
+                row_blockers.append("preservation_status must be already_preserved, newly_preserved, or fetch_failed.")
+                status_counts["invalid"] += 1
+            else:
+                status_counts[status] += 1
+
+            object_id = str(row.get("object_id") or "").strip()
+            sha256 = str(row.get("sha256") or "").strip()
+            if status != "fetch_failed":
+                for field in byte_identity_fields:
+                    if row.get(field) in (None, ""):
+                        row_blockers.append(f"{field} is required when preservation_status is not fetch_failed.")
+                if object_id and not OBJECT_ID_RE.match(object_id):
+                    row_blockers.append("object_id must be sha256:<64 lowercase hex>.")
+                if sha256 and not SHA256_RE.match(sha256):
+                    row_blockers.append("sha256 must be 64 lowercase hex characters.")
+                if object_id and sha256 and object_id != f"sha256:{sha256}":
+                    row_blockers.append("object_id must match sha256.")
+
+                manifest_record = manifest_index.get(object_id)
+                manifest_match = manifest_record is not None
+                if manifest_match:
+                    manifest_match_count += 1
+                    manifest_size = manifest_record.get("size_bytes")
+                    if isinstance(manifest_size, int) and isinstance(row.get("size_bytes"), int) and manifest_size != row.get("size_bytes"):
+                        row_warnings.append("manifest size_bytes differs from media result size_bytes.")
+                else:
+                    manifest_missing_count += 1
+                    if status == "already_preserved":
+                        row_blockers.append("already_preserved media must already exist in objects/manifests/files.jsonl.")
+                    elif status == "newly_preserved":
+                        row_warnings.append("newly_preserved media is not yet visible in objects/manifests/files.jsonl.")
+            else:
+                manifest_match = False
+
+            item_results.append(
+                {
+                    "item_index": index,
+                    "page_ref": str(row.get("page_ref") or ""),
+                    "block_ref": str(row.get("block_ref") or ""),
+                    "media_kind": str(row.get("media_kind") or ""),
+                    "preservation_status": status or "invalid",
+                    "object_id_present": bool(object_id),
+                    "manifest_match": manifest_match,
+                    "ok": not row_blockers,
+                    "blockers": row_blockers,
+                    "warnings": row_warnings,
+                }
+            )
+
+    item_blocker_count = sum(len(item.get("blockers") or []) for item in item_results)
+    plan_state = "blocked"
+    if not blockers and item_blocker_count == 0:
+        plan_state = "media_result_verification_ready"
+    elif not blockers:
+        plan_state = "media_result_verification_blocked"
+
+    return {
+        "ok": not blockers and item_blocker_count == 0,
+        "dry_run": True,
+        "lifecycle_action": "notion_media_result_verification_plan",
+        "archive_id": archive_id,
+        "plan_state": plan_state,
+        "source": normalized_source,
+        "fixture_summary": {
+            "media_result_path": normalized_media_result_path,
+            "fixture_file_read": bool(payload is not None),
+            "fixture_kind": payload.get("fixture_kind") if isinstance(payload, dict) else None,
+            "declared_media_count": len(media_rows),
+            "processed_media_count": len(item_results),
+            "max_items": max_items_value,
+        },
+        "verification_summary": {
+            "media_result_count": len(item_results),
+            "manifest_match_count": manifest_match_count,
+            "manifest_missing_count": manifest_missing_count,
+            "already_preserved_count": status_counts["already_preserved"],
+            "newly_preserved_count": status_counts["newly_preserved"],
+            "fetch_failed_count": status_counts["fetch_failed"],
+            "invalid_status_count": status_counts["invalid"],
+            "item_blocker_count": item_blocker_count,
+            "auto_writable_count": 0,
+        },
+        "item_results": item_results,
+        "current_capability": {
+            "media_result_fixture_parser_available": True,
+            "object_manifest_consistency_check_available": True,
+            "provider_api_call_implemented": False,
+            "fresh_provider_file_url_retrieval_implemented": False,
+            "media_bytes_download_implemented": False,
+            "media_byte_hashing_implemented": False,
+            "object_manifest_writer_implemented": False,
+            "receipt_writer_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "credential_value_read": False,
+            "fresh_provider_file_url_retrieved": False,
+            "media_bytes_downloaded": False,
+            "media_bytes_hashed": False,
+            "fixture_file_read": bool(payload is not None),
+            "object_manifest_read": bool(manifest_index),
+            "object_manifest_updated": False,
+            "receipts_written": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "page_titles_echoed": False,
+            "page_bodies_echoed": False,
+            "comment_bodies_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "tokens_echoed": False,
+            "secret_values_echoed": False,
+            "media_bytes_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": [
+            "Use this verifier after a future credential-bounded media fetch adapter emits a sanitized notion_media_result_fixture.",
+            "Treat already_preserved rows missing from objects/manifests/files.jsonl as inconsistent until the manifest evidence is repaired.",
+            "Treat newly_preserved rows as pending until a later approved writer records object manifest and receipt evidence.",
+            "Do not infer preservation from expired provider URLs; preservation requires byte hash evidence.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def notion_media_manifest_index(root: Path) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    warnings: list[str] = []
+    manifest_path = archive_internal_path(root, "objects/manifests/files.jsonl")
+    if not manifest_path.is_file():
+        warnings.append("objects/manifests/files.jsonl is missing; media preservation cannot be matched locally.")
+        return {}, warnings
+    index: dict[str, dict[str, Any]] = {}
+    try:
+        lines = manifest_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        warnings.append("objects/manifests/files.jsonl could not be read as UTF-8.")
+        return {}, warnings
+    for line_number, line in enumerate(lines, start=1):
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            record = json.loads(text)
+        except json.JSONDecodeError:
+            warnings.append(f"objects/manifests/files.jsonl line {line_number} is not valid JSON.")
+            continue
+        if not isinstance(record, dict):
+            warnings.append(f"objects/manifests/files.jsonl line {line_number} is not an object.")
+            continue
+        object_id = str(record.get("object_id") or "").strip()
+        if OBJECT_ID_RE.match(object_id) and object_id not in index:
+            index[object_id] = record
+    return index, warnings
+
+
 def notion_block_mirror_tree_fixture_plan(
     archive_root: Path | str,
     *,

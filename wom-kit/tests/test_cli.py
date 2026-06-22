@@ -3138,6 +3138,150 @@ state:
             self.assertEqual(no_dry_code, 1)
             self.assertIn("requires --dry-run", no_dry_output)
 
+    def test_notion_media_fetch_adapter_execution_contract_keeps_media_bytes_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+            credential_ref = "env:wom_notion_readonly"
+
+            code, output = self.run_cli(
+                [
+                    "notion-media-fetch-adapter-execution-contract",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree.sample.json",
+                    "--source",
+                    "notion",
+                    "--scope-leaf-ref",
+                    "page:fake:db2-nested-live-log",
+                    "--credential-ref",
+                    credential_ref,
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "notion_media_fetch_adapter_execution_contract")
+            self.assertEqual(result["contract_state"], "media_fetch_contract_ready")
+            self.assertEqual(result["media_request_summary"]["candidate_page_count"], 1)
+            self.assertEqual(result["media_request_summary"]["unfiltered_candidate_page_count"], 3)
+            self.assertTrue(result["media_request_summary"]["media_block_count_requires_live_page_or_block_fetch"])
+            self.assertFalse(result["media_request_summary"]["media_block_count_known_now"])
+            self.assertTrue(result["credential_summary"]["credential_ref_supplied"])
+            self.assertEqual(result["credential_summary"]["credential_ref_store"], "env")
+            self.assertFalse(result["credential_summary"]["credential_ref_echoed"])
+            self.assertFalse(result["credential_summary"]["credential_value_read"])
+            self.assertFalse(result["execution_contract"]["live_execution_allowed_now"])
+            self.assertTrue(result["execution_contract"]["must_refresh_expiring_provider_file_urls"])
+            self.assertTrue(result["execution_contract"]["must_hash_bytes_before_manifest_or_fixture_claims"])
+            self.assertEqual(
+                result["execution_actor_contract"]["intended_live_fetch_execution_subject"],
+                "future_wom_local_credential_bounded_adapter_process",
+            )
+            self.assertFalse(result["execution_actor_contract"]["ai_hand_rolled_provider_crawl_allowed"])
+            self.assertEqual(result["adapter_output_contract"]["fixture_kind"], "notion_media_result_fixture")
+            self.assertIn("already_preserved", result["adapter_output_contract"]["preservation_statuses"])
+            self.assertIn("newly_preserved", result["adapter_output_contract"]["preservation_statuses"])
+            self.assertIn("fetch_failed", result["adapter_output_contract"]["preservation_statuses"])
+            self.assertTrue(result["current_capability"]["media_fetch_adapter_execution_contract_available"])
+            self.assertFalse(result["current_capability"]["live_notion_media_fetch_adapter_implemented"])
+            self.assertFalse(result["current_capability"]["media_bytes_download_implemented"])
+            self.assertFalse(result["current_capability"]["object_manifest_writer_implemented"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["fresh_provider_file_url_retrieved"])
+            self.assertFalse(result["closed_actions"]["media_bytes_downloaded"])
+            self.assertFalse(result["closed_actions"]["media_bytes_hashed"])
+            self.assertFalse(result["closed_actions"]["object_manifest_updated"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["media_bytes_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertNotIn(credential_ref, serialized)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            no_dry_code, no_dry_output = self.run_cli(
+                [
+                    "notion-media-fetch-adapter-execution-contract",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-nested-tree.sample.json",
+                    "--source",
+                    "notion",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_code, 1)
+            self.assertIn("requires --dry-run", no_dry_output)
+
+    def test_notion_media_result_verification_plan_checks_manifest_without_reading_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "notion-media-result-verification-plan",
+                    str(archive_root),
+                    "--media-result",
+                    "workbench/notion-media-result.sample.json",
+                    "--source",
+                    "notion",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "notion_media_result_verification_plan")
+            self.assertEqual(result["plan_state"], "media_result_verification_ready")
+            self.assertEqual(result["verification_summary"]["media_result_count"], 1)
+            self.assertEqual(result["verification_summary"]["manifest_match_count"], 1)
+            self.assertEqual(result["verification_summary"]["already_preserved_count"], 1)
+            self.assertEqual(result["verification_summary"]["newly_preserved_count"], 0)
+            self.assertEqual(result["verification_summary"]["fetch_failed_count"], 0)
+            self.assertEqual(result["verification_summary"]["item_blocker_count"], 0)
+            self.assertTrue(result["current_capability"]["media_result_fixture_parser_available"])
+            self.assertTrue(result["current_capability"]["object_manifest_consistency_check_available"])
+            self.assertFalse(result["current_capability"]["provider_api_call_implemented"])
+            self.assertFalse(result["current_capability"]["media_bytes_download_implemented"])
+            self.assertFalse(result["current_capability"]["media_byte_hashing_implemented"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["fresh_provider_file_url_retrieved"])
+            self.assertFalse(result["closed_actions"]["media_bytes_downloaded"])
+            self.assertFalse(result["closed_actions"]["media_bytes_hashed"])
+            self.assertFalse(result["closed_actions"]["object_manifest_updated"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertFalse(result["privacy_guards"]["media_bytes_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            no_dry_code, no_dry_output = self.run_cli(
+                [
+                    "notion-media-result-verification-plan",
+                    str(archive_root),
+                    "--media-result",
+                    "workbench/notion-media-result.sample.json",
+                    "--source",
+                    "notion",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(no_dry_code, 1)
+            self.assertIn("requires --dry-run", no_dry_output)
+
     def test_notion_block_mirror_tree_fixture_plan_builds_sanitized_tree_without_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

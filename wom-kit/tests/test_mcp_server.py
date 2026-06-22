@@ -647,6 +647,8 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("notion_nested_tree_plan", tool_names)
             self.assertIn("notion_ancestor_crawl_plan", tool_names)
             self.assertIn("notion_ancestor_fetch_adapter_execution_contract", tool_names)
+            self.assertIn("notion_media_fetch_adapter_execution_contract", tool_names)
+            self.assertIn("notion_media_result_verification_plan", tool_names)
             self.assertIn("notion_block_mirror_tree_fixture_plan", tool_names)
             self.assertIn("notion_ancestor_merge_plan", tool_names)
             self.assertIn("notion_client_issue_verification_plan", tool_names)
@@ -1567,6 +1569,35 @@ class McpServerTests(unittest.TestCase):
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
                 self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+
+                verification_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "notion_media_result_verification_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "media_result": "workbench/notion-media-result.sample.json",
+                                "source": "notion",
+                            },
+                        },
+                    },
+                )
+                verification_result = verification_response["result"]
+                self.assertFalse(verification_result["isError"])
+                verification = verification_result["structuredContent"]
+                self.assertTrue(verification["ok"])
+                self.assertEqual(verification["lifecycle_action"], "notion_media_result_verification_plan")
+                self.assertEqual(verification["plan_state"], "media_result_verification_ready")
+                self.assertEqual(verification["verification_summary"]["media_result_count"], 1)
+                self.assertEqual(verification["verification_summary"]["manifest_match_count"], 1)
+                self.assertFalse(verification["closed_actions"]["media_bytes_downloaded"])
+                self.assertFalse(verification["closed_actions"]["media_bytes_hashed"])
+                self.assertFalse(verification["closed_actions"]["object_manifest_updated"])
+                self.assertFalse(verification["privacy_guards"]["media_bytes_echoed"])
             finally:
                 self.stop_server(process)
 
@@ -2512,6 +2543,89 @@ class McpServerTests(unittest.TestCase):
                         "method": "tools/call",
                         "params": {
                             "name": "notion_ancestor_fetch_adapter_execution_contract",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "tree": "workbench/notion-nested-tree.sample.json",
+                                "source": "notion",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_notion_media_fetch_adapter_execution_contract_tool_keeps_media_bytes_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "notion_media_fetch_adapter_execution_contract",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "tree": "workbench/notion-nested-tree.sample.json",
+                                "source": "notion",
+                                "scope_leaf_refs": ["page:fake:db2-nested-live-log"],
+                                "credential_ref": "env:wom_notion_readonly",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                serialized = json.dumps(structured, ensure_ascii=False)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "notion_media_fetch_adapter_execution_contract")
+                self.assertEqual(structured["contract_state"], "media_fetch_contract_ready")
+                self.assertEqual(structured["media_request_summary"]["candidate_page_count"], 1)
+                self.assertFalse(structured["media_request_summary"]["media_block_count_known_now"])
+                self.assertFalse(structured["execution_contract"]["live_execution_allowed_now"])
+                self.assertTrue(structured["execution_contract"]["must_hash_bytes_before_manifest_or_fixture_claims"])
+                self.assertFalse(structured["execution_actor_contract"]["ai_hand_rolled_provider_crawl_allowed"])
+                self.assertFalse(structured["current_capability"]["live_notion_media_fetch_adapter_implemented"])
+                self.assertFalse(structured["closed_actions"]["provider_api_called"])
+                self.assertFalse(structured["closed_actions"]["fresh_provider_file_url_retrieved"])
+                self.assertFalse(structured["closed_actions"]["media_bytes_downloaded"])
+                self.assertFalse(structured["closed_actions"]["media_bytes_hashed"])
+                self.assertFalse(structured["closed_actions"]["object_manifest_updated"])
+                self.assertFalse(structured["privacy_guards"]["provider_urls_echoed"])
+                self.assertFalse(structured["privacy_guards"]["media_bytes_echoed"])
+                self.assertEqual(structured["would_change"], [])
+                self.assertNotIn("env:wom_notion_readonly", serialized)
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "notion_media_fetch_adapter_execution_contract",
                             "arguments": {
                                 "archive_root": str(allowed_archive),
                                 "tree": "workbench/notion-nested-tree.sample.json",

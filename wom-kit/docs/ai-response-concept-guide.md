@@ -268,6 +268,14 @@ Then route safely:
   adapter process; the AI chat runtime must not hand-roll provider crawling or
   receive credential values, and client-supplied ancestor fixtures are only
   sanitized safe-origin fallback input.
+- Preview the future Notion media byte fetch adapter contract: use
+  `notion-media-fetch-adapter-execution-contract --tree
+  workbench/notion-nested-tree.sample.json --source notion --scope-leaf-ref
+  page:fake:db2-nested-live-log --dry-run` when nested leaf pages may contain
+  images or files whose bytes cannot be proven from local metadata alone.
+- Verify a sanitized media result fixture after a future adapter run: use
+  `notion-media-result-verification-plan --media-result
+  workbench/notion-media-result.sample.json --source notion --dry-run`.
 - Build a nested tree fixture from reviewed Notion block mirror metadata: use
   `notion-block-mirror-tree-fixture-plan --mirror
   workbench/notion-block-mirror.sample.json --source notion --dry-run`.
@@ -331,6 +339,8 @@ This guide rephrases existing model documents for AI-human conversation:
 - [Notion Nested Tree Plan](notion-nested-tree-plan.md)
 - [Notion Ancestor Crawl Plan](notion-ancestor-crawl-plan.md)
 - [Notion Ancestor Fetch Adapter Execution Contract](notion-ancestor-fetch-adapter-execution-contract.md)
+- [Notion Media Fetch Adapter Execution Contract](notion-media-fetch-adapter-execution-contract.md)
+- [Notion Media Result Verification Plan](notion-media-result-verification-plan.md)
 - [Notion Block Mirror Tree Fixture Plan](notion-block-mirror-tree-fixture-plan.md)
 - [Notion Ancestor Merge Plan](notion-ancestor-merge-plan.md)
 - [Notion Client Issue Verification Plan](notion-client-issue-verification-plan.md)

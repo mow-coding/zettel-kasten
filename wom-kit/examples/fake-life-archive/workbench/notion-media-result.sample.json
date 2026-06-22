@@ -1,0 +1,19 @@
+{
+  "fixture_kind": "notion_media_result_fixture",
+  "source": "notion",
+  "media": [
+    {
+      "page_ref": "page:fake:db2-nested-live-log",
+      "block_ref": "block:fake:db2-nested-log-media-1",
+      "media_kind": "file",
+      "object_id": "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136",
+      "sha256": "acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136",
+      "size_bytes": 151,
+      "ext": "txt",
+      "mime": "text/plain",
+      "source_status": "live",
+      "preservation_status": "already_preserved",
+      "review_status": "fixture_reviewed"
+    }
+  ]
+}
