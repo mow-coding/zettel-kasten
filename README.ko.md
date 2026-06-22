@@ -23,7 +23,7 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.3.142 pre-release
+v0.3.143 pre-release
 ```
 
 이전 공개 기준: v0.3.137 pre-release.
@@ -51,7 +51,7 @@ v0.3.142 pre-release
 아직 없는 것:
 
 - production-grade 설치와 platform support,
-- real OS keyring read/write adapter, secret retrieval, OAuth flow, OpenAI API call, paid OCR API call,
+- broad real OS keyring read/write adapter beyond narrow Tiro Windows Credential Manager read, secret retrieval for other providers, OAuth flow, OpenAI API call, paid OCR API call,
 - 첫 approval-gated local IMAP header scan과 첫 approval-gated local Notion ancestor structure fetch를 넘어서는 broad live provider sync,
 - production `ZET` transport, sharing service, feed update, mirroring delivery,
 - real wallet creation, private-key custody, cryptographic signing, token mechanics, payments, staking, consensus, blockchain integration,
@@ -227,7 +227,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.142
+v0.3.143
 v0.3.137
 v0.3.136
 v0.3.135

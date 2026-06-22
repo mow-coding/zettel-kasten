@@ -1354,10 +1354,18 @@ calls the official Tiro REST API, writes the private raw bundle under
 `workbench/`, and records a non-secret fetch receipt under
 `receipts/tiro/lossless-fetches/`. Command output and receipts do not echo the
 credential ref, environment variable name, token, meeting titles, transcript
-text, participant names, provider URLs, or raw provider responses. Keyring/vault
-credential reads, original audio byte retrieval where no official endpoint is
-confirmed, AI enrichment writes, derived text, zet drafting, and minting remain
-separate future layers.
+text, participant names, provider URLs, or raw provider responses. At the
+v0.3.140 checkpoint, keyring/vault credential reads, original audio byte
+retrieval where no official endpoint is confirmed, AI enrichment writes,
+derived text, zet drafting, and minting remained separate future layers.
+v0.3.143 extends that same Tiro fetch path to approved Windows Credential
+Manager reads through `keyring:` and `credential-manager:` refs. Dry-run still
+opens no credential store. Approved mode may read exactly one matching Windows
+generic credential from a safe label, including auto-detection when there is one
+match, while output and receipts echo no ref, target name, token, provider URL,
+account id, or email. macOS Keychain, Linux Secret Service, KeePassXC, wallet,
+browser password-manager reads, and non-Tiro provider secret reads remain
+future layers.
 v0.3.141 responds to the beta-tester Notion recovery experience breakdown.
 `archive notion-connection-plan --dry-run` records the one-click "Connect
 Notion" product contract and separates internal connection tokens, personal

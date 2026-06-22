@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.143 - 2026-06-22
+
+- Added approval-gated Tiro credential reads from Windows Credential Manager
+  through safe `keyring:` and `credential-manager:` refs in
+  `archive tiro-lossless-recovery-fetch-run`.
+- Dry-run still opens no credential store and calls no provider. Approved mode
+  may read the local OS credential store only after `--approve --reviewed-by`,
+  then clears the token from local runtime variables before returning.
+- The Windows reader first tries an exact generic credential target match. If no
+  exact target exists, it can auto-detect exactly one matching generic
+  credential from the safe ref label; multiple matches block without echoing
+  target names.
+- Tiro credential values may be raw bearer/API tokens or JSON-shaped OAuth
+  credential blobs with `access_token` / `accessToken`-style fields; command
+  output and receipts echo no refs, env var names, OS credential target names,
+  tokens, provider URLs, account ids, emails, or raw provider responses.
+- Updated the Tiro lossless recovery docs, capability matrix, README status,
+  release notes, and tests.
+
 ## v0.3.142 - 2026-06-22
 
 - Added read-only `archive notion-oauth-connection-preflight`, with aliases

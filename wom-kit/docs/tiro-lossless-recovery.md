@@ -1,6 +1,6 @@
 # Tiro Lossless Recovery
 
-Status: v0.3.140 live Tiro REST fetch and lossless bundle capture checkpoint
+Status: v0.3.143 live Tiro REST fetch with OS credential-store read checkpoint
 
 `archive tiro-lossless-recovery-plan`,
 `archive tiro-lossless-recovery-fetch-run`, and
@@ -12,7 +12,10 @@ the broader recovery contract and raw-bundle capture. v0.3.140 adds the first
 approval-gated live Tiro REST fetch adapter so a human can provide a local
 `env:` credential reference, fetch official Tiro data directly, write a private
 raw recovery bundle, and then preserve that bundle as a WOM objet before any AI
-enrichment, derived text, zet drafting, or minting.
+enrichment, derived text, zet drafting, or minting. v0.3.143 adds approved
+Windows Credential Manager reads through `keyring:` and `credential-manager:`
+refs so a user who already connected Tiro through a local desktop/MCP flow does
+not have to copy an API token into an environment variable first.
 
 ## Commands
 
@@ -23,6 +26,13 @@ archive tiro-lossless-recovery-plan <archive-root> --credential-ref env:WOM_TIRO
 ```powershell
 archive tiro-lossless-recovery-fetch-run <archive-root> --credential-ref env:WOM_TIRO_API_KEY --workspace-guid <workspace-guid> --output workbench/tiro-lossless-recovery.live.json --dry-run --format json
 archive tiro-lossless-recovery-fetch-run <archive-root> --credential-ref env:WOM_TIRO_API_KEY --workspace-guid <workspace-guid> --output workbench/tiro-lossless-recovery.live.json --approve --reviewed-by human:<id> --format json
+```
+
+On Windows, approved fetch can also use a safe OS credential-store ref:
+
+```powershell
+archive tiro-lossless-recovery-fetch-run <archive-root> --credential-ref keyring:<safe-tiro-label> --workspace-guid <workspace-guid> --output workbench/tiro-lossless-recovery.live.json --dry-run --format json
+archive tiro-lossless-recovery-fetch-run <archive-root> --credential-ref credential-manager:<safe-tiro-label> --workspace-guid <workspace-guid> --output workbench/tiro-lossless-recovery.live.json --approve --reviewed-by human:<id> --format json
 ```
 
 ```powershell
@@ -45,9 +55,9 @@ tiro-recovery-capture
 2. `tiro-lossless-recovery-fetch-run --dry-run` writes nothing, reads no token,
    and calls no provider. It only previews the approved fetch path.
 3. `tiro-lossless-recovery-fetch-run --approve --reviewed-by ...` reads the
-   approved `env:` token locally, calls Tiro REST endpoints, writes the private
-   raw bundle under `workbench/`, and writes a non-secret fetch receipt under
-   `receipts/tiro/lossless-fetches/`.
+   approved `env:`, `keyring:`, or `credential-manager:` token locally, calls
+   Tiro REST endpoints, writes the private raw bundle under `workbench/`, and
+   writes a non-secret fetch receipt under `receipts/tiro/lossless-fetches/`.
 4. `tiro-lossless-recovery-capture --approve --reviewed-by ...` stores that raw
    bundle exactly as a content-addressed WOM objet.
 
@@ -104,8 +114,8 @@ workbench/tiro-lossless-recovery.live.json
 The stored object preserves the raw bundle bytes exactly. Command output and
 receipts report only structure, hashes, counts, paths inside the archive, and
 gap categories. They do not echo credential refs, environment variable names,
-meeting titles, transcript text, participant names, emails, provider URLs,
-tokens, raw provider responses, or secret values.
+OS credential target names, meeting titles, transcript text, participant
+names, emails, provider URLs, tokens, raw provider responses, or secret values.
 
 This preserves the important boundary:
 
@@ -120,10 +130,18 @@ inference, summary cleanup, or any other AI enrichment.
 
 ## Current Boundary
 
-v0.3.140 implements the live credential-bounded Tiro REST fetch adapter for
-local `env:` credential refs. These pieces are still separate future layers:
+v0.3.143 implements the live credential-bounded Tiro REST fetch adapter for
+local `env:` refs and Windows Credential Manager-backed `keyring:` /
+`credential-manager:` refs. A `keyring:<safe-label>` ref first tries an exact
+Windows generic credential target match. If no exact target exists, the local
+runtime may auto-detect exactly one Windows generic credential target whose
+name contains the safe label; if multiple matches exist, the command blocks
+without printing target names.
 
-- keyring, vault, wallet, or OS password-manager credential reads,
+These pieces are still separate future layers:
+
+- macOS Keychain, Linux Secret Service, KeePassXC, wallet, or browser
+  password-manager credential reads,
 - original audio byte retrieval when no official REST endpoint is confirmed,
 - AI enrichment writes,
 - derived-text capture,
@@ -139,15 +157,15 @@ When audio bytes cannot be fetched by the adapter, the raw bundle records an
 The plan command writes nothing and reads no credential values.
 
 The fetch command writes only after `--approve --reviewed-by`. In dry-run mode,
-it does not read the environment variable and does not call Tiro. In approve
-mode, it reads only the named local environment variable, calls Tiro, writes the
-raw bundle, writes a non-secret fetch receipt, and clears the token from local
-runtime variables before returning.
+it does not read the environment variable, open Windows Credential Manager, or
+call Tiro. In approve mode, it reads only the approved local credential ref,
+calls Tiro, writes the raw bundle, writes a non-secret fetch receipt, and
+clears the token from local runtime variables before returning.
 
 The capture command writes only after `--approve --reviewed-by`. It reads the
 selected archive-relative bundle, writes object bytes, appends one manifest
 record when needed, and writes a non-secret receipt.
 
 These commands do not draft zets, mint zets, write derived text, perform ASR,
-open a keyring, open a password manager, upload data, delete the staged bundle,
-or clean files.
+open unapproved credential stores, upload data, delete the staged bundle, or
+clean files.
