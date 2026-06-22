@@ -1658,6 +1658,40 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "notion_media_fetch_adapter_execution_contract",
+        "description": "Preview the read-only execution and actor contract a future credential-bounded Notion media byte fetch adapter must satisfy for nested leaf media preservation. Never calls providers, retrieves secrets, refreshes signed URLs, downloads media bytes, hashes bytes, or writes manifests.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "tree": {"type": "string"},
+                "source": {"type": "string", "enum": sorted(archive_services.NOTION_NESTED_TREE_SOURCES)},
+                "credential_ref": {"type": "string"},
+                "max_items": {"type": "integer", "minimum": 1, "maximum": archive_services.NOTION_NESTED_TREE_MAX_ITEMS_LIMIT, "default": 1000},
+                "scope_generation_ids": {"type": "array", "items": {"type": "string"}, "default": []},
+                "scope_root_refs": {"type": "array", "items": {"type": "string"}, "default": []},
+                "scope_leaf_refs": {"type": "array", "items": {"type": "string"}, "default": []},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "tree", "source"],
+        },
+    },
+    {
+        "name": "notion_media_result_verification_plan",
+        "description": "Verify a sanitized Notion media result fixture against object manifests. Read-only; never calls providers, refreshes signed URLs, downloads media bytes, hashes bytes, or writes manifests.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "media_result": {"type": "string"},
+                "source": {"type": "string", "enum": sorted(archive_services.NOTION_NESTED_TREE_SOURCES)},
+                "max_items": {"type": "integer", "minimum": 1, "maximum": archive_services.NOTION_NESTED_TREE_MAX_ITEMS_LIMIT, "default": 1000},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root", "media_result", "source"],
+        },
+    },
+    {
         "name": "notion_block_mirror_tree_fixture_plan",
         "description": "Build a sanitized nested tree fixture preview from reviewed Notion block mirror metadata. Dry-run only; never calls providers, reads titles or bodies, or writes fixtures.",
         "inputSchema": {
@@ -2775,6 +2809,10 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_notion_ancestor_crawl_plan(arguments)
     if name == "notion_ancestor_fetch_adapter_execution_contract":
         return tool_notion_ancestor_fetch_adapter_execution_contract(arguments)
+    if name == "notion_media_fetch_adapter_execution_contract":
+        return tool_notion_media_fetch_adapter_execution_contract(arguments)
+    if name == "notion_media_result_verification_plan":
+        return tool_notion_media_result_verification_plan(arguments)
     if name == "notion_block_mirror_tree_fixture_plan":
         return tool_notion_block_mirror_tree_fixture_plan(arguments)
     if name == "notion_ancestor_merge_plan":
@@ -4245,6 +4283,42 @@ def tool_notion_ancestor_fetch_adapter_execution_contract(arguments: dict[str, A
     )
     state = result.get("contract_state") or ("passed" if result["ok"] else "blocked")
     return tool_success_result(f"notion_ancestor_fetch_adapter_execution_contract: {state}.", result)
+
+
+def tool_notion_media_fetch_adapter_execution_contract(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("notion_media_fetch_adapter_execution_contract is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.notion_media_fetch_adapter_execution_contract,
+        archive_root,
+        tree_path=require_string_arg(arguments, "tree"),
+        source=require_string_arg(arguments, "source"),
+        credential_ref=optional_string_arg(arguments, "credential_ref"),
+        max_items=int(arguments.get("max_items", 1000)),
+        scope_generation_ids=arguments.get("scope_generation_ids"),
+        scope_root_refs=arguments.get("scope_root_refs"),
+        scope_leaf_refs=arguments.get("scope_leaf_refs"),
+        dry_run=True,
+    )
+    state = result.get("contract_state") or ("passed" if result["ok"] else "blocked")
+    return tool_success_result(f"notion_media_fetch_adapter_execution_contract: {state}.", result)
+
+
+def tool_notion_media_result_verification_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("notion_media_result_verification_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.notion_media_result_verification_plan,
+        archive_root,
+        media_result_path=require_string_arg(arguments, "media_result"),
+        source=require_string_arg(arguments, "source"),
+        max_items=int(arguments.get("max_items", 1000)),
+        dry_run=True,
+    )
+    state = result.get("plan_state") or ("passed" if result["ok"] else "blocked")
+    return tool_success_result(f"notion_media_result_verification_plan: {state}.", result)
 
 
 def tool_notion_block_mirror_tree_fixture_plan(arguments: dict[str, Any]) -> dict[str, Any]:

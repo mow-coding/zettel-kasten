@@ -73,6 +73,10 @@ Commands:
           Plan missing Notion ancestor crawl requests from a sanitized nested tree fixture.
   notion-ancestor-fetch-adapter-execution-contract
           Preview the read-only execution contract for a future Notion ancestor fetch adapter.
+  notion-media-fetch-adapter-execution-contract
+          Preview the read-only execution contract for a future Notion media byte fetch adapter.
+  notion-media-result-verification-plan
+          Verify a sanitized Notion media result fixture against object manifests.
   notion-block-mirror-tree-fixture-plan
           Build a sanitized nested tree fixture preview from reviewed Notion block mirror metadata.
   notion-ancestor-merge-plan
@@ -3182,6 +3186,52 @@ def command_notion_ancestor_fetch_adapter_execution_contract(args: argparse.Name
     return 0 if result.get("ok", True) else 1
 
 
+def command_notion_media_fetch_adapter_execution_contract(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("notion-media-fetch-adapter-execution-contract is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.notion_media_fetch_adapter_execution_contract(
+            Path(args.archive_root),
+            tree_path=args.tree,
+            source=args.source,
+            credential_ref=args.credential_ref,
+            dry_run=args.dry_run,
+            max_items=args.max_items,
+            scope_generation_ids=args.scope_generation_id,
+            scope_root_refs=args.scope_root_ref,
+            scope_leaf_refs=args.scope_leaf_ref,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_notion_media_fetch_adapter_execution_contract_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def command_notion_media_result_verification_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("notion-media-result-verification-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.notion_media_result_verification_plan(
+            Path(args.archive_root),
+            media_result_path=args.media_result,
+            source=args.source,
+            dry_run=args.dry_run,
+            max_items=args.max_items,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_notion_media_result_verification_plan_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
 def command_notion_block_mirror_tree_fixture_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("notion-block-mirror-tree-fixture-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -3247,6 +3297,76 @@ def print_notion_ancestor_fetch_adapter_execution_contract_result(result: dict[s
     print("Client hand-rolled provider crawl required: no")
     print("AI hand-rolled provider crawl allowed: no")
     print("Provider API called: no")
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
+
+
+def print_notion_media_fetch_adapter_execution_contract_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    summary = result.get("media_request_summary") if isinstance(result.get("media_request_summary"), dict) else {}
+    credential = result.get("credential_summary") if isinstance(result.get("credential_summary"), dict) else {}
+    actor = result.get("execution_actor_contract") if isinstance(result.get("execution_actor_contract"), dict) else {}
+    print(f"Notion media fetch adapter execution contract: {result.get('contract_state') or '-'}")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Source: {result.get('source') or '-'}")
+    print(f"Candidate pages: {summary.get('candidate_page_count', 0)}")
+    print(f"Unfiltered candidate pages: {summary.get('unfiltered_candidate_page_count', 0)}")
+    print(f"Excluded by scope filter: {summary.get('excluded_by_scope_filter_count', 0)}")
+    print(f"Media block count known now: {summary.get('media_block_count_known_now', False)}")
+    print(f"Credential ref supplied: {credential.get('credential_ref_supplied', False)}")
+    print("Live execution allowed now: no")
+    print(f"Current execution subject: {actor.get('current_live_fetch_execution_subject') or 'none_contract_preview_only'}")
+    print(f"Intended future execution subject: {actor.get('intended_live_fetch_execution_subject') or 'future_wom_local_credential_bounded_adapter_process'}")
+    print("Client hand-rolled provider crawl required: no")
+    print("AI hand-rolled provider crawl allowed: no")
+    print("Provider API called: no")
+    print("Media bytes downloaded: no")
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
+
+
+def print_notion_media_result_verification_plan_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    summary = result.get("verification_summary") if isinstance(result.get("verification_summary"), dict) else {}
+    print(f"Notion media result verification plan: {result.get('plan_state') or '-'}")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Source: {result.get('source') or '-'}")
+    print(f"Media results: {summary.get('media_result_count', 0)}")
+    print(f"Manifest matches: {summary.get('manifest_match_count', 0)}")
+    print(f"Manifest missing: {summary.get('manifest_missing_count', 0)}")
+    print(f"Already preserved: {summary.get('already_preserved_count', 0)}")
+    print(f"Newly preserved: {summary.get('newly_preserved_count', 0)}")
+    print(f"Fetch failed: {summary.get('fetch_failed_count', 0)}")
+    print(f"Item blockers: {summary.get('item_blocker_count', 0)}")
+    print("Provider API called: no")
+    print("Media bytes downloaded: no")
+    print("Media bytes hashed: no")
     print("Writes: none")
     if result.get("blockers"):
         print("Blockers:")
@@ -13138,6 +13258,87 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notion_ancestor_fetch_contract.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     notion_ancestor_fetch_contract.set_defaults(func=command_notion_ancestor_fetch_adapter_execution_contract)
+
+    notion_media_fetch_contract = subcommands.add_parser(
+        "notion-media-fetch-adapter-execution-contract",
+        aliases=["notion-media-fetch-execution-contract", "notion-nested-leaf-media-fetch-contract"],
+        help="Preview the read-only execution contract a future Notion media byte fetch adapter must satisfy.",
+    )
+    notion_media_fetch_contract.add_argument("archive_root", help="Archive root to inspect.")
+    notion_media_fetch_contract.add_argument(
+        "--tree",
+        required=True,
+        help="Archive-relative sanitized nested-tree fixture JSON path. Absolute paths and provider URLs are rejected.",
+    )
+    notion_media_fetch_contract.add_argument(
+        "--source",
+        required=True,
+        choices=sorted(archive_services.NOTION_NESTED_TREE_SOURCES),
+        help="External nested tree source declared by the fixture.",
+    )
+    notion_media_fetch_contract.add_argument(
+        "--credential-ref",
+        help="Optional safe env/keyring/secret/wallet ref label. Exact value is validated but never echoed.",
+    )
+    notion_media_fetch_contract.add_argument(
+        "--max-items",
+        type=int,
+        default=1000,
+        help="Maximum fixture nodes to parse while deriving media fetch candidate pages. Oversized fixtures block.",
+    )
+    notion_media_fetch_contract.add_argument(
+        "--scope-generation-id",
+        action="append",
+        help="Optional generation id filter for broad workspace fixtures. Repeat to include more than one generation.",
+    )
+    notion_media_fetch_contract.add_argument(
+        "--scope-root-ref",
+        action="append",
+        help="Optional safe root/ref filter matched before a future media adapter receives the queue. Repeatable.",
+    )
+    notion_media_fetch_contract.add_argument(
+        "--scope-leaf-ref",
+        action="append",
+        help="Optional exact nested leaf page ref filter. Repeatable.",
+    )
+    notion_media_fetch_contract.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Contract only; never calls Notion, retrieves secrets, downloads media bytes, hashes bytes, or writes files.",
+    )
+    notion_media_fetch_contract.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    notion_media_fetch_contract.set_defaults(func=command_notion_media_fetch_adapter_execution_contract)
+
+    notion_media_result_verification = subcommands.add_parser(
+        "notion-media-result-verification-plan",
+        aliases=["notion-media-result-verify-plan", "notion-media-preservation-verification-plan"],
+        help="Verify a sanitized Notion media result fixture against object manifests without reading bytes.",
+    )
+    notion_media_result_verification.add_argument("archive_root", help="Archive root to inspect.")
+    notion_media_result_verification.add_argument(
+        "--media-result",
+        required=True,
+        help="Archive-relative sanitized notion_media_result_fixture JSON path.",
+    )
+    notion_media_result_verification.add_argument(
+        "--source",
+        required=True,
+        choices=sorted(archive_services.NOTION_NESTED_TREE_SOURCES),
+        help="External source declared by the fixture.",
+    )
+    notion_media_result_verification.add_argument(
+        "--max-items",
+        type=int,
+        default=1000,
+        help="Maximum media result rows to verify. Oversized fixtures block.",
+    )
+    notion_media_result_verification.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Reads only sanitized fixture metadata and object manifests; never reads or hashes media bytes.",
+    )
+    notion_media_result_verification.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    notion_media_result_verification.set_defaults(func=command_notion_media_result_verification_plan)
 
     notion_block_mirror_tree_fixture_plan = subcommands.add_parser(
         "notion-block-mirror-tree-fixture-plan",

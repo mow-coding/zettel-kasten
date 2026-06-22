@@ -25,10 +25,11 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.131 pre-release
+v0.3.132 pre-release
 ```
 
-Previous public baseline: v0.3.130 pre-release.
+Previous public baseline: v0.3.131 pre-release.
+Earlier public baseline: v0.3.130 pre-release.
 Earlier public baseline: v0.3.129 pre-release.
 Earlier public baseline: v0.3.128 pre-release.
 Earlier public baseline: v0.3.127 pre-release.
@@ -326,6 +327,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.132
 v0.3.131
 v0.3.130
 v0.3.129

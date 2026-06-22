@@ -6,6 +6,28 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.132 - 2026-06-22
+
+- Added read-only
+  `archive notion-media-fetch-adapter-execution-contract --dry-run` and MCP
+  `notion_media_fetch_adapter_execution_contract`.
+- The media fetch contract reuses nested-tree planning to scope candidate live
+  content leaf pages, defines the future `notion_media_result_fixture`, requires
+  fresh provider file refs and byte hashing before preservation claims, and
+  keeps the v0.3.131 actor boundary: WOM local credential-bounded adapter,
+  human credential approval, AI plan/review/verify only.
+- Added read-only
+  `archive notion-media-result-verification-plan --dry-run` and MCP
+  `notion_media_result_verification_plan`.
+- The verifier checks sanitized media result fixtures against
+  `objects/manifests/files.jsonl` for `object_id` / `sha256` consistency,
+  manifest presence, and preservation states: `already_preserved`,
+  `newly_preserved`, and `fetch_failed`.
+- Still closed: no live Notion media fetch adapter, OAuth, provider API calls,
+  credential value reads, signed URL refreshes, media byte downloads, media byte
+  hashing, object manifest writes, receipts, zettel writes, edge writes, or
+  object manifest updates.
+
 ## v0.3.131 - 2026-06-22
 
 - Clarified the Notion ancestor fetch adapter execution subject in
