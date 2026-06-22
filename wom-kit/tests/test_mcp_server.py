@@ -2268,6 +2268,7 @@ class McpServerTests(unittest.TestCase):
                                 "archive_root": str(allowed_archive),
                                 "tree": "workbench/notion-nested-tree.sample.json",
                                 "source": "notion",
+                                "scope_ancestor_refs": ["page:fake:missing-parent"],
                             },
                         },
                     },
@@ -2365,6 +2366,7 @@ class McpServerTests(unittest.TestCase):
                                 "archive_root": str(allowed_archive),
                                 "tree": "workbench/notion-nested-tree.sample.json",
                                 "source": "notion",
+                                "scope_ancestor_refs": ["page:fake:missing-parent"],
                             },
                         },
                     },
@@ -2377,6 +2379,8 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(structured["lifecycle_action"], "notion_ancestor_crawl_plan")
                 self.assertEqual(structured["plan_state"], "ancestor_crawl_requests_ready")
                 self.assertEqual(structured["request_summary"]["crawl_request_count"], 1)
+                self.assertTrue(structured["request_summary"]["scope_filter_active"])
+                self.assertEqual(structured["scope_filter"]["scope_ancestor_refs"], ["page:fake:missing-parent"])
                 self.assertEqual(structured["missing_ancestor_refs"], ["page:fake:missing-parent"])
                 self.assertEqual(structured["affected_leaf_refs"], ["page:fake:db3-unknown-orphan"])
                 self.assertTrue(structured["ancestor_crawl_contract"]["consumes_missing_ancestor_refs_from_nested_tree_plan"])

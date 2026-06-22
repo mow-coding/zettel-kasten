@@ -258,8 +258,8 @@ Then route safely:
   guessed.
 - Package missing Notion ancestors reported by nested-tree planning: use
   `notion-ancestor-crawl-plan --tree workbench/notion-nested-tree.sample.json
-  --source notion --dry-run` to create a local request queue for a future
-  credential-bounded adapter.
+  --source notion --scope-generation-id DB1 --dry-run` to create a scoped
+  local request queue for a future credential-bounded adapter.
 - Build a nested tree fixture from reviewed Notion block mirror metadata: use
   `notion-block-mirror-tree-fixture-plan --mirror
   workbench/notion-block-mirror.sample.json --source notion --dry-run`.

@@ -2898,7 +2898,10 @@ state:
             self.assertEqual(result["source_plan_state"], "nested_tree_recovery_plan_ready")
             self.assertTrue(result["ancestor_crawl_contract"]["consumes_missing_ancestor_refs_from_nested_tree_plan"])
             self.assertTrue(result["ancestor_crawl_contract"]["provider_transport_is_not_implemented_in_this_release"])
+            self.assertTrue(result["ancestor_crawl_contract"]["scope_filter_narrows_request_queue_before_adapter"])
+            self.assertFalse(result["scope_filter"]["active"])
             self.assertEqual(result["request_summary"]["crawl_request_count"], 1)
+            self.assertEqual(result["request_summary"]["unfiltered_crawl_request_count"], 1)
             self.assertEqual(result["missing_ancestor_refs"], ["page:fake:missing-parent"])
             self.assertEqual(result["affected_leaf_refs"], ["page:fake:db3-unknown-orphan"])
             request = result["crawl_request_queue"][0]
@@ -2934,6 +2937,118 @@ state:
             )
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
+
+    def test_notion_ancestor_crawl_plan_scopes_broad_workspace_queue_before_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture_path = archive_root / "workbench" / "notion-scoped-ancestor-crawl.sample.json"
+            fixture_path.write_text(
+                json.dumps(
+                    {
+                        "fixture_kind": "notion_nested_tree_fixture",
+                        "source": "notion",
+                        "generation_roots": [
+                            {"generation_id": "DB1", "root_ref": "database:fake:db1"},
+                            {"generation_id": "DB2", "root_ref": "database:fake:db2"},
+                        ],
+                        "nodes": [
+                            {
+                                "node_ref": "database:fake:db1",
+                                "node_kind": "database",
+                                "source_status": "live",
+                                "mint_state": "not_applicable",
+                                "review_status": "fixture_reviewed",
+                            },
+                            {
+                                "node_ref": "database:fake:db2",
+                                "node_kind": "database",
+                                "source_status": "live",
+                                "mint_state": "not_applicable",
+                                "review_status": "fixture_reviewed",
+                            },
+                            {
+                                "node_ref": "page:fake:db1-orphan",
+                                "parent_ref": "page:fake:missing-parent-db1",
+                                "node_kind": "child_page",
+                                "source_status": "live",
+                                "mint_state": "missing",
+                                "review_status": "needs_parent_recovery",
+                                "declared_generation_id": "DB1",
+                            },
+                            {
+                                "node_ref": "page:fake:db2-orphan",
+                                "parent_ref": "page:fake:missing-parent-db2",
+                                "node_kind": "child_page",
+                                "source_status": "live",
+                                "mint_state": "missing",
+                                "review_status": "needs_parent_recovery",
+                                "declared_generation_id": "DB2",
+                            },
+                        ],
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "notion-ancestor-crawl-plan",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-scoped-ancestor-crawl.sample.json",
+                    "--source",
+                    "notion",
+                    "--scope-generation-id",
+                    "DB1",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["plan_state"], "ancestor_crawl_requests_ready")
+            self.assertTrue(result["scope_filter"]["active"])
+            self.assertEqual(result["scope_filter"]["scope_generation_ids"], ["DB1"])
+            self.assertEqual(result["scope_filter"]["unfiltered_crawl_request_count"], 2)
+            self.assertEqual(result["scope_filter"]["filtered_crawl_request_count"], 1)
+            self.assertEqual(result["scope_filter"]["excluded_crawl_request_count"], 1)
+            self.assertEqual(result["request_summary"]["crawl_request_count"], 1)
+            self.assertEqual(result["request_summary"]["unfiltered_crawl_request_count"], 2)
+            self.assertEqual(result["missing_ancestor_refs"], ["page:fake:missing-parent-db1"])
+            request = result["crawl_request_queue"][0]
+            self.assertEqual(request["affected_generation_ids"], ["DB1"])
+            self.assertEqual(request["ancestor_ref"], "page:fake:missing-parent-db1")
+            self.assertEqual(request["affected_leaf_refs"], ["page:fake:db1-orphan"])
+            self.assertFalse(result["current_capability"]["provider_api_call_implemented"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+            miss_code, miss_output = self.run_cli(
+                [
+                    "notion-ancestor-crawl-plan",
+                    str(archive_root),
+                    "--tree",
+                    "workbench/notion-scoped-ancestor-crawl.sample.json",
+                    "--source",
+                    "notion",
+                    "--scope-generation-id",
+                    "DB3",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            miss = json.loads(miss_output)
+            self.assertEqual(miss_code, 0, miss_output)
+            self.assertEqual(miss["plan_state"], "no_matching_ancestor_crawl_requests")
+            self.assertEqual(miss["scope_filter"]["unfiltered_crawl_request_count"], 2)
+            self.assertEqual(miss["scope_filter"]["filtered_crawl_request_count"], 0)
+            self.assertIn("ancestor_crawl_scope_filter_matched_no_requests", miss["warnings"])
 
     def test_notion_block_mirror_tree_fixture_plan_builds_sanitized_tree_without_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7188,6 +7303,7 @@ state:
             self.assertTrue(any("connection-import-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-nested-tree-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-ancestor-crawl-plan" in route["command"] for route in result["safe_routing"]))
+            self.assertTrue(any("--scope-generation-id" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-block-mirror-tree-fixture-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-ancestor-merge-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-client-issue-verification-plan" in route["command"] for route in result["safe_routing"]))
@@ -7207,6 +7323,7 @@ state:
             self.assertTrue(result["current_capability"]["notion_import_material_clue_audit_available"])
             self.assertTrue(result["current_capability"]["notion_nested_tree_recovery_planning_available"])
             self.assertTrue(result["current_capability"]["notion_ancestor_crawl_request_planning_available"])
+            self.assertTrue(result["current_capability"]["notion_ancestor_crawl_scope_filter_available"])
             self.assertTrue(result["current_capability"]["notion_block_mirror_tree_fixture_planning_available"])
             self.assertTrue(result["current_capability"]["notion_ancestor_merge_replan_available"])
             self.assertTrue(result["current_capability"]["notion_client_issue_verification_available"])

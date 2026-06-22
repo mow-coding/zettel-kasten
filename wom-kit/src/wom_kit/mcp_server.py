@@ -1627,6 +1627,10 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "source": {"type": "string", "enum": sorted(archive_services.NOTION_NESTED_TREE_SOURCES)},
                 "max_items": {"type": "integer", "minimum": 1, "maximum": archive_services.NOTION_NESTED_TREE_MAX_ITEMS_LIMIT, "default": 1000},
                 "max_depth": {"type": "integer", "minimum": 1, "maximum": 64, "default": 16},
+                "scope_generation_ids": {"type": "array", "items": {"type": "string"}, "default": []},
+                "scope_root_refs": {"type": "array", "items": {"type": "string"}, "default": []},
+                "scope_ancestor_refs": {"type": "array", "items": {"type": "string"}, "default": []},
+                "scope_leaf_refs": {"type": "array", "items": {"type": "string"}, "default": []},
                 "dry_run": {"type": "boolean", "default": True},
             },
             "required": ["archive_root", "tree", "source"],
@@ -4188,6 +4192,10 @@ def tool_notion_ancestor_crawl_plan(arguments: dict[str, Any]) -> dict[str, Any]
         source=require_string_arg(arguments, "source"),
         max_items=int(arguments.get("max_items", 1000)),
         max_depth=int(arguments.get("max_depth", 16)),
+        scope_generation_ids=arguments.get("scope_generation_ids"),
+        scope_root_refs=arguments.get("scope_root_refs"),
+        scope_ancestor_refs=arguments.get("scope_ancestor_refs"),
+        scope_leaf_refs=arguments.get("scope_leaf_refs"),
         dry_run=True,
     )
     state = result.get("plan_state") or ("passed" if result["ok"] else "blocked")
