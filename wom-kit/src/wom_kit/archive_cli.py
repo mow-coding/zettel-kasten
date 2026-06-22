@@ -3608,6 +3608,12 @@ def notion_recover_execution_result(
             "fetched_location_count": int(fetch_summary.get("fetched_node_count", 0) or 0),
             "partial_request_count": int(fetch_summary.get("partial_request_count", 0) or 0),
             "failed_request_count": int(fetch_summary.get("failed_request_count", 0) or 0),
+            "failure_categories": fetch_summary.get("failure_categories", []),
+            "primary_failure_category": fetch_summary.get("primary_failure_category"),
+            "safe_action_hints": fetch_summary.get("safe_action_hints", []),
+            "permission_or_connection_issue_detected": fetch_summary.get("primary_failure_category")
+            in {"notion_connection_not_shared_or_permission_denied", "notion_object_missing_or_not_shared"},
+            "raw_provider_errors_echoed": False,
             "page_titles_returned": False,
             "page_bodies_returned": False,
             "media_bytes_returned": False,
@@ -3706,6 +3712,11 @@ def print_notion_recover_result(result: dict[str, Any], output_format: str) -> N
     if fetch:
         print(f"Recovered locations: {fetch.get('fetched_location_count', 0)}")
         print(f"Failed checks: {fetch.get('failed_request_count', 0)}")
+        if fetch.get("primary_failure_category"):
+            print(f"Likely failure category: {fetch.get('primary_failure_category')}")
+        hints = fetch.get("safe_action_hints") if isinstance(fetch.get("safe_action_hints"), list) else []
+        if hints:
+            print(f"Suggested next action: {hints[0]}")
     print("Reads: folder/shelf/location links only")
     print("Does not read: page titles, page bodies, comments, or media")
     if handoff.get("sanitized_output_path"):
@@ -3719,6 +3730,32 @@ def print_notion_recover_result(result: dict[str, Any], output_format: str) -> N
         print("Warnings:")
         for warning in result["warnings"]:
             print(f"- {warning}")
+
+
+def command_notion_connection_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("notion-connection-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.notion_connection_plan(
+            Path(args.archive_root),
+            dry_run=args.dry_run,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Notion connection plan: {result.get('connection_state') or '-'}")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        recommended = result.get("recommended_product_path") if isinstance(result.get("recommended_product_path"), dict) else {}
+        print(f"Recommended path: {recommended.get('path') or '-'}")
+        print(f"First click: {recommended.get('first_click') or '-'}")
+        implemented = result.get("implemented_now") if isinstance(result.get("implemented_now"), dict) else {}
+        print(f"One-click OAuth implemented: {implemented.get('one_click_oauth_connection')}")
+        print(f"Actionable failure classification: {implemented.get('actionable_provider_failure_classification')}")
+    return 0 if result.get("ok", True) else 1
 
 
 def command_notion_media_fetch_adapter_execution_contract(args: argparse.Namespace) -> int:
@@ -14290,6 +14327,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notion_recover.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     notion_recover.set_defaults(func=command_notion_recover)
+
+    notion_connection_plan = subcommands.add_parser(
+        "notion-connection-plan",
+        aliases=["notion-connect-plan", "notion-one-click-connection-plan"],
+        help="Preview the product contract for one-click Notion connection and actionable recovery failures.",
+    )
+    notion_connection_plan.add_argument(
+        "archive_root",
+        nargs="?",
+        default=".",
+        help="Archive root to inspect. Defaults to the current directory.",
+    )
+    notion_connection_plan.add_argument("--dry-run", action="store_true", help="Required; writes nothing and calls no provider.")
+    notion_connection_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    notion_connection_plan.set_defaults(func=command_notion_connection_plan)
 
     notion_media_fetch_contract = subcommands.add_parser(
         "notion-media-fetch-adapter-execution-contract",

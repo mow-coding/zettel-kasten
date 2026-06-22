@@ -3795,6 +3795,149 @@ state:
             self.assertNotIn("notion.example", approve_output)
             self.assertNotIn(str(archive_root), approve_output)
 
+    def test_notion_recover_classifies_permission_failure_without_echoing_raw_provider_error(self) -> None:
+        root_id = "a" * 32
+        missing_parent_id = "b" * 32
+        leaf_id = "c" * 32
+        raw_provider_message = "API token does not have access to this resource."
+
+        def fake_notion_get_json(
+            *,
+            target_kind: str,
+            target_id: str,
+            token: str,
+            notion_version: str,
+            timeout_seconds: int,
+        ) -> dict[str, Any]:
+            self.assertEqual(token, "notion-token-hidden")
+            raise archive_services.NotionProviderRequestError(
+                "Notion provider request failed; raw provider error is not echoed.",
+                http_status=403,
+                notion_code="restricted_resource",
+                failure_category="notion_connection_not_shared_or_permission_denied",
+                stop_condition="provider_permission_denied_connection_not_shared_raw_error_redacted",
+                retryable=False,
+                action_hint="Share the top-level Notion recovery page or database with the connection.",
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            tree_path = archive_root / "workbench" / "notion-live-ancestor.permission-failure.json"
+            tree_path.write_text(
+                json.dumps(
+                    {
+                        "fixture_kind": "notion_nested_tree_fixture",
+                        "source": "notion",
+                        "generation_roots": [
+                            {
+                                "generation_id": "DB1",
+                                "root_ref": f"database:{root_id}",
+                                "generation_label": "Reviewed DB1",
+                            }
+                        ],
+                        "minted_refs": [],
+                        "nodes": [
+                            {
+                                "node_ref": f"database:{root_id}",
+                                "node_kind": "database",
+                                "content_class": "structure",
+                                "source_status": "live",
+                                "mint_state": "not_applicable",
+                                "review_status": "reviewed_root",
+                            },
+                            {
+                                "node_ref": f"page:{leaf_id}",
+                                "parent_ref": f"page:{missing_parent_id}",
+                                "node_kind": "page",
+                                "content_class": "content",
+                                "source_status": "live",
+                                "mint_state": "missing",
+                                "review_status": "needs_recovery",
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_TEST_NOTION_TOKEN": "notion-token-hidden"},
+                clear=False,
+            ), patch("wom_kit.archive_services.notion_api_get_json", fake_notion_get_json):
+                code, output = self.run_cli(
+                    [
+                        "notion-recover",
+                        str(archive_root),
+                        "--tree",
+                        "workbench/notion-live-ancestor.permission-failure.json",
+                        "--credential-ref",
+                        "env:WOM_TEST_NOTION_TOKEN",
+                        "--yes",
+                        "--approve",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["recover_state"], "blocked_after_partial_execution")
+            self.assertEqual(result["fetch_summary"]["failed_request_count"], 1)
+            self.assertEqual(
+                result["fetch_summary"]["primary_failure_category"],
+                "notion_connection_not_shared_or_permission_denied",
+            )
+            self.assertTrue(result["fetch_summary"]["permission_or_connection_issue_detected"])
+            self.assertIn(
+                "Share the top-level Notion recovery page or database with the connection.",
+                result["fetch_summary"]["safe_action_hints"],
+            )
+            self.assertIn("notion_connection_not_shared_or_permission_denied", serialized)
+            self.assertNotIn("env:WOM_TEST_NOTION_TOKEN", serialized)
+            self.assertNotIn("WOM_TEST_NOTION_TOKEN", serialized)
+            self.assertNotIn("notion-token-hidden", serialized)
+            self.assertNotIn(raw_provider_message, serialized)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+
+    def test_notion_connection_plan_names_one_click_contract_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+            code, output = self.run_cli(
+                [
+                    "notion-connection-plan",
+                    str(archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "notion_connection_plan")
+            self.assertEqual(result["connection_state"], "one_click_connection_contract_ready")
+            models = {item["model"] for item in result["official_notion_connection_models"]}
+            self.assertIn("internal_connection", models)
+            self.assertIn("personal_access_token", models)
+            self.assertIn("public_connection_oauth", models)
+            self.assertEqual(result["recommended_product_path"]["first_click"], "Connect Notion")
+            self.assertTrue(result["implemented_now"]["actionable_provider_failure_classification"])
+            self.assertFalse(result["implemented_now"]["one_click_oauth_connection"])
+            self.assertTrue(result["one_click_contract"]["must_keep_ai_secret_blind"])
+            self.assertFalse(result["privacy_guards"]["provider_api_called"])
+            self.assertFalse(result["privacy_guards"]["credential_value_read"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+            self.assertNotIn("token-hidden", serialized)
+
     def test_notion_recover_dry_run_auto_scopes_missing_locations_without_placeholder_chain(self) -> None:
         root_id = "a" * 32
         missing_parent_id = "b" * 32

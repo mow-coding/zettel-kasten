@@ -1,6 +1,6 @@
 # Notion Recover
 
-Status: v0.3.138 beginner-friendly one-command local Notion location recovery with file-ref credential fallback
+Status: v0.3.141 beginner-friendly one-command local Notion location recovery with actionable failure classification
 Date: 2026-06-22
 
 `archive notion-recover` is the beginner-facing wrapper for the existing
@@ -34,6 +34,12 @@ archive notion-recover --credential-ref file:<local-token-file>
 The file path is a local handoff only. WOM does not echo the path, file name, or
 token value in command output or receipts.
 
+For the connection-experience product contract:
+
+```bash
+archive notion-connection-plan --dry-run --format json
+```
+
 ## What It Does
 
 The command:
@@ -48,6 +54,8 @@ The command:
   needed,
 - writes the one-time approval receipt internally,
 - runs the approved location fetch,
+- classifies provider failures into safe human-action categories without raw
+  provider error echo,
 - writes a sanitized ancestor result fixture,
 - previews the merge handoff so the human can ask AI to tidy and merge the
   recovered locations.
@@ -69,8 +77,30 @@ It does not:
 - download media bytes,
 - refresh signed file URLs,
 - return raw provider responses,
+- return raw provider error bodies,
 - mint zets,
 - write zettel edges.
+
+## Failure Categories
+
+If the provider fetch fails, `notion-recover` now reports safe categories rather
+than only saying that checks failed:
+
+```text
+token_invalid_or_expired
+notion_connection_not_shared_or_permission_denied
+notion_object_missing_or_not_shared
+provider_rate_limited
+network_or_timeout
+provider_temporarily_unavailable
+provider_request_failed
+```
+
+The category most relevant to internal Notion integrations is usually
+`notion_connection_not_shared_or_permission_denied`: the token may be valid, but
+the target page or database has not been shared with the connection. WOM still
+does not echo the raw provider error body, page title, page body, provider URL,
+account id, email, or token.
 
 ## Safety Boundary
 
@@ -89,6 +119,11 @@ Vault/keyring refs such as `keyring:<label>` and `secret:<label>` are still the
 right long-term direction for one-click credential handoff, but live vault or OS
 keyring reads are not implemented in this wrapper yet. If such a ref is passed
 today, the wrapper fails closed instead of pretending the vault was opened.
+
+The product direction after the beta-tester recovery breakdown is stronger than
+vault/keyring alone: the default future path should be a managed "Connect
+Notion" browser flow. See `notion-connection-plan` for the one-click connection
+contract. The current token paths remain power-user fallbacks.
 
 Power-user commands such as `notion-ancestor-crawl-plan`,
 `credential-access-approval`, `notion-ancestor-fetch-adapter-run`, and

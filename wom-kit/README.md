@@ -95,6 +95,7 @@ docs/notion-nested-tree-plan.md
 docs/notion-ancestor-crawl-plan.md
 docs/notion-ancestor-fetch-adapter-execution-contract.md
 docs/notion-ancestor-fetch-adapter-run.md
+docs/notion-connection-plan.md
 docs/notion-recover.md
 docs/notion-media-fetch-adapter-execution-contract.md
 docs/notion-media-result-verification-plan.md
@@ -1356,6 +1357,16 @@ text, participant names, provider URLs, or raw provider responses. Keyring/vault
 credential reads, original audio byte retrieval where no official endpoint is
 confirmed, AI enrichment writes, derived text, zet drafting, and minting remain
 separate future layers.
+v0.3.141 responds to the beta-tester Notion recovery experience breakdown.
+`archive notion-connection-plan --dry-run` records the one-click "Connect
+Notion" product contract and separates internal connection tokens, personal
+access tokens, and public OAuth connections. `archive notion-recover` and the
+underlying Notion ancestor fetch adapter now classify provider failures into
+safe action categories such as invalid token, permission/page-share gap, missing
+or unshared object, rate limit, network/timeout, or temporary provider outage
+without echoing raw provider errors. Browser OAuth, managed local callback
+storage, keyring/vault reads, page picker authorization, and UI buttons remain
+future layers; env/file token handoff stays a power-user fallback.
 
 v0.2.41 adds a read-only attestation statement draft preview after v0.2.40 candidate indexing. The draft is non-binding, labels hash commitments as not proof of authenticity, writes nothing, and still does not create trust, signatures, attestations, imports, minting, receipts, sharing, provider calls, or ZET transport.
 

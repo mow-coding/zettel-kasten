@@ -2271,6 +2271,27 @@ class ArchiveServiceError(Exception):
     pass
 
 
+class NotionProviderRequestError(ArchiveServiceError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        http_status: int | None = None,
+        notion_code: str | None = None,
+        failure_category: str = "provider_request_failed",
+        stop_condition: str = "provider_fetch_failed_raw_error_redacted",
+        retryable: bool = False,
+        action_hint: str = "Review the local connection setup and retry after the human fixes the provider-side issue.",
+    ) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+        self.notion_code = notion_code
+        self.failure_category = failure_category
+        self.stop_condition = stop_condition
+        self.retryable = retryable
+        self.action_hint = action_hint
+
+
 def connect_archive_index(
     db_path: Path,
     *,
@@ -17726,6 +17747,132 @@ def notion_recover_plan(
         "blockers": unique_preserve_order(blockers),
     }
 
+def notion_connection_plan(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    if not dry_run:
+        blockers.append("notion-connection-plan is read-only and requires --dry-run.")
+    return json_safe(
+        {
+            "ok": not blockers,
+            "dry_run": bool(dry_run),
+            "lifecycle_action": "notion_connection_plan",
+            "archive_id": archive_id,
+            "connection_state": "one_click_connection_contract_ready" if not blockers else "blocked",
+            "user_feedback_diagnosis": {
+                "manual_internal_token_flow_rejected": True,
+                "terminal_token_file_and_page_share_loop_is_product_gap": True,
+                "notion_recover_capability_sufficient_but_connection_experience_not_sufficient": True,
+                "target_user_is_beginner_who_wants_professional_results": True,
+            },
+            "official_notion_connection_models": [
+                {
+                    "model": "internal_connection",
+                    "authentication": "static_installation_token",
+                    "content_access": "pages_or_databases_must_be_shared_with_connection",
+                    "user_experience_fit": "developer_or_admin_workflow_not_beginner_default",
+                    "wom_status": "supported_as_power_user_fallback",
+                },
+                {
+                    "model": "personal_access_token",
+                    "authentication": "user_scoped_static_token",
+                    "content_access": "uses_the_creating_users_workspace_membership_and_page_permissions",
+                    "user_experience_fit": "trusted_local_tool_fallback_better_than_internal_connection_for_single_user",
+                    "wom_status": "candidate_local_stopgap_after_human_choice",
+                },
+                {
+                    "model": "public_connection_oauth",
+                    "authentication": "oauth_2_authorization_flow",
+                    "content_access": "user_selects_pages_during_authorization_or_adds_connection_later",
+                    "user_experience_fit": "target_one_click_connection_model",
+                    "wom_status": "recommended_product_direction_not_implemented_in_cli_yet",
+                },
+            ],
+            "recommended_product_path": {
+                "path": "managed_notion_connection",
+                "first_click": "Connect Notion",
+                "human_role": "approve_access_once_in_browser",
+                "ai_role": "plan_verify_and_explain_without_secret_access",
+                "local_runtime_role": "receive_token_or_callback_store_secret_and_run_adapter",
+                "preferred_auth_model": "public_connection_oauth",
+                "local_trusted_tool_stopgap": "personal_access_token_or_guided_internal_connection",
+            },
+            "one_click_contract": {
+                "must_remove_token_file_hunt": True,
+                "must_remove_terminal_command_assembly_for_beginners": True,
+                "must_remove_manual_receipt_path_copy": True,
+                "must_classify_failures_without_raw_error_echo": True,
+                "must_keep_ai_secret_blind": True,
+                "must_show_human_action_in_plain_language": True,
+                "must_support_repeatable_recovery_after_connection": True,
+            },
+            "implemented_now": {
+                "notion_recover_single_command_wrapper": True,
+                "env_credential_ref": True,
+                "file_credential_ref": True,
+                "actionable_provider_failure_classification": True,
+                "one_click_oauth_connection": False,
+                "managed_local_callback_server": False,
+                "keyring_or_vault_secret_storage": False,
+                "page_picker_or_browser_authorization": False,
+            },
+            "failure_categories_for_current_recover": [
+                {
+                    "category": "token_invalid_or_expired",
+                    "human_action": "Create or refresh the Notion token, then rerun the local recovery command.",
+                },
+                {
+                    "category": "notion_connection_not_shared_or_permission_denied",
+                    "human_action": "Share the top-level recovery page or database with the connection, or use the planned OAuth/PAT connection path.",
+                },
+                {
+                    "category": "notion_object_missing_or_not_shared",
+                    "human_action": "Confirm the target still exists and is visible to the selected connection.",
+                },
+                {
+                    "category": "provider_rate_limited",
+                    "human_action": "Wait and retry.",
+                },
+                {
+                    "category": "network_or_timeout",
+                    "human_action": "Check local network access and retry.",
+                },
+                {
+                    "category": "provider_temporarily_unavailable",
+                    "human_action": "Retry later.",
+                },
+            ],
+            "privacy_guards": {
+                "writes": False,
+                "provider_api_called": False,
+                "browser_opened": False,
+                "credential_value_read": False,
+                "credential_ref_echoed": False,
+                "tokens_echoed": False,
+                "provider_urls_echoed": False,
+                "local_absolute_paths_echoed": False,
+                "raw_provider_responses_echoed": False,
+                "page_titles_echoed": False,
+                "page_bodies_echoed": False,
+                "account_ids_echoed": False,
+                "emails_echoed": False,
+            },
+            "would_change": [],
+            "next_safe_actions": [
+                "Use notion-recover failure categories to tell the human what to fix without exposing raw provider errors.",
+                "Design a managed Notion OAuth callback broker before implementing one-click browser authorization.",
+                "Keep the existing env/file token path only as a power-user or temporary fallback.",
+            ],
+            "warnings": [],
+            "blockers": blockers,
+        }
+    )
+
 
 def notion_recover_select_tree_fixture(
     archive_root: Path,
@@ -18456,6 +18603,8 @@ def notion_ancestor_fetch_adapter_run(
     execution_status = "not_run"
     fetched_nodes: dict[str, dict[str, Any]] = {}
     request_results: list[dict[str, Any]] = []
+    provider_failure_categories: list[str] = []
+    provider_action_hints: list[str] = []
     token = None
 
     if approve and request_queue and not blockers:
@@ -18480,7 +18629,16 @@ def notion_ancestor_fetch_adapter_run(
                 provider_api_called = provider_api_called or bool(result.get("provider_api_called"))
                 request_results.append(result)
                 if result.get("execution_status") == "failed":
-                    blockers.append("notion ancestor provider fetch failed; raw provider error is not echoed.")
+                    failure_category = str(result.get("failure_category") or "provider_request_failed")
+                    provider_failure_categories.append(failure_category)
+                    action_hint = str(result.get("safe_action_hint") or "").strip()
+                    if action_hint:
+                        provider_action_hints.append(action_hint)
+            if provider_failure_categories:
+                categories = ", ".join(unique_preserve_order(provider_failure_categories))
+                blockers.append(
+                    f"notion ancestor provider fetch failed with actionable category: {categories}. Raw provider error is not echoed."
+                )
         finally:
             token = None
         execution_status = "failed" if blockers else "succeeded"
@@ -18586,6 +18744,10 @@ def notion_ancestor_fetch_adapter_run(
             "fetched_node_count": len(fetched_nodes),
             "partial_request_count": len([item for item in request_results if item.get("partial")]),
             "failed_request_count": len([item for item in request_results if item.get("execution_status") == "failed"]),
+            "failure_categories": unique_preserve_order(provider_failure_categories),
+            "primary_failure_category": unique_preserve_order(provider_failure_categories)[0] if provider_failure_categories else None,
+            "safe_action_hints": unique_preserve_order(provider_action_hints),
+            "raw_provider_errors_echoed": False,
             "page_titles_returned": False,
             "page_bodies_returned": False,
             "media_bytes_returned": False,
@@ -18838,6 +19000,21 @@ def notion_execute_one_ancestor_fetch_request(
         else:
             stop_condition = "max_depth_reached"
             partial = True
+    except NotionProviderRequestError as exc:
+        return {
+            "request_id": request_id,
+            "execution_status": "failed",
+            "stop_condition": exc.stop_condition,
+            "partial": True,
+            "provider_api_called": True,
+            "fetched_node_refs": fetched_refs,
+            "failure_category": exc.failure_category,
+            "failure_retryable": exc.retryable,
+            "safe_action_hint": exc.action_hint,
+            "provider_status_category": exc.http_status,
+            "provider_error_code": exc.notion_code,
+            "raw_provider_error_echoed": False,
+        }
     except Exception:
         return {
             "request_id": request_id,
@@ -18846,6 +19023,10 @@ def notion_execute_one_ancestor_fetch_request(
             "partial": True,
             "provider_api_called": provider_api_called,
             "fetched_node_refs": fetched_refs,
+            "failure_category": "provider_request_failed",
+            "failure_retryable": False,
+            "safe_action_hint": "Review the local connection setup and retry after the provider-side issue is fixed.",
+            "raw_provider_error_echoed": False,
         }
 
     return {
@@ -18857,6 +19038,81 @@ def notion_execute_one_ancestor_fetch_request(
         "fetched_node_count": len(fetched_refs),
         "fetched_node_refs": fetched_refs,
     }
+
+
+def notion_provider_failure_details(
+    *,
+    http_status: int | None = None,
+    notion_code: str | None = None,
+    transport_error: bool = False,
+) -> dict[str, Any]:
+    code = str(notion_code or "").strip()
+    if transport_error:
+        return {
+            "failure_category": "network_or_timeout",
+            "stop_condition": "provider_network_or_timeout_raw_error_redacted",
+            "retryable": True,
+            "action_hint": "Check the network connection and retry the local provider fetch.",
+        }
+    if http_status == 401 or code == "unauthorized":
+        return {
+            "failure_category": "token_invalid_or_expired",
+            "stop_condition": "provider_token_invalid_or_expired_raw_error_redacted",
+            "retryable": False,
+            "action_hint": "Create or refresh the Notion token, then rerun the approved local recovery command.",
+        }
+    if http_status == 403 or code == "restricted_resource":
+        return {
+            "failure_category": "notion_connection_not_shared_or_permission_denied",
+            "stop_condition": "provider_permission_denied_connection_not_shared_raw_error_redacted",
+            "retryable": False,
+            "action_hint": "Share the top-level Notion recovery page or database with the connection, or switch to the planned OAuth/PAT connection path.",
+        }
+    if http_status == 404 or code == "object_not_found":
+        return {
+            "failure_category": "notion_object_missing_or_not_shared",
+            "stop_condition": "provider_object_missing_or_not_shared_raw_error_redacted",
+            "retryable": False,
+            "action_hint": "Confirm the target still exists and is shared with the Notion connection; this often means the connection was not added to the relevant parent page.",
+        }
+    if http_status == 429 or code == "rate_limited":
+        return {
+            "failure_category": "provider_rate_limited",
+            "stop_condition": "provider_rate_limited_raw_error_redacted",
+            "retryable": True,
+            "action_hint": "Wait for the provider rate limit window to reset, then rerun the local recovery command.",
+        }
+    if http_status in {500, 502, 503, 504, 529} or code in {
+        "internal_server_error",
+        "bad_gateway",
+        "service_unavailable",
+        "database_connection_unavailable",
+        "gateway_timeout",
+        "service_overload",
+    }:
+        return {
+            "failure_category": "provider_temporarily_unavailable",
+            "stop_condition": "provider_temporarily_unavailable_raw_error_redacted",
+            "retryable": True,
+            "action_hint": "Retry later; the provider returned a temporary availability or overload signal.",
+        }
+    return {
+        "failure_category": "provider_request_failed",
+        "stop_condition": "provider_fetch_failed_raw_error_redacted",
+        "retryable": False,
+        "action_hint": "Review the local connection setup and rerun after the human fixes the provider-side issue.",
+    }
+
+
+def notion_error_code_from_http_body(body: bytes) -> str | None:
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    code = payload.get("code")
+    return str(code).strip() if isinstance(code, str) and code.strip() else None
 
 
 def notion_api_get_json(
@@ -18888,8 +19144,22 @@ def notion_api_get_json(
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             body = response.read(1_000_000)
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise ArchiveServiceError("Notion provider request failed; raw provider error is not echoed.") from exc
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read(1_000_000)
+        notion_code = notion_error_code_from_http_body(error_body)
+        details = notion_provider_failure_details(http_status=exc.code, notion_code=notion_code)
+        raise NotionProviderRequestError(
+            "Notion provider request failed; raw provider error is not echoed.",
+            http_status=exc.code,
+            notion_code=notion_code,
+            **details,
+        ) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        details = notion_provider_failure_details(transport_error=True)
+        raise NotionProviderRequestError(
+            "Notion provider request failed; raw provider error is not echoed.",
+            **details,
+        ) from exc
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:

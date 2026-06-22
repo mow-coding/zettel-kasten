@@ -1,6 +1,6 @@
 # Notion Ancestor Fetch Adapter Run
 
-Status: v0.3.134 approval-gated local Notion ancestor structure fetch checkpoint
+Status: v0.3.141 approval-gated local Notion ancestor structure fetch with actionable provider failure classification
 
 `archive notion-ancestor-fetch-adapter-run` is the first local live Notion
 ancestor fetch adapter.
@@ -16,6 +16,11 @@ comments, media bytes, file URLs, workspace URLs, or raw provider responses,
 and it does not mint zets or write edges.
 More explicitly: it does not read page titles, does not read page bodies, and
 does not download media bytes.
+
+v0.3.141 keeps raw provider errors redacted but classifies safe failure causes
+for the caller: invalid token, permission/page-share gap, missing or unshared
+object, rate limit, network/timeout, temporary provider outage, or generic
+provider request failure.
 
 ## Command
 
@@ -129,6 +134,12 @@ max_depth_reached
 parent_ref_missing_or_ambiguous
 unsafe_ref_or_provider_secret_detected
 provider_fetch_failed_raw_error_redacted
+provider_token_invalid_or_expired_raw_error_redacted
+provider_permission_denied_connection_not_shared_raw_error_redacted
+provider_object_missing_or_not_shared_raw_error_redacted
+provider_rate_limited_raw_error_redacted
+provider_network_or_timeout_raw_error_redacted
+provider_temporarily_unavailable_raw_error_redacted
 ```
 
 When the fetched node's parent is already a known generation root in the local
