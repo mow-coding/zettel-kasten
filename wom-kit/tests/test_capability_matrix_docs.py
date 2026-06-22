@@ -57,6 +57,7 @@ NOTION_BLOCK_MIRROR_TREE_FIXTURE_PLAN_PATH = KIT_ROOT / "docs" / "notion-block-m
 NOTION_ANCESTOR_MERGE_PLAN_PATH = KIT_ROOT / "docs" / "notion-ancestor-merge-plan.md"
 NOTION_CLIENT_ISSUE_VERIFICATION_PLAN_PATH = KIT_ROOT / "docs" / "notion-client-issue-verification-plan.md"
 NOTION_CLIENT_FIXTURE_REQUEST_PLAN_PATH = KIT_ROOT / "docs" / "notion-client-fixture-request-plan.md"
+TIRO_IMPORT_PLAN_PATH = KIT_ROOT / "docs" / "tiro-import-plan.md"
 ZETTEL_EDGE_WRITE_PATH = KIT_ROOT / "docs" / "zettel-edge-write.md"
 ZETTEL_EDGE_BATCH_PATH = KIT_ROOT / "docs" / "zettel-edge-batch.md"
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
@@ -469,8 +470,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.57.md").read_text(encoding="utf-8")
+        current_release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.137.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.65 read-only version truth-source checkpoint with parent project pin discovery",
+            "Status: v0.3.137 read-only version truth-source checkpoint with project source mirror drift discovery",
             "archive --version",
             "archive version --format json",
             "archive version <project-or-archive-root> --format json",
@@ -478,10 +480,15 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "wom_kit.__version__",
             ".zettel-kasten/source/installed-version.txt",
             "parent_of_archive/.zettel-kasten/installed-version.txt",
+            ".zettel-kasten/source",
+            "project_source_mirror",
+            "latest fetched semver tag",
+            "consistency_state: project_source_mirror_behind_latest_fetched_tag",
             "consistency_state: project_pin_mismatch",
             "writes no files",
             "calls no providers",
             "reads no secrets",
+            "repairs no project source mirror",
             "redacts local absolute paths by default",
             "does not provide automatic upgrade",
         ):
@@ -493,13 +500,15 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "archive --version",
             "archive version [root] --format json",
             "runtime-context field `wom_kit_version`",
+            "project_source_mirror",
             "parent_of_archive/.zettel-kasten/installed-version.txt",
-            "writes no files, calls no providers, and reads no secrets",
+            "project_source_mirror_behind_latest_fetched_tag",
+            "writes no files, repairs no mirror, calls no providers, and reads no secrets",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.87 pre-release",
+            "v0.3.137 pre-release",
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "read-only WOM-kit version truth-source checks",
             "parent project installed-version pin discovery",
@@ -510,6 +519,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "docs/version-truth-source.md",
             "version",
             "Print the running WOM-kit CLI version",
+            "source mirror status",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, kit_readme_text)
@@ -520,8 +530,76 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, release_text)
+        for phrase in (
+            "project_source_mirror",
+            "latest fetched semver tag",
+            "The version check remains read-only",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, current_release_text)
         self.assertIn("[Version Truth Source](version-truth-source.md)", public_map_text)
         self.assertIn("[Version Truth Source](version-truth-source.md)", public_map_ko_text)
+
+    def test_tiro_import_plan_doc_and_matrix_cover_read_only_meeting_manifest_contract(self) -> None:
+        tiro_text = TIRO_IMPORT_PLAN_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.137.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.137 read-only Tiro meeting transcript import planning",
+            "archive tiro-import-plan <archive-root> --manifest workbench/tiro-meeting.sample.json --dry-run --format json",
+            "tiro_import_plan",
+            "wom-tiro-import-manifest/v0.1",
+            "workbench/tiro-meeting.sample.json",
+            "meeting metadata presence",
+            "participant and speaker counts",
+            "transcript segment count",
+            "audio object id",
+            "does not echo meeting titles",
+            "writes no files",
+            "calls no Tiro API",
+            "reads no audio bytes",
+            "writes no derived text",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, tiro_text)
+        for phrase in (
+            "Tiro meeting import plan",
+            "archive tiro-import-plan",
+            "MCP `tiro_import_plan`",
+            "echoes no meeting title",
+            "calls no Tiro API",
+            "reads no audio bytes",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "[Tiro Import Plan](wom-kit/docs/tiro-import-plan.md)",
+            "read-only Tiro meeting transcript import planning",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        for phrase in (
+            "docs/tiro-import-plan.md",
+            "tiro-import-plan",
+            "Plan Tiro meeting transcript and audio-objet import",
+            "archive tiro-import-plan --manifest workbench/tiro-meeting.sample.json --dry-run",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, kit_readme_text)
+        self.assertIn("[Tiro Import Plan](tiro-import-plan.md)", public_map_text)
+        self.assertIn("[Tiro Import Plan](tiro-import-plan.md)", public_map_ko_text)
+        for phrase in (
+            "v0.3.137 adds the first read-only WOM-kit planning gate",
+            "archive tiro-import-plan",
+            "MCP `tiro_import_plan`",
+            "no transcript/title/link echo",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
 
     def test_runtime_canonical_entrypoints_doc_and_matrix_keep_orientation_read_only(self) -> None:
         entrypoints_text = RUNTIME_CANONICAL_ENTRYPOINTS_PATH.read_text(encoding="utf-8")

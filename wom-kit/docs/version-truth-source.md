@@ -1,6 +1,6 @@
 # WOM-kit Version Truth Source
 
-Status: v0.3.65 read-only version truth-source checkpoint with parent project pin discovery
+Status: v0.3.137 read-only version truth-source checkpoint with project source mirror drift discovery
 
 WOM-kit has several places where a human or AI might see a version-like value:
 the installed CLI, the source checkout, and a project-local pin left by a setup
@@ -59,6 +59,41 @@ mismatch does not rewrite anything; it simply returns `ok: false` with
 upgrade the project-local source or switch to the intended CLI. UTF-8
 BOM-prefixed pin files are normalized for Windows-created text files.
 
+## Optional Project Source Mirror
+
+A project may also keep a checked-out WOM-kit source mirror at:
+
+```text
+.zettel-kasten/source
+```
+
+Starting in v0.3.137, `archive version <root> --format json` reports a
+`project_source_mirror` block when that folder exists. The check is still
+read-only. It compares:
+
+- mirror package version from `wom-kit/src/wom_kit/__init__.py`,
+- mirror `wom-kit/pyproject.toml` version,
+- mirror `installed-version.txt`,
+- exact Git head tag when available,
+- latest fetched semver tag when available.
+
+This catches a common drift case: a project-local mirror may still point at an
+old source checkout even though newer tags have been fetched locally. In that
+case the JSON can return:
+
+```text
+consistency_state: project_source_mirror_behind_latest_fetched_tag
+```
+
+or:
+
+```text
+consistency_state: project_source_mirror_mismatch
+```
+
+The command does not run `git fetch`, update the mirror, switch branches, edit
+pins, or repair anything automatically.
+
 ## Privacy Boundary
 
 The version check is local and non-secret:
@@ -67,13 +102,15 @@ The version check is local and non-secret:
 - it calls no providers,
 - it reads no secrets, keyrings, vaults, browser stores, mailboxes, or source
   documents,
+- it repairs no project source mirror,
 - it redacts local absolute paths by default.
 
 Use `--no-redact-local-paths` only for trusted local debugging.
 
 ## Not Implemented
 
-v0.3.65 does not provide automatic upgrade, installer repair, live provider
-sync, IMAP execution, secret retrieval, or project migration. It only gives a
-clear read-only signal about which WOM-kit version is running and whether an
-optional project pin agrees with it.
+v0.3.137 does not provide automatic upgrade, installer repair, project source
+mirror repair, live provider sync, IMAP execution, secret retrieval, or project
+migration. It only gives a clear read-only signal about which WOM-kit version is
+running and whether optional project-local pin/source mirror evidence agrees
+with it.

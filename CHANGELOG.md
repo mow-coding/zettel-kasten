@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.137 - 2026-06-22
+
+- Added read-only `archive tiro-import-plan` and MCP `tiro_import_plan` for
+  Tiro-style meeting transcript import planning from archive-internal
+  manifests.
+- The Tiro planner validates meeting metadata, speaker turns, timestamps,
+  transcript segment shape, confidence fields, and optional audio objet refs
+  without echoing meeting titles, participant names, transcript text, source
+  URLs, audio filenames, local paths, account ids, emails, tokens, or secrets.
+- Added a public fake archive Tiro manifest fixture and documentation for the
+  manifest contract and safety boundary.
+- Strengthened `archive version` with `project_source_mirror` checks so
+  project-local `.zettel-kasten/source` mirrors can report source version,
+  pyproject version, installed-version pin alignment, exact head tag, and latest
+  fetched semver tag drift when available.
+
 ## v0.3.136 - 2026-06-22
 
 - Added `archive notion-recover`, a beginner-facing one-command wrapper for

@@ -470,6 +470,31 @@ NOTION_API_DEFAULT_VERSION = "2022-06-28"
 NOTION_API_ID_RE = re.compile(
     r"^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
 )
+TIRO_IMPORT_MANIFEST_SCHEMA = "wom-tiro-import-manifest/v0.1"
+TIRO_IMPORT_SOURCE = "tiro"
+TIRO_IMPORT_MAX_SEGMENTS = 10000
+TIRO_IMPORT_AUDIO_EXTENSIONS = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav"}
+TIRO_IMPORT_TRANSCRIPT_EXTENSIONS = {".json", ".jsonl", ".md", ".srt", ".txt", ".vtt"}
+TIRO_IMPORT_MEETING_FIELDS = {
+    "external_id",
+    "title",
+    "started_at",
+    "ended_at",
+    "duration_seconds",
+    "place",
+    "source_url",
+    "language",
+}
+TIRO_IMPORT_AUDIO_FIELDS = {
+    "object_id",
+    "objet_ref",
+    "filename",
+    "mime",
+    "duration_seconds",
+    "source_ref",
+}
+TIRO_IMPORT_PARTICIPANT_FIELDS = {"speaker_id", "display_name", "person_ref", "role"}
+TIRO_IMPORT_SEGMENT_FIELDS = {"segment_id", "speaker_id", "start_ms", "end_ms", "text", "confidence"}
 EXTERNAL_IMPORT_EXTENSIONS = {".md", ".markdown", ".txt"}
 SOURCE_TYPES = {"local_folder", "external_ssd", "notion_export", "google_drive_export", "object_manifest", "imap_mailbox"}
 IMAP_MAILBOX_SOURCE_TYPE = "imap_mailbox"
@@ -20268,6 +20293,419 @@ def read_safe_archive_json_fixture(
         blockers.append(f"{fixture_label} must be a JSON object.")
         return normalized_path, None
     return normalized_path, payload
+
+
+def read_tiro_import_manifest(
+    root: Path,
+    relative_path: str,
+    *,
+    blockers: list[str],
+) -> tuple[str, dict[str, Any] | None]:
+    normalized_path = ""
+    try:
+        normalized_path = normalize_archive_relative_path(relative_path)
+        manifest_file = resolve_archive_relative_path(root, normalized_path)
+    except ArchivePathError:
+        blockers.append("manifest must be a safe archive-relative JSON path.")
+        return "", None
+    if Path(normalized_path).suffix.lower() != ".json":
+        blockers.append("manifest must be a JSON file.")
+        return normalized_path, None
+    if not manifest_file.is_file():
+        blockers.append("manifest file is missing.")
+        return normalized_path, None
+    try:
+        text = manifest_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        blockers.append(f"manifest could not be read as UTF-8 ({exc.__class__.__name__}).")
+        return normalized_path, None
+    if contains_forbidden_location_reference(text) or source_intake_secret_like(text):
+        blockers.append("manifest contains a local absolute path, object-storage URL, token, or secret-like value.")
+        return normalized_path, None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        blockers.append("manifest must be valid JSON.")
+        return normalized_path, None
+    if not isinstance(payload, dict):
+        blockers.append("manifest must be a JSON object.")
+        return normalized_path, None
+    return normalized_path, payload
+
+
+def safe_tiro_import_max_segments(max_segments: int, blockers: list[str]) -> int:
+    try:
+        value = int(max_segments)
+    except (TypeError, ValueError):
+        blockers.append(f"max_segments must be an integer between 1 and {TIRO_IMPORT_MAX_SEGMENTS}.")
+        return 1000
+    if value < 1 or value > TIRO_IMPORT_MAX_SEGMENTS:
+        blockers.append(f"max_segments must be between 1 and {TIRO_IMPORT_MAX_SEGMENTS}.")
+        return max(1, min(value, TIRO_IMPORT_MAX_SEGMENTS))
+    return value
+
+
+def tiro_import_safe_ref(value: Any, field_name: str, blockers: list[str]) -> str:
+    if not isinstance(value, str) or not value.strip():
+        blockers.append(f"{field_name} must be a non-empty safe id.")
+        return ""
+    text = value.strip()
+    if not safe_source_intake_ref(text):
+        blockers.append(f"{field_name} must be a safe non-secret id, not a path, URL, token, or free-text value.")
+        return ""
+    return text
+
+
+def tiro_import_optional_safe_ref(value: Any, field_name: str, blockers: list[str]) -> str | None:
+    if value is None or value == "":
+        return None
+    return tiro_import_safe_ref(value, field_name, blockers)
+
+
+def tiro_import_optional_text_present(value: Any, field_name: str, blockers: list[str]) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, str):
+        blockers.append(f"{field_name} must be a string when present.")
+        return False
+    if source_intake_secret_like(value) or contains_forbidden_location_reference(value):
+        blockers.append(f"{field_name} must not contain local paths, object-storage URLs, tokens, or secrets.")
+    return bool(value.strip())
+
+
+def tiro_import_optional_nonnegative_int(value: Any, field_name: str, blockers: list[str]) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        blockers.append(f"{field_name} must be a non-negative integer.")
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        blockers.append(f"{field_name} must be a non-negative integer.")
+        return None
+    if number < 0:
+        blockers.append(f"{field_name} must be a non-negative integer.")
+        return None
+    return number
+
+
+def tiro_import_optional_confidence(value: Any, field_name: str, blockers: list[str]) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        blockers.append(f"{field_name} must be a number from 0 to 1.")
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        blockers.append(f"{field_name} must be a number from 0 to 1.")
+        return None
+    if number < 0 or number > 1:
+        blockers.append(f"{field_name} must be a number from 0 to 1.")
+    return number
+
+
+def tiro_import_audio_object_id(audio: dict[str, Any], blockers: list[str]) -> str | None:
+    raw_object_id = audio.get("object_id")
+    raw_objet_ref = audio.get("objet_ref")
+    if raw_object_id and raw_objet_ref:
+        object_id = normalize_object_id(str(raw_object_id), blockers)
+        objet_object_id = object_id_from_objet_ref(str(raw_objet_ref), blockers)
+        if object_id and objet_object_id and object_id != objet_object_id:
+            blockers.append("audio.object_id and audio.objet_ref point to different objects.")
+        return object_id or objet_object_id or None
+    if raw_object_id:
+        return normalize_object_id(str(raw_object_id), blockers) or None
+    if raw_objet_ref:
+        return object_id_from_objet_ref(str(raw_objet_ref), blockers) or None
+    return None
+
+
+def tiro_import_plan(
+    archive_root: Path | str,
+    *,
+    manifest_path: str,
+    source: str = TIRO_IMPORT_SOURCE,
+    max_segments: int = 1000,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    normalized_source = (source or "").strip().lower()
+    if normalized_source != TIRO_IMPORT_SOURCE:
+        blockers.append("source must be tiro.")
+
+    safe_max_segments = safe_tiro_import_max_segments(max_segments, blockers)
+    normalized_manifest_path, payload = read_tiro_import_manifest(root, manifest_path, blockers=blockers)
+
+    meeting_summary: dict[str, Any] = {
+        "external_id_present": False,
+        "title_present": False,
+        "started_at_present": False,
+        "ended_at_present": False,
+        "duration_seconds": None,
+        "place_present": False,
+        "source_url_present": False,
+        "language": None,
+        "raw_values_echoed": False,
+    }
+    participant_summary: dict[str, Any] = {
+        "participant_count": 0,
+        "declared_speaker_count": 0,
+        "display_names_echoed": False,
+        "person_refs_present": False,
+    }
+    transcript_summary: dict[str, Any] = {
+        "segment_count": 0,
+        "speaker_count_in_segments": 0,
+        "undeclared_speaker_count": 0,
+        "empty_text_segment_count": 0,
+        "confidence_count": 0,
+        "timestamp_unit": "milliseconds",
+        "turn_order_preserved": True,
+        "transcript_text_echoed": False,
+    }
+    audio_summary: dict[str, Any] = {
+        "audio_ref_present": False,
+        "object_id_valid": False,
+        "objet_ref_present": False,
+        "manifest_record_found": False,
+        "duration_seconds": None,
+        "mime_present": False,
+        "filename_echoed": False,
+        "audio_bytes_read": False,
+    }
+    source_refs_for_draft: list[dict[str, str]] = []
+
+    if payload is not None:
+        schema = str(payload.get("schema") or payload.get("schema_version") or "").strip()
+        if schema != TIRO_IMPORT_MANIFEST_SCHEMA:
+            blockers.append(f"manifest schema must be {TIRO_IMPORT_MANIFEST_SCHEMA}.")
+        payload_source = str(payload.get("source") or "").strip().lower()
+        if payload_source and payload_source != TIRO_IMPORT_SOURCE:
+            blockers.append("manifest source must be tiro.")
+
+        meeting = payload.get("meeting")
+        if not isinstance(meeting, dict):
+            blockers.append("manifest.meeting must be an object.")
+            meeting = {}
+        else:
+            unknown_meeting_fields = sorted(set(meeting) - TIRO_IMPORT_MEETING_FIELDS)
+            if unknown_meeting_fields:
+                warnings.append("manifest.meeting has fields outside the v0.1 contract; they were ignored.")
+            external_id = tiro_import_optional_safe_ref(meeting.get("external_id"), "meeting.external_id", blockers)
+            meeting_summary.update(
+                {
+                    "external_id_present": bool(external_id),
+                    "title_present": tiro_import_optional_text_present(meeting.get("title"), "meeting.title", blockers),
+                    "started_at_present": tiro_import_optional_text_present(
+                        meeting.get("started_at"),
+                        "meeting.started_at",
+                        blockers,
+                    ),
+                    "ended_at_present": tiro_import_optional_text_present(meeting.get("ended_at"), "meeting.ended_at", blockers),
+                    "duration_seconds": tiro_import_optional_nonnegative_int(
+                        meeting.get("duration_seconds"),
+                        "meeting.duration_seconds",
+                        blockers,
+                    ),
+                    "place_present": tiro_import_optional_text_present(meeting.get("place"), "meeting.place", blockers),
+                    "source_url_present": isinstance(meeting.get("source_url"), str) and bool(str(meeting.get("source_url")).strip()),
+                    "language": meeting.get("language") if safe_source_intake_ref(str(meeting.get("language") or "")) else None,
+                }
+            )
+            if meeting.get("language") and meeting_summary["language"] is None:
+                blockers.append("meeting.language must be a safe short label such as ko or en-US.")
+            if meeting.get("source_url") is not None and not isinstance(meeting.get("source_url"), str):
+                blockers.append("meeting.source_url must be a string when present.")
+
+        participants = payload.get("participants") or []
+        if not isinstance(participants, list):
+            blockers.append("manifest.participants must be a list when present.")
+            participants = []
+        declared_speakers: set[str] = set()
+        for index, item in enumerate(participants, start=1):
+            if not isinstance(item, dict):
+                blockers.append(f"participants[{index}] must be an object.")
+                continue
+            unknown_participant_fields = sorted(set(item) - TIRO_IMPORT_PARTICIPANT_FIELDS)
+            if unknown_participant_fields:
+                warnings.append("manifest.participants has fields outside the v0.1 contract; they were ignored.")
+            speaker_id = tiro_import_safe_ref(item.get("speaker_id"), f"participants[{index}].speaker_id", blockers)
+            if speaker_id:
+                declared_speakers.add(speaker_id)
+            if item.get("display_name") is not None:
+                tiro_import_optional_text_present(item.get("display_name"), f"participants[{index}].display_name", blockers)
+            if item.get("person_ref") is not None:
+                tiro_import_optional_safe_ref(item.get("person_ref"), f"participants[{index}].person_ref", blockers)
+        participant_summary.update(
+            {
+                "participant_count": len(participants),
+                "declared_speaker_count": len(declared_speakers),
+                "person_refs_present": any(isinstance(item, dict) and bool(item.get("person_ref")) for item in participants),
+            }
+        )
+
+        segments = payload.get("segments")
+        if not isinstance(segments, list):
+            blockers.append("manifest.segments must be a list.")
+            segments = []
+        if len(segments) > safe_max_segments:
+            blockers.append(f"manifest.segments has {len(segments)} items; max_segments is {safe_max_segments}.")
+        segment_speakers: set[str] = set()
+        previous_start_ms: int | None = None
+        empty_text_count = 0
+        confidence_count = 0
+        for index, item in enumerate(segments[:safe_max_segments], start=1):
+            if not isinstance(item, dict):
+                blockers.append(f"segments[{index}] must be an object.")
+                continue
+            unknown_segment_fields = sorted(set(item) - TIRO_IMPORT_SEGMENT_FIELDS)
+            if unknown_segment_fields:
+                warnings.append("manifest.segments has fields outside the v0.1 contract; they were ignored.")
+            tiro_import_safe_ref(item.get("segment_id"), f"segments[{index}].segment_id", blockers)
+            speaker_id = tiro_import_safe_ref(item.get("speaker_id"), f"segments[{index}].speaker_id", blockers)
+            if speaker_id:
+                segment_speakers.add(speaker_id)
+            start_ms = tiro_import_optional_nonnegative_int(item.get("start_ms"), f"segments[{index}].start_ms", blockers)
+            end_ms = tiro_import_optional_nonnegative_int(item.get("end_ms"), f"segments[{index}].end_ms", blockers)
+            if start_ms is None or end_ms is None:
+                blockers.append(f"segments[{index}] must include start_ms and end_ms.")
+            elif end_ms < start_ms:
+                blockers.append(f"segments[{index}].end_ms must be greater than or equal to start_ms.")
+            if previous_start_ms is not None and start_ms is not None and start_ms < previous_start_ms:
+                transcript_summary["turn_order_preserved"] = False
+                warnings.append("manifest.segments are not sorted by start_ms.")
+            if start_ms is not None:
+                previous_start_ms = start_ms
+            text_value = item.get("text")
+            if not isinstance(text_value, str):
+                blockers.append(f"segments[{index}].text must be a string.")
+            elif not text_value.strip():
+                empty_text_count += 1
+            if item.get("confidence") is not None:
+                confidence_count += 1
+                tiro_import_optional_confidence(item.get("confidence"), f"segments[{index}].confidence", blockers)
+        undeclared_speakers = segment_speakers - declared_speakers if declared_speakers else set()
+        transcript_summary.update(
+            {
+                "segment_count": len(segments),
+                "speaker_count_in_segments": len(segment_speakers),
+                "undeclared_speaker_count": len(undeclared_speakers),
+                "empty_text_segment_count": empty_text_count,
+                "confidence_count": confidence_count,
+            }
+        )
+        if undeclared_speakers:
+            warnings.append("Some transcript speaker ids are not declared in participants.")
+
+        audio = payload.get("audio") or {}
+        if audio and not isinstance(audio, dict):
+            blockers.append("manifest.audio must be an object when present.")
+            audio = {}
+        if isinstance(audio, dict) and audio:
+            unknown_audio_fields = sorted(set(audio) - TIRO_IMPORT_AUDIO_FIELDS)
+            if unknown_audio_fields:
+                warnings.append("manifest.audio has fields outside the v0.1 contract; they were ignored.")
+            object_id = tiro_import_audio_object_id(audio, blockers)
+            audio_summary.update(
+                {
+                    "audio_ref_present": bool(object_id or audio.get("source_ref")),
+                    "object_id_valid": bool(object_id),
+                    "objet_ref_present": bool(audio.get("objet_ref")),
+                    "duration_seconds": tiro_import_optional_nonnegative_int(
+                        audio.get("duration_seconds"),
+                        "audio.duration_seconds",
+                        blockers,
+                    ),
+                    "mime_present": isinstance(audio.get("mime"), str) and bool(str(audio.get("mime")).strip()),
+                }
+            )
+            if audio.get("mime") is not None and not isinstance(audio.get("mime"), str):
+                blockers.append("audio.mime must be a string when present.")
+            elif isinstance(audio.get("mime"), str) and audio.get("mime") and not str(audio["mime"]).startswith("audio/"):
+                warnings.append("audio.mime is not an audio/* MIME label.")
+            if audio.get("filename") is not None:
+                tiro_import_optional_text_present(audio.get("filename"), "audio.filename", blockers)
+            if audio.get("source_ref") is not None:
+                tiro_import_optional_safe_ref(audio.get("source_ref"), "audio.source_ref", blockers)
+            if object_id:
+                audio_summary["manifest_record_found"] = find_manifest_record(root, object_id) is not None
+                source_refs_for_draft.append({"type": "object_id", "value": object_id, "role": "attachment"})
+                if not audio_summary["manifest_record_found"]:
+                    warnings.append("audio object_id is not yet visible in objects/manifests/files.jsonl.")
+
+        manifest_digest = sha256_json_value(payload).removeprefix("sha256:")[:16]
+        source_refs_for_draft.insert(
+            0,
+            {
+                "type": "source_manifest",
+                "value": f"tiro:manifest:{manifest_digest}",
+                "role": SOURCE_INTAKE_DEFAULT_ROLE,
+            },
+        )
+
+    state = "blocked" if blockers else "ready_for_review"
+    return json_safe(
+        {
+            "ok": not blockers,
+            "dry_run": True,
+            "lifecycle_action": "tiro_import_plan",
+            "archive_id": archive_id,
+            "source": TIRO_IMPORT_SOURCE,
+            "manifest_path": normalized_manifest_path,
+            "state": state,
+            "meeting_metadata": meeting_summary,
+            "participant_summary": participant_summary,
+            "transcript_mapping": {
+                "segments_preserved": transcript_summary,
+                "speaker_turns_preserved": True,
+                "timestamps_preserved": True,
+                "confidence_preserved_when_present": True,
+                "draft_body_text_generated": False,
+                "derived_text_capture_performed": False,
+            },
+            "audio_source_ref": audio_summary,
+            "source_refs_for_draft": source_refs_for_draft if not blockers else [],
+            "privacy_guards": {
+                "meeting_title_echoed": False,
+                "participant_display_names_echoed": False,
+                "segment_text_echoed": False,
+                "source_url_echoed": False,
+                "audio_filename_echoed": False,
+                "local_absolute_paths_echoed": False,
+            },
+            "current_capability": {
+                "tiro_manifest_plan_available": True,
+                "tiro_live_api_implemented": False,
+                "tiro_import_writer_implemented": False,
+                "audio_object_bytes_capture_reused": True,
+                "mcp_plan_tool_available": True,
+            },
+            "closed_actions": {
+                "manifest_json_read": payload is not None,
+                "files_written": False,
+                "provider_api_called": False,
+                "live_tiro_api_called": False,
+                "audio_bytes_read": False,
+                "transcript_text_echoed": False,
+                "derived_text_written": False,
+                "draft_written": False,
+                "mint_run": False,
+            },
+            "would_change": [],
+            "next_safe_actions": [
+                "Review this plan with the human before turning transcript text into derived text.",
+                "Capture or verify the meeting audio as a WOM objet when audio_source_ref.manifest_record_found is false.",
+                "Use the reviewed transcript segments as derived text only after a separate approval-gated capture step.",
+                "Create or mint zets after source_refs_for_draft and transcript-derived text evidence are reviewed.",
+            ],
+            "warnings": unique_preserve_order(warnings),
+            "blockers": unique_preserve_order(blockers),
+        }
+    )
 
 
 def notion_nested_tree_safe_max_items(max_items: int, blockers: list[str]) -> int:
@@ -46851,6 +47289,39 @@ def normalize_version_label(value: str | None) -> str | None:
     return normalized or None
 
 
+def version_sort_key(value: str | None) -> tuple[int, int, int, str] | None:
+    normalized = normalize_version_label(value)
+    if not normalized:
+        return None
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)(.*)$", normalized)
+    if not match:
+        return None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)), match.group(4))
+
+
+def version_label_from_normalized(value: str | None) -> str | None:
+    normalized = normalize_version_label(value)
+    return f"v{normalized}" if normalized else None
+
+
+def read_version_from_init_file(path: Path) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r'(?m)^__version__\s*=\s*"([^"]+)"\s*$', text)
+    return match.group(1) if match else None
+
+
+def read_pyproject_version_at(path: Path) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r'(?m)^version\s*=\s*"([^"]+)"\s*$', text)
+    return match.group(1) if match else None
+
+
 def read_wom_kit_pyproject_version() -> str | None:
     service_path = Path(__file__).resolve()
     pyproject_path = service_path.parents[2] / "pyproject.toml"
@@ -46873,6 +47344,136 @@ def wom_kit_version_pin_location(root_label: str, candidate: str) -> str:
     if root_label == "inspection_root":
         return candidate
     return f"{root_label}/{candidate}"
+
+
+def wom_kit_project_source_mirror_search_roots(root: Path) -> list[tuple[str, Path]]:
+    return wom_kit_version_pin_search_roots(root)
+
+
+def wom_kit_project_source_mirror_location(root_label: str) -> str:
+    location = ".zettel-kasten/source"
+    if root_label == "inspection_root":
+        return location
+    return f"{root_label}/{location}"
+
+
+def git_output_lines(cwd: Path, args: list[str]) -> list[str]:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(cwd), *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if completed.returncode != 0:
+        return []
+    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+
+
+def latest_semver_tag(labels: Iterable[str]) -> str | None:
+    candidates: list[tuple[tuple[int, int, int, str], str]] = []
+    for label in labels:
+        key = version_sort_key(label)
+        if key is not None:
+            candidates.append((key, label.strip()))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def wom_kit_project_source_mirror_info(
+    inspection_root: Path | None,
+    *,
+    normalized_package: str | None,
+    warnings: list[str],
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "checked": inspection_root is not None,
+        "status": "not_checked",
+        "path": None,
+        "checked_locations": [],
+        "source_version": None,
+        "pyproject_version": None,
+        "source_matches_pyproject_version": None,
+        "source_matches_running_version": None,
+        "installed_pin": None,
+        "pin_matches_source_version": None,
+        "head_tag": None,
+        "latest_fetched_tag": None,
+        "mirror_behind_latest_fetched_tag": None,
+    }
+    if inspection_root is None:
+        return summary
+    if not inspection_root.exists():
+        summary["status"] = "inspection_root_missing"
+        return summary
+
+    mirror_path: Path | None = None
+    for root_label, search_root in wom_kit_project_source_mirror_search_roots(inspection_root):
+        logical_location = wom_kit_project_source_mirror_location(root_label)
+        summary["checked_locations"].append(logical_location)
+        candidate_path = search_root / ".zettel-kasten" / "source"
+        if candidate_path.is_dir():
+            mirror_path = candidate_path
+            summary["status"] = "present"
+            summary["path"] = logical_location
+            break
+    if mirror_path is None:
+        summary["status"] = "missing"
+        return summary
+
+    source_version = (
+        read_version_from_init_file(mirror_path / "wom-kit" / "src" / "wom_kit" / "__init__.py")
+        or read_version_from_init_file(mirror_path / "wom_kit" / "__init__.py")
+    )
+    pyproject_version = read_pyproject_version_at(mirror_path / "wom-kit" / "pyproject.toml")
+    pin_path = mirror_path / "installed-version.txt"
+    installed_pin: str | None = None
+    if pin_path.is_file():
+        try:
+            installed_pin = pin_path.read_text(encoding="utf-8").strip().lstrip("\ufeff").strip()
+        except OSError:
+            installed_pin = None
+    summary["source_version"] = source_version
+    summary["pyproject_version"] = pyproject_version
+    summary["installed_pin"] = installed_pin
+
+    normalized_source = normalize_version_label(source_version)
+    normalized_pyproject = normalize_version_label(pyproject_version)
+    normalized_pin = normalize_version_label(installed_pin)
+    if normalized_source is None and normalized_pyproject is None:
+        summary["status"] = "metadata_only"
+        return summary
+
+    if normalized_source is not None and normalized_pyproject is not None:
+        summary["source_matches_pyproject_version"] = normalized_source == normalized_pyproject
+        if summary["source_matches_pyproject_version"] is False:
+            warnings.append("WOM-kit project source mirror package and pyproject.toml versions differ.")
+    if normalized_source is not None and normalized_package is not None:
+        summary["source_matches_running_version"] = normalized_source == normalized_package
+        if summary["source_matches_running_version"] is False:
+            warnings.append("WOM-kit project source mirror differs from the running CLI version.")
+    if normalized_pin is not None and normalized_source is not None:
+        summary["pin_matches_source_version"] = normalized_pin == normalized_source
+        if summary["pin_matches_source_version"] is False:
+            warnings.append("WOM-kit project source mirror installed-version pin differs from the source mirror version.")
+
+    head_tags = git_output_lines(mirror_path, ["describe", "--tags", "--exact-match", "HEAD"])
+    if head_tags:
+        summary["head_tag"] = head_tags[0]
+    summary["latest_fetched_tag"] = latest_semver_tag(git_output_lines(mirror_path, ["tag", "--list", "v*"]))
+    latest_key = version_sort_key(str(summary["latest_fetched_tag"] or ""))
+    source_key = version_sort_key(source_version)
+    if latest_key is not None and source_key is not None:
+        behind = source_key < latest_key
+        summary["mirror_behind_latest_fetched_tag"] = behind
+        if behind:
+            warnings.append("WOM-kit project source mirror is behind its latest fetched tag.")
+
+    return summary
 
 
 def wom_kit_version_info(
@@ -46904,6 +47505,7 @@ def wom_kit_version_info(
         "matches_package_version": None,
         "checked_locations": [],
     }
+    root: Path | None = None
     if inspection_root is not None:
         root = Path(inspection_root).expanduser().resolve()
         pin_summary["checked"] = True
@@ -46942,6 +47544,12 @@ def wom_kit_version_info(
             else:
                 pin_summary["status"] = "missing"
 
+    source_mirror = wom_kit_project_source_mirror_info(
+        root,
+        normalized_package=normalized_package,
+        warnings=warnings,
+    )
+
     consistency_state = "source_checkout_match"
     if pyproject_matches is False:
         consistency_state = "source_checkout_mismatch"
@@ -46949,6 +47557,10 @@ def wom_kit_version_info(
         consistency_state = "package_version_only"
     if pin_summary["matches_package_version"] is False:
         consistency_state = "project_pin_mismatch"
+    if source_mirror.get("source_matches_running_version") is False:
+        consistency_state = "project_source_mirror_mismatch"
+    if source_mirror.get("mirror_behind_latest_fetched_tag") is True:
+        consistency_state = "project_source_mirror_behind_latest_fetched_tag"
 
     result: dict[str, Any] = {
         "ok": not warnings,
@@ -46961,6 +47573,7 @@ def wom_kit_version_info(
         "pyproject_version": pyproject_version,
         "pyproject_matches_package_version": pyproject_matches,
         "project_pin": pin_summary,
+        "project_source_mirror": source_mirror,
         "consistency_state": consistency_state,
         "canonical_checks": {
             "human_readable": "archive --version",
