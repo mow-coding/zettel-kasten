@@ -4043,7 +4043,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.64 read-only beginner setup manual with object storage setup screens",
+            "Status: v0.3.135 read-only beginner setup manual with Notion recovery guidance",
             "archive beginner-setup-manual",
             "first-use-setup-manual",
             "setup-manual",
@@ -4052,6 +4052,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "credential_bulk_migration",
             "derived_text_tools",
             "object_storage_setup_manual",
+            "notion_nested_recovery",
             "CSV encoding: UTF-8",
             "Database > Merge from Database",
             "temporary database and working CSV copy",
@@ -4067,6 +4068,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "secret:keepassxc-openai-api",
             "derived-text-tool-hints/v0.1",
             "does not execute the tools",
+            "folder, shelf, upper page, and item location",
+            "ask Notion again for the missing location links",
+            "notion-ancestor-fetch-adapter-run --approve",
+            "The AI does not receive your Notion token.",
+            "run Notion location fetches",
             "It is a human setup guide and command checklist",
         ):
             with self.subTest(phrase=phrase):
@@ -4080,6 +4086,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("archive beginner-setup-manual --topic first_secret_and_text_tools --dry-run", matrix_text)
         self.assertIn("--topic credential_bulk_migration", matrix_text)
         self.assertIn("--topic object_storage_setup_manual", matrix_text)
+        self.assertIn("--topic notion_nested_recovery", matrix_text)
+        self.assertIn("Notion nested recovery human-step guidance", matrix_text)
+        self.assertIn("writes no approval receipts", matrix_text)
+        self.assertIn("runs no Notion location fetches", matrix_text)
         self.assertIn("Cloudflare R2 bucket/API-token screen guidance", matrix_text)
         self.assertIn("creates no bucket or API token", matrix_text)
         self.assertIn("reads no CSV or vault", matrix_text)

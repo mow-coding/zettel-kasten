@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.135 - 2026-06-22
+
+- Added read-only `archive beginner-setup-manual --topic
+  notion_nested_recovery --dry-run`.
+- The new guide translates low-level Notion recovery terms such as
+  ancestor/parent/child, fetch/crawl, fixture/node, merge, and untraceable into
+  folder/shelf/location language before showing commands.
+- It walks a beginner through scoped review, private local token ref setup,
+  one-time credential approval preview/write, live structure fetch preview/run,
+  and `notion-ancestor-merge-plan` handoff.
+- It remains read-only: no approval receipts are written, no environment
+  variables are read, no Notion provider calls are made, no live fetch runs, and
+  no page titles, page bodies, comments, media bytes, signed file URLs, raw
+  provider responses, exact env var names, account emails, provider URLs,
+  tokens, or secret values are echoed.
+
 ## v0.3.134 - 2026-06-22
 
 - Added approval-gated local

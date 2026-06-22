@@ -7993,6 +7993,87 @@ state:
             self.assertNotIn("sk-proj-", serialized)
             self.assertNotIn(str(archive_root.resolve()), serialized)
 
+    def test_beginner_setup_manual_guides_notion_nested_recovery_without_live_fetch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "beginner-setup-manual",
+                    str(archive_root),
+                    "--topic",
+                    "notion_nested_recovery",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["topic"], "notion_nested_recovery")
+            self.assertTrue(result["manual_contract"]["notion_recovery_plain_language_available"])
+            self.assertTrue(result["manual_contract"]["guided_human_approval_flow_available"])
+            self.assertTrue(result["manual_contract"]["one_time_approval_kept_separate_from_ai_secret_access"])
+
+            section_ids = [section["section_id"] for section in result["sections"]]
+            self.assertEqual(section_ids, ["first_rule", "notion_nested_recovery"])
+            section = result["sections"][1]
+            self.assertIn("folder, shelf, upper page", serialized)
+            self.assertIn("ask Notion again for the missing location links", serialized)
+            self.assertIn("put the recovered locations back into the reviewed list", serialized)
+            self.assertIn("The AI does not receive your Notion token.", section["human_explanation_script"])
+            self.assertIn("page body", section["what_this_never_reads"])
+            self.assertIn("media bytes", section["what_this_never_reads"])
+            self.assertIn("raw provider responses", section["what_this_never_reads"])
+            self.assertEqual(section["confirmation_prompt_template"]["default_answer"], "N")
+
+            step_ids = [step["step_id"] for step in section["guided_flow"]]
+            self.assertEqual(
+                step_ids,
+                [
+                    "review_scope",
+                    "prepare_local_token_ref",
+                    "preview_one_time_approval",
+                    "write_one_time_approval",
+                    "preview_location_fetch",
+                    "run_location_fetch",
+                    "handoff_sanitized_result_to_ai",
+                ],
+            )
+            commands = [step.get("command", "") for step in section["guided_flow"]]
+            self.assertTrue(any("credential-access-approval" in command and "--dry-run" in command for command in commands))
+            self.assertTrue(any("credential-access-approval" in command and "--approve" in command for command in commands))
+            self.assertTrue(any("notion-ancestor-fetch-adapter-run" in command and "--dry-run" in command for command in commands))
+            self.assertTrue(any("notion-ancestor-fetch-adapter-run" in command and "--approve" in command for command in commands))
+            self.assertTrue(any("notion-ancestor-merge-plan" in command for command in commands))
+            self.assertTrue(any("notion-ancestor-fetch-adapter-run" in command for command in result["command_checklist"]))
+            self.assertIn("notion-ancestor-crawl-plan", result["cross_links"])
+            self.assertIn("credential-access-approval", result["cross_links"])
+            self.assertIn("notion-ancestor-fetch-adapter-run", result["cross_links"])
+            self.assertIn("notion-ancestor-merge-plan", result["cross_links"])
+            self.assertTrue(result["current_capability"]["notion_nested_recovery_guidance_available"])
+            self.assertTrue(result["current_capability"]["live_notion_ancestor_structure_fetch_adapter_implemented"])
+            self.assertFalse(result["current_capability"]["guided_interactive_single_prompt_runner_implemented"])
+            self.assertFalse(result["current_capability"]["notion_media_byte_fetch_implemented"])
+            self.assertFalse(result["current_capability"]["notion_page_body_capture_implemented"])
+            self.assertFalse(result["closed_actions"]["approval_receipt_written"])
+            self.assertFalse(result["closed_actions"]["notion_location_fetch_executed"])
+            self.assertFalse(result["closed_actions"]["notion_ancestor_result_fixture_written"])
+            self.assertFalse(result["closed_actions"]["provider_api_called"])
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertFalse(result["privacy_guards"]["secret_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["env_var_names_echoed"])
+            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
+            self.assertEqual(result["would_change"], [])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn("https://", serialized)
+            self.assertNotIn("C:\\", serialized)
+            self.assertNotIn("sk-proj-", serialized)
+            self.assertNotIn(str(archive_root.resolve()), serialized)
+
     def test_credential_semantic_extraction_recipe_splits_complex_notes_without_reading_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
