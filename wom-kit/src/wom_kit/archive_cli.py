@@ -5838,6 +5838,52 @@ def command_tiro_lossless_recovery_capture(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_tiro_lossless_recovery_fetch_run(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.tiro_lossless_recovery_fetch_run(
+            Path(args.archive_root),
+            credential_ref=args.credential_ref,
+            workspace_guid=args.workspace_guid,
+            note_guid=args.note_guid,
+            output_path=args.output,
+            max_notes=args.max_notes,
+            timeout_seconds=args.timeout_seconds,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Tiro lossless recovery fetch {result.get('fetch_state') or '-'}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        bundle = result.get("bundle") if isinstance(result.get("bundle"), dict) else {}
+        print(f"Bundle: {bundle.get('output_path') or bundle.get('proposed_output_path') or '-'}")
+        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
+        print(f"Receipt: {receipt.get('receipt_path') or receipt.get('proposed_receipt_path') or '-'}")
+        if result.get("files_written"):
+            print("Files written:")
+            for path in result["files_written"]:
+                print(f"- {path}")
+        elif result.get("would_change"):
+            print("Would change:")
+            for path in result["would_change"]:
+                print(f"- {path}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_zet_markdown_style_guide(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("zet-markdown-style-guide is read-only and requires --dry-run.", file=sys.stderr)
@@ -12688,6 +12734,33 @@ def build_parser() -> argparse.ArgumentParser:
     tiro_lossless_recovery_capture.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
     tiro_lossless_recovery_capture.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     tiro_lossless_recovery_capture.set_defaults(func=command_tiro_lossless_recovery_capture)
+
+    tiro_lossless_recovery_fetch_run = subcommands.add_parser(
+        "tiro-lossless-recovery-fetch-run",
+        aliases=["tiro-recovery-fetch-run"],
+        help="Preview or approve a credential-bounded Tiro REST fetch into a private raw recovery bundle.",
+    )
+    tiro_lossless_recovery_fetch_run.add_argument("archive_root", help="Archive root to update.")
+    tiro_lossless_recovery_fetch_run.add_argument("--credential-ref", help="env: credential ref for approved live fetch; exact value is not echoed.")
+    tiro_lossless_recovery_fetch_run.add_argument("--workspace-guid", help="Optional safe Tiro workspace id; exact value is not echoed.")
+    tiro_lossless_recovery_fetch_run.add_argument("--note-guid", help="Optional safe Tiro note id; exact value is not echoed.")
+    tiro_lossless_recovery_fetch_run.add_argument(
+        "--output",
+        default=archive_services.TIRO_LOSSLESS_RECOVERY_DEFAULT_OUTPUT_PATH,
+        help="Archive-relative raw bundle output path under workbench/.",
+    )
+    tiro_lossless_recovery_fetch_run.add_argument(
+        "--max-notes",
+        type=int,
+        default=200,
+        help=f"Maximum notes to fetch, up to {archive_services.TIRO_LOSSLESS_RECOVERY_MAX_NOTES}.",
+    )
+    tiro_lossless_recovery_fetch_run.add_argument("--timeout-seconds", type=int, default=30, help="Provider request timeout, 1-120 seconds.")
+    tiro_lossless_recovery_fetch_run.add_argument("--dry-run", action="store_true", help="Preview provider/bundle writes without reading credentials.")
+    tiro_lossless_recovery_fetch_run.add_argument("--approve", action="store_true", help="Run the approved live fetch and write the raw bundle.")
+    tiro_lossless_recovery_fetch_run.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
+    tiro_lossless_recovery_fetch_run.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    tiro_lossless_recovery_fetch_run.set_defaults(func=command_tiro_lossless_recovery_fetch_run)
 
     zet_markdown_style_guide = subcommands.add_parser(
         "zet-markdown-style-guide",

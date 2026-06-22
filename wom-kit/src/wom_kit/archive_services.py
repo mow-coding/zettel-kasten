@@ -18,6 +18,7 @@ import stat
 import subprocess
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -497,8 +498,12 @@ TIRO_IMPORT_PARTICIPANT_FIELDS = {"speaker_id", "display_name", "person_ref", "r
 TIRO_IMPORT_SEGMENT_FIELDS = {"segment_id", "speaker_id", "start_ms", "end_ms", "text", "confidence"}
 TIRO_LOSSLESS_RECOVERY_BUNDLE_SCHEMA = "wom-tiro-lossless-recovery-bundle/v0.1"
 TIRO_LOSSLESS_RECOVERY_RECEIPT_SCHEMA = "wom-tiro-lossless-recovery-capture/v0.1"
+TIRO_LOSSLESS_RECOVERY_FETCH_RECEIPT_SCHEMA = "wom-tiro-lossless-recovery-fetch/v0.1"
+TIRO_LOSSLESS_RECOVERY_FETCH_RECEIPTS_DIR = "receipts/tiro/lossless-fetches"
 TIRO_LOSSLESS_RECOVERY_RECEIPTS_DIR = "receipts/tiro/lossless-recovery"
 TIRO_LOSSLESS_RECOVERY_MAX_NOTES = 2000
+TIRO_LOSSLESS_RECOVERY_DEFAULT_OUTPUT_PATH = "workbench/tiro-lossless-recovery.live.json"
+TIRO_API_BASE_URL = "https://api.tiro.ooo"
 TIRO_LOSSLESS_RECOVERY_BUNDLE_KEYS = (
     "auth_context",
     "workspaces",
@@ -1756,6 +1761,7 @@ CREDENTIAL_REF_ALLOWED_PROVIDERS = {
     "azure_ai_vision",
     "aws_textract",
     "notion",
+    "tiro",
     "cloudflare_r2",
     "backblaze_b2",
     "generic_provider",
@@ -21327,6 +21333,572 @@ def tiro_lossless_recovery_capture(
                 "Run derived-text capture only after the raw Tiro bundle object is preserved.",
                 "Keep speaker correction, relationship inference, and summary cleanup in a separate AI enrichment layer.",
                 "Implement the credential-bounded live REST/CLI adapter next so the bundle is generated without a client hand-written manifest.",
+            ],
+            "warnings": unique_preserve_order(warnings),
+            "blockers": unique_preserve_order(blockers),
+        }
+    )
+
+
+def tiro_lossless_recovery_fetch_output_path(output_path: str, blockers: list[str]) -> str:
+    try:
+        normalized = normalize_archive_relative_path(output_path or TIRO_LOSSLESS_RECOVERY_DEFAULT_OUTPUT_PATH)
+    except ArchivePathError:
+        blockers.append("output_path must be a safe archive-relative JSON path under workbench/.")
+        return ""
+    if not normalized.startswith("workbench/") or Path(normalized).suffix.lower() != ".json":
+        blockers.append("output_path must be a safe archive-relative JSON path under workbench/.")
+        return ""
+    return normalized
+
+
+def tiro_env_ref_name(ref: str) -> str | None:
+    text = (ref or "").strip()
+    if not text.lower().startswith("env:"):
+        return None
+    env_name = text.split(":", 1)[1].strip()
+    return env_name if safe_environment_ref_name(env_name) else None
+
+
+def tiro_lossless_recovery_fetch_receipt_id(
+    *,
+    archive_id: str,
+    output_path: str,
+    workspace_guid_supplied: bool,
+    note_guid_supplied: bool,
+    created_at: datetime,
+) -> str:
+    payload = {
+        "archive_id": archive_id,
+        "output_path": output_path,
+        "workspace_guid_supplied": workspace_guid_supplied,
+        "note_guid_supplied": note_guid_supplied,
+        "created_at": created_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
+    return f"tiro-lossless-fetch-{digest}"
+
+
+def tiro_api_request_json(
+    path: str,
+    *,
+    token: str,
+    method: str = "GET",
+    body: dict[str, Any] | None = None,
+    query: dict[str, Any] | None = None,
+    timeout_seconds: int = 30,
+) -> dict[str, Any]:
+    if not path.startswith("/"):
+        raise ArchiveServiceError("Tiro provider request path must be absolute.")
+    query_items = {key: value for key, value in (query or {}).items() if value is not None and value != ""}
+    query_string = urllib.parse.urlencode(query_items)
+    url = TIRO_API_BASE_URL.rstrip("/") + path
+    if query_string:
+        url = f"{url}?{query_string}"
+    data: bytes | None = None
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+    if body is not None:
+        data = json.dumps(json_safe(body), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            raw = response.read(16 * 1024 * 1024)
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ArchiveServiceError("Tiro provider request failed; raw provider error is not echoed.") from exc
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ArchiveServiceError("Tiro provider response was not valid JSON; raw response is not echoed.") from exc
+    if not isinstance(payload, dict):
+        raise ArchiveServiceError("Tiro provider response was not a JSON object; raw response is not echoed.")
+    return payload
+
+
+def tiro_response_items(payload: dict[str, Any]) -> list[Any]:
+    content = payload.get("content")
+    if isinstance(content, list):
+        return content
+    if isinstance(payload.get("data"), list):
+        return list(payload["data"])
+    if isinstance(payload.get("items"), list):
+        return list(payload["items"])
+    return []
+
+
+def tiro_response_next_cursor(payload: dict[str, Any]) -> str | None:
+    cursor = payload.get("nextCursor") or payload.get("next_cursor")
+    return str(cursor).strip() if isinstance(cursor, str) and cursor.strip() else None
+
+
+def tiro_paginated_get(
+    path: str,
+    *,
+    token: str,
+    timeout_seconds: int,
+    size: int = 200,
+    max_items: int | None = None,
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    cursor: str | None = None
+    items: list[Any] = []
+    pages: list[dict[str, Any]] = []
+    while True:
+        query = {"size": size}
+        if cursor:
+            query["cursor"] = cursor
+        payload = tiro_api_request_json(path, token=token, query=query, timeout_seconds=timeout_seconds)
+        page_items = tiro_response_items(payload)
+        items.extend(page_items)
+        cursor = tiro_response_next_cursor(payload)
+        pages.append(
+            {
+                "path_category": path.rsplit("/", 1)[-1] or "root",
+                "item_count": len(page_items),
+                "next_cursor_present": bool(cursor),
+            }
+        )
+        if max_items is not None and len(items) >= max_items:
+            items = items[:max_items]
+            break
+        if not cursor:
+            break
+    return items, pages
+
+
+def tiro_optional_get(
+    path: str,
+    *,
+    token: str,
+    timeout_seconds: int,
+    fetch_gaps: list[dict[str, Any]],
+    category: str,
+    paginated: bool = False,
+) -> Any:
+    try:
+        if paginated:
+            items, _pages = tiro_paginated_get(path, token=token, timeout_seconds=timeout_seconds)
+            return {"content": items}
+        return tiro_api_request_json(path, token=token, timeout_seconds=timeout_seconds)
+    except ArchiveServiceError:
+        fetch_gaps.append({"category": category, "status": "provider_request_failed_raw_error_redacted"})
+        return None
+
+
+def tiro_lossless_recovery_fetch_run(
+    archive_root: Path | str,
+    *,
+    credential_ref: str | None = None,
+    workspace_guid: str | None = None,
+    note_guid: str | None = None,
+    output_path: str = TIRO_LOSSLESS_RECOVERY_DEFAULT_OUTPUT_PATH,
+    max_notes: int = 200,
+    timeout_seconds: int = 30,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+    reviewer = safe_project_intake_actor_id(reviewed_by)
+    if approve and reviewer is None:
+        blockers.append("tiro-lossless-recovery-fetch-run approval requires --reviewed-by with a safe actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    normalized_output_path = tiro_lossless_recovery_fetch_output_path(output_path, blockers)
+    output_file = archive_internal_path(root, normalized_output_path) if normalized_output_path else None
+    if approve and output_file and output_file.exists():
+        blockers.append(f"Output bundle already exists: {normalized_output_path}.")
+
+    normalized_credential_ref = str(credential_ref or "").strip()
+    credential_store = None
+    if normalized_credential_ref:
+        if not safe_credential_ref(normalized_credential_ref):
+            blockers.append("credential_ref must be a safe env/keyring/secret/wallet ref and is never echoed.")
+            normalized_credential_ref = ""
+        else:
+            credential_store = credential_ref_store(normalized_credential_ref)
+    env_name = tiro_env_ref_name(normalized_credential_ref)
+    if approve and (not normalized_credential_ref or credential_store != "env" or not env_name):
+        blockers.append("tiro-lossless-recovery-fetch-run currently supports only env: credential refs for approved live fetch.")
+
+    scoped_workspace = tiro_lossless_recovery_safe_ref(workspace_guid, "workspace_guid", blockers)
+    scoped_note = tiro_lossless_recovery_safe_ref(note_guid, "note_guid", blockers)
+    safe_max_notes = tiro_lossless_recovery_safe_max_notes(max_notes, blockers)
+    if timeout_seconds < 1 or timeout_seconds > 120:
+        blockers.append("timeout_seconds must be between 1 and 120.")
+        timeout_seconds = 30
+
+    created_at = datetime.now(timezone.utc)
+    receipt_id = tiro_lossless_recovery_fetch_receipt_id(
+        archive_id=archive_id,
+        output_path=normalized_output_path,
+        workspace_guid_supplied=bool(scoped_workspace),
+        note_guid_supplied=bool(scoped_note),
+        created_at=created_at,
+    )
+    receipt_relative = f"{TIRO_LOSSLESS_RECOVERY_FETCH_RECEIPTS_DIR}/{receipt_id}.json"
+    receipt_path = archive_internal_path(root, receipt_relative)
+    if approve and receipt_path.exists():
+        blockers.append(f"Execution receipt already exists: {receipt_relative}.")
+
+    token: str | None = None
+    credential_value_read = False
+    environment_read = False
+    provider_api_called = False
+    bundle_written = False
+    receipt_written = False
+    files_written: list[str] = []
+    bundle_payload: dict[str, Any] | None = None
+    fetch_gaps: list[dict[str, Any]] = []
+    pagination: list[dict[str, Any]] = []
+    request_categories: set[str] = set()
+    execution_status = "not_run"
+
+    if approve and not blockers:
+        environment_read = True
+        credential_value_read = True
+        token = os.environ.get(env_name or "")
+        if not token:
+            blockers.append("Tiro token environment variable was not available.")
+
+    if approve and not blockers:
+        execution_status = "running"
+        try:
+            workspace_records: list[Any] = []
+            effective_workspace = scoped_workspace
+            try:
+                provider_api_called = True
+                workspace_list = tiro_api_request_json("/v1/external/workspaces", token=str(token), timeout_seconds=timeout_seconds)
+                request_categories.add("workspaces")
+                listed_workspaces = workspace_list.get("workspaces")
+                if isinstance(listed_workspaces, list):
+                    workspace_records = listed_workspaces
+                else:
+                    workspace_items = tiro_response_items(workspace_list)
+                    workspace_records = workspace_items if workspace_items else [workspace_list]
+                if not effective_workspace:
+                    workspace_guids = [
+                        str(item.get("guid") or item.get("workspaceGuid")).strip()
+                        for item in workspace_records
+                        if isinstance(item, dict) and str(item.get("guid") or item.get("workspaceGuid") or "").strip()
+                    ]
+                    workspace_guids = unique_preserve_order(workspace_guids)
+                    if len(workspace_guids) == 1:
+                        effective_workspace = workspace_guids[0]
+                    elif len(workspace_guids) > 1:
+                        blockers.append("Multiple Tiro workspaces are available; rerun with --workspace-guid.")
+            except ArchiveServiceError:
+                fetch_gaps.append({"category": "workspaces", "status": "provider_request_failed_raw_error_redacted"})
+            if not effective_workspace and not blockers:
+                provider_api_called = True
+                workspace_me = tiro_api_request_json("/v1/external/workspaces/me", token=str(token), timeout_seconds=timeout_seconds)
+                request_categories.add("workspace_me")
+                workspace_records = [workspace_me]
+                candidate = workspace_me.get("guid") or workspace_me.get("workspaceGuid")
+                effective_workspace = str(candidate).strip() if isinstance(candidate, str) and candidate.strip() else None
+            if not effective_workspace:
+                blockers.append("Tiro workspace guid could not be resolved from the provider response.")
+            notes: list[Any] = []
+            if not blockers and scoped_note:
+                notes = [{"guid": scoped_note}]
+            elif not blockers and effective_workspace:
+                notes, pages = tiro_paginated_get(
+                    f"/v1/external/workspaces/{effective_workspace}/notes",
+                    token=str(token),
+                    timeout_seconds=timeout_seconds,
+                    max_items=safe_max_notes,
+                )
+                provider_api_called = True
+                pagination.extend(pages)
+                request_categories.add("workspace_notes")
+            note_guids: list[str] = []
+            for item in notes:
+                if isinstance(item, dict):
+                    guid = item.get("guid") or item.get("noteGuid")
+                    if isinstance(guid, str) and guid.strip():
+                        note_guids.append(guid.strip())
+            note_guids = unique_preserve_order(note_guids)[:safe_max_notes]
+
+            note_details: dict[str, Any] = {}
+            paragraphs_by_note: dict[str, Any] = {}
+            summaries_by_note: dict[str, Any] = {}
+            documents_by_note: dict[str, Any] = {}
+            folders_by_note: dict[str, Any] = {}
+            for guid in note_guids:
+                note_details[guid] = tiro_api_request_json(
+                    f"/v1/external/notes/{guid}",
+                    token=str(token),
+                    timeout_seconds=timeout_seconds,
+                )
+                provider_api_called = True
+                request_categories.add("note_metadata")
+                paragraphs, paragraph_pages = tiro_paginated_get(
+                    f"/v1/external/notes/{guid}/paragraphs",
+                    token=str(token),
+                    timeout_seconds=timeout_seconds,
+                )
+                pagination.extend(paragraph_pages)
+                paragraphs_by_note[guid] = {"content": paragraphs}
+                request_categories.add("paragraphs")
+                summaries_by_note[guid] = tiro_optional_get(
+                    f"/v1/external/notes/{guid}/summaries",
+                    token=str(token),
+                    timeout_seconds=timeout_seconds,
+                    fetch_gaps=fetch_gaps,
+                    category="summaries",
+                    paginated=True,
+                )
+                documents_by_note[guid] = tiro_optional_get(
+                    f"/v1/external/notes/{guid}/documents",
+                    token=str(token),
+                    timeout_seconds=timeout_seconds,
+                    fetch_gaps=fetch_gaps,
+                    category="documents",
+                    paginated=True,
+                )
+                folders_by_note[guid] = tiro_optional_get(
+                    f"/v1/external/notes/{guid}/folders",
+                    token=str(token),
+                    timeout_seconds=timeout_seconds,
+                    fetch_gaps=fetch_gaps,
+                    category="folders_by_note",
+                    paginated=True,
+                )
+
+            user_word_memories = tiro_optional_get(
+                "/v1/external/users/me/word-memories",
+                token=str(token),
+                timeout_seconds=timeout_seconds,
+                fetch_gaps=fetch_gaps,
+                category="user_word_memories",
+                paginated=True,
+            )
+            workspace_word_memories = (
+                tiro_optional_get(
+                    f"/v1/external/workspaces/{effective_workspace}/word-memories",
+                    token=str(token),
+                    timeout_seconds=timeout_seconds,
+                    fetch_gaps=fetch_gaps,
+                    category="workspace_word_memories",
+                    paginated=True,
+                )
+                if effective_workspace
+                else None
+            )
+            wiki = (
+                tiro_optional_get(
+                    f"/v1/external/workspaces/{effective_workspace}/wiki/info",
+                    token=str(token),
+                    timeout_seconds=timeout_seconds,
+                    fetch_gaps=fetch_gaps,
+                    category="wiki",
+                )
+                if effective_workspace
+                else None
+            )
+            fetch_gaps.append({"category": "audio_original_bytes", "status": "rest_endpoint_not_confirmed_by_adapter"})
+            bundle_payload = {
+                "schema": TIRO_LOSSLESS_RECOVERY_BUNDLE_SCHEMA,
+                "source": TIRO_IMPORT_SOURCE,
+                "captured_at": created_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                "capture_mode": "live_tiro_rest_fetch",
+                "workspaces": workspace_records,
+                "notes": notes,
+                "note_details": note_details,
+                "paragraphs_by_note": paragraphs_by_note,
+                "summaries_by_note": summaries_by_note,
+                "documents_by_note": documents_by_note,
+                "folders_by_note": folders_by_note,
+                "user_word_memories": user_word_memories,
+                "workspace_word_memories": workspace_word_memories,
+                "wiki": wiki,
+                "audio_gaps": [item for item in fetch_gaps if item.get("category") == "audio_original_bytes"],
+                "fetch_gaps": fetch_gaps,
+                "pagination": pagination,
+                "rate_limit_observations": [],
+                "errors": [],
+            }
+            execution_status = "succeeded"
+        except ArchiveServiceError:
+            execution_status = "failed"
+            blockers.append("Tiro live fetch failed; raw provider error is not echoed.")
+        finally:
+            token = None
+
+    if approve and not blockers and bundle_payload is not None and output_file is not None:
+        created_paths: list[Path] = []
+        created_dirs = missing_parent_dirs_before_write(root, [output_file, receipt_path])
+        try:
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            write_json_new_file(output_file, bundle_payload)
+            created_paths.append(output_file)
+            files_written.append(normalized_output_path)
+            bundle_written = True
+            analysis = tiro_lossless_recovery_bundle_analysis(bundle_payload)
+            receipt = {
+                "schema": TIRO_LOSSLESS_RECOVERY_FETCH_RECEIPT_SCHEMA,
+                "receipt_kind": "tiro_lossless_recovery_fetch_run",
+                "lifecycle_action": "tiro_lossless_recovery_fetch_run",
+                "receipt_id": receipt_id,
+                "created_at": created_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                "archive_id": archive_id,
+                "reviewed_by": reviewer,
+                "source": TIRO_IMPORT_SOURCE,
+                "output_path": normalized_output_path,
+                "summary": {
+                    "note_count": len(bundle_payload.get("notes") or []),
+                    "note_detail_count": len(bundle_payload.get("note_details") or {}),
+                    "paragraph_note_count": len(bundle_payload.get("paragraphs_by_note") or {}),
+                    "known_key_count": analysis.get("known_key_count"),
+                    "fetch_gap_count": analysis.get("fetch_gap_count"),
+                    "audio_gap_count": analysis.get("audio_gap_count"),
+                },
+                "closed_actions": {
+                    "provider_api_called": provider_api_called,
+                    "credential_value_read": credential_value_read,
+                    "environment_read": environment_read,
+                    "raw_bundle_written": True,
+                    "receipt_written": True,
+                    "object_manifest_updated": False,
+                    "zettels_written": False,
+                },
+                "redaction": {
+                    "credential_ref_included": False,
+                    "credential_value_included": False,
+                    "env_var_name_included": False,
+                    "raw_provider_responses_included": False,
+                    "meeting_titles_included": False,
+                    "transcript_text_included": False,
+                    "participant_names_included": False,
+                    "emails_included": False,
+                    "provider_urls_included": False,
+                    "tokens_included": False,
+                },
+            }
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_new_file(receipt_path, receipt)
+            created_paths.append(receipt_path)
+            files_written.append(receipt_relative)
+            receipt_written = True
+        except OSError as exc:
+            for path in reversed(created_paths):
+                path.unlink(missing_ok=True)
+            cleanup_empty_archive_dirs(root, created_dirs)
+            raise ArchiveServiceError(f"Could not write Tiro lossless recovery fetch output: {exc}") from exc
+
+    if blockers and approve and execution_status in {"not_run", "running"}:
+        execution_status = "blocked"
+
+    would_change = [] if approve or blockers else [normalized_output_path, receipt_relative]
+    fetch_state = "blocked" if blockers else ("fetched" if approve else "ready_for_approval")
+    bundle_summary = {"note_count": 0, "note_detail_count": 0, "paragraph_note_count": 0, "fetch_gap_count": 0}
+    if bundle_payload is not None:
+        bundle_summary = {
+            "note_count": len(bundle_payload.get("notes") or []),
+            "note_detail_count": len(bundle_payload.get("note_details") or {}),
+            "paragraph_note_count": len(bundle_payload.get("paragraphs_by_note") or {}),
+            "fetch_gap_count": len(bundle_payload.get("fetch_gaps") or []),
+        }
+    return json_safe(
+        {
+            "ok": not blockers,
+            "dry_run": bool(dry_run),
+            "approved": bool(approve),
+            "lifecycle_action": "tiro_lossless_recovery_fetch_run",
+            "archive_id": archive_id,
+            "source": TIRO_IMPORT_SOURCE,
+            "fetch_state": fetch_state,
+            "execution_status": execution_status,
+            "scope": {
+                "workspace_guid_supplied": bool(scoped_workspace),
+                "note_guid_supplied": bool(scoped_note),
+                "workspace_guid_echoed": False,
+                "note_guid_echoed": False,
+                "max_notes": safe_max_notes,
+            },
+            "credential_resolution": {
+                "supported_ref_store": "env",
+                "credential_ref_supplied": bool(normalized_credential_ref),
+                "credential_ref_store": credential_store,
+                "env_ref_supported_now": True,
+                "keyring_ref_store_supported_now": False,
+                "secret_manager_ref_store_supported_now": False,
+                "credential_ref_echoed": False,
+                "credential_values_echoed": False,
+            },
+            "provider_fetch": {
+                "provider": "tiro",
+                "provider_url_echoed": False,
+                "raw_provider_response_echoed": False,
+                "request_category_count": len(request_categories),
+                "request_categories": sorted(request_categories),
+            },
+            "bundle": {
+                "proposed_output_path": None if bundle_written else normalized_output_path,
+                "output_path": normalized_output_path if bundle_written else None,
+                "schema": TIRO_LOSSLESS_RECOVERY_BUNDLE_SCHEMA,
+                "summary": bundle_summary,
+                "raw_values_echoed": False,
+                "next_capture_command": f"archive tiro-lossless-recovery-capture <archive-root> --bundle {normalized_output_path} --dry-run --format json",
+            },
+            "receipt": {
+                "proposed_receipt_path": None if receipt_written else receipt_relative,
+                "receipt_path": receipt_relative if receipt_written else None,
+                "raw_values_included": False,
+            },
+            "current_capability": {
+                "live_tiro_rest_fetch_adapter_implemented": True,
+                "env_credential_ref_read_implemented": True,
+                "raw_bundle_writer_implemented": True,
+                "fetch_receipt_writer_implemented": True,
+                "lossless_bundle_capture_writer_implemented": True,
+                "keyring_credential_ref_read_implemented": False,
+                "audio_original_byte_fetch_implemented": False,
+                "ai_enrichment_writer_implemented": False,
+            },
+            "closed_actions": {
+                "provider_api_called": provider_api_called,
+                "credential_value_read": credential_value_read,
+                "environment_read": environment_read,
+                "raw_bundle_written": bundle_written,
+                "receipt_written": receipt_written,
+                "object_manifest_updated": False,
+                "derived_text_written": False,
+                "zettels_written": False,
+                "mint_run": False,
+                "files_written": bool(files_written),
+            },
+            "privacy_guards": {
+                "credential_ref_echoed": False,
+                "credential_values_echoed": False,
+                "env_var_names_echoed": False,
+                "workspace_guid_echoed": False,
+                "note_guid_echoed": False,
+                "meeting_titles_echoed": False,
+                "transcript_text_echoed": False,
+                "participant_names_echoed": False,
+                "emails_echoed": False,
+                "provider_urls_echoed": False,
+                "local_absolute_paths_echoed": False,
+                "raw_provider_responses_echoed": False,
+                "tokens_echoed": False,
+                "secret_values_echoed": False,
+                "writes": bool(files_written),
+            },
+            "would_change": would_change,
+            "files_written": files_written,
+            "next_safe_actions": [
+                "Run tiro-lossless-recovery-capture on the written raw bundle to store it as a WOM objet.",
+                "Run derived-text capture only after the raw Tiro bundle object is preserved.",
+                "Keep speaker correction, relationship inference, and summary cleanup in a separate AI enrichment layer.",
             ],
             "warnings": unique_preserve_order(warnings),
             "blockers": unique_preserve_order(blockers),
