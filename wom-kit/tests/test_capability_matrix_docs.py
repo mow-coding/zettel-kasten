@@ -58,6 +58,8 @@ NOTION_ANCESTOR_MERGE_PLAN_PATH = KIT_ROOT / "docs" / "notion-ancestor-merge-pla
 NOTION_CLIENT_ISSUE_VERIFICATION_PLAN_PATH = KIT_ROOT / "docs" / "notion-client-issue-verification-plan.md"
 NOTION_CLIENT_FIXTURE_REQUEST_PLAN_PATH = KIT_ROOT / "docs" / "notion-client-fixture-request-plan.md"
 TIRO_IMPORT_PLAN_PATH = KIT_ROOT / "docs" / "tiro-import-plan.md"
+TIRO_LOSSLESS_RECOVERY_PATH = KIT_ROOT / "docs" / "tiro-lossless-recovery.md"
+ZET_MARKDOWN_STYLE_GUIDE_PATH = KIT_ROOT / "docs" / "zet-markdown-style-guide.md"
 ZETTEL_EDGE_WRITE_PATH = KIT_ROOT / "docs" / "zettel-edge-write.md"
 ZETTEL_EDGE_BATCH_PATH = KIT_ROOT / "docs" / "zettel-edge-batch.md"
 ZET_SURFACE_PROTOTYPES_PATH = KIT_ROOT / "docs" / "zet-surface-prototypes.md"
@@ -597,6 +599,80 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "archive tiro-import-plan",
             "MCP `tiro_import_plan`",
             "no transcript/title/link echo",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, release_text)
+
+    def test_tiro_lossless_recovery_and_zet_markdown_style_docs_are_publicly_indexed(self) -> None:
+        tiro_text = TIRO_LOSSLESS_RECOVERY_PATH.read_text(encoding="utf-8")
+        style_text = ZET_MARKDOWN_STYLE_GUIDE_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.139.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.139 Tiro lossless recovery bundle contract and capture checkpoint",
+            "archive tiro-lossless-recovery-plan <archive-root>",
+            "archive tiro-lossless-recovery-capture <archive-root>",
+            "workspaces",
+            "transcript paragraphs",
+            "generated note documents",
+            "word memories",
+            "wiki info",
+            "600 requests per 60 seconds",
+            "objects/sha256/<prefix>/<sha256>",
+            "live credential-bounded Tiro REST or CLI fetch adapter",
+            "does not yet implement",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, tiro_text)
+        for phrase in (
+            "Status: v0.3.139 zet Markdown range-tilde authoring checkpoint",
+            "archive zet-markdown-style-guide <archive-root> --topic range_tilde --dry-run --format json",
+            "A ~ B",
+            "A~~B",
+            "Double tilde is used only when the human explicitly wants Markdown",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, style_text)
+        for phrase in (
+            "Status: v0.3.139 Tiro lossless recovery bundle and zet Markdown tilde checkpoint",
+            "Tiro lossless recovery",
+            "archive tiro-lossless-recovery-plan",
+            "archive tiro-lossless-recovery-capture",
+            "live credential-bounded Tiro REST/CLI fetch adapter that generates the bundle is not implemented yet",
+            "zet Markdown style guide",
+            "archive zet-markdown-style-guide",
+            "A ~ B",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "[Tiro Lossless Recovery](wom-kit/docs/tiro-lossless-recovery.md)",
+            "[zet Markdown Style Guide](wom-kit/docs/zet-markdown-style-guide.md)",
+            "raw Tiro recovery bundle capture",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        for phrase in (
+            "docs/tiro-lossless-recovery.md",
+            "docs/zet-markdown-style-guide.md",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, kit_readme_text)
+        self.assertIn("[Tiro Lossless Recovery](tiro-lossless-recovery.md)", public_map_text)
+        self.assertIn("[zet Markdown Style Guide](zet-markdown-style-guide.md)", public_map_text)
+        self.assertIn("[Tiro Lossless Recovery](tiro-lossless-recovery.md)", public_map_ko_text)
+        self.assertIn("[zet Markdown Style Guide](zet-markdown-style-guide.md)", public_map_ko_text)
+        for phrase in (
+            "v0.3.139 responds to the Tiro full-data recovery feedback",
+            "archive tiro-lossless-recovery-plan",
+            "archive tiro-lossless-recovery-capture",
+            "archive zet-markdown-style-guide",
+            "A ~ B",
+            "does not yet implement the live credential-bounded Tiro REST/CLI fetch adapter",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, release_text)
