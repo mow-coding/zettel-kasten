@@ -3049,6 +3049,14 @@ state:
             self.assertEqual(miss["scope_filter"]["unfiltered_crawl_request_count"], 2)
             self.assertEqual(miss["scope_filter"]["filtered_crawl_request_count"], 0)
             self.assertIn("ancestor_crawl_scope_filter_matched_no_requests", miss["warnings"])
+            self.assertIn(
+                "scope_generation_id_may_not_match_generation_unknown_untraceable_leaf_requests",
+                miss["warnings"],
+            )
+            self.assertEqual(
+                miss["scope_filter"]["untraceable_leaf_recovery_guidance"]["recommended_scope_fields"],
+                ["scope_leaf_refs", "scope_root_refs", "scope_ancestor_refs"],
+            )
 
     def test_notion_ancestor_fetch_adapter_execution_contract_keeps_live_fetch_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3089,6 +3097,13 @@ state:
             self.assertFalse(result["credential_summary"]["credential_value_read"])
             self.assertFalse(result["execution_contract"]["live_execution_allowed_now"])
             self.assertTrue(result["execution_contract"]["must_consume_crawl_request_queue"])
+            self.assertTrue(result["execution_contract"]["must_fetch_parent_chain_recursively_until_stop_condition"])
+            self.assertTrue(result["execution_contract"]["must_continue_when_fetched_parent_is_still_missing_its_parent"])
+            self.assertTrue(result["execution_contract"]["max_depth_is_parent_chain_guard"])
+            self.assertTrue(result["execution_contract"]["must_report_stop_condition_for_partial_parent_chain_fetch"])
+            self.assertTrue(result["recursive_fetch_contract"]["required_for_live_adapter"])
+            self.assertTrue(result["recursive_fetch_contract"]["must_fetch_newly_discovered_missing_parent_refs"])
+            self.assertIn("max_depth_reached", result["recursive_fetch_contract"]["continues_until"])
             self.assertEqual(
                 result["execution_actor_contract"]["current_live_fetch_execution_subject"],
                 "none_contract_preview_only",

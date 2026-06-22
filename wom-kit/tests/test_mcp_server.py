@@ -2511,6 +2511,9 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(structured["contract_state"], "fetch_contract_ready")
                 self.assertEqual(structured["crawl_request_summary"]["crawl_request_count"], 1)
                 self.assertFalse(structured["execution_contract"]["live_execution_allowed_now"])
+                self.assertTrue(structured["execution_contract"]["must_fetch_parent_chain_recursively_until_stop_condition"])
+                self.assertTrue(structured["recursive_fetch_contract"]["required_for_live_adapter"])
+                self.assertTrue(structured["recursive_fetch_contract"]["must_fetch_newly_discovered_missing_parent_refs"])
                 self.assertEqual(
                     structured["execution_actor_contract"]["current_live_fetch_execution_subject"],
                     "none_contract_preview_only",

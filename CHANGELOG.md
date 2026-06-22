@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.133 - 2026-06-22
+
+- Clarified the Notion ancestor live adapter contract in
+  `archive notion-ancestor-fetch-adapter-execution-contract --dry-run` and MCP
+  `notion_ancestor_fetch_adapter_execution_contract`.
+- The future live ancestor adapter must recurse upward from each
+  `crawl_request_queue` seed until a stop condition such as known generation
+  root, workspace root, max depth, ambiguous parent ref, or unsafe ref.
+- Added JSON scope guidance and warning output so generation-unknown
+  untraceable leaf recovery is scoped by leaf/root/ancestor refs rather than
+  generation id when the generation has not yet been recovered.
+- Still closed: no live Notion fetch adapter, OAuth, provider API calls,
+  credential value reads, title/body reads, media downloads, fixture writes,
+  zettel writes, edge writes, receipts, or object manifest updates.
+
 ## v0.3.132 - 2026-06-22
 
 - Added read-only
