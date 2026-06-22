@@ -21612,6 +21612,8 @@ state:
             self.assertIn("credentials.json", gitignore)
             self.assertIn("/collab/", gitignore)
             self.assertIn("/.mow-harness/", gitignore)
+            self.assertIn(".wom-scratch/", gitignore)
+            self.assertIn("workbench/ai-scratch/", gitignore)
             self.assertNotIn("/AGENTS.md", gitignore)
             self.assertIn("**/db/archive-index.sqlite", gitignore)
             self.assertIn("**/db/archive-index.sqlite-wal", gitignore)
@@ -21633,6 +21635,8 @@ state:
                 not in {
                     "objects/sha256/",
                     "objects/derived-text/sha256/",
+                    ".wom-scratch/",
+                    "workbench/ai-scratch/",
                     "/collab/",
                     "/.mow-harness/",
                     "**/db/archive-index.sqlite",
@@ -21649,6 +21653,8 @@ state:
             result = json.loads(output)
             self.assertEqual(result["action"], "would_append_patterns")
             self.assertIn("objects/derived-text/sha256/", result["missing_patterns"])
+            self.assertIn(".wom-scratch/", result["missing_patterns"])
+            self.assertIn("workbench/ai-scratch/", result["missing_patterns"])
             self.assertIn("/collab/", result["missing_patterns"])
             self.assertIn("**/db/archive-index.sqlite-wal", result["missing_patterns"])
             self.assertEqual(gitignore_path.read_text(encoding="utf-8"), before)
@@ -21671,6 +21677,8 @@ state:
             repaired = gitignore_path.read_text(encoding="utf-8")
             self.assertIn("objects/sha256/", repaired)
             self.assertIn("objects/derived-text/sha256/", repaired)
+            self.assertIn(".wom-scratch/", repaired)
+            self.assertIn("workbench/ai-scratch/", repaired)
             self.assertIn("/collab/", repaired)
             self.assertIn("/.mow-harness/", repaired)
             self.assertIn("**/db/archive-index.sqlite", repaired)
@@ -21810,6 +21818,8 @@ state:
             self.assertIn("profiles/local/", gitignore)
             self.assertIn("/collab/", gitignore)
             self.assertIn("/.mow-harness/", gitignore)
+            self.assertIn(".wom-scratch/", gitignore)
+            self.assertIn("workbench/ai-scratch/", gitignore)
             self.assertNotIn("/AGENTS.md", gitignore)
 
             provider_data = archive_cli.load_yaml((archive_root / "provider-bindings.yml").read_text(encoding="utf-8"))
@@ -22543,7 +22553,7 @@ state:
         self.assertTrue(any(item["status"] == "needs_human_review" for item in result["checklist"]))
         self.assertEqual(result["receipt_preview"]["receipt_path"], result["proposed_receipt_path"])
 
-    def test_mint_zet_blocks_plain_https_provider_url_in_body(self) -> None:
+    def test_mint_zet_blocks_private_provider_locator_in_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             draft_path = archive_root / "inbox" / "zet_20260617_provider_url_fixture.md"
@@ -22591,6 +22601,144 @@ state:
             object_id_only = next(item for item in result["checklist"] if item["id"] == "object_id_only")
             self.assertEqual(object_id_only["status"], "blocked")
             self.assertNotIn("app.notion.com", serialized)
+
+    def test_mint_zet_allows_external_citation_url_in_body_and_source_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path = archive_root / "inbox" / "zet_20260622_external_citation_fixture.md"
+            frontmatter = {
+                "id": "zet_20260622_external_citation_fixture",
+                "title": "External citation fixture",
+                "created_at": "2026-06-22T10:00:00+09:00",
+                "updated_at": "2026-06-22T10:00:00+09:00",
+                "archive_id": "archive:personal:fake-life",
+                "status": "draft",
+                "kind": "permanent_note",
+                "facets": {"domain": "test"},
+                "assets": [],
+                "edges": [],
+                "source_refs": [
+                    {
+                        "type": "external_citation",
+                        "value": "https://www.youtube.com/watch?v=public-reference",
+                        "role": "citation",
+                    }
+                ],
+                "provenance": {
+                    "created_by": "person:test",
+                    "created_in": "archive:personal:fake-life",
+                    "source": "manual_test",
+                    "derived_from": [],
+                },
+                "visibility": {"scope": "private", "allowed_archives": [], "source_visibility": "private"},
+                "promotion": {
+                    "stage": "promotion_candidate",
+                    "ready_for_promotion": True,
+                    "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
+                },
+            }
+            body = (
+                "# External citation fixture\n\n"
+                "This zet is self-contained and keeps the public citation inline: "
+                "https://www.youtube.com/watch?v=public-reference.\n"
+            )
+            draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260622_external_citation_fixture.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            object_id_only = next(item for item in result["checklist"] if item["id"] == "object_id_only")
+            self.assertEqual(object_id_only["status"], "passed")
+            self.assertTrue(result["self_contained_check"]["external_citation_urls_allowed"])
+            self.assertEqual(result["self_contained_check"]["external_citation_url_count"], 1)
+            self.assertIn(frontmatter["source_refs"][0], result["receipt_preview"]["source_refs"])
+
+    def test_mint_zet_consumes_explicit_ai_scratch_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            scratch_path = archive_root / ".wom-scratch" / "session" / "research-note.md"
+            scratch_path.parent.mkdir(parents=True, exist_ok=True)
+            scratch_path.write_text("Temporary research material that should not become canonical.", encoding="utf-8")
+            draft_path = archive_root / "inbox" / "zet_20260622_scratch_gc_fixture.md"
+            frontmatter = {
+                "id": "zet_20260622_scratch_gc_fixture",
+                "title": "Scratch GC fixture",
+                "created_at": "2026-06-22T10:10:00+09:00",
+                "updated_at": "2026-06-22T10:10:00+09:00",
+                "archive_id": "archive:personal:fake-life",
+                "status": "draft",
+                "kind": "permanent_note",
+                "facets": {"domain": "test"},
+                "assets": [],
+                "edges": [],
+                "source_refs": [
+                    {"type": "ai_scratch", "value": ".wom-scratch/session/research-note.md", "role": "working_material"},
+                    {"type": "external_citation", "value": "https://example.org/public-source", "role": "citation"},
+                ],
+                "provenance": {
+                    "created_by": "ai_runtime:codex",
+                    "created_in": "archive:personal:fake-life",
+                    "source": "manual_test",
+                    "derived_from": [],
+                },
+                "visibility": {"scope": "private", "allowed_archives": [], "source_visibility": "private"},
+                "promotion": {
+                    "stage": "promotion_candidate",
+                    "ready_for_promotion": True,
+                    "checklist": {item_id: True for item_id in PROMOTION_CHECKLIST_IDS},
+                },
+            }
+            body = "# Scratch GC fixture\n\nAll durable context from the scratch note is now summarized inside this zet.\n"
+            draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+
+            check_code, check_output = self.run_cli(
+                [
+                    "zet-self-contained-check",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260622_scratch_gc_fixture.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            check_result = json.loads(check_output)
+            self.assertEqual(check_code, 0, check_output)
+            self.assertFalse(check_result["self_contained"])
+            self.assertEqual(check_result["scratch_cleanup_plan"]["candidate_count"], 1)
+            self.assertNotIn(str(archive_root), check_output)
+
+            code, output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260622_scratch_gc_fixture.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertFalse(scratch_path.exists())
+            self.assertEqual(result["scratch_cleanup"]["deleted"][0]["path"], ".wom-scratch/session/research-note.md")
+            self.assertTrue((archive_root / result["scratch_cleanup"]["receipt_path"]).is_file())
+            canonical_text = (archive_root / result["canonical_path"]).read_text(encoding="utf-8")
+            canonical_frontmatter = archive_cli.load_yaml(archive_cli.FRONTMATTER_RE.match(canonical_text).group(1))
+            self.assertEqual(canonical_frontmatter["source_refs"], [frontmatter["source_refs"][1]])
 
     def test_promote_real_requires_approval_and_reviewer(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"

@@ -44,7 +44,7 @@ For installation today:
 | `DURABLE_UNTIL_RESOLVED` | `inbox/` drafts, active project intake staging decisions | Keep until minted, explicitly deferred, or explicitly abandoned. |
 | `DURABLE_WITH_EXPIRY` | `workpacks/` and transfer/export bundles with `expires_at` or a review window | Keep until expiry and explicit cleanup review. |
 | `REBUILDABLE_GENERATED` | `db/archive-index.sqlite`, `db/archive-index.sqlite-wal`, `db/archive-index.sqlite-shm`, `db/archive-index.sqlite-journal`, future search indexes and caches | Safe to rebuild later, but do not delete silently in this batch. |
-| `DISPOSABLE_AFTER_REVIEW` | `tmp/`, `tmp-*`, dry-run sandboxes, abandoned staging folders, expired workpacks after review | Disposable only after explicit review gates. |
+| `DISPOSABLE_AFTER_REVIEW` | `tmp/`, `.wom-scratch/`, `workbench/ai-scratch/`, `tmp-*`, dry-run sandboxes, abandoned staging folders, expired workpacks after review | Disposable only after explicit review gates. |
 | `LOCAL_ONLY_SECRET_CONFIG` | `.env`, `.env.*`, keys, tokens, `profiles/local/`, `keyrings/local/`, `.archive-local/`, `rclone.conf`, credentials | Must stay local and ignored by git. Never publish. |
 | `EXTERNAL_LIVE_NEVER_TOUCH` | private dogfood archives, any real user archive, any real local `-objets` store | Never read or mutate by default. Require explicit operator approval. |
 | `EXTERNAL_MANUAL_OR_DEFERRED` | GitHub repositories, R2/B2/S3 buckets, Neon/Postgres, provider permissions, remote object storage state | Manual or future provider flow. No automatic provider changes. |
@@ -102,6 +102,8 @@ rclone.conf
 credentials.json
 token.json
 tmp/
+.wom-scratch/
+workbench/ai-scratch/
 /collab/
 /.mow-harness/
 **/db/archive-index.sqlite
@@ -131,9 +133,32 @@ control even when an archive is operated from a larger workspace.
 
 ## 5. Future Cleanup Guidance
 
-A future cleanup or `gc` flow may report items such as:
+AI scratch files belong in `.wom-scratch/` or `workbench/ai-scratch/`, not in
+`objets/`. `objets/` is for human-selected original material such as meeting
+audio, transcripts, photos, exports, or other source files that should remain
+recoverable. AI research notes, intermediate reports, prompt drafts, and
+temporary composition files are scratch unless a human explicitly preserves them
+as an objet.
+
+The current local cleanup flow is:
+
+```powershell
+python wom-kit\cli\archive.py zet-self-contained-check <archive-root> --path inbox/example.md --dry-run --format json
+python wom-kit\cli\archive.py ai-scratch-gc <archive-root> --path inbox/example.md --dry-run --format json
+python wom-kit\cli\archive.py ai-scratch-gc <archive-root> --path inbox/example.md --approve --reviewed-by person:me --format json
+```
+
+When `mint-zet --approve` sees explicit `.wom-scratch/` or
+`workbench/ai-scratch/` source refs, the minted canonical zet removes those
+scratch refs and the approved mint runs the same scratch cleanup gate for those
+explicit files. External citation URLs such as public articles or videos may
+remain inside the zet body or `source_refs`; private provider locators and local
+file paths still need durable WOM refs.
+
+A broader future cleanup or `gc` flow may report items such as:
 
 - stale `tmp/` folders,
+- explicit AI scratch files not tied to an active draft,
 - expired workpacks,
 - abandoned project intake staging folders,
 - rebuildable SQLite/search indexes,
@@ -148,6 +173,7 @@ records are preserved.
 These are not solved yet:
 
 - no systematic `gc` command exists,
+- no broad archive-wide AI scratch sweep exists,
 - no orphan-objet sweep exists,
 - no real local objet capture flow exists in this batch,
 - no provider upload/sync cleanup exists,

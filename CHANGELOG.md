@@ -6,6 +6,27 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.144 - 2026-06-22
+
+- Added read-only `archive zet-self-contained-check` to report whether a
+  selected zet depends on AI scratch refs, private provider locators, local
+  absolute paths, or object-store locations.
+- Added approval-gated `archive ai-scratch-gc`, with aliases
+  `archive ai-residue-cleanup` and `archive scratch-gc`, to delete only
+  explicit `.wom-scratch/` or `workbench/ai-scratch/` files referenced by one
+  selected zet and write a cleanup receipt.
+- Updated minting so public external citation URLs may remain in zet bodies or
+  `source_refs`, while private provider locators and original-file locations
+  remain blocked by the machine-enforced `object_id_only` gate.
+- Approved `mint-zet` now removes explicit AI scratch refs from the canonical
+  zet and invokes the same scratch cleanup gate after canonical, mint receipt,
+  and draft snapshot writes succeed.
+- Added `.wom-scratch/` and `workbench/ai-scratch/` to generated archive
+  `.gitignore` safe defaults and artifact hygiene classification, while keeping
+  broad archive-wide scratch sweeps as future work.
+- Updated README status, artifact hygiene docs, capability matrix, release
+  notes, and tests.
+
 ## v0.3.143 - 2026-06-22
 
 - Added approval-gated Tiro credential reads from Windows Credential Manager
