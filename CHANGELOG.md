@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.134 - 2026-06-22
+
+- Added approval-gated local
+  `archive notion-ancestor-fetch-adapter-run --dry-run|--approve`.
+- The adapter verifies a matching credential access approval receipt and
+  credential policy check, supports `env:` token refs through the local CLI
+  process in this first version, calls the Notion API only for parent-chain
+  structure metadata, and writes a sanitized
+  `notion_ancestor_result_fixture` plus a non-secret execution receipt.
+- The run stops at known generation roots, workspace roots, max depth,
+  ambiguous parents, unsafe refs, or redacted provider fetch failures, then
+  routes the next step to `notion-ancestor-merge-plan`.
+- Still closed: no MCP live provider-call tool, OAuth, browser session,
+  keyring/password-manager reads, page title/body/comment reads, signed URL
+  refresh, media byte download/hash, zettel writes, edge writes, minting, or
+  object manifest updates.
+
 ## v0.3.133 - 2026-06-22
 
 - Clarified the Notion ancestor live adapter contract in

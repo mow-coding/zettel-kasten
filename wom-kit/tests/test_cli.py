@@ -3153,6 +3153,222 @@ state:
             self.assertEqual(no_dry_code, 1)
             self.assertIn("requires --dry-run", no_dry_output)
 
+    def test_notion_ancestor_fetch_adapter_run_writes_sanitized_fixture_after_approval(self) -> None:
+        root_id = "a" * 32
+        missing_parent_id = "b" * 32
+        leaf_id = "c" * 32
+        calls: list[dict[str, Any]] = []
+
+        def fake_notion_get_json(
+            *,
+            target_kind: str,
+            target_id: str,
+            token: str,
+            notion_version: str,
+            timeout_seconds: int,
+        ) -> dict[str, Any]:
+            calls.append(
+                {
+                    "target_kind": target_kind,
+                    "target_id": target_id,
+                    "token": token,
+                    "notion_version": notion_version,
+                    "timeout_seconds": timeout_seconds,
+                }
+            )
+            if target_kind == "page" and target_id == missing_parent_id:
+                return {
+                    "object": "page",
+                    "id": missing_parent_id,
+                    "parent": {"type": "database_id", "database_id": root_id},
+                    "archived": False,
+                    "in_trash": False,
+                    "url": "https://notion.example/redacted-by-adapter",
+                    "properties": {"title": {"title": [{"plain_text": "must not be persisted"}]}},
+                }
+            raise AssertionError(f"unexpected fake Notion target: {target_kind}:{target_id}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            tree_path = archive_root / "workbench" / "notion-live-ancestor.sample.json"
+            tree_path.write_text(
+                json.dumps(
+                    {
+                        "fixture_kind": "notion_nested_tree_fixture",
+                        "source": "notion",
+                        "generation_roots": [
+                            {
+                                "generation_id": "DB1",
+                                "root_ref": f"database:{root_id}",
+                                "generation_label": "Reviewed DB1",
+                            }
+                        ],
+                        "minted_refs": [],
+                        "nodes": [
+                            {
+                                "node_ref": f"database:{root_id}",
+                                "node_kind": "database",
+                                "content_class": "structure",
+                                "source_status": "live",
+                                "mint_state": "not_applicable",
+                                "review_status": "reviewed_root",
+                            },
+                            {
+                                "node_ref": f"page:{leaf_id}",
+                                "parent_ref": f"page:{missing_parent_id}",
+                                "node_kind": "page",
+                                "content_class": "content",
+                                "source_status": "live",
+                                "mint_state": "missing",
+                                "review_status": "needs_recovery",
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            approval_code, approval_output = self.run_cli(
+                [
+                    "credential-access-approval",
+                    str(archive_root),
+                    "--credential-id",
+                    "cred:notion-readonly",
+                    "--credential-ref",
+                    "env:WOM_TEST_NOTION_TOKEN",
+                    "--credential-kind",
+                    "provider_api_key",
+                    "--provider",
+                    "notion",
+                    "--action-kind",
+                    "cli_token_auth",
+                    "--decision",
+                    "approve_once",
+                    "--store-kind",
+                    "environment",
+                    "--consumer",
+                    "wom:adapter:notion-ancestor-fetch",
+                    "--reviewed-by",
+                    "human:tester",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+            approval = json.loads(approval_output)
+            self.assertEqual(approval_code, 0, approval_output)
+            approval_receipt = approval["receipt_path"]
+            after_approval = self.snapshot_archive_files(archive_root)
+
+            base_args = [
+                "notion-ancestor-fetch-adapter-run",
+                str(archive_root),
+                "--tree",
+                "workbench/notion-live-ancestor.sample.json",
+                "--output",
+                "workbench/notion-ancestor-result.live-test.json",
+                "--source",
+                "notion",
+                "--scope-ancestor-ref",
+                f"page:{missing_parent_id}",
+                "--credential-id",
+                "cred:notion-readonly",
+                "--credential-ref",
+                "env:WOM_TEST_NOTION_TOKEN",
+                "--credential-kind",
+                "provider_api_key",
+                "--credential-provider",
+                "notion",
+                "--store-kind",
+                "environment",
+                "--adapter-kind",
+                "environment_injection",
+                "--approval-decision",
+                "approve_once",
+                "--approval-receipt",
+                approval_receipt,
+                "--consumer",
+                "wom:adapter:notion-ancestor-fetch",
+                "--reviewed-by",
+                "human:tester",
+                "--format",
+                "json",
+            ]
+
+            dry_code, dry_output = self.run_cli([*base_args, "--dry-run"])
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertTrue(dry_result["ok"], dry_result)
+            self.assertEqual(dry_result["run_state"], "ready_for_approved_live_run")
+            self.assertEqual(dry_result["fixture"]["proposed_output_path"], "workbench/notion-ancestor-result.live-test.json")
+            self.assertFalse(dry_result["closed_actions"]["environment_read"])
+            self.assertFalse(dry_result["closed_actions"]["provider_api_called"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), after_approval)
+
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_TEST_NOTION_TOKEN": "notion-token-hidden"},
+                clear=False,
+            ), patch("wom_kit.archive_services.notion_api_get_json", fake_notion_get_json):
+                approve_code, approve_output = self.run_cli([*base_args, "--approve"])
+
+            approve_result = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"], approve_result)
+            self.assertEqual(approve_result["run_state"], "succeeded")
+            self.assertEqual(approve_result["fetch_summary"]["request_count"], 1)
+            self.assertEqual(approve_result["fetch_summary"]["fetched_node_count"], 1)
+            self.assertTrue(approve_result["current_capability"]["live_notion_ancestor_fetch_adapter_implemented"])
+            self.assertTrue(approve_result["closed_actions"]["provider_api_called"])
+            self.assertTrue(approve_result["closed_actions"]["credential_value_read"])
+            self.assertTrue(approve_result["closed_actions"]["ancestor_result_fixture_written"])
+            self.assertTrue(approve_result["closed_actions"]["execution_receipt_written"])
+            self.assertFalse(approve_result["closed_actions"]["page_titles_read"])
+            self.assertFalse(approve_result["closed_actions"]["page_bodies_read"])
+            self.assertFalse(approve_result["closed_actions"]["media_downloaded"])
+            self.assertEqual(len(approve_result["files_written"]), 2)
+
+            fixture_path = archive_root / "workbench" / "notion-ancestor-result.live-test.json"
+            fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+            self.assertEqual(set(fixture), {"fixture_kind", "source", "nodes"})
+            self.assertEqual(fixture["fixture_kind"], "notion_ancestor_result_fixture")
+            self.assertEqual(fixture["nodes"], [
+                {
+                    "node_ref": f"page:{missing_parent_id}",
+                    "parent_ref": f"database:{root_id}",
+                    "node_kind": "page",
+                    "source_status": "live",
+                    "mint_state": "not_applicable",
+                    "review_status": "needs_merge_review",
+                }
+            ])
+
+            receipt_path = archive_root / approve_result["files_written"][1]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["receipt_kind"], "notion_ancestor_fetch_adapter_run")
+            self.assertEqual(receipt["result"]["fetched_node_count"], 1)
+            self.assertFalse(receipt["redaction"]["credential_value_included"])
+            self.assertFalse(receipt["redaction"]["raw_provider_responses_included"])
+            self.assertFalse(receipt["redaction"]["page_titles_included"])
+            self.assertEqual(calls, [
+                {
+                    "target_kind": "page",
+                    "target_id": missing_parent_id,
+                    "token": "notion-token-hidden",
+                    "notion_version": archive_services.NOTION_API_DEFAULT_VERSION,
+                    "timeout_seconds": 30,
+                }
+            ])
+            self.assertNotIn(approval_receipt, approve_output)
+            self.assertNotIn("env:WOM_TEST_NOTION_TOKEN", approve_output)
+            self.assertNotIn("WOM_TEST_NOTION_TOKEN", approve_output)
+            self.assertNotIn("notion-token-hidden", approve_output)
+            self.assertNotIn("must not be persisted", approve_output)
+            self.assertNotIn("notion.example", approve_output)
+            self.assertNotIn(str(archive_root), approve_output)
+
     def test_notion_media_fetch_adapter_execution_contract_keeps_media_bytes_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

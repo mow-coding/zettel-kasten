@@ -1,9 +1,9 @@
 # Notion Ancestor Fetch Adapter Execution Contract
 
-Status: v0.3.133 read-only future recursive fetch adapter contract checkpoint
+Status: v0.3.134 read-only recursive fetch contract and live-run handoff checkpoint
 
 `archive notion-ancestor-fetch-adapter-execution-contract` previews the contract
-that a future credential-bounded Notion ancestor fetch adapter must satisfy.
+that a credential-bounded Notion ancestor fetch adapter must satisfy.
 
 It is the safe bridge between:
 
@@ -22,6 +22,9 @@ WOM local credential-bounded adapter process, not the AI chat runtime and not a
 requirement that a client hand-roll provider crawling.
 v0.3.133 clarifies the required live adapter shape: ancestor fetch is recursive
 up the parent chain until a stop condition is reached.
+v0.3.134 implements that live structure fetch as the separate CLI-only
+`archive notion-ancestor-fetch-adapter-run` command. The contract command stays
+read-only.
 
 ## Command
 
@@ -81,17 +84,18 @@ human operator reviews scope and approves credential ref
 -> notion-ancestor-merge-plan consumes the fixture
 ```
 
-The current release does not execute that path yet. Its current live fetch
-execution subject is:
+This contract command does not execute that path. Its current live fetch
+execution subject is still:
 
 ```text
 none_contract_preview_only
 ```
 
-The future live fetch execution subject is:
+The implemented live fetch execution subject is now available through the
+separate CLI-only run command:
 
 ```text
-future_wom_local_credential_bounded_adapter_process
+wom_local_credential_bounded_adapter_process
 ```
 
 The AI chat runtime may plan, review, and verify. It must not become the live

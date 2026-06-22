@@ -266,12 +266,17 @@ Then route safely:
 - Preview the future Notion ancestor fetch adapter contract: use
   `notion-ancestor-fetch-adapter-execution-contract --tree
   workbench/notion-nested-tree.sample.json --source notion --scope-generation-id
-  DB1 --dry-run` before any live credential-bounded adapter is implemented.
-  The intended live fetch subject is a future WOM local credential-bounded
-  adapter process; the AI chat runtime must not hand-roll provider crawling or
-  receive credential values, future live adapter execution must recurse up the
-  parent chain until a stop condition, and client-supplied ancestor fixtures are
-  only sanitized safe-origin fallback input.
+  DB1 --dry-run` before a scoped live run.
+- Run the first local Notion ancestor structure fetch after credential approval:
+  use `notion-ancestor-fetch-adapter-run --tree
+  workbench/notion-nested-tree.sample.json --output
+  workbench/notion-ancestor-result.live.json --source notion
+  --scope-ancestor-ref page:<32hex> --approval-decision approve_once
+  --approval-receipt <receipt> --dry-run|--approve`. The live fetch subject is
+  a WOM local credential-bounded adapter process; the AI chat runtime must not
+  hand-roll provider crawling or receive credential values. The run writes only
+  a sanitized ancestor fixture plus a non-secret receipt and still does not read
+  page titles, page bodies, comments, or media bytes.
 - Preview the future Notion media byte fetch adapter contract: use
   `notion-media-fetch-adapter-execution-contract --tree
   workbench/notion-nested-tree.sample.json --source notion --scope-leaf-ref

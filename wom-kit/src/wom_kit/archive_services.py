@@ -17,6 +17,8 @@ import sqlite3
 import stat
 import subprocess
 import unicodedata
+import urllib.error
+import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
@@ -460,6 +462,12 @@ NOTION_BLOCK_MIRROR_KIND_ALIASES = {
     "view": "view",
 }
 NOTION_ANCESTOR_RESULT_FIXTURE_FIELDS = {"fixture_kind", "source", "nodes"}
+NOTION_ANCESTOR_FETCH_RECEIPTS_DIR = "receipts/notion/ancestor-fetches"
+NOTION_ANCESTOR_FETCH_RECEIPT_SCHEMA = "wom-notion-ancestor-fetch-adapter-run/v0.1"
+NOTION_API_DEFAULT_VERSION = "2022-06-28"
+NOTION_API_ID_RE = re.compile(
+    r"^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+)
 EXTERNAL_IMPORT_EXTENSIONS = {".md", ".markdown", ".txt"}
 SOURCE_TYPES = {"local_folder", "external_ssd", "notion_export", "google_drive_export", "object_manifest", "imap_mailbox"}
 IMAP_MAILBOX_SOURCE_TYPE = "imap_mailbox"
@@ -1586,6 +1594,7 @@ CREDENTIAL_REF_ALLOWED_PROVIDERS = {
     "google_cloud_vision",
     "azure_ai_vision",
     "aws_textract",
+    "notion",
     "cloudflare_r2",
     "backblaze_b2",
     "generic_provider",
@@ -17256,6 +17265,7 @@ def notion_ancestor_crawl_plan(
         "tree_summary": nested_plan.get("tree_summary", {}),
         "source_plan_state": nested_plan.get("plan_state"),
         "source_recovery_summary": nested_plan.get("recovery_summary", {}),
+        "generation_roots": [] if blockers else list(nested_plan.get("generation_roots") or []),
         "ancestor_crawl_contract": {
             "consumes_missing_ancestor_refs_from_nested_tree_plan": True,
             "groups_multiple_affected_leaves_by_same_missing_ancestor": True,
@@ -17782,6 +17792,723 @@ def notion_ancestor_fetch_adapter_execution_contract(
         "warnings": unique_preserve_order(warnings),
         "blockers": unique_preserve_order(blockers),
     }
+
+
+def notion_ancestor_fetch_adapter_run(
+    archive_root: Path | str,
+    *,
+    tree_path: str,
+    output_path: str = "workbench/notion-ancestor-result.live.json",
+    source: str = "notion",
+    credential_id: str = "cred:notion-readonly",
+    credential_ref: str | None = None,
+    credential_kind: str | None = "provider_api_key",
+    credential_provider: str | None = "notion",
+    store_kind: str = "environment",
+    adapter_kind: str | None = "environment_injection",
+    approval_decision: str = "needs_review",
+    approval_receipt: str | None = None,
+    consumer: str = "wom:adapter:notion-ancestor-fetch",
+    reviewed_by: str | None = None,
+    platform: str = "windows",
+    notion_version: str = NOTION_API_DEFAULT_VERSION,
+    timeout_seconds: int = 30,
+    dry_run: bool = True,
+    approve: bool = False,
+    max_items: int = 1000,
+    max_depth: int = 16,
+    scope_generation_ids: Iterable[str] | str | None = None,
+    scope_root_refs: Iterable[str] | str | None = None,
+    scope_ancestor_refs: Iterable[str] | str | None = None,
+    scope_leaf_refs: Iterable[str] | str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    now = datetime.now(timezone.utc)
+
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+
+    normalized_source = str(source or "").strip().lower().replace("-", "_")
+    if normalized_source not in NOTION_NESTED_TREE_SOURCES:
+        blockers.append("source must be one of: " + ", ".join(sorted(NOTION_NESTED_TREE_SOURCES)) + ".")
+        normalized_source = "notion"
+
+    normalized_output_path = notion_ancestor_fetch_output_path(output_path, blockers)
+    output_file = archive_internal_path(root, normalized_output_path) if normalized_output_path else None
+    if output_file and approve and output_file.exists():
+        blockers.append(f"Output fixture already exists: {normalized_output_path}.")
+
+    resolved_notion_version = str(notion_version or NOTION_API_DEFAULT_VERSION).strip()
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", resolved_notion_version):
+        blockers.append("notion_version must be a YYYY-MM-DD Notion API version string.")
+        resolved_notion_version = NOTION_API_DEFAULT_VERSION
+    if timeout_seconds < 1 or timeout_seconds > 120:
+        blockers.append("timeout_seconds must be between 1 and 120.")
+
+    normalized_credential_ref = str(credential_ref or "").strip()
+    credential_store = None
+    if normalized_credential_ref:
+        if not safe_credential_ref(normalized_credential_ref):
+            blockers.append("credential_ref must be a safe env/keyring/secret/wallet ref and is never echoed.")
+            normalized_credential_ref = ""
+        else:
+            credential_store = credential_ref_store(normalized_credential_ref)
+
+    contract = notion_ancestor_fetch_adapter_execution_contract(
+        root,
+        tree_path=tree_path,
+        source=normalized_source,
+        credential_ref=normalized_credential_ref or None,
+        dry_run=True,
+        max_items=max_items,
+        max_depth=max_depth,
+        scope_generation_ids=scope_generation_ids,
+        scope_root_refs=scope_root_refs,
+        scope_ancestor_refs=scope_ancestor_refs,
+        scope_leaf_refs=scope_leaf_refs,
+    )
+    warnings.extend(str(item) for item in contract.get("warnings") or [])
+    if not contract.get("ok"):
+        blockers.extend(str(item) for item in contract.get("blockers") or [])
+    crawl_plan = (
+        notion_ancestor_crawl_plan(
+            root,
+            tree_path=tree_path,
+            source=normalized_source,
+            dry_run=True,
+            max_items=max_items,
+            max_depth=max_depth,
+            scope_generation_ids=scope_generation_ids,
+            scope_root_refs=scope_root_refs,
+            scope_ancestor_refs=scope_ancestor_refs,
+            scope_leaf_refs=scope_leaf_refs,
+        )
+        if not blockers
+        else {}
+    )
+    request_queue = list(crawl_plan.get("crawl_request_queue") or []) if not blockers else []
+    known_generation_root_refs = {
+        notion_canonical_provider_ref(str(item.get("root_ref") or ""))
+        for item in crawl_plan.get("generation_roots", [])
+        if isinstance(item, dict) and notion_canonical_provider_ref(str(item.get("root_ref") or ""))
+    }
+
+    resolved_store = (store_kind or "environment").strip().lower().replace("-", "_")
+    resolved_adapter = (adapter_kind or "environment_injection").strip().lower().replace("-", "_")
+    resolved_decision = (approval_decision or "needs_review").strip().lower().replace("-", "_")
+    policy_check: dict[str, Any] | None = None
+    approval_receipt_verified = False
+    if approval_receipt or approve or resolved_decision != "needs_review":
+        policy_check = credential_policy_check(
+            root,
+            credential_id=credential_id,
+            credential_ref=normalized_credential_ref or None,
+            credential_kind=credential_kind,
+            provider=credential_provider or "notion",
+            action_kind="cli_token_auth",
+            approval_decision=resolved_decision,
+            store_kind=resolved_store,
+            adapter_kind=resolved_adapter,
+            operation="resolve_for_approved_action",
+            consumer=consumer,
+            reviewed_by=reviewed_by or "human:pending-review",
+            platform=platform,
+            approval_receipt=approval_receipt,
+            dry_run=True,
+        )
+        warnings.extend(str(item) for item in policy_check.get("warnings") or [])
+        if policy_check.get("blockers"):
+            blockers.extend(str(item) for item in policy_check.get("blockers") or [])
+        evaluation = policy_check.get("policy_evaluation") if isinstance(policy_check.get("policy_evaluation"), dict) else {}
+        approval_receipt_verified = bool(evaluation.get("approval_receipt_verified"))
+
+    env_name = notion_env_ref_name(normalized_credential_ref)
+    if approve:
+        if resolved_store != "environment" or resolved_adapter != "environment_injection":
+            blockers.append("notion-ancestor-fetch-adapter-run currently supports only store_kind=environment with adapter_kind=environment_injection.")
+        if resolved_decision != "approve_once":
+            blockers.append("--approve requires approval_decision approve_once.")
+        if not approval_receipt:
+            blockers.append("approval_receipt is required before live Notion ancestor fetch.")
+        if policy_check is None or policy_check.get("policy_result") != "ready_after_approval_receipt" or not approval_receipt_verified:
+            blockers.append("credential policy must be ready_after_approval_receipt before live Notion ancestor fetch.")
+        if not normalized_credential_ref or not env_name:
+            blockers.append("credential_ref must be an env: reference for the first live Notion ancestor fetch.")
+
+    receipt_id = notion_ancestor_fetch_receipt_id(
+        archive_id=archive_id,
+        output_path=normalized_output_path,
+        request_queue=request_queue,
+        created_at=now,
+    )
+    receipt_relative = f"{NOTION_ANCESTOR_FETCH_RECEIPTS_DIR}/{receipt_id}.json"
+    receipt_path = archive_internal_path(root, receipt_relative)
+    if approve and receipt_path.exists():
+        blockers.append(f"Execution receipt already exists: {receipt_relative}.")
+
+    environment_read = False
+    credential_value_read = False
+    provider_api_called = False
+    fixture_written = False
+    receipt_written = False
+    execution_status = "not_run"
+    fetched_nodes: dict[str, dict[str, Any]] = {}
+    request_results: list[dict[str, Any]] = []
+    token = None
+
+    if approve and request_queue and not blockers:
+        environment_read = True
+        credential_value_read = True
+        token = os.environ.get(env_name or "")
+        if not token:
+            blockers.append("Notion token environment variable was not available.")
+
+    if approve and request_queue and not blockers:
+        execution_status = "running"
+        try:
+            for request in request_queue:
+                result = notion_execute_one_ancestor_fetch_request(
+                    request,
+                    token=str(token or ""),
+                    notion_version=resolved_notion_version,
+                    timeout_seconds=timeout_seconds,
+                    fetched_nodes=fetched_nodes,
+                    known_generation_root_refs=known_generation_root_refs,
+                )
+                provider_api_called = provider_api_called or bool(result.get("provider_api_called"))
+                request_results.append(result)
+                if result.get("execution_status") == "failed":
+                    blockers.append("notion ancestor provider fetch failed; raw provider error is not echoed.")
+        finally:
+            token = None
+        execution_status = "failed" if blockers else "succeeded"
+    elif approve and not request_queue and not blockers:
+        execution_status = "no_fetch_requests_ready"
+
+    files_written: list[str] = []
+    fixture_payload = {
+        "fixture_kind": "notion_ancestor_result_fixture",
+        "source": normalized_source,
+        "nodes": list(fetched_nodes.values()),
+    }
+    receipt_payload = notion_ancestor_fetch_receipt_payload(
+        archive_id=archive_id,
+        receipt_id=receipt_id,
+        created_at=now,
+        execution_status=execution_status,
+        source=normalized_source,
+        output_path=normalized_output_path,
+        request_queue=request_queue,
+        request_results=request_results,
+        fetched_node_count=len(fetched_nodes),
+        notion_version=resolved_notion_version,
+        approval_receipt_verified=approval_receipt_verified,
+        policy_result=policy_check.get("policy_result") if isinstance(policy_check, dict) else None,
+        provider_api_called=provider_api_called,
+    )
+    if approve and not blockers:
+        created_paths: list[Path] = []
+        created_dirs = missing_parent_dirs_before_write(root, [path for path in [output_file, receipt_path] if path is not None])
+        try:
+            if output_file and request_queue:
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                write_json_new_file(output_file, fixture_payload)
+                created_paths.append(output_file)
+                files_written.append(normalized_output_path)
+                fixture_written = True
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_new_file(receipt_path, receipt_payload)
+            created_paths.append(receipt_path)
+            files_written.append(receipt_relative)
+            receipt_written = True
+        except OSError as exc:
+            for path in reversed(created_paths):
+                path.unlink(missing_ok=True)
+            cleanup_empty_archive_dirs(root, created_dirs)
+            raise ArchiveServiceError(f"Could not write Notion ancestor fetch output: {exc}") from exc
+
+    would_change = [] if approve or blockers else ([normalized_output_path, receipt_relative] if request_queue else [receipt_relative])
+    run_state = "blocked"
+    if not blockers:
+        if approve:
+            run_state = execution_status
+        elif approval_receipt_verified:
+            run_state = "ready_for_approved_live_run"
+        else:
+            run_state = "needs_approval_receipt"
+
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "approved": bool(approve),
+        "lifecycle_action": "notion_ancestor_fetch_adapter_run",
+        "archive_id": archive_id,
+        "run_state": run_state,
+        "execution_status": execution_status,
+        "source": normalized_source,
+        "notion_api": {
+            "provider": "notion",
+            "notion_version": resolved_notion_version,
+            "provider_url_echoed": False,
+            "raw_provider_response_echoed": False,
+        },
+        "crawl_request_summary": contract.get("crawl_request_summary") if isinstance(contract.get("crawl_request_summary"), dict) else {},
+        "credential_resolution": {
+            "supported_ref_store": "env",
+            "credential_ref_supplied": bool(normalized_credential_ref),
+            "credential_ref_store": credential_store,
+            "env_ref_supported_now": True,
+            "keyring_ref_store_supported_now": False,
+            "secret_manager_ref_store_supported_now": False,
+            "credential_ref_echoed": False,
+            "credential_values_echoed": False,
+        },
+        "policy_check_summary": {
+            "policy_result": policy_check.get("policy_result") if isinstance(policy_check, dict) else None,
+            "approval_receipt_verified": approval_receipt_verified,
+            "approval_receipt_path_echoed": False,
+            "approval_receipt_required_before_live_execution": True,
+        },
+        "fixture": {
+            "fixture_kind": "notion_ancestor_result_fixture",
+            "proposed_output_path": normalized_output_path if not fixture_written else None,
+            "output_path": normalized_output_path if fixture_written else None,
+            "output_path_kind": "archive_relative",
+            "node_count": len(fetched_nodes),
+            "merge_target": "sanitized_nested_tree_fixture",
+            "raw_provider_responses_included": False,
+        },
+        "fetch_summary": {
+            "request_count": len(request_queue),
+            "request_results": request_results,
+            "fetched_node_count": len(fetched_nodes),
+            "partial_request_count": len([item for item in request_results if item.get("partial")]),
+            "failed_request_count": len([item for item in request_results if item.get("execution_status") == "failed"]),
+            "page_titles_returned": False,
+            "page_bodies_returned": False,
+            "media_bytes_returned": False,
+        },
+        "receipt": {
+            "receipt_kind": "notion_ancestor_fetch_adapter_run",
+            "proposed_receipt_path": receipt_relative if not receipt_written else None,
+            "receipt_path": receipt_relative if receipt_written else None,
+            "receipt_path_kind": "archive_relative",
+            "records_secret_values": False,
+            "records_raw_provider_responses": False,
+            "records_page_titles": False,
+            "records_page_bodies": False,
+        },
+        "current_capability": {
+            "live_notion_ancestor_fetch_adapter_implemented": True,
+            "env_credential_ref_read_implemented": True,
+            "approval_receipt_verification_implemented": True,
+            "sanitized_ancestor_result_fixture_writer_implemented": True,
+            "execution_receipt_writer_implemented": True,
+            "keyring_credential_ref_read_implemented": False,
+            "notion_media_byte_fetch_implemented": False,
+            "notion_page_body_capture_implemented": False,
+            "merge_writer_implemented": False,
+        },
+        "closed_actions": {
+            "live_adapter_executed": bool(approve and provider_api_called),
+            "provider_api_called": provider_api_called,
+            "notion_connection_opened": provider_api_called,
+            "credential_value_read": credential_value_read,
+            "secret_value_read": credential_value_read,
+            "environment_read": environment_read,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "page_titles_read": False,
+            "page_bodies_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "ancestor_result_fixture_written": fixture_written,
+            "execution_receipt_written": receipt_written,
+            "zettels_written": False,
+            "edges_written": False,
+            "object_manifest_updated": False,
+            "files_written": bool(files_written),
+        },
+        "privacy_guards": {
+            "credential_ref_echoed": False,
+            "credential_values_echoed": False,
+            "env_var_names_echoed": False,
+            "provider_urls_echoed": False,
+            "workspace_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "raw_provider_responses_echoed": False,
+            "page_titles_echoed": False,
+            "page_bodies_echoed": False,
+            "comment_bodies_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "tokens_echoed": False,
+            "secret_values_echoed": False,
+            "writes": bool(files_written),
+        },
+        "would_change": would_change,
+        "files_written": files_written,
+        "next_safe_actions": [
+            "Run notion-ancestor-merge-plan with the sanitized output fixture before any recovery or minting.",
+            "Rerun notion-ancestor-crawl-plan after the merge; repeat live fetch only for remaining reviewed gaps.",
+            "Keep media bytes and page body capture behind their separate approval gates.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
+def notion_ancestor_fetch_output_path(output_path: str, blockers: list[str]) -> str:
+    try:
+        normalized = normalize_archive_relative_path(output_path or "workbench/notion-ancestor-result.live.json")
+    except ArchivePathError:
+        blockers.append("output_path must be a safe archive-relative JSON path under workbench/.")
+        return ""
+    if not normalized.startswith("workbench/") or not normalized.endswith(".json"):
+        blockers.append("output_path must be a safe archive-relative JSON path under workbench/.")
+        return ""
+    return normalized
+
+
+def notion_ancestor_fetch_receipt_id(
+    *,
+    archive_id: str,
+    output_path: str,
+    request_queue: list[dict[str, Any]],
+    created_at: datetime,
+) -> str:
+    payload = {
+        "archive_id": archive_id,
+        "output_path": output_path,
+        "request_ids": [str(item.get("request_id") or "") for item in request_queue],
+        "created_at": created_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
+    return f"notion-ancestor-fetch-{digest}"
+
+
+def notion_ancestor_fetch_receipt_payload(
+    *,
+    archive_id: str,
+    receipt_id: str,
+    created_at: datetime,
+    execution_status: str,
+    source: str,
+    output_path: str,
+    request_queue: list[dict[str, Any]],
+    request_results: list[dict[str, Any]],
+    fetched_node_count: int,
+    notion_version: str,
+    approval_receipt_verified: bool,
+    policy_result: str | None,
+    provider_api_called: bool,
+) -> dict[str, Any]:
+    return {
+        "schema_version": NOTION_ANCESTOR_FETCH_RECEIPT_SCHEMA,
+        "receipt_kind": "notion_ancestor_fetch_adapter_run",
+        "lifecycle_action": "notion_ancestor_fetch_adapter_run",
+        "receipt_id": receipt_id,
+        "created_at": created_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "archive_id": archive_id,
+        "source": source,
+        "adapter": {
+            "adapter_kind": "environment_injection",
+            "provider": "notion",
+            "operation": "ancestor_parent_chain_fetch",
+            "notion_version": notion_version,
+        },
+        "approval": {
+            "approval_receipt_required": True,
+            "approval_receipt_verified": approval_receipt_verified,
+            "approval_receipt_path_included": False,
+            "policy_result": policy_result,
+        },
+        "result": {
+            "execution_status": execution_status,
+            "request_count": len(request_queue),
+            "fetched_node_count": fetched_node_count,
+            "output_path": output_path if execution_status == "succeeded" and request_queue else None,
+            "request_results": request_results,
+        },
+        "closed_actions": {
+            "provider_api_called": provider_api_called,
+            "credential_value_read": provider_api_called,
+            "environment_read": provider_api_called,
+            "page_titles_read": False,
+            "page_bodies_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+        },
+        "redaction": {
+            "credential_ref_included": False,
+            "credential_value_included": False,
+            "env_var_name_included": False,
+            "provider_urls_included": False,
+            "raw_provider_responses_included": False,
+            "page_titles_included": False,
+            "page_bodies_included": False,
+            "comment_bodies_included": False,
+            "account_ids_included": False,
+            "emails_included": False,
+            "tokens_included": False,
+        },
+    }
+
+
+def notion_execute_one_ancestor_fetch_request(
+    request: dict[str, Any],
+    *,
+    token: str,
+    notion_version: str,
+    timeout_seconds: int,
+    fetched_nodes: dict[str, dict[str, Any]],
+    known_generation_root_refs: set[str],
+) -> dict[str, Any]:
+    request_id = str(request.get("request_id") or "")
+    max_depth = int(request.get("max_depth") or 1)
+    max_depth = max(1, min(max_depth, 64))
+    known_roots = {
+        notion_canonical_provider_ref(str(value or ""))
+        for value in request.get("affected_root_refs", [])
+        if notion_canonical_provider_ref(str(value or ""))
+    }
+    known_roots.update(ref for ref in known_generation_root_refs if ref)
+    current_ref = notion_canonical_provider_ref(str(request.get("ancestor_ref") or ""))
+    visited: list[str] = []
+    fetched_refs: list[str] = []
+    provider_api_called = False
+    stop_condition = "parent_ref_missing_or_ambiguous"
+    partial = False
+
+    if not current_ref:
+        return {
+            "request_id": request_id,
+            "execution_status": "failed",
+            "stop_condition": "unsafe_ref_or_provider_secret_detected",
+            "partial": True,
+            "provider_api_called": False,
+            "fetched_node_refs": [],
+        }
+
+    try:
+        for _depth in range(max_depth):
+            if current_ref in visited:
+                stop_condition = "parent_ref_missing_or_ambiguous"
+                partial = True
+                break
+            target = notion_api_target_from_ref(current_ref)
+            if target is None:
+                stop_condition = "unsafe_ref_or_provider_secret_detected"
+                partial = True
+                break
+            response = notion_api_get_json(
+                target_kind=str(target["api_kind"]),
+                target_id=str(target["provider_id"]),
+                token=token,
+                notion_version=notion_version,
+                timeout_seconds=timeout_seconds,
+            )
+            provider_api_called = True
+            node, parent_ref, parent_stop = notion_sanitized_ancestor_node_from_response(
+                response,
+                fallback_ref=str(target["node_ref"]),
+            )
+            if not node:
+                stop_condition = parent_stop or "parent_ref_missing_or_ambiguous"
+                partial = True
+                break
+            node_ref = str(node.get("node_ref") or "")
+            fetched_nodes.setdefault(node_ref, node)
+            fetched_refs.append(node_ref)
+            visited.append(current_ref)
+            if node_ref in known_roots or (parent_ref and parent_ref in known_roots):
+                stop_condition = "known_generation_root_ref_reached"
+                break
+            if not parent_ref:
+                stop_condition = parent_stop or "space_or_workspace_root_reached"
+                break
+            next_ref = notion_canonical_provider_ref(parent_ref)
+            if not next_ref:
+                stop_condition = "parent_ref_missing_or_ambiguous"
+                partial = True
+                break
+            current_ref = next_ref
+        else:
+            stop_condition = "max_depth_reached"
+            partial = True
+    except Exception:
+        return {
+            "request_id": request_id,
+            "execution_status": "failed",
+            "stop_condition": "provider_fetch_failed_raw_error_redacted",
+            "partial": True,
+            "provider_api_called": provider_api_called,
+            "fetched_node_refs": fetched_refs,
+        }
+
+    return {
+        "request_id": request_id,
+        "execution_status": "succeeded",
+        "stop_condition": stop_condition,
+        "partial": partial,
+        "provider_api_called": provider_api_called,
+        "fetched_node_count": len(fetched_refs),
+        "fetched_node_refs": fetched_refs,
+    }
+
+
+def notion_api_get_json(
+    *,
+    target_kind: str,
+    target_id: str,
+    token: str,
+    notion_version: str,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    route_by_kind = {
+        "page": f"https://api.notion.com/v1/pages/{target_id}",
+        "block": f"https://api.notion.com/v1/blocks/{target_id}",
+        "database": f"https://api.notion.com/v1/databases/{target_id}",
+        "data_source": f"https://api.notion.com/v1/data_sources/{target_id}",
+    }
+    url = route_by_kind.get(target_kind)
+    if not url:
+        raise ArchiveServiceError("unsupported Notion API target kind")
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Notion-Version": notion_version,
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            body = response.read(1_000_000)
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ArchiveServiceError("Notion provider request failed; raw provider error is not echoed.") from exc
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ArchiveServiceError("Notion provider response was not valid JSON; raw response is not echoed.") from exc
+    if not isinstance(payload, dict):
+        raise ArchiveServiceError("Notion provider response was not a JSON object; raw response is not echoed.")
+    return payload
+
+
+def notion_api_target_from_ref(ref: str) -> dict[str, str] | None:
+    text = notion_canonical_provider_ref(ref)
+    if not text:
+        return None
+    kind, provider_id = text.split(":", 1)
+    api_kind = kind
+    if kind not in {"page", "block", "database", "data_source"}:
+        return None
+    return {
+        "api_kind": api_kind,
+        "provider_id": provider_id,
+        "node_ref": text,
+    }
+
+
+def notion_canonical_provider_ref(ref: str) -> str | None:
+    text = str(ref or "").strip()
+    if not safe_source_intake_plan_scalar(text) or ":" not in text:
+        return None
+    kind, provider_id = text.split(":", 1)
+    normalized_kind = kind.strip().lower().replace("-", "_")
+    provider_id = provider_id.strip().lower().replace("-", "")
+    if normalized_kind not in {"page", "block", "database", "data_source"}:
+        return None
+    if not re.match(r"^[0-9a-f]{32}$", provider_id):
+        return None
+    return f"{normalized_kind}:{provider_id}"
+
+
+def notion_ref_from_provider_id(kind: str, provider_id: Any) -> str | None:
+    normalized_kind = str(kind or "").strip().lower().replace("-", "_")
+    compact_id = str(provider_id or "").strip().lower().replace("-", "")
+    if normalized_kind not in {"page", "block", "database", "data_source"}:
+        return None
+    if not re.match(r"^[0-9a-f]{32}$", compact_id):
+        return None
+    return f"{normalized_kind}:{compact_id}"
+
+
+def notion_sanitized_ancestor_node_from_response(
+    response: dict[str, Any],
+    *,
+    fallback_ref: str,
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    object_kind = str(response.get("object") or "").strip().lower().replace("-", "_")
+    response_id = str(response.get("id") or "").strip()
+    block_type = str(response.get("type") or "").strip().lower().replace("-", "_") if object_kind == "block" else ""
+
+    node_ref_kind = object_kind
+    node_kind = object_kind
+    if object_kind == "block":
+        if block_type == "child_page":
+            node_ref_kind = "page"
+            node_kind = "child_page"
+        elif block_type == "child_database":
+            node_ref_kind = "database"
+            node_kind = "child_database"
+        else:
+            return None, None, "parent_ref_missing_or_ambiguous"
+    if node_kind not in NOTION_NESTED_TREE_NODE_KINDS:
+        return None, None, "parent_ref_missing_or_ambiguous"
+
+    node_ref = notion_ref_from_provider_id(node_ref_kind, response_id) or fallback_ref
+    parent_ref, parent_stop = notion_parent_ref_from_response(response)
+    source_status = notion_source_status_from_response(response)
+    node = {
+        "node_ref": node_ref,
+        "parent_ref": parent_ref,
+        "node_kind": node_kind,
+        "source_status": source_status,
+        "mint_state": "not_applicable",
+        "review_status": "needs_merge_review",
+    }
+    return node, parent_ref, parent_stop
+
+
+def notion_parent_ref_from_response(response: dict[str, Any]) -> tuple[str | None, str | None]:
+    parent = response.get("parent") if isinstance(response.get("parent"), dict) else {}
+    parent_type = str(parent.get("type") or "").strip().lower()
+    if parent_type == "workspace":
+        return None, "space_or_workspace_root_reached"
+    kind_by_parent_type = {
+        "page_id": "page",
+        "database_id": "database",
+        "data_source_id": "data_source",
+        "block_id": "block",
+    }
+    parent_kind = kind_by_parent_type.get(parent_type)
+    if not parent_kind:
+        return None, "parent_ref_missing_or_ambiguous"
+    parent_id = parent.get(parent_type)
+    parent_ref = notion_ref_from_provider_id(parent_kind, parent_id)
+    return parent_ref, None if parent_ref else "parent_ref_missing_or_ambiguous"
+
+
+def notion_source_status_from_response(response: dict[str, Any]) -> str:
+    if bool(response.get("in_trash")) or bool(response.get("trashed")):
+        return "trash"
+    if bool(response.get("archived")):
+        return "archived"
+    return "live"
+
+
+def notion_env_ref_name(ref: str) -> str | None:
+    text = (ref or "").strip()
+    if not text.lower().startswith("env:"):
+        return None
+    env_name = text.split(":", 1)[1].strip()
+    return env_name if safe_environment_ref_name(env_name) else None
 
 
 def notion_media_fetch_adapter_execution_contract(

@@ -49,6 +49,7 @@ CONNECTION_EDGE_INTELLIGENCE_PATH = KIT_ROOT / "docs" / "connection-edge-intelli
 NOTION_NESTED_TREE_PLAN_PATH = KIT_ROOT / "docs" / "notion-nested-tree-plan.md"
 NOTION_ANCESTOR_CRAWL_PLAN_PATH = KIT_ROOT / "docs" / "notion-ancestor-crawl-plan.md"
 NOTION_ANCESTOR_FETCH_ADAPTER_EXECUTION_CONTRACT_PATH = KIT_ROOT / "docs" / "notion-ancestor-fetch-adapter-execution-contract.md"
+NOTION_ANCESTOR_FETCH_ADAPTER_RUN_PATH = KIT_ROOT / "docs" / "notion-ancestor-fetch-adapter-run.md"
 NOTION_MEDIA_FETCH_ADAPTER_EXECUTION_CONTRACT_PATH = KIT_ROOT / "docs" / "notion-media-fetch-adapter-execution-contract.md"
 NOTION_MEDIA_RESULT_VERIFICATION_PLAN_PATH = KIT_ROOT / "docs" / "notion-media-result-verification-plan.md"
 NOTION_BLOCK_MIRROR_TREE_FIXTURE_PLAN_PATH = KIT_ROOT / "docs" / "notion-block-mirror-tree-fixture-plan.md"
@@ -1399,7 +1400,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in release_text or phrase in changelog_text)
 
-    def test_notion_ancestor_fetch_adapter_execution_contract_is_documented_as_closed_live_fetch_boundary(self) -> None:
+    def test_notion_ancestor_fetch_adapter_execution_contract_is_documented_as_read_only_live_run_handoff(self) -> None:
         text = NOTION_ANCESTOR_FETCH_ADAPTER_EXECUTION_CONTRACT_PATH.read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
@@ -1411,7 +1412,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.133.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.133 read-only future recursive fetch adapter contract checkpoint",
+            "Status: v0.3.134 read-only recursive fetch contract and live-run handoff checkpoint",
             "archive notion-ancestor-fetch-adapter-execution-contract",
             "notion_ancestor_fetch_adapter_execution_contract",
             "adapter_input_contract",
@@ -1422,31 +1423,33 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "does not call Notion",
             "retrieve credential values",
             "write receipts",
+            "archive notion-ancestor-fetch-adapter-run",
+            "The contract command stays",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)
         for phrase in (
-            "Status: v0.3.133 Notion recursive live fetch contract checkpoint",
+            "Status: v0.3.134 Notion ancestor live structure fetch checkpoint",
             "Notion ancestor fetch adapter execution contract",
             "archive notion-ancestor-fetch-adapter-execution-contract",
             "notion_ancestor_fetch_adapter_execution_contract",
-            "future live fetch subject is a WOM local credential-bounded adapter process",
+            "live fetch subject must be a WOM local credential-bounded adapter process",
             "client-supplied ancestor fixtures",
             "parent-chain fetch to recurse",
-            "performs no live fetch",
+            "This contract command performs no live fetch",
             "retrieves no secrets",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.133 pre-release",
+            "v0.3.134 pre-release",
             "recursive fetch adapter execution contract",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "v0.3.133 pre-release",
-            "future recursive fetch adapter execution contract",
+            "v0.3.134 pre-release",
+            "recursive fetch adapter execution contract",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_ko_text)
@@ -1471,6 +1474,85 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "notion_ancestor_fetch_adapter_execution_contract",
             "recursive_fetch_contract",
             "scope_generation_id_may_not_match_generation_unknown_untraceable_leaf_requests",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(phrase in release_text or phrase in changelog_text)
+
+    def test_notion_ancestor_fetch_adapter_run_is_documented_as_approval_gated_live_structure_fetch(self) -> None:
+        text = NOTION_ANCESTOR_FETCH_ADAPTER_RUN_PATH.read_text(encoding="utf-8")
+        matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
+        kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        guide_text = (KIT_ROOT / "docs" / "ai-response-concept-guide.md").read_text(encoding="utf-8")
+        public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
+        public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
+        release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.134.md").read_text(encoding="utf-8")
+        changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        for phrase in (
+            "Status: v0.3.134 approval-gated local Notion ancestor structure fetch checkpoint",
+            "archive notion-ancestor-fetch-adapter-run",
+            "credential access approval receipt",
+            "notion_ancestor_result_fixture",
+            "receipts/notion/ancestor-fetches",
+            "known_generation_root_ref_reached",
+            "notion-ancestor-merge-plan",
+            "There is no MCP live execution tool",
+            "does not read page titles",
+            "does not read page bodies",
+            "does not download media bytes",
+            "Retrieve a page",
+            "Parent object",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+        for phrase in (
+            "Notion ancestor fetch adapter run",
+            "approval-gated write",
+            "archive notion-ancestor-fetch-adapter-run",
+            "env:WOM_NOTION_READONLY_TOKEN",
+            "receipts/notion/ancestor-fetches",
+            "does not expose an MCP live provider-call tool",
+            "page titles",
+            "media bytes",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, matrix_text)
+        for phrase in (
+            "v0.3.134 pre-release",
+            "first approval-gated local Notion ancestor structure fetch adapter",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_text)
+        for phrase in (
+            "v0.3.134 pre-release",
+            "첫 local Notion ancestor structure fetch adapter",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, readme_ko_text)
+        for phrase in (
+            "docs/notion-ancestor-fetch-adapter-run.md",
+            "notion-ancestor-fetch-adapter-run",
+            "first approval-gated local Notion ancestor structure fetch adapter",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, kit_readme_text)
+        self.assertIn("notion-ancestor-fetch-adapter-run", guide_text)
+        self.assertIn(
+            "[Notion Ancestor Fetch Adapter Run](notion-ancestor-fetch-adapter-run.md)",
+            public_map_text,
+        )
+        self.assertIn(
+            "[Notion Ancestor Fetch Adapter Run](notion-ancestor-fetch-adapter-run.md)",
+            public_map_ko_text,
+        )
+        for phrase in (
+            "# v0.3.134 - Notion Ancestor Live Structure Fetch",
+            "notion-ancestor-fetch-adapter-run",
+            "approval-gated local",
+            "env:",
+            "Notion API",
+            "no MCP live provider-call tool",
         ):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in release_text or phrase in changelog_text)

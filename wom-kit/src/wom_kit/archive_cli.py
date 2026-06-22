@@ -73,6 +73,8 @@ Commands:
           Plan missing Notion ancestor crawl requests from a sanitized nested tree fixture.
   notion-ancestor-fetch-adapter-execution-contract
           Preview the read-only execution contract for a future Notion ancestor fetch adapter.
+  notion-ancestor-fetch-adapter-run
+          Run the approval-gated local Notion ancestor structure fetch adapter.
   notion-media-fetch-adapter-execution-contract
           Preview the read-only execution contract for a future Notion media byte fetch adapter.
   notion-media-result-verification-plan
@@ -3183,6 +3185,77 @@ def command_notion_ancestor_fetch_adapter_execution_contract(args: argparse.Name
         return 1
 
     print_notion_ancestor_fetch_adapter_execution_contract_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def command_notion_ancestor_fetch_adapter_run(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.notion_ancestor_fetch_adapter_run(
+            Path(args.archive_root),
+            tree_path=args.tree,
+            output_path=args.output,
+            source=args.source,
+            credential_id=args.credential_id,
+            credential_ref=args.credential_ref,
+            credential_kind=args.credential_kind,
+            credential_provider=args.credential_provider,
+            store_kind=args.store_kind,
+            adapter_kind=args.adapter_kind,
+            approval_decision=args.approval_decision,
+            approval_receipt=args.approval_receipt,
+            consumer=args.consumer,
+            reviewed_by=args.reviewed_by,
+            platform=args.platform,
+            notion_version=args.notion_version,
+            timeout_seconds=args.timeout_seconds,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            max_items=args.max_items,
+            max_depth=args.max_depth,
+            scope_generation_ids=args.scope_generation_id,
+            scope_root_refs=args.scope_root_ref,
+            scope_ancestor_refs=args.scope_ancestor_ref,
+            scope_leaf_refs=args.scope_leaf_ref,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("fetch_summary") if isinstance(result.get("fetch_summary"), dict) else {}
+        fixture = result.get("fixture") if isinstance(result.get("fixture"), dict) else {}
+        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
+        print(f"Notion ancestor fetch adapter run: {result.get('run_state') or '-'}")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source: {result.get('source') or '-'}")
+        print(f"Requests: {summary.get('request_count', 0)}")
+        print(f"Fetched nodes: {summary.get('fetched_node_count', 0)}")
+        print(f"Fixture: {fixture.get('output_path') or fixture.get('proposed_output_path') or '-'}")
+        print(f"Receipt: {receipt.get('receipt_path') or receipt.get('proposed_receipt_path') or '-'}")
+        print("Page titles read: no")
+        print("Page bodies read: no")
+        print("Media bytes downloaded: no")
+        writes = result.get("files_written") or []
+        if writes:
+            print("Files written:")
+            for path in writes:
+                print(f"- {path}")
+        else:
+            print("Writes: none")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
 
 
@@ -13258,6 +13331,124 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notion_ancestor_fetch_contract.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     notion_ancestor_fetch_contract.set_defaults(func=command_notion_ancestor_fetch_adapter_execution_contract)
+
+    notion_ancestor_fetch_run = subcommands.add_parser(
+        "notion-ancestor-fetch-adapter-run",
+        aliases=["notion-ancestor-fetch-run", "notion-ancestor-live-fetch"],
+        help="Run the approval-gated local Notion ancestor structure fetch adapter.",
+    )
+    notion_ancestor_fetch_run.add_argument("archive_root", help="Archive root to update.")
+    notion_ancestor_fetch_run.add_argument(
+        "--tree",
+        required=True,
+        help="Archive-relative sanitized nested-tree fixture JSON path. Absolute paths and provider URLs are rejected.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--output",
+        default="workbench/notion-ancestor-result.live.json",
+        help="Archive-relative sanitized ancestor result fixture path under workbench/. Existing files are not overwritten.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--source",
+        required=True,
+        choices=sorted(archive_services.NOTION_NESTED_TREE_SOURCES),
+        help="External nested tree source declared by the fixture.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--credential-id",
+        default="cred:notion-readonly",
+        help="Safe non-secret credential label for the approval receipt.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--credential-ref",
+        help="Required with --approve. Must be an env: ref for the first live Notion ancestor fetch; exact value is never echoed.",
+    )
+    notion_ancestor_fetch_run.add_argument("--credential-kind", default="provider_api_key", help="Credential kind label.")
+    notion_ancestor_fetch_run.add_argument("--credential-provider", default="notion", help="Credential provider label.")
+    notion_ancestor_fetch_run.add_argument(
+        "--store-kind",
+        default="environment",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
+        help="Credential store kind. First live run supports environment only.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--adapter-kind",
+        default="environment_injection",
+        choices=sorted(archive_services.CREDENTIAL_ADAPTER_KINDS),
+        help="Credential adapter kind. First live run supports environment_injection only.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--approval-decision",
+        default="needs_review",
+        choices=sorted(archive_services.CREDENTIAL_ACCESS_APPROVAL_DECISIONS),
+        help="Use approve_once with --approve after writing a matching credential-access-approval receipt.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--approval-receipt",
+        help="Archive-relative credential access approval receipt path. Required with --approve; not echoed in result details.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--consumer",
+        default="wom:adapter:notion-ancestor-fetch",
+        help="Safe consumer label that must match the approval receipt.",
+    )
+    notion_ancestor_fetch_run.add_argument("--reviewed-by", default="human:pending-review", help="Safe reviewer label.")
+    notion_ancestor_fetch_run.add_argument(
+        "--platform",
+        default="windows",
+        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
+        help="Credential platform policy label.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--notion-version",
+        default=archive_services.NOTION_API_DEFAULT_VERSION,
+        help="Notion API version header. Defaults to the conservative stable version.",
+    )
+    notion_ancestor_fetch_run.add_argument("--timeout-seconds", type=int, default=30, help="Provider request timeout, 1-120 seconds.")
+    notion_ancestor_fetch_run.add_argument(
+        "--max-items",
+        type=int,
+        default=1000,
+        help="Maximum fixture nodes to parse while deriving missing ancestor requests. Oversized fixtures block.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--max-depth",
+        type=int,
+        default=16,
+        help="Maximum parent-chain crawl depth per missing ancestor. Range 1-64.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--scope-generation-id",
+        action="append",
+        help="Optional generation id filter for broad workspace fixtures. Repeat to include more than one generation.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--scope-root-ref",
+        action="append",
+        help="Optional safe root/ref filter matched against request refs before the live adapter receives the queue. Repeatable.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--scope-ancestor-ref",
+        action="append",
+        help="Optional exact ancestor_ref filter. Repeatable.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--scope-leaf-ref",
+        action="append",
+        help="Optional exact affected leaf ref filter. Repeatable.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview without reading environment variables, calling Notion, or writing files.",
+    )
+    notion_ancestor_fetch_run.add_argument(
+        "--approve",
+        action="store_true",
+        help="Run the local Notion ancestor structure fetch and write sanitized fixture plus non-secret receipt.",
+    )
+    notion_ancestor_fetch_run.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    notion_ancestor_fetch_run.set_defaults(func=command_notion_ancestor_fetch_adapter_run)
 
     notion_media_fetch_contract = subcommands.add_parser(
         "notion-media-fetch-adapter-execution-contract",
