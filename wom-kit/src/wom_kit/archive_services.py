@@ -17527,6 +17527,215 @@ def notion_ancestor_crawl_request_matches_scope(
     return True
 
 
+def notion_ancestor_fetch_adapter_execution_contract(
+    archive_root: Path | str,
+    *,
+    tree_path: str,
+    source: str = "notion",
+    credential_ref: str | None = None,
+    dry_run: bool = True,
+    max_items: int = 1000,
+    max_depth: int = 16,
+    scope_generation_ids: Iterable[str] | str | None = None,
+    scope_root_refs: Iterable[str] | str | None = None,
+    scope_ancestor_refs: Iterable[str] | str | None = None,
+    scope_leaf_refs: Iterable[str] | str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not dry_run:
+        blockers.append("notion-ancestor-fetch-adapter-execution-contract is read-only and requires --dry-run.")
+
+    normalized_credential_ref = str(credential_ref or "").strip()
+    credential_store = None
+    if normalized_credential_ref:
+        if not safe_credential_ref(normalized_credential_ref):
+            blockers.append("credential_ref must be a safe env/keyring/secret/wallet ref and is never echoed.")
+            normalized_credential_ref = ""
+        else:
+            credential_store = credential_ref_store(normalized_credential_ref)
+
+    crawl_plan = notion_ancestor_crawl_plan(
+        root,
+        tree_path=tree_path,
+        source=source,
+        dry_run=True,
+        max_items=max_items,
+        max_depth=max_depth,
+        scope_generation_ids=scope_generation_ids,
+        scope_root_refs=scope_root_refs,
+        scope_ancestor_refs=scope_ancestor_refs,
+        scope_leaf_refs=scope_leaf_refs,
+    )
+    warnings.extend(str(item) for item in crawl_plan.get("warnings") or [])
+    if not crawl_plan.get("ok"):
+        blockers.extend(str(item) for item in crawl_plan.get("blockers") or [])
+
+    request_queue = [] if blockers else list(crawl_plan.get("crawl_request_queue") or [])
+    contract_state = "blocked"
+    if not blockers:
+        contract_state = "fetch_contract_ready" if request_queue else "no_fetch_requests_ready"
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "notion_ancestor_fetch_adapter_execution_contract",
+        "archive_id": archive_id,
+        "contract_state": contract_state,
+        "source": crawl_plan.get("source") or str(source or "").strip().lower().replace("-", "_"),
+        "credential_summary": {
+            "credential_ref_supplied": bool(normalized_credential_ref),
+            "credential_ref_store": credential_store,
+            "credential_ref_echoed": False,
+            "credential_value_read": False,
+            "credential_required_for_live_execution": True,
+        },
+        "crawl_request_summary": {
+            "source_plan_state": crawl_plan.get("plan_state"),
+            "crawl_request_count": crawl_plan.get("request_summary", {}).get("crawl_request_count", 0),
+            "unfiltered_crawl_request_count": crawl_plan.get("request_summary", {}).get("unfiltered_crawl_request_count", 0),
+            "excluded_crawl_request_count": crawl_plan.get("request_summary", {}).get("excluded_crawl_request_count", 0),
+            "scope_filter_active": crawl_plan.get("request_summary", {}).get("scope_filter_active", False),
+            "max_depth": crawl_plan.get("request_summary", {}).get("max_depth", max_depth),
+        },
+        "scope_filter": crawl_plan.get("scope_filter", {}),
+        "execution_contract": {
+            "adapter_mode": "future_credential_bounded_notion_ancestor_fetch_adapter",
+            "live_execution_allowed_now": False,
+            "future_live_adapter_implemented": False,
+            "must_consume_crawl_request_queue": True,
+            "must_write_only_sanitized_ancestor_result_fixture_after_approval": True,
+            "approval_receipt_must_be_verified_again": True,
+            "credential_policy_check_required": True,
+            "human_scope_review_required_before_live_fetch": True,
+            "provider_rate_limit_policy_required": True,
+            "partial_fetch_must_not_be_reported_as_complete": True,
+        },
+        "adapter_input_contract": {
+            "source_command": "archive notion-ancestor-crawl-plan --dry-run",
+            "required_request_fields": [
+                "request_id",
+                "source",
+                "request_reason",
+                "ancestor_ref",
+                "affected_leaf_refs",
+                "known_child_refs",
+                "max_depth",
+                "stop_conditions",
+                "required_return_fields",
+                "merge_target",
+            ],
+            "optional_request_fields": [
+                "affected_generation_ids",
+                "affected_root_refs",
+                "lineage_refs_seen",
+                "lineage_depths_seen",
+            ],
+            "must_not_include": [
+                "page_titles",
+                "page_bodies",
+                "comments",
+                "media",
+                "provider_urls",
+                "workspace_urls",
+                "account_ids",
+                "emails",
+                "tokens",
+                "secret_values",
+            ],
+        },
+        "adapter_output_contract": {
+            "fixture_kind": "notion_ancestor_result_fixture",
+            "merge_target": "sanitized_nested_tree_fixture",
+            "next_command": "archive notion-ancestor-merge-plan <archive-root> --tree <tree.json> --ancestors <ancestor-result.json> --source notion --dry-run --format json",
+            "required_node_fields": [
+                "node_ref",
+                "parent_ref",
+                "node_kind",
+                "source_status",
+                "review_status",
+            ],
+            "optional_node_fields": [
+                "content_class",
+                "mint_state",
+                "containment_source_ref",
+                "declared_generation_id",
+            ],
+            "must_not_include": [
+                "page_titles",
+                "page_bodies",
+                "comment_bodies",
+                "media_bytes",
+                "provider_urls",
+                "local_absolute_paths",
+                "raw_provider_responses",
+                "credential_refs",
+                "secret_values",
+            ],
+        },
+        "current_capability": {
+            "fetch_adapter_execution_contract_available": True,
+            "ancestor_crawl_request_queue_available": True,
+            "ancestor_crawl_scope_filter_available": True,
+            "live_notion_fetch_adapter_implemented": False,
+            "provider_api_call_implemented": False,
+            "oauth_started": False,
+            "credential_secret_retrieval_implemented": False,
+            "ancestor_result_fixture_writer_implemented": False,
+            "merge_writer_implemented": False,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "oauth_started": False,
+            "notion_connection_opened": False,
+            "credential_value_read": False,
+            "secret_value_read": False,
+            "password_manager_opened": False,
+            "os_keyring_opened": False,
+            "environment_read": False,
+            "page_titles_read": False,
+            "page_bodies_read": False,
+            "comments_read": False,
+            "media_downloaded": False,
+            "fixture_file_read": bool(crawl_plan.get("closed_actions", {}).get("fixture_file_read")),
+            "fixture_parser_executed": bool(crawl_plan.get("closed_actions", {}).get("fixture_parser_executed")),
+            "ancestor_result_fixture_written": False,
+            "receipts_written": False,
+            "zettels_written": False,
+            "edges_written": False,
+            "object_manifest_updated": False,
+            "files_written": False,
+        },
+        "privacy_guards": {
+            "credential_ref_echoed": False,
+            "credential_values_echoed": False,
+            "provider_urls_echoed": False,
+            "workspace_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "raw_export_paths_echoed": False,
+            "page_titles_echoed": False,
+            "page_bodies_echoed": False,
+            "comment_bodies_echoed": False,
+            "account_ids_echoed": False,
+            "emails_echoed": False,
+            "tokens_echoed": False,
+            "secret_values_echoed": False,
+            "writes": False,
+        },
+        "would_change": [],
+        "next_safe_actions": [
+            "Review crawl_request_summary and scope_filter before any future live adapter run.",
+            "Run credential-policy-check and credential-access-approval before a live credential-bounded fetch adapter exists.",
+            "A future adapter must return only a sanitized notion_ancestor_result_fixture, then run notion-ancestor-merge-plan before recovery.",
+        ],
+        "warnings": unique_preserve_order(warnings),
+        "blockers": unique_preserve_order(blockers),
+    }
+
+
 def notion_block_mirror_tree_fixture_plan(
     archive_root: Path | str,
     *,
@@ -28373,6 +28582,10 @@ def ai_response_concept_guide(
                 "command": "archive notion-ancestor-crawl-plan <archive-root> --tree workbench/notion-nested-tree.sample.json --source notion --scope-generation-id DB1 --dry-run --format json",
             },
             {
+                "human_intent": "preview the future credential-bounded Notion ancestor fetch adapter contract",
+                "command": "archive notion-ancestor-fetch-adapter-execution-contract <archive-root> --tree workbench/notion-nested-tree.sample.json --source notion --scope-generation-id DB1 --dry-run --format json",
+            },
+            {
                 "human_intent": "build a nested tree fixture from reviewed Notion block mirror metadata",
                 "command": "archive notion-block-mirror-tree-fixture-plan <archive-root> --mirror workbench/notion-block-mirror.sample.json --source notion --dry-run --format json",
             },
@@ -28427,6 +28640,7 @@ def ai_response_concept_guide(
             "notion_nested_tree_recovery_planning_available": True,
             "notion_ancestor_crawl_request_planning_available": True,
             "notion_ancestor_crawl_scope_filter_available": True,
+            "notion_ancestor_fetch_adapter_execution_contract_available": True,
             "notion_block_mirror_tree_fixture_planning_available": True,
             "notion_ancestor_merge_replan_available": True,
             "notion_client_issue_verification_available": True,
@@ -28448,6 +28662,7 @@ def ai_response_concept_guide(
             "connection-import-plan",
             "notion-nested-tree-plan",
             "notion-ancestor-crawl-plan",
+            "notion-ancestor-fetch-adapter-execution-contract",
             "notion-block-mirror-tree-fixture-plan",
             "notion-ancestor-merge-plan",
             "notion-client-issue-verification-plan",

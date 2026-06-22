@@ -71,6 +71,8 @@ Commands:
           Plan Notion nested child-page recovery from a sanitized tree fixture.
   notion-ancestor-crawl-plan
           Plan missing Notion ancestor crawl requests from a sanitized nested tree fixture.
+  notion-ancestor-fetch-adapter-execution-contract
+          Preview the read-only execution contract for a future Notion ancestor fetch adapter.
   notion-block-mirror-tree-fixture-plan
           Build a sanitized nested tree fixture preview from reviewed Notion block mirror metadata.
   notion-ancestor-merge-plan
@@ -3153,6 +3155,33 @@ def command_notion_ancestor_crawl_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_notion_ancestor_fetch_adapter_execution_contract(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("notion-ancestor-fetch-adapter-execution-contract is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.notion_ancestor_fetch_adapter_execution_contract(
+            Path(args.archive_root),
+            tree_path=args.tree,
+            source=args.source,
+            credential_ref=args.credential_ref,
+            dry_run=args.dry_run,
+            max_items=args.max_items,
+            max_depth=args.max_depth,
+            scope_generation_ids=args.scope_generation_id,
+            scope_root_refs=args.scope_root_ref,
+            scope_ancestor_refs=args.scope_ancestor_ref,
+            scope_leaf_refs=args.scope_leaf_ref,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print_notion_ancestor_fetch_adapter_execution_contract_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
 def command_notion_block_mirror_tree_fixture_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("notion-block-mirror-tree-fixture-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -3195,6 +3224,37 @@ def command_notion_block_mirror_tree_fixture_plan(args: argparse.Namespace) -> i
             for warning in result["warnings"]:
                 print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
+
+
+def print_notion_ancestor_fetch_adapter_execution_contract_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    summary = result.get("crawl_request_summary") if isinstance(result.get("crawl_request_summary"), dict) else {}
+    credential = result.get("credential_summary") if isinstance(result.get("credential_summary"), dict) else {}
+    print(f"Notion ancestor fetch adapter execution contract: {result.get('contract_state') or '-'}")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Source: {result.get('source') or '-'}")
+    print(f"Crawl requests: {summary.get('crawl_request_count', 0)}")
+    print(f"Unfiltered crawl requests: {summary.get('unfiltered_crawl_request_count', 0)}")
+    print(f"Excluded by scope filter: {summary.get('excluded_crawl_request_count', 0)}")
+    print(f"Scope filter: {'active' if summary.get('scope_filter_active') else 'inactive'}")
+    print(f"Credential ref supplied: {credential.get('credential_ref_supplied', False)}")
+    print("Live execution allowed now: no")
+    print("Provider API called: no")
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
 
 
 def command_notion_ancestor_merge_plan(args: argparse.Namespace) -> int:
@@ -13012,6 +13072,67 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notion_ancestor_crawl_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     notion_ancestor_crawl_plan.set_defaults(func=command_notion_ancestor_crawl_plan)
+
+    notion_ancestor_fetch_contract = subcommands.add_parser(
+        "notion-ancestor-fetch-adapter-execution-contract",
+        aliases=["notion-ancestor-fetch-execution-contract", "notion-ancestor-crawl-adapter-execution-contract"],
+        help="Preview the read-only execution contract a future Notion ancestor fetch adapter must satisfy.",
+    )
+    notion_ancestor_fetch_contract.add_argument("archive_root", help="Archive root to inspect.")
+    notion_ancestor_fetch_contract.add_argument(
+        "--tree",
+        required=True,
+        help="Archive-relative sanitized nested-tree fixture JSON path. Absolute paths and provider URLs are rejected.",
+    )
+    notion_ancestor_fetch_contract.add_argument(
+        "--source",
+        required=True,
+        choices=sorted(archive_services.NOTION_NESTED_TREE_SOURCES),
+        help="External nested tree source declared by the fixture.",
+    )
+    notion_ancestor_fetch_contract.add_argument(
+        "--credential-ref",
+        help="Optional safe env/keyring/secret/wallet ref label. Exact value is validated but never echoed.",
+    )
+    notion_ancestor_fetch_contract.add_argument(
+        "--max-items",
+        type=int,
+        default=1000,
+        help="Maximum fixture nodes to parse while deriving missing ancestor requests. Oversized fixtures block.",
+    )
+    notion_ancestor_fetch_contract.add_argument(
+        "--max-depth",
+        type=int,
+        default=16,
+        help="Maximum future parent-chain crawl depth to request per missing ancestor. Range 1-64.",
+    )
+    notion_ancestor_fetch_contract.add_argument(
+        "--scope-generation-id",
+        action="append",
+        help="Optional generation id filter for broad workspace fixtures. Repeat to include more than one generation.",
+    )
+    notion_ancestor_fetch_contract.add_argument(
+        "--scope-root-ref",
+        action="append",
+        help="Optional safe root/ref filter matched against request refs before a future adapter receives the queue. Repeatable.",
+    )
+    notion_ancestor_fetch_contract.add_argument(
+        "--scope-ancestor-ref",
+        action="append",
+        help="Optional exact ancestor_ref filter. Repeatable.",
+    )
+    notion_ancestor_fetch_contract.add_argument(
+        "--scope-leaf-ref",
+        action="append",
+        help="Optional exact affected leaf ref filter. Repeatable.",
+    )
+    notion_ancestor_fetch_contract.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Contract only; never calls Notion, retrieves secrets, reads titles or bodies, or writes files.",
+    )
+    notion_ancestor_fetch_contract.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    notion_ancestor_fetch_contract.set_defaults(func=command_notion_ancestor_fetch_adapter_execution_contract)
 
     notion_block_mirror_tree_fixture_plan = subcommands.add_parser(
         "notion-block-mirror-tree-fixture-plan",

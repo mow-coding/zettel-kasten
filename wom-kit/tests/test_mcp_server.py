@@ -646,6 +646,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("connection_evidence_parse_fixture", tool_names)
             self.assertIn("notion_nested_tree_plan", tool_names)
             self.assertIn("notion_ancestor_crawl_plan", tool_names)
+            self.assertIn("notion_ancestor_fetch_adapter_execution_contract", tool_names)
             self.assertIn("notion_block_mirror_tree_fixture_plan", tool_names)
             self.assertIn("notion_ancestor_merge_plan", tool_names)
             self.assertIn("notion_client_issue_verification_plan", tool_names)
@@ -2424,6 +2425,82 @@ class McpServerTests(unittest.TestCase):
                         "method": "tools/call",
                         "params": {
                             "name": "notion_ancestor_crawl_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "tree": "workbench/notion-nested-tree.sample.json",
+                                "source": "notion",
+                                "dry_run": False,
+                            },
+                        },
+                    },
+                )
+                dry_run_result = dry_run_response["result"]
+                self.assertTrue(dry_run_result["isError"])
+                self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_notion_ancestor_fetch_adapter_execution_contract_tool_keeps_live_fetch_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "notion_ancestor_fetch_adapter_execution_contract",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "tree": "workbench/notion-nested-tree.sample.json",
+                                "source": "notion",
+                                "scope_ancestor_refs": ["page:fake:missing-parent"],
+                                "credential_ref": "env:wom_notion_readonly",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                serialized = json.dumps(structured, ensure_ascii=False)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "notion_ancestor_fetch_adapter_execution_contract")
+                self.assertEqual(structured["contract_state"], "fetch_contract_ready")
+                self.assertEqual(structured["crawl_request_summary"]["crawl_request_count"], 1)
+                self.assertFalse(structured["execution_contract"]["live_execution_allowed_now"])
+                self.assertFalse(structured["current_capability"]["live_notion_fetch_adapter_implemented"])
+                self.assertFalse(structured["closed_actions"]["provider_api_called"])
+                self.assertFalse(structured["closed_actions"]["credential_value_read"])
+                self.assertFalse(structured["privacy_guards"]["credential_ref_echoed"])
+                self.assertEqual(structured["would_change"], [])
+                self.assertNotIn("env:wom_notion_readonly", serialized)
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                dry_run_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "notion_ancestor_fetch_adapter_execution_contract",
                             "arguments": {
                                 "archive_root": str(allowed_archive),
                                 "tree": "workbench/notion-nested-tree.sample.json",

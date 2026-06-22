@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.130 - 2026-06-22
+
+- Added read-only
+  `archive notion-ancestor-fetch-adapter-execution-contract --dry-run` and MCP
+  `notion_ancestor_fetch_adapter_execution_contract`.
+- The contract reuses the scoped ancestor crawl request planner, reports
+  credential ref presence without echoing exact refs, defines the future
+  adapter input queue contract, requires a sanitized
+  `notion_ancestor_result_fixture` output, and routes the next local step to
+  `notion-ancestor-merge-plan`.
+- Still closed: no live Notion fetch adapter, OAuth, provider API calls,
+  credential value reads, title/body reads, media downloads, fixture writes,
+  zettel writes, edge writes, receipts, or object manifest updates.
+
 ## v0.3.129 - 2026-06-22
 
 - Added optional request-queue scope filters to read-only

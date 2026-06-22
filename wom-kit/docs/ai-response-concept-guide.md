@@ -260,6 +260,10 @@ Then route safely:
   `notion-ancestor-crawl-plan --tree workbench/notion-nested-tree.sample.json
   --source notion --scope-generation-id DB1 --dry-run` to create a scoped
   local request queue for a future credential-bounded adapter.
+- Preview the future Notion ancestor fetch adapter contract: use
+  `notion-ancestor-fetch-adapter-execution-contract --tree
+  workbench/notion-nested-tree.sample.json --source notion --scope-generation-id
+  DB1 --dry-run` before any live credential-bounded adapter is implemented.
 - Build a nested tree fixture from reviewed Notion block mirror metadata: use
   `notion-block-mirror-tree-fixture-plan --mirror
   workbench/notion-block-mirror.sample.json --source notion --dry-run`.
@@ -322,6 +326,7 @@ This guide rephrases existing model documents for AI-human conversation:
 - [Notion Objet Source Map Link Plan](notion-objet-source-map-link-plan.md)
 - [Notion Nested Tree Plan](notion-nested-tree-plan.md)
 - [Notion Ancestor Crawl Plan](notion-ancestor-crawl-plan.md)
+- [Notion Ancestor Fetch Adapter Execution Contract](notion-ancestor-fetch-adapter-execution-contract.md)
 - [Notion Block Mirror Tree Fixture Plan](notion-block-mirror-tree-fixture-plan.md)
 - [Notion Ancestor Merge Plan](notion-ancestor-merge-plan.md)
 - [Notion Client Issue Verification Plan](notion-client-issue-verification-plan.md)
