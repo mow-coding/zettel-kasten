@@ -41,6 +41,7 @@
 - [Agent Operator Capabilities Manifest](agent-operator-capabilities.md)
 - [Operator Feedback Lifecycle](operator-feedback-lifecycle.md)
 - [Approval Handoff Lifecycle](approval-handoff-lifecycle.md)
+- [Operation Status Taxonomy](operation-status-taxonomy.md)
 - [AI 응대 개념 설명 가이드](ai-response-concept-guide.md)
 - [Archive Status Board](archive-status-board.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)

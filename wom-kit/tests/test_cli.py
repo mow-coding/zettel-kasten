@@ -528,6 +528,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("status-board", command_names)
         self.assertIn("derived-artifact-staleness", command_names)
         self.assertIn("approval-handoff-record", command_names)
+        self.assertIn("operation-status-taxonomy", command_names)
         capability = next(item for item in commands if item["name"] == "capabilities")
         self.assertIn("--machine", capability["options"])
         serialized = json.dumps(result, ensure_ascii=False)
@@ -716,6 +717,28 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn(target_ref, record_text)
             self.assertIn(requested_action, record_text)
             self.assertIn("operation_executed_by_this_record: false", record_text)
+
+    def test_operation_status_taxonomy_marks_partial_and_truncated_as_not_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.archive_tree_snapshot(archive_root)
+            code, output = self.run_cli(["operation-status-taxonomy", str(archive_root), "--dry-run", "--format", "json"])
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "operation_status_taxonomy")
+            self.assertFalse(result["summary"]["partial_and_truncated_are_success"])
+            status_classes = {item["status_class"]: item for item in result["data"]["status_classes"]}
+            self.assertFalse(status_classes["partial"]["ok"])
+            self.assertFalse(status_classes["truncated"]["ok"])
+            self.assertFalse(status_classes["blocked"]["ok"])
+            self.assertTrue(status_classes["succeeded"]["ok"])
+            self.assertIn("partial", result["data"]["failure_classes"])
+            self.assertIn("truncated", result["data"]["failure_classes"])
+            self.assertIn("privacy_guards", result)
+            self.assertFalse(result["privacy_guards"]["archive_body_text_read"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            self.assertEqual(before, self.archive_tree_snapshot(archive_root))
 
     def test_version_command_reports_project_source_mirror_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

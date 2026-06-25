@@ -14,6 +14,8 @@ Commands:
           Show the AI-to-human approval handoff storage and lifecycle contract.
   approval-handoff-record
           Preview or approve a metadata record for a human approval handoff.
+  operation-status-taxonomy
+          Show how AI operators should classify success, partial, truncated, blocked, and failed results.
   doctor  Inspect an archive for structural and policy issues.
   profile-list
           List read-only WOM profile registry entries.
@@ -2650,6 +2652,27 @@ def command_approval_handoff_record(args: argparse.Namespace) -> int:
             print("Warnings:")
             for warning in result["warnings"]:
                 print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_operation_status_taxonomy(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("operation-status-taxonomy is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.operation_status_taxonomy(Path(args.archive_root), dry_run=True)
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print("Operation status taxonomy.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Status classes: {summary.get('status_class_count') or 0}")
+        print("Partial/truncated count as success: no")
+        print("Writes: none")
     return 0 if result.get("ok", True) else 1
 
 
@@ -11892,6 +11915,16 @@ def build_parser() -> argparse.ArgumentParser:
     approval_handoff_record.add_argument("--approve", action="store_true", help="Write ops/approval-handoffs metadata and a receipt.")
     approval_handoff_record.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     approval_handoff_record.set_defaults(func=command_approval_handoff_record)
+
+    operation_status_taxonomy = subcommands.add_parser(
+        "operation-status-taxonomy",
+        aliases=["status-taxonomy", "partial-success-taxonomy"],
+        help="Read-only taxonomy for AI-visible operation status and partial/truncated result handling.",
+    )
+    operation_status_taxonomy.add_argument("archive_root", help="Archive root to inspect.")
+    operation_status_taxonomy.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    operation_status_taxonomy.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    operation_status_taxonomy.set_defaults(func=command_operation_status_taxonomy)
 
     doctor = subcommands.add_parser("doctor", help="Inspect an archive for structural and policy issues.")
     doctor.add_argument("archive_root", nargs="?", default=".", help="Archive root to inspect.")

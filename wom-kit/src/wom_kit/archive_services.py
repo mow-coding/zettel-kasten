@@ -993,6 +993,18 @@ APPROVAL_HANDOFF_OPERATION_KINDS = (
     "other",
 )
 APPROVAL_HANDOFF_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,120}$")
+OPERATION_STATUS_TAXONOMY_SCHEMA = "wom-kit/operation-status-taxonomy/v0.1"
+OPERATION_STATUS_CLASSES = (
+    "succeeded",
+    "preview",
+    "written",
+    "no_change",
+    "partial",
+    "truncated",
+    "blocked",
+    "failed",
+)
+OPERATION_STATUS_FAILURE_CLASSES = ("partial", "truncated", "blocked", "failed")
 AI_USAGE_RECEIPTS_DIR = "receipts/ai-usage"
 AI_USAGE_RECEIPT_SCHEMA = "wom-kit/ai-usage-receipt/v0.1"
 AI_USAGE_MAX_LABEL_LENGTH = 160
@@ -3485,6 +3497,129 @@ def approval_handoff_record(
             "tokens_or_secrets_echoed": False,
             "operation_executed": False,
             "writes": approve and not blockers,
+        },
+    }
+
+
+def operation_status_taxonomy(archive_root: Path | str, *, dry_run: bool = True) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    if not dry_run:
+        blockers.append("operation-status-taxonomy is read-only and requires --dry-run.")
+
+    statuses = [
+        {
+            "status_class": "succeeded",
+            "ok": True,
+            "terminal": True,
+            "meaning": "the requested read-only or verification operation completed fully",
+            "ai_operator_rule": "it may be summarized as complete if warnings are empty or explicitly explained",
+        },
+        {
+            "status_class": "preview",
+            "ok": True,
+            "terminal": False,
+            "meaning": "a dry-run preview or plan completed without writing",
+            "ai_operator_rule": "do not claim the planned write or external action happened",
+        },
+        {
+            "status_class": "written",
+            "ok": True,
+            "terminal": True,
+            "meaning": "an approval-gated local write completed and receipts should name what changed",
+            "ai_operator_rule": "summarize files_written or receipt_path before saying the write is done",
+        },
+        {
+            "status_class": "no_change",
+            "ok": True,
+            "terminal": True,
+            "meaning": "the operation was valid but idempotent and nothing needed to change",
+            "ai_operator_rule": "say no change was needed rather than implying a new write happened",
+        },
+        {
+            "status_class": "partial",
+            "ok": False,
+            "terminal": False,
+            "meaning": "some items completed but at least one requested item did not",
+            "ai_operator_rule": "never report this as success; list incomplete counts and next safe actions",
+        },
+        {
+            "status_class": "truncated",
+            "ok": False,
+            "terminal": False,
+            "meaning": "the command intentionally omitted results because of limits, caps, or paging",
+            "ai_operator_rule": "never report this as complete coverage; ask for a narrower scope or continue paging",
+        },
+        {
+            "status_class": "blocked",
+            "ok": False,
+            "terminal": False,
+            "meaning": "preconditions or safety gates stopped the operation before it could run",
+            "ai_operator_rule": "surface blockers first and do not retry with broader permissions automatically",
+        },
+        {
+            "status_class": "failed",
+            "ok": False,
+            "terminal": True,
+            "meaning": "the command failed unexpectedly or an operation error occurred",
+            "ai_operator_rule": "report the failure and preserve evidence instead of claiming a policy blocker",
+        },
+    ]
+    return {
+        "ok": not blockers,
+        "state": "ready" if not blockers else "blocked",
+        "dry_run": True,
+        "lifecycle_action": "operation_status_taxonomy",
+        "archive_id": read_archive_id(root),
+        "summary": {
+            "schema": OPERATION_STATUS_TAXONOMY_SCHEMA,
+            "status_class_count": len(statuses),
+            "failure_class_count": len(OPERATION_STATUS_FAILURE_CLASSES),
+            "partial_and_truncated_are_success": False,
+            "writes": False,
+        },
+        "data": {
+            "schema": OPERATION_STATUS_TAXONOMY_SCHEMA,
+            "required_envelope_fields": [
+                "ok",
+                "state",
+                "summary",
+                "data",
+                "blockers",
+                "warnings",
+                "privacy_guards",
+            ],
+            "status_classes": statuses,
+            "failure_classes": list(OPERATION_STATUS_FAILURE_CLASSES),
+            "recommended_state_mapping": {
+                "complete_and_verified": "succeeded",
+                "dry_run_only": "preview",
+                "approval_gated_write_done": "written",
+                "idempotent": "no_change",
+                "item_level_gaps": "partial",
+                "limit_or_page_cap_hit": "truncated",
+                "precondition_missing": "blocked",
+                "unexpected_exception": "failed",
+            },
+            "agent_operator_checks": [
+                "If ok is false, lead with blockers, incomplete counts, or truncation before any success wording.",
+                "If a summary contains truncated=true, limit_hit=true, omitted_count>0, or incomplete_count>0, classify as truncated or partial even when some items were returned.",
+                "If dry_run=true, do not say files were written or external actions were performed.",
+                "If privacy_guards say values were not echoed, do not invent those values in the user-facing answer.",
+            ],
+        },
+        "blockers": blockers,
+        "warnings": [],
+        "would_change": [],
+        "privacy_guards": {
+            "archive_body_text_read": False,
+            "zettel_body_text_echoed": False,
+            "source_values_echoed": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_paths_echoed": False,
+            "tokens_or_secrets_echoed": False,
+            "writes": False,
         },
     }
 
