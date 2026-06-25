@@ -14,6 +14,8 @@ Commands:
           Show the AI-to-human approval handoff storage and lifecycle contract.
   approval-handoff-record
           Preview or approve a metadata record for a human approval handoff.
+  approval-handoff-audit
+          Audit a handoff record before a future operation uses it as approval evidence.
   operation-status-taxonomy
           Show how AI operators should classify success, partial, truncated, blocked, and failed results.
   input-provenance-taxonomy
@@ -2643,6 +2645,45 @@ def command_approval_handoff_record(args: argparse.Namespace) -> int:
         print(f"Operation kind: {summary.get('operation_kind') or '-'}")
         print(f"Status: {summary.get('status') or '-'}")
         print(f"Record path: {summary.get('record_path') or '-'}")
+        print("Target ref echoed: no")
+        print("Requested action echoed: no")
+        print("Execution performed: no")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_approval_handoff_audit(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("approval-handoff-audit is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.approval_handoff_audit(
+            Path(args.archive_root),
+            handoff_record=args.handoff_record,
+            expected_operation_kind=args.expected_operation_kind,
+            expected_status=args.expected_status,
+            dry_run=True,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print("Approval handoff audit.")
+        print(f"State: {result.get('state') or '-'}")
+        print(f"Handoff id: {summary.get('handoff_id') or '-'}")
+        print(f"Status: {summary.get('status') or '-'}")
+        print(f"Operation kind: {summary.get('operation_kind') or '-'}")
+        print(f"Future operation authorized: {'yes' if summary.get('future_operation_authorized') else 'no'}")
         print("Target ref echoed: no")
         print("Requested action echoed: no")
         print("Execution performed: no")
@@ -11938,6 +11979,32 @@ def build_parser() -> argparse.ArgumentParser:
     approval_handoff_record.add_argument("--approve", action="store_true", help="Write ops/approval-handoffs metadata and a receipt.")
     approval_handoff_record.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     approval_handoff_record.set_defaults(func=command_approval_handoff_record)
+
+    approval_handoff_audit = subcommands.add_parser(
+        "approval-handoff-audit",
+        aliases=["handoff-audit", "human-approval-handoff-audit"],
+        help="Audit an approval handoff metadata record without executing the underlying operation.",
+    )
+    approval_handoff_audit.add_argument("archive_root", help="Archive root to inspect.")
+    approval_handoff_audit.add_argument(
+        "--handoff-record",
+        required=True,
+        help="Archive-relative ops/approval-handoffs/<id>.yml path. Target/action values are not echoed.",
+    )
+    approval_handoff_audit.add_argument(
+        "--expected-operation-kind",
+        choices=archive_services.APPROVAL_HANDOFF_OPERATION_KINDS,
+        help="Optional operation kind expected by the future operation.",
+    )
+    approval_handoff_audit.add_argument(
+        "--expected-status",
+        choices=archive_services.APPROVAL_HANDOFF_STATUSES,
+        default="approved_once",
+        help="Expected handoff status. Defaults to approved_once.",
+    )
+    approval_handoff_audit.add_argument("--dry-run", action="store_true", help="Required. Audit only; write nothing.")
+    approval_handoff_audit.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    approval_handoff_audit.set_defaults(func=command_approval_handoff_audit)
 
     operation_status_taxonomy = subcommands.add_parser(
         "operation-status-taxonomy",

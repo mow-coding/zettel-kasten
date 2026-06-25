@@ -41,6 +41,7 @@
 - [Agent Operator Capabilities Manifest](agent-operator-capabilities.md)
 - [Operator Feedback Lifecycle](operator-feedback-lifecycle.md)
 - [Approval Handoff Lifecycle](approval-handoff-lifecycle.md)
+- [Approval Handoff Audit](approval-handoff-audit.md)
 - [Operation Status Taxonomy](operation-status-taxonomy.md)
 - [Input Provenance Taxonomy](input-provenance-taxonomy.md)
 - [AI 응대 개념 설명 가이드](ai-response-concept-guide.md)

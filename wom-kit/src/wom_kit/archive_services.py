@@ -3513,6 +3513,132 @@ def approval_handoff_record(
     }
 
 
+def approval_handoff_audit(
+    archive_root: Path | str,
+    *,
+    handoff_record: str | None,
+    expected_operation_kind: str | None = None,
+    expected_status: str = "approved_once",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("approval-handoff-audit is read-only and requires --dry-run.")
+
+    record_relative: str | None = None
+    record: dict[str, Any] | None = None
+    raw_record = str(handoff_record or "").strip()
+    if not raw_record:
+        blockers.append("handoff_record is required.")
+    else:
+        try:
+            record_path = resolve_archive_relative_path(root, raw_record)
+            record_relative = archive_relative_path(record_path, root)
+        except ArchivePathError:
+            blockers.append("handoff_record must be an archive-relative path inside the archive root.")
+            record_path = None
+        if record_relative and (
+            not record_relative.startswith(f"{APPROVAL_HANDOFF_DIR}/") or not record_relative.endswith(".yml")
+        ):
+            blockers.append(f"handoff_record must point under {APPROVAL_HANDOFF_DIR}/ and end with .yml.")
+        if record_path is not None and not record_path.is_file():
+            blockers.append("approval handoff record is missing.")
+        if record_path is not None and record_path.is_file() and not blockers:
+            loaded = load_yaml(record_path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                blockers.append("approval handoff record must be a YAML object.")
+            else:
+                record = json_safe(loaded)
+
+    normalized_expected_status = (expected_status or "").strip().lower()
+    if normalized_expected_status not in APPROVAL_HANDOFF_STATUSES:
+        blockers.append("expected_status must be one of: " + ", ".join(APPROVAL_HANDOFF_STATUSES) + ".")
+    normalized_expected_kind = (expected_operation_kind or "").strip() or None
+    if normalized_expected_kind and normalized_expected_kind not in APPROVAL_HANDOFF_OPERATION_KINDS:
+        blockers.append("expected_operation_kind must be one of: " + ", ".join(APPROVAL_HANDOFF_OPERATION_KINDS) + ".")
+
+    handoff_id = None
+    status = None
+    operation_kind = None
+    reviewed_by_present = False
+    target_ref_present = False
+    requested_action_present = False
+    if record is not None:
+        if record.get("schema") != APPROVAL_HANDOFF_SCHEMA:
+            blockers.append(f"approval handoff record schema must be {APPROVAL_HANDOFF_SCHEMA}.")
+        handoff_id = record.get("handoff_id") if isinstance(record.get("handoff_id"), str) else None
+        status = str(record.get("status") or "")
+        operation_kind = str(record.get("operation_kind") or "")
+        reviewed_by_present = bool(record.get("reviewed_by"))
+        target_ref_present = bool(record.get("target_ref"))
+        requested_action_present = bool(record.get("requested_action"))
+        if status != normalized_expected_status:
+            blockers.append("approval handoff status does not match expected_status.")
+        if normalized_expected_kind and operation_kind != normalized_expected_kind:
+            blockers.append("approval handoff operation_kind does not match expected_operation_kind.")
+        if status == "approved_once" and not reviewed_by_present:
+            blockers.append("approved_once handoff requires reviewed_by.")
+        if record.get("operation_executed_by_this_record") is not False:
+            blockers.append("approval handoff record must not report operation execution.")
+        if record.get("private_material_read_by_this_record") is not False:
+            blockers.append("approval handoff record must not report private material reads.")
+        if record.get("external_provider_called_by_this_record") is not False:
+            blockers.append("approval handoff record must not report provider calls.")
+
+    future_operation_authorized = not blockers and status == "approved_once"
+    if status == "needs_review":
+        warnings.append("The handoff still needs human review before any future operation proceeds.")
+    if status == "denied":
+        warnings.append("The handoff was denied; the future operation must not proceed.")
+    if status == "superseded":
+        warnings.append("The handoff was superseded; audit the replacement handoff before proceeding.")
+    if status == "resolved":
+        warnings.append("The handoff is resolved; use the closing receipt or release as the authority.")
+
+    return {
+        "ok": not blockers,
+        "state": "authorized" if future_operation_authorized else ("blocked" if blockers else "not_authorized"),
+        "dry_run": True,
+        "lifecycle_action": "approval_handoff_audit",
+        "archive_id": read_archive_id(root),
+        "summary": {
+            "handoff_id": handoff_id,
+            "record_path": record_relative,
+            "status": status or None,
+            "operation_kind": operation_kind or None,
+            "expected_status": normalized_expected_status if normalized_expected_status in APPROVAL_HANDOFF_STATUSES else None,
+            "expected_operation_kind": normalized_expected_kind,
+            "target_ref_present": target_ref_present,
+            "requested_action_present": requested_action_present,
+            "reviewed_by_present": reviewed_by_present,
+            "future_operation_authorized": future_operation_authorized,
+        },
+        "data": {
+            "record_schema": APPROVAL_HANDOFF_SCHEMA,
+            "status_lifecycle": list(APPROVAL_HANDOFF_STATUSES),
+            "operation_kinds": list(APPROVAL_HANDOFF_OPERATION_KINDS),
+            "audit_only": True,
+        },
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [],
+        "privacy_guards": {
+            "handoff_record_body_read": bool(record is not None),
+            "target_ref_value_echoed": False,
+            "requested_action_value_echoed": False,
+            "private_material_read": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_paths_echoed": False,
+            "tokens_or_secrets_echoed": False,
+            "operation_executed": False,
+            "writes": False,
+        },
+    }
+
+
 def operation_status_taxonomy(archive_root: Path | str, *, dry_run: bool = True) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     blockers: list[str] = []
