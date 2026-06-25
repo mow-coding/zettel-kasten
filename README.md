@@ -25,10 +25,11 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.152 pre-release
+v0.3.153 pre-release
 ```
 
-Previous public baseline: v0.3.151 pre-release.
+Previous public baseline: v0.3.152 pre-release.
+Earlier public baseline: v0.3.151 pre-release.
 Earlier public baseline: v0.3.150 pre-release.
 Earlier public baseline: v0.3.149 pre-release.
 Earlier public baseline: v0.3.148 pre-release.
@@ -91,6 +92,7 @@ What exists today:
 - read-only `archive capabilities --machine` for AI operators that need a stable `ok/state/summary/data/blockers/warnings` envelope listing the executable local CLI commands, aliases, required positionals, options, nested subcommands, and local release identity without calling GitHub or providers,
 - read-only `archive operator-feedback-plan --dry-run` and approval-gated `archive operator-feedback-record --approve` for tracking operator-generated tool feedback under `ops/feedback/` with draft/delivered/acknowledged/resolved/archived lifecycle metadata, without reading feedback bodies, submitting externally, or mixing feedback lifecycle state into user knowledge `objets/`,
 - read-only `archive approval-handoff-plan --dry-run` and approval-gated `archive approval-handoff-record --approve` for AI-to-human approval handoff metadata under `ops/approval-handoffs/`, so sensitive operations can stop at a clear needs_review/approved_once/denied/superseded/resolved state without executing the operation, reading private material, calling providers, or echoing target/action values,
+- read-only `archive approval-handoff-audit --dry-run` for checking a handoff record before a future operation uses it as approval evidence, without executing the operation or echoing target/action values,
 - read-only `archive operation-status-taxonomy --dry-run` for AI operators that need to distinguish succeeded/preview/written/no_change from partial/truncated/blocked/failed results before telling a human that work is complete,
 - read-only `archive input-provenance-taxonomy --dry-run` for AI operators that need to distinguish tool-discovered and receipt-verified inputs from caller-supplied, AI-generated, fixture, environment-inferred, or unknown inputs before treating them as source truth,
 - runtime-context canonical entrypoint metadata so AI runtimes can see which archive-relative files/directories to treat as start-here and authoritative sources, plus machine-readable `ai_runtime_order`, `recommended_first_commands`, and `material_link_routes` that hand off from `runtime-context` to `AGENTS.md` and `ai-response-concept-guide`,
@@ -164,6 +166,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Agent Operator Capabilities Manifest](wom-kit/docs/agent-operator-capabilities.md)
 - [Operator Feedback Lifecycle](wom-kit/docs/operator-feedback-lifecycle.md)
 - [Approval Handoff Lifecycle](wom-kit/docs/approval-handoff-lifecycle.md)
+- [Approval Handoff Audit](wom-kit/docs/approval-handoff-audit.md)
 - [Operation Status Taxonomy](wom-kit/docs/operation-status-taxonomy.md)
 - [Input Provenance Taxonomy](wom-kit/docs/input-provenance-taxonomy.md)
 - [Archive Status Board](wom-kit/docs/archive-status-board.md)
@@ -373,6 +376,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.153
 v0.3.152
 v0.3.151
 v0.3.150

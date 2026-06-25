@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.153 - 2026-06-25
+
+- Added read-only `archive approval-handoff-audit`, with aliases
+  `archive handoff-audit` and `archive human-approval-handoff-audit`, to audit
+  a handoff record before a future operation uses it as approval evidence.
+- The audit checks record path boundary, schema, expected status, expected
+  operation kind, `reviewed_by` presence for `approved_once`, and closed-action
+  safety flags.
+- The audit returns `future_operation_authorized: true` only for a matching
+  `approved_once` handoff.
+- Kept the audit execution-safe: it reads only handoff metadata, executes no
+  operation, reads no private material, calls no providers, and echoes no
+  target ref or requested action values.
+- Updated README status, capability matrix, public docs, release notes, and CLI
+  tests.
+
 ## v0.3.152 - 2026-06-25
 
 - Added read-only `archive input-provenance-taxonomy`, with aliases

@@ -528,6 +528,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("status-board", command_names)
         self.assertIn("derived-artifact-staleness", command_names)
         self.assertIn("approval-handoff-record", command_names)
+        self.assertIn("approval-handoff-audit", command_names)
         self.assertIn("operation-status-taxonomy", command_names)
         self.assertIn("input-provenance-taxonomy", command_names)
         capability = next(item for item in commands if item["name"] == "capabilities")
@@ -718,6 +719,52 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn(target_ref, record_text)
             self.assertIn(requested_action, record_text)
             self.assertIn("operation_executed_by_this_record: false", record_text)
+
+            audit_code, audit_output = self.run_cli(
+                [
+                    "approval-handoff-audit",
+                    str(archive_root),
+                    "--handoff-record",
+                    "ops/approval-handoffs/imap_material_capture_review_20260625.yml",
+                    "--expected-operation-kind",
+                    "read_private_material",
+                    "--expected-status",
+                    "approved_once",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            audit = json.loads(audit_output)
+            self.assertEqual(audit_code, 0, audit_output)
+            self.assertEqual(audit["state"], "authorized")
+            self.assertTrue(audit["summary"]["future_operation_authorized"])
+            self.assertTrue(audit["summary"]["target_ref_present"])
+            self.assertTrue(audit["summary"]["requested_action_present"])
+            serialized_audit = json.dumps(audit, ensure_ascii=False)
+            self.assertNotIn(target_ref, serialized_audit)
+            self.assertNotIn(requested_action, serialized_audit)
+            self.assertFalse(audit["privacy_guards"]["target_ref_value_echoed"])
+            self.assertFalse(audit["privacy_guards"]["requested_action_value_echoed"])
+            self.assertFalse(audit["privacy_guards"]["operation_executed"])
+
+            mismatch_code, mismatch_output = self.run_cli(
+                [
+                    "handoff-audit",
+                    str(archive_root),
+                    "--handoff-record",
+                    "ops/approval-handoffs/imap_material_capture_review_20260625.yml",
+                    "--expected-operation-kind",
+                    "credential_access",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            mismatch = json.loads(mismatch_output)
+            self.assertEqual(mismatch_code, 1, mismatch_output)
+            self.assertFalse(mismatch["summary"]["future_operation_authorized"])
+            self.assertIn("approval handoff operation_kind does not match expected_operation_kind.", mismatch["blockers"])
 
     def test_operation_status_taxonomy_marks_partial_and_truncated_as_not_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
