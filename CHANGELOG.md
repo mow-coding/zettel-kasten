@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.148 - 2026-06-25
+
+- Added read-only `archive capabilities --machine` for AI operators that need
+  to know which WOM-kit commands are executable in the current local
+  installation before planning a workflow.
+- The manifest is generated from the actual local CLI parser and reports
+  command names, aliases, help text, required positionals, options, nested
+  subcommands, command count, version, release notes presence, local git tag
+  presence, and local release state.
+- The command uses a stable agent-facing envelope:
+  `ok / state / summary / data / blockers / warnings / privacy_guards`.
+- Kept the command read-only and local-only: it writes nothing, calls no
+  providers, checks no network, and echoes no local absolute paths, tokens, or
+  secret values.
+- Updated README status, capability matrix, public docs, release notes, and CLI
+  tests.
+
 ## v0.3.147 - 2026-06-25
 
 - Added read-only `archive derived-artifact-staleness`, with aliases

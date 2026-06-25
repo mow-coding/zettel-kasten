@@ -4,6 +4,8 @@
 Commands:
   version
           Print the running WOM-kit version and optional project pin status.
+  capabilities
+          Print an agent-facing manifest of executable CLI commands and release identity.
   doctor  Inspect an archive for structural and policy issues.
   profile-list
           List read-only WOM profile registry entries.
@@ -2345,6 +2347,169 @@ def command_version(args: argparse.Namespace) -> int:
             for warning in result["warnings"]:
                 print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
+
+
+def git_version_tags() -> list[str]:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(KIT_ROOT.parent), "tag", "-l", "v[0-9]*"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if completed.returncode != 0:
+        return []
+    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+
+
+def semver_key_from_tag(tag: str) -> tuple[int, int, int, str] | None:
+    match = re.match(r"^v(\d+)\.(\d+)\.(\d+)(.*)$", tag)
+    if not match:
+        return None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)), match.group(4))
+
+
+def release_identity_probe() -> dict[str, Any]:
+    current_tag = f"v{__version__}"
+    release_notes = KIT_ROOT / "docs" / "releases" / f"{current_tag}.md"
+    tags = git_version_tags()
+    tag_keys = [(tag, semver_key_from_tag(tag)) for tag in tags]
+    valid_tags = [(tag, key) for tag, key in tag_keys if key is not None]
+    latest_tag = max(valid_tags, key=lambda item: item[1])[0] if valid_tags else None
+    local_tag_present = current_tag in tags
+    release_notes_present = release_notes.is_file()
+    if local_tag_present:
+        state = "released_local_tag_present"
+    elif release_notes_present:
+        state = "documented_release_candidate"
+    else:
+        state = "development_snapshot"
+    return {
+        "version": __version__,
+        "version_label": current_tag,
+        "release_state": state,
+        "release_notes_present": release_notes_present,
+        "local_git_tag_present": local_tag_present,
+        "latest_local_release_tag": latest_tag,
+        "network_checked": False,
+    }
+
+
+def subparser_action(parser: argparse.ArgumentParser) -> argparse._SubParsersAction | None:
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action
+    return None
+
+
+def parser_command_manifest(parser: argparse.ArgumentParser) -> list[dict[str, Any]]:
+    action = subparser_action(parser)
+    if action is None:
+        return []
+    help_by_name = {choice.dest: choice.help for choice in action._choices_actions}
+    grouped: dict[int, dict[str, Any]] = {}
+    for name, command_parser in action.choices.items():
+        parser_id = id(command_parser)
+        group = grouped.setdefault(
+            parser_id,
+            {
+                "names": [],
+                "help": None,
+                "required_positionals": [],
+                "options": [],
+                "subcommands": [],
+            },
+        )
+        group["names"].append(name)
+        if group["help"] is None and name in help_by_name:
+            group["help"] = help_by_name[name]
+        required_positionals: list[str] = []
+        options: list[str] = []
+        nested_subcommands: list[str] = []
+        for command_action in command_parser._actions:
+            if isinstance(command_action, argparse._SubParsersAction):
+                nested_subcommands.extend(sorted(command_action.choices.keys()))
+                continue
+            if command_action.option_strings:
+                options.extend(command_action.option_strings)
+            elif command_action.dest not in {"help", argparse.SUPPRESS} and getattr(command_action, "nargs", None) not in {"?", "*"}:
+                required_positionals.append(command_action.dest)
+        group["required_positionals"] = sorted(set(required_positionals))
+        group["options"] = sorted(set(options))
+        group["subcommands"] = nested_subcommands
+
+    commands: list[dict[str, Any]] = []
+    for group in grouped.values():
+        names = group["names"]
+        primary = names[0]
+        commands.append(
+            {
+                "name": primary,
+                "aliases": names[1:],
+                "help": group["help"] or "",
+                "runnable": True,
+                "required_positionals": group["required_positionals"],
+                "options": group["options"],
+                "nested_subcommands": group["subcommands"],
+            }
+        )
+    return sorted(commands, key=lambda item: item["name"])
+
+
+def command_capabilities(args: argparse.Namespace) -> int:
+    parser = build_parser()
+    commands = parser_command_manifest(parser)
+    release = release_identity_probe()
+    data = {
+        "command_count": len(commands),
+        "commands": [] if args.no_commands else commands,
+        "agent_operator_notes": [
+            "This manifest is generated from the actual local CLI parser.",
+            "release_state is local-only and does not call GitHub or any provider.",
+            "Use required_positionals and options for command planning; use each command's --help for full usage.",
+        ],
+        "recommended_agent_checks": [
+            "Confirm release_state before assuming a feature exists in the public release.",
+            "Treat documented_release_candidate as usable locally but not yet proven public.",
+            "Prefer JSON commands that expose ok, blockers, warnings, and privacy_guards when available.",
+        ],
+    }
+    result = {
+        "ok": True,
+        "state": release["release_state"],
+        "summary": {
+            "version": release["version"],
+            "version_label": release["version_label"],
+            "command_count": len(commands),
+            "release_state": release["release_state"],
+            "release_notes_present": release["release_notes_present"],
+            "local_git_tag_present": release["local_git_tag_present"],
+            "latest_local_release_tag": release["latest_local_release_tag"],
+        },
+        "data": data,
+        "blockers": [],
+        "warnings": [],
+        "privacy_guards": {
+            "network_checked": False,
+            "provider_called": False,
+            "local_absolute_paths_echoed": False,
+            "tokens_or_secrets_echoed": False,
+            "writes": False,
+        },
+    }
+    if args.machine or args.format == "json":
+        print_json(result)
+    else:
+        summary = result["summary"]
+        print("WOM-kit capabilities manifest.")
+        print(f"Version: {summary['version_label']}")
+        print(f"Release state: {summary['release_state']}")
+        print(f"Commands: {summary['command_count']}")
+        print("Machine form: archive capabilities --machine")
+    return 0
 
 
 def command_validate(args: argparse.Namespace) -> int:
@@ -11504,6 +11669,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     version.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     version.set_defaults(func=command_version)
+
+    capabilities = subcommands.add_parser(
+        "capabilities",
+        help="Print an agent-facing manifest of executable CLI commands and local release identity.",
+    )
+    capabilities.add_argument(
+        "--machine",
+        action="store_true",
+        help="Print the stable JSON envelope intended for AI operators.",
+    )
+    capabilities.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    capabilities.add_argument(
+        "--no-commands",
+        action="store_true",
+        help="Omit the full command list and print only summary/release identity.",
+    )
+    capabilities.set_defaults(func=command_capabilities)
 
     doctor = subcommands.add_parser("doctor", help="Inspect an archive for structural and policy issues.")
     doctor.add_argument("archive_root", nargs="?", default=".", help="Archive root to inspect.")
