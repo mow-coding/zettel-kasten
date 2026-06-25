@@ -1005,6 +1005,18 @@ OPERATION_STATUS_CLASSES = (
     "failed",
 )
 OPERATION_STATUS_FAILURE_CLASSES = ("partial", "truncated", "blocked", "failed")
+INPUT_PROVENANCE_TAXONOMY_SCHEMA = "wom-kit/input-provenance-taxonomy/v0.1"
+INPUT_PROVENANCE_CLASSES = (
+    "tool_discovered",
+    "receipt_verified",
+    "human_selected",
+    "caller_supplied",
+    "ai_generated",
+    "fixture_supplied",
+    "environment_inferred",
+    "unknown",
+)
+INPUT_PROVENANCE_UNVERIFIED_CLASSES = ("caller_supplied", "ai_generated", "fixture_supplied", "environment_inferred", "unknown")
 AI_USAGE_RECEIPTS_DIR = "receipts/ai-usage"
 AI_USAGE_RECEIPT_SCHEMA = "wom-kit/ai-usage-receipt/v0.1"
 AI_USAGE_MAX_LABEL_LENGTH = 160
@@ -3614,6 +3626,120 @@ def operation_status_taxonomy(archive_root: Path | str, *, dry_run: bool = True)
         "privacy_guards": {
             "archive_body_text_read": False,
             "zettel_body_text_echoed": False,
+            "source_values_echoed": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_paths_echoed": False,
+            "tokens_or_secrets_echoed": False,
+            "writes": False,
+        },
+    }
+
+
+def input_provenance_taxonomy(archive_root: Path | str, *, dry_run: bool = True) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    if not dry_run:
+        blockers.append("input-provenance-taxonomy is read-only and requires --dry-run.")
+
+    provenance_classes = [
+        {
+            "provenance_class": "tool_discovered",
+            "verified_by_tool": True,
+            "owner": "tool",
+            "meaning": "the command discovered the input from archive metadata, an index, or a local manifest",
+            "ai_operator_rule": "the AI may say the tool found the input, while still respecting privacy guards",
+        },
+        {
+            "provenance_class": "receipt_verified",
+            "verified_by_tool": True,
+            "owner": "prior_receipt",
+            "meaning": "the input came from a receipt that the command parsed and matched to the current archive",
+            "ai_operator_rule": "cite the receipt path or hash when the command output exposes a safe reference",
+        },
+        {
+            "provenance_class": "human_selected",
+            "verified_by_tool": False,
+            "owner": "human",
+            "meaning": "a human selected the input, but the command may not have independently verified the target",
+            "ai_operator_rule": "say the human selected it; do not claim the tool discovered it unless a receipt confirms it",
+        },
+        {
+            "provenance_class": "caller_supplied",
+            "verified_by_tool": False,
+            "owner": "caller",
+            "meaning": "the invoking AI, script, or shell supplied the input argument",
+            "ai_operator_rule": "treat it as brittle until the command validates it against archive state or a receipt",
+        },
+        {
+            "provenance_class": "ai_generated",
+            "verified_by_tool": False,
+            "owner": "ai",
+            "meaning": "an AI generated the input label, path, identifier, or mapping",
+            "ai_operator_rule": "never treat it as source truth without a validation command or human correction event",
+        },
+        {
+            "provenance_class": "fixture_supplied",
+            "verified_by_tool": False,
+            "owner": "test_fixture",
+            "meaning": "the input came from a local fixture or sanitized sample",
+            "ai_operator_rule": "do not generalize fixture success to live provider or full archive coverage",
+        },
+        {
+            "provenance_class": "environment_inferred",
+            "verified_by_tool": False,
+            "owner": "runtime_environment",
+            "meaning": "the input was inferred from cwd, environment variables, path conventions, or local defaults",
+            "ai_operator_rule": "re-check explicit archive roots, accounts, and release state before writing or publishing",
+        },
+        {
+            "provenance_class": "unknown",
+            "verified_by_tool": False,
+            "owner": "unknown",
+            "meaning": "the command cannot tell where the input came from",
+            "ai_operator_rule": "do not claim provenance; ask for or generate a receipt-backed validation step",
+        },
+    ]
+
+    return {
+        "ok": not blockers,
+        "state": "ready" if not blockers else "blocked",
+        "dry_run": True,
+        "lifecycle_action": "input_provenance_taxonomy",
+        "archive_id": read_archive_id(root),
+        "summary": {
+            "schema": INPUT_PROVENANCE_TAXONOMY_SCHEMA,
+            "provenance_class_count": len(provenance_classes),
+            "unverified_class_count": len(INPUT_PROVENANCE_UNVERIFIED_CLASSES),
+            "caller_supplied_is_verified": False,
+            "writes": False,
+        },
+        "data": {
+            "schema": INPUT_PROVENANCE_TAXONOMY_SCHEMA,
+            "provenance_classes": provenance_classes,
+            "unverified_classes": list(INPUT_PROVENANCE_UNVERIFIED_CLASSES),
+            "recommended_fields_for_future_commands": [
+                "input_provenance",
+                "input_provenance_class",
+                "input_verified_by_tool",
+                "source_receipt_path",
+                "source_receipt_sha256",
+                "caller_supplied_fields",
+            ],
+            "agent_operator_checks": [
+                "If an input is caller_supplied, say it was supplied to the command, not discovered by the command.",
+                "If an input is ai_generated, require validation before minting, linking, fetching, or publishing.",
+                "If an input is fixture_supplied, do not claim live provider coverage.",
+                "If provenance is unknown, add a validation or receipt step before treating it as canonical.",
+            ],
+        },
+        "blockers": blockers,
+        "warnings": [],
+        "would_change": [],
+        "privacy_guards": {
+            "archive_body_text_read": False,
+            "zettel_body_text_echoed": False,
+            "input_values_echoed": False,
             "source_values_echoed": False,
             "provider_called": False,
             "network_checked": False,
