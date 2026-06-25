@@ -6,6 +6,10 @@ Commands:
           Print the running WOM-kit version and optional project pin status.
   capabilities
           Print an agent-facing manifest of executable CLI commands and release identity.
+  operator-feedback-plan
+          Show the operator-generated feedback storage and lifecycle contract.
+  operator-feedback-record
+          Preview or approve a metadata record for operator-generated feedback.
   doctor  Inspect an archive for structural and policy issues.
   profile-list
           List read-only WOM profile registry entries.
@@ -2510,6 +2514,66 @@ def command_capabilities(args: argparse.Namespace) -> int:
         print(f"Commands: {summary['command_count']}")
         print("Machine form: archive capabilities --machine")
     return 0
+
+
+def command_operator_feedback_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("operator-feedback-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.operator_feedback_plan(Path(args.archive_root), dry_run=True)
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print("Operator feedback lifecycle plan.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Feedback dir: {summary.get('feedback_dir') or '-'}")
+        print(f"Receipt dir: {summary.get('receipt_dir') or '-'}")
+        print("Statuses: " + ", ".join(summary.get("statuses") or []))
+    return 0 if result.get("ok", True) else 1
+
+
+def command_operator_feedback_record(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print("operator-feedback-record requires exactly one of --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("operator-feedback-record requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.operator_feedback_record(
+            Path(args.archive_root),
+            feedback_id=args.feedback_id,
+            feedback_ref=args.feedback_ref,
+            status=args.status,
+            title=args.title,
+            related_release=args.related_release,
+            resolved_in=args.resolved_in,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print("Operator feedback record.")
+        print(f"State: {result.get('state') or '-'}")
+        print(f"Feedback id: {summary.get('feedback_id') or '-'}")
+        print(f"Status: {summary.get('status') or '-'}")
+        print(f"Record path: {summary.get('record_path') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+    return 0 if result.get("ok", True) else 1
 
 
 def command_validate(args: argparse.Namespace) -> int:
@@ -11686,6 +11750,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Omit the full command list and print only summary/release identity.",
     )
     capabilities.set_defaults(func=command_capabilities)
+
+    operator_feedback_plan = subcommands.add_parser(
+        "operator-feedback-plan",
+        aliases=["feedback-plan", "ops-feedback-plan"],
+        help="Read-only plan for operator-generated feedback storage and lifecycle status.",
+    )
+    operator_feedback_plan.add_argument("archive_root", help="Archive root to inspect.")
+    operator_feedback_plan.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    operator_feedback_plan.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    operator_feedback_plan.set_defaults(func=command_operator_feedback_plan)
+
+    operator_feedback_record = subcommands.add_parser(
+        "operator-feedback-record",
+        aliases=["feedback-record", "feedback-register"],
+        help="Preview or approve a metadata record for operator-generated feedback.",
+    )
+    operator_feedback_record.add_argument("archive_root", help="Archive root receiving the feedback metadata record.")
+    operator_feedback_record.add_argument("--feedback-id", required=True, help="Safe feedback id for ops/feedback/<id>.yml.")
+    operator_feedback_record.add_argument("--feedback-ref", required=True, help="Safe non-secret feedback ref; no URLs, emails, tokens, or local paths.")
+    operator_feedback_record.add_argument("--status", required=True, choices=archive_services.OPERATOR_FEEDBACK_STATUSES, help="Feedback lifecycle status.")
+    operator_feedback_record.add_argument("--title", help="Optional safe single-line label stored in the record but not echoed.")
+    operator_feedback_record.add_argument("--related-release", action="append", help="Safe related release label. May be repeated.")
+    operator_feedback_record.add_argument("--resolved-in", help="Safe release/decision label required when --status resolved.")
+    operator_feedback_record.add_argument("--dry-run", action="store_true", help="Preview the metadata record without writing files.")
+    operator_feedback_record.add_argument("--approve", action="store_true", help="Write ops/feedback metadata and a receipt.")
+    operator_feedback_record.add_argument("--reviewed-by", help="Reviewer id required for approved writes.")
+    operator_feedback_record.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    operator_feedback_record.set_defaults(func=command_operator_feedback_record)
 
     doctor = subcommands.add_parser("doctor", help="Inspect an archive for structural and policy issues.")
     doctor.add_argument("archive_root", nargs="?", default=".", help="Archive root to inspect.")

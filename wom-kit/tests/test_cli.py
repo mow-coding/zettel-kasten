@@ -539,6 +539,88 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(summary["data"]["commands"], [])
         self.assertGreater(summary["summary"]["command_count"], 0)
 
+    def test_operator_feedback_plan_and_record_lifecycle_without_body_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_code, plan_output = self.run_cli(["operator-feedback-plan", str(archive_root), "--dry-run", "--format", "json"])
+            plan = json.loads(plan_output)
+            self.assertEqual(plan_code, 0, plan_output)
+            self.assertEqual(plan["lifecycle_action"], "operator_feedback_plan")
+            self.assertEqual(plan["summary"]["feedback_dir"], "ops/feedback")
+            self.assertIn("resolved", plan["summary"]["statuses"])
+            self.assertFalse(plan["privacy_guards"]["feedback_body_read"])
+
+            feedback_ref = "feedback:agent-operator-retro"
+            title_marker = "Private Operator Feedback Title"
+            body_marker = "PRIVATE_FEEDBACK_BODY_SHOULD_NOT_ECHO"
+            before = self.archive_tree_snapshot(archive_root)
+            dry_code, dry_output = self.run_cli(
+                [
+                    "operator-feedback-record",
+                    str(archive_root),
+                    "--feedback-id",
+                    "agent_operator_retro_20260623",
+                    "--feedback-ref",
+                    feedback_ref,
+                    "--status",
+                    "delivered",
+                    "--title",
+                    title_marker,
+                    "--related-release",
+                    "v0.3.148",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            dry = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertEqual(dry["state"], "preview")
+            self.assertEqual(dry["summary"]["record_path"], "ops/feedback/agent_operator_retro_20260623.yml")
+            self.assertEqual(before, self.archive_tree_snapshot(archive_root))
+            serialized_dry = json.dumps(dry, ensure_ascii=False)
+            self.assertNotIn(feedback_ref, serialized_dry)
+            self.assertNotIn(title_marker, serialized_dry)
+            self.assertNotIn(body_marker, serialized_dry)
+            self.assertFalse(dry["privacy_guards"]["feedback_ref_value_echoed"])
+            self.assertFalse(dry["privacy_guards"]["title_value_echoed"])
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "feedback-record",
+                    str(archive_root),
+                    "--feedback-id",
+                    "agent_operator_retro_20260623",
+                    "--feedback-ref",
+                    feedback_ref,
+                    "--status",
+                    "resolved",
+                    "--resolved-in",
+                    "v0.3.149",
+                    "--title",
+                    title_marker,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            approved = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertEqual(approved["state"], "written")
+            self.assertTrue(approved["approved"])
+            self.assertEqual(approved["files_written"][0], "ops/feedback/agent_operator_retro_20260623.yml")
+            self.assertTrue((archive_root / "ops" / "feedback" / "agent_operator_retro_20260623.yml").is_file())
+            self.assertTrue((archive_root / approved["files_written"][1]).is_file())
+            serialized_approved = json.dumps(approved, ensure_ascii=False)
+            self.assertNotIn(feedback_ref, serialized_approved)
+            self.assertNotIn(title_marker, serialized_approved)
+            self.assertNotIn(body_marker, serialized_approved)
+            record_text = (archive_root / "ops" / "feedback" / "agent_operator_retro_20260623.yml").read_text(encoding="utf-8")
+            self.assertIn(feedback_ref, record_text)
+            self.assertIn(title_marker, record_text)
+
     def test_version_command_reports_project_source_mirror_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = Path(tmp) / "project"

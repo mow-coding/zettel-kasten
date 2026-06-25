@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.149 - 2026-06-25
+
+- Added read-only `archive operator-feedback-plan`, with aliases
+  `archive feedback-plan` and `archive ops-feedback-plan`, to define the
+  storage and status lifecycle for operator-generated tool feedback.
+- Added approval-gated `archive operator-feedback-record`, with aliases
+  `archive feedback-record` and `archive feedback-register`, to write
+  `ops/feedback/<feedback-id>.yml` metadata plus a receipt under
+  `receipts/operator-feedback/`.
+- The feedback lifecycle now has explicit statuses:
+  `draft`, `delivered`, `acknowledged`, `resolved`, and `archived`.
+- Kept the command body-safe and local-only: it does not read feedback bodies,
+  copy files, submit externally, call providers, check network, echo feedback
+  refs or titles, or treat user knowledge `objets/` as the lifecycle tracker.
+- Updated README status, capability matrix, public docs, release notes, and CLI
+  tests.
+
 ## v0.3.148 - 2026-06-25
 
 - Added read-only `archive capabilities --machine` for AI operators that need

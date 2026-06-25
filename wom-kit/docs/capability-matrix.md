@@ -1,9 +1,10 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.148 agent operator capabilities checkpoint
+Status: v0.3.149 operator feedback lifecycle checkpoint
 Date: 2026-06-25
-Version: v0.3.148, release candidate
+Version: v0.3.149, release candidate
 
+Previous checkpoint: Status: v0.3.148 agent operator capabilities checkpoint
 Previous checkpoint: Status: v0.3.147 derived artifact staleness checkpoint
 Previous checkpoint: Status: v0.3.146 archive status board checkpoint
 Previous checkpoint: Status: v0.3.145 zet quality and archive-root boundary checkpoint
@@ -73,6 +74,7 @@ Read it as a safety label. A row marked `read-only preview` means WOM-kit can in
 | Capability | Status in current working tree | Write behavior | Notes |
 | --- | --- | --- | --- |
 | Agent operator capabilities manifest | `implemented local command` | read-only | CLI `archive capabilities --machine` returns a stable `ok / state / summary / data / blockers / warnings / privacy_guards` envelope generated from the actual local CLI parser. It reports executable command names, aliases, help text, required positionals, options, nested subcommands, command count, version, release notes presence, local git tag presence, and local release state so an AI operator can plan against real local capabilities instead of guessing. It writes nothing, calls no providers, checks no network, and echoes no local absolute paths, tokens, or secret values. |
+| Operator feedback lifecycle | `approval-gated write` | dry-run previews first; CLI approve writes metadata and a receipt only | CLI `archive operator-feedback-plan <archive-root> --dry-run --format json`, aliases `archive feedback-plan` and `archive ops-feedback-plan`, describes the `ops/feedback/` metadata location, `receipts/operator-feedback/` receipt location, and draft/delivered/acknowledged/resolved/archived statuses. CLI `archive operator-feedback-record <archive-root> --feedback-id <safe-id> --feedback-ref <safe-ref> --status <status> --dry-run|--approve --reviewed-by <actor> --format json`, aliases `archive feedback-record` and `archive feedback-register`, writes only metadata and a receipt after approval. It reads no feedback body, copies no body files, submits nothing externally, calls no providers, checks no network, and echoes no feedback ref values, title values, local absolute paths, tokens, or secret values. |
 | Archive doctor | `implemented local command` | read-only | `archive doctor` checks archive structure, schema, manifest, receipt, lifecycle consistency, archive-root web/app artifact boundaries, and incomplete `.git` markers. |
 | Archive validation | `implemented local command` | read-only | `archive validate` still performs full archive validation by default. v0.3.121 adds `archive validate --since <batch-id-or-receipt>` for mint, retired-draft, and zettel-edge batch receipts, plus repeated `archive validate --scope <facet=value>` filters backed by a current generated index. Scoped validation runs only the narrow global structure checks plus selected/touched zettels and receipts, so it is an incremental gate and not a replacement for periodic full archive validation. The generated index now stores zettel `body_sha256`, `approved_body_sha256`, file size/mtime, and `forbidden_location_reference_found`, letting scoped validation reuse unchanged indexed body evidence. `archive validate --progress` streams stage/item counts, elapsed time, and ETA to stderr. It writes nothing, performs no archive migration, calls no providers, and echoes no zettel body text. |
 | Archive `.gitignore` repair | `approval-gated write` | dry-run previews first; CLI approve appends missing safe patterns only | `archive repair-gitignore` fixes missing local-only, generated-index, harness, and content-addressed byte-store ignore patterns. It preserves existing `.gitignore` entries and does not clean files. |
