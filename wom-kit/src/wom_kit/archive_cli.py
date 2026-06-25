@@ -22,6 +22,8 @@ Commands:
           Show how AI operators should classify tool-discovered, receipt-verified, human-selected, and caller-supplied inputs.
   secret-signal-taxonomy
           Show how AI operators should distinguish secret concept words, safe refs, and secret-like values.
+  ai-response-contract
+          Show the minimum status/provenance/privacy/approval checks an AI should use when answering a human.
   doctor  Inspect an archive for structural and policy issues.
   profile-list
           List read-only WOM profile registry entries.
@@ -2759,6 +2761,28 @@ def command_secret_signal_taxonomy(args: argparse.Namespace) -> int:
         print(f"Archive: {result.get('archive_id') or '-'}")
         print(f"Signal classes: {summary.get('signal_class_count') or 0}")
         print("Concept words are secret values: no")
+        print("Writes: none")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_ai_response_contract(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("ai-response-contract is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.ai_response_contract(Path(args.archive_root), dry_run=True)
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print("AI response contract.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Required sections: {summary.get('required_section_count') or 0}")
+        print("Conversation status board allowed: yes")
+        print("Web UI required: no")
         print("Writes: none")
     return 0 if result.get("ok", True) else 1
 
@@ -12058,6 +12082,16 @@ def build_parser() -> argparse.ArgumentParser:
     secret_signal_taxonomy.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
     secret_signal_taxonomy.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     secret_signal_taxonomy.set_defaults(func=command_secret_signal_taxonomy)
+
+    ai_response_contract = subcommands.add_parser(
+        "ai-response-contract",
+        aliases=["response-contract", "operator-response-contract"],
+        help="Read-only contract for AI answers that report status, provenance, privacy, approval, and remaining work.",
+    )
+    ai_response_contract.add_argument("archive_root", help="Archive root to inspect.")
+    ai_response_contract.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    ai_response_contract.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    ai_response_contract.set_defaults(func=command_ai_response_contract)
 
     doctor = subcommands.add_parser("doctor", help="Inspect an archive for structural and policy issues.")
     doctor.add_argument("archive_root", nargs="?", default=".", help="Archive root to inspect.")

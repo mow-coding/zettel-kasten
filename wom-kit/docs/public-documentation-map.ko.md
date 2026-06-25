@@ -45,6 +45,7 @@
 - [Operation Status Taxonomy](operation-status-taxonomy.md)
 - [Input Provenance Taxonomy](input-provenance-taxonomy.md)
 - [Secret Signal Taxonomy](secret-signal-taxonomy.md)
+- [AI Response Contract](ai-response-contract.md)
 - [AI 응대 개념 설명 가이드](ai-response-concept-guide.md)
 - [Archive Status Board](archive-status-board.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)
