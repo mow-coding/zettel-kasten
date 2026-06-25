@@ -39,6 +39,7 @@
 - [Zettel Lifecycle](../specs/zettel-lifecycle.md)
 - [Zettel-Kasten Layer](../specs/zettel-kasten.md)
 - [AI 응대 개념 설명 가이드](ai-response-concept-guide.md)
+- [zet Quality Check](zet-quality-check.md)
 - [Source Object Storage Policy](source-object-storage-policy.md)
 - [Text Provenance Hierarchy](text-provenance-hierarchy.md)
 - [Derived Text Capture](derived-text.md)

@@ -105,6 +105,8 @@ Commands:
           Print beginner-friendly secret vault and text-tool setup steps.
   ai-response-concept-guide
           Print beginner-friendly AI explanation cards for WOM object identity and evidence layers.
+  zet-quality-check
+          Check one zet for entity, document-type, source, audience, correction, and derived-artifact risks.
   credential-semantic-extraction-recipe
           Print a read-only semantic recipe for splitting complex credential notes without reading secrets.
   connected-accounts
@@ -414,6 +416,9 @@ RECOMMENDED_GITIGNORE_PATTERNS = [
     "tmp/",
     ".wom-scratch/",
     "workbench/ai-scratch/",
+    "node_modules/",
+    ".next/",
+    ".vercel/",
     "/collab/",
     "/.mow-harness/",
     "**/db/archive-index.sqlite",
@@ -833,6 +838,7 @@ class Doctor:
         return [
             ("symlink-boundaries", self._check_symlink_boundaries),
             ("required-structure", self._check_required_structure),
+            ("archive-root-boundaries", self._check_archive_root_boundaries),
             ("v0.2-recommendations", self._check_v02_recommendations),
             ("archive-yml", self._check_archive_yml),
             ("archive-identity", self._check_archive_identity_yml),
@@ -860,6 +866,7 @@ class Doctor:
         return [
             ("symlink-boundaries", self._check_symlink_boundaries),
             ("required-structure", self._check_required_structure),
+            ("archive-root-boundaries", self._check_archive_root_boundaries),
             ("archive-yml", self._check_archive_yml),
             ("archive-identity", self._check_archive_identity_yml),
             ("provider-bindings", self._check_provider_bindings_yml),
@@ -1034,6 +1041,12 @@ class Doctor:
             path = self.archive_root / relative
             if not path.is_file():
                 self.error("required_file_missing", f"Required file is missing: {relative}", path)
+
+    def _check_archive_root_boundaries(self) -> None:
+        for item in archive_services.archive_development_artifact_warnings(self.archive_root):
+            self.warn(item["code"], item["message"], self.archive_root / item["path"])
+        for item in archive_services.archive_git_marker_warnings(self.archive_root):
+            self.warn(item["code"], item["message"], self.archive_root / item["path"])
 
     def _check_v02_recommendations(self) -> None:
         for relative in RECOMMENDED_V02_FILES:
@@ -7631,6 +7644,35 @@ def command_zet_self_contained_check(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def command_zet_quality_check(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("zet-quality-check is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.zet_quality_check(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            relative_path=args.path,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Zet quality check {result.get('quality_state') or 'unknown'}.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Zet: {result.get('zettel_id') or result.get('zettel_path') or '-'}")
+        print(f"Issues: {result.get('issue_count', 0)}")
+        if result.get("issues"):
+            print("Issues:")
+            for issue in result["issues"]:
+                print(f"- {issue.get('code')}: {issue.get('severity')}")
+    return 0 if result.get("ok", True) else 1
+
+
 def command_ai_scratch_gc(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -11038,6 +11080,9 @@ def write_safe_gitignore(target: Path) -> None:
                 "tmp/",
                 ".wom-scratch/",
                 "workbench/ai-scratch/",
+                "node_modules/",
+                ".next/",
+                ".vercel/",
                 "",
                 "# Local-only collaboration and harness state",
                 "/collab/",
@@ -13682,6 +13727,19 @@ def build_parser() -> argparse.ArgumentParser:
     self_contained.add_argument("--dry-run", action="store_true", help="Required; read-only check.")
     self_contained.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     self_contained.set_defaults(func=command_zet_self_contained_check)
+
+    quality_check = subcommands.add_parser(
+        "zet-quality-check",
+        aliases=["zettel-quality-check"],
+        help="Read-only check for entity, document-type, source, audience, correction, and derived-artifact quality risks.",
+    )
+    quality_check.add_argument("archive_root", help="Archive root to inspect.")
+    quality_target = quality_check.add_mutually_exclusive_group(required=True)
+    quality_target.add_argument("--zettel-id", help="Zet id to inspect.")
+    quality_target.add_argument("--path", help="Archive-relative zet path to inspect.")
+    quality_check.add_argument("--dry-run", action="store_true", help="Required; read-only check.")
+    quality_check.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    quality_check.set_defaults(func=command_zet_quality_check)
 
     ai_scratch_gc = subcommands.add_parser(
         "ai-scratch-gc",

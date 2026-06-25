@@ -2274,6 +2274,72 @@ AI_SCRATCH_REFERENCE_RE = re.compile(
     r"(?<![A-Za-z0-9_./-])(?P<path>(?:\.wom-scratch|workbench/ai-scratch)/[A-Za-z0-9._/@+=,-]+)"
 )
 AI_SCRATCH_GC_RECEIPTS_DIR = "receipts/scratch-gc"
+ZET_QUALITY_RULES_FILENAME = "zet-quality-rules.yml"
+ZET_QUALITY_DOCUMENT_TYPES = {
+    "raw_note",
+    "meeting_transcript",
+    "source_transcription",
+    "source_outline",
+    "research_brief",
+    "production_strategy",
+    "external_report",
+    "private_working_note",
+}
+ZET_QUALITY_AUDIENCES = {
+    "private_self",
+    "ai_working_context",
+    "client_report",
+    "public_web",
+    "legal_copyright_request",
+}
+ZET_QUALITY_EXTERNAL_AUDIENCES = {"client_report", "public_web", "legal_copyright_request"}
+ZET_QUALITY_PARSE_META_PATTERNS = (
+    ("ocr_confidence_column", re.compile(r"(?i)(?:^|\|)\s*(?:ocr[_ -]?)?confidence\s*(?:\||$)")),
+    ("parse_log_marker", re.compile(r"(?i)\bparse[_ -]?log\b")),
+    ("human_corrections_marker", re.compile(r"(?i)\bhuman[_ -]?corrections?\b")),
+    ("ocr_work_note_marker", re.compile(r"(?i)\b(?:ocr|parsing)\s+(?:note|memo|confidence|metadata)\b")),
+    ("korean_confidence_column", re.compile(r"(?:^|\|)\s*신뢰도\s*(?:\||$)")),
+    ("korean_fix_memo_column", re.compile(r"(?:^|\|)\s*표기\s*확정\s*메모\s*(?:\||$)")),
+)
+ZET_QUALITY_INTERNAL_LEAK_PATTERNS = (
+    ("ai_conversation_residue", re.compile(r"(?i)\b(?:ai conversation|chatgpt|assistant mistake|model error)\b|AI와의\s*대화")),
+    ("draft_simulator_residue", re.compile(r"1차\s*시뮬레이터|배치\s*설명용|simulation\s+only", re.IGNORECASE)),
+    ("undistributed_original_residue", re.compile(r"원본\s*이미지는\s*아직|not\s+included\s+in\s+public\s+distribution", re.IGNORECASE)),
+    ("internal_working_note_residue", re.compile(r"내부\s*메모|작업\s*중간\s*상태|internal\s+working\s+note", re.IGNORECASE)),
+    ("production_tool_detail_residue", re.compile(r"프리미어\s*프로\s*세부|premiere\s+pro\s+setting", re.IGNORECASE)),
+)
+ZET_QUALITY_CORRECTION_HINT_RE = re.compile(
+    r"오타\s*아님|잘못됐다|잘못\s*됐다|빼라|수정된\s*사실|correction\s+event|not\s+a\s+typo",
+    re.IGNORECASE,
+)
+ZET_QUALITY_MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
+ZET_QUALITY_SOURCE_METADATA_FIELDS = (
+    "acquired_at",
+    "acquired_by",
+    "acquisition_method",
+    "verification_status",
+)
+ZET_QUALITY_SOURCE_RIGHTS_FIELDS = (
+    "public_report_allowed",
+    "rights_status",
+    "copyright_status",
+)
+ARCHIVE_DEV_PROJECT_MARKERS = (
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "node_modules",
+    ".next",
+    ".vercel",
+    ".env.local",
+    "src",
+    "public",
+    ".vercelignore",
+    "next.config.js",
+    "next.config.mjs",
+    "vite.config.ts",
+)
 
 
 class ArchiveServiceError(Exception):
@@ -6480,6 +6546,11 @@ def mint_zettel_dry_run(
     if snapshot_path.exists():
         blockers.append(f"Draft snapshot path already exists: {snapshot_relative}.")
 
+    quality_check = zettel_quality_assessment(root, source_path, source_frontmatter, body)
+    for issue in quality_check.get("issues", []):
+        if isinstance(issue, dict) and issue.get("severity") == "blocker":
+            blockers.append(f"Zet quality check blocked: {issue.get('code')}.")
+
     receipt_preview = build_mint_receipt_preview(
         archive_root=root,
         source_path=source_path,
@@ -6515,6 +6586,7 @@ def mint_zettel_dry_run(
         "duplicate_check": promotion_dry_run.get("duplicate_check", {}),
         "near_duplicates": promotion_dry_run["near_duplicates"],
         "self_contained_check": self_contained_check,
+        "quality_check": quality_check,
         "scratch_cleanup": scratch_cleanup,
         "receipt_preview": receipt_preview,
         "would_change": [
@@ -6717,6 +6789,7 @@ def mint_zettel(
         "generated_index_updated": generated_index_updated,
         "near_duplicates": dry_run["near_duplicates"],
         "self_contained_check": dry_run.get("self_contained_check", {}),
+        "quality_check": dry_run.get("quality_check", {}),
         "scratch_cleanup": scratch_cleanup_result,
         "checklist": dry_run["checklist"],
         "created_paths": created_paths,
@@ -9034,6 +9107,498 @@ def zet_self_contained_check(
             "writes": False,
         },
     }
+
+
+def quality_issue(code: str, severity: str, category: str, message: str, **extra: Any) -> dict[str, Any]:
+    issue = {
+        "code": code,
+        "severity": severity,
+        "category": category,
+        "message": message,
+    }
+    for key, value in extra.items():
+        if value is not None:
+            issue[key] = json_safe(value)
+    return issue
+
+
+def load_zet_quality_rules(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    path = root / ZET_QUALITY_RULES_FILENAME
+    if not path.is_file():
+        return {}, []
+    try:
+        loaded = load_yaml(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # pragma: no cover - exact parser errors vary by PyYAML version.
+        return {}, [
+            quality_issue(
+                "quality_rules_unreadable",
+                "warning",
+                "configuration",
+                "zet-quality-rules.yml could not be parsed; project entity rules were skipped.",
+                rule_file=ZET_QUALITY_RULES_FILENAME,
+                error_type=type(exc).__name__,
+            )
+        ]
+    if not isinstance(loaded, dict):
+        return {}, [
+            quality_issue(
+                "quality_rules_invalid",
+                "warning",
+                "configuration",
+                "zet-quality-rules.yml must be a YAML object; project entity rules were skipped.",
+                rule_file=ZET_QUALITY_RULES_FILENAME,
+            )
+        ]
+    return json_safe(loaded), []
+
+
+def zettel_quality_scalar(frontmatter: dict[str, Any], field: str) -> str | None:
+    value = frontmatter.get(field)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    facets = frontmatter.get("facets")
+    if isinstance(facets, dict):
+        value = facets.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    visibility = frontmatter.get("visibility")
+    if field == "audience" and isinstance(visibility, dict):
+        value = visibility.get("audience")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def zettel_has_markdown_table(body: str) -> bool:
+    lines = body.splitlines()
+    for index, line in enumerate(lines[:-1]):
+        if "|" not in line:
+            continue
+        if ZET_QUALITY_MARKDOWN_TABLE_SEPARATOR_RE.match(lines[index + 1] or ""):
+            return True
+    return False
+
+
+def zettel_parse_meta_hits(body: str) -> list[str]:
+    return [code for code, pattern in ZET_QUALITY_PARSE_META_PATTERNS if pattern.search(body)]
+
+
+def zettel_internal_leak_hits(body: str) -> list[str]:
+    return [code for code, pattern in ZET_QUALITY_INTERNAL_LEAK_PATTERNS if pattern.search(body)]
+
+
+def normalize_quality_rule_items(rules: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_terms = rules.get("entity_terms")
+    if raw_terms is None:
+        raw_terms = rules.get("entities")
+    if isinstance(raw_terms, dict):
+        items = raw_terms.get("rules")
+        if items is None:
+            items = raw_terms.get("terms")
+        raw_terms = items
+    if not isinstance(raw_terms, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_terms, start=1):
+        if not isinstance(item, dict):
+            continue
+        forbidden = item.get("forbidden")
+        if isinstance(forbidden, str):
+            forbidden_terms = [forbidden]
+        elif isinstance(forbidden, list):
+            forbidden_terms = [str(value) for value in forbidden if isinstance(value, (str, int, float))]
+        else:
+            forbidden_terms = []
+        canonical = item.get("canonical")
+        allowed = item.get("allowed")
+        if isinstance(allowed, str):
+            allowed_terms = [allowed]
+        elif isinstance(allowed, list):
+            allowed_terms = [str(value) for value in allowed if isinstance(value, (str, int, float))]
+        else:
+            allowed_terms = []
+        if isinstance(canonical, str) and canonical.strip():
+            allowed_terms.insert(0, canonical)
+        severity = str(item.get("severity") or "blocker").strip().lower()
+        if severity not in {"blocker", "warning"}:
+            severity = "blocker"
+        normalized.append(
+            {
+                "rule_id": str(item.get("id") or f"entity_rule_{index}"),
+                "forbidden": [term for term in forbidden_terms if term.strip()],
+                "allowed": [term for term in allowed_terms if term.strip()],
+                "severity": severity,
+            }
+        )
+    return normalized
+
+
+def project_entity_rule_hits(rules: dict[str, Any], title: str, body: str) -> list[dict[str, Any]]:
+    haystack = f"{title}\n{body}"
+    hits: list[dict[str, Any]] = []
+    for item in normalize_quality_rule_items(rules):
+        forbidden_hits = sum(haystack.count(term) for term in item["forbidden"])
+        if not forbidden_hits:
+            continue
+        allowed_present = any(term in haystack for term in item["allowed"])
+        hits.append(
+            {
+                "rule_id": item["rule_id"],
+                "severity": item["severity"],
+                "forbidden_match_count": forbidden_hits,
+                "allowed_term_present": allowed_present,
+            }
+        )
+    return hits
+
+
+def source_ref_metadata_summary(frontmatter: dict[str, Any]) -> dict[str, Any]:
+    source_refs = frontmatter.get("source_refs")
+    if not isinstance(source_refs, list):
+        return {"source_ref_count": 0, "missing_metadata_count": 0, "rights_review_missing_count": 0}
+    missing_metadata = 0
+    rights_missing = 0
+    for item in source_refs:
+        if not isinstance(item, dict):
+            continue
+        if any(not item.get(field) for field in ZET_QUALITY_SOURCE_METADATA_FIELDS):
+            missing_metadata += 1
+        ref_type = str(item.get("type") or "").strip().lower()
+        role = str(item.get("role") or "").strip().lower()
+        likely_external_rights = ref_type in {"external_citation", "web", "url", "video", "news", "object_id"} or role in {
+            "citation",
+            "public_report",
+            "media_source",
+        }
+        if likely_external_rights and not any(item.get(field) for field in ZET_QUALITY_SOURCE_RIGHTS_FIELDS):
+            rights_missing += 1
+    return {
+        "source_ref_count": len([item for item in source_refs if isinstance(item, dict)]),
+        "missing_metadata_count": missing_metadata,
+        "rights_review_missing_count": rights_missing,
+    }
+
+
+def correction_event_summary(frontmatter: dict[str, Any], body: str) -> dict[str, Any]:
+    raw_events = frontmatter.get("correction_events")
+    if raw_events is None:
+        raw_events = frontmatter.get("corrections")
+    events = raw_events if isinstance(raw_events, list) else []
+    incomplete = 0
+    for item in events:
+        if not isinstance(item, dict):
+            incomplete += 1
+            continue
+        if not item.get("event_id") or not item.get("status") or not item.get("applies_to"):
+            incomplete += 1
+    return {
+        "event_count": len(events),
+        "incomplete_event_count": incomplete,
+        "body_correction_hint_found": bool(ZET_QUALITY_CORRECTION_HINT_RE.search(body)),
+    }
+
+
+def derived_artifact_summary(frontmatter: dict[str, Any]) -> dict[str, Any]:
+    raw_artifacts = frontmatter.get("derived_artifacts")
+    if raw_artifacts is None:
+        raw_artifacts = frontmatter.get("external_artifacts")
+    if raw_artifacts is None:
+        raw_artifacts = frontmatter.get("projections")
+    artifacts = raw_artifacts if isinstance(raw_artifacts, list) else []
+    missing_source = 0
+    missing_sync = 0
+    for item in artifacts:
+        if not isinstance(item, dict):
+            missing_source += 1
+            missing_sync += 1
+            continue
+        source_fields = [item.get("source_zettels"), item.get("source_refs"), item.get("source_receipts")]
+        if not any(isinstance(value, list) and value for value in source_fields):
+            missing_source += 1
+        if not item.get("sync_status") and not item.get("last_synced_at"):
+            missing_sync += 1
+    return {
+        "artifact_count": len(artifacts),
+        "missing_source_link_count": missing_source,
+        "missing_sync_status_count": missing_sync,
+    }
+
+
+def zettel_quality_assessment(
+    archive_root: Path,
+    zettel_path: Path,
+    frontmatter: dict[str, Any],
+    body: str,
+) -> dict[str, Any]:
+    rules, rule_issues = load_zet_quality_rules(archive_root)
+    issues = list(rule_issues)
+    title = str(frontmatter.get("title") or "")
+    document_type = zettel_quality_scalar(frontmatter, "document_type")
+    audience = zettel_quality_scalar(frontmatter, "audience")
+    parse_meta_hits = zettel_parse_meta_hits(body)
+    table_found = zettel_has_markdown_table(body)
+    correction_summary = correction_event_summary(frontmatter, body)
+    source_summary = source_ref_metadata_summary(frontmatter)
+    artifact_summary = derived_artifact_summary(frontmatter)
+    external_audience = bool(audience in ZET_QUALITY_EXTERNAL_AUDIENCES or document_type == "external_report")
+
+    if not document_type:
+        issues.append(
+            quality_issue(
+                "document_type_missing",
+                "warning",
+                "document_type",
+                "Zet has no document_type. Add one so raw notes, source outlines, strategies, and reports do not blur together.",
+            )
+        )
+    elif document_type not in ZET_QUALITY_DOCUMENT_TYPES:
+        issues.append(
+            quality_issue(
+                "document_type_unknown",
+                "warning",
+                "document_type",
+                "Zet document_type is outside the current WOM quality vocabulary.",
+            )
+        )
+
+    if audience and audience not in ZET_QUALITY_AUDIENCES:
+        issues.append(
+            quality_issue(
+                "audience_unknown",
+                "warning",
+                "audience",
+                "Zet audience is outside the current WOM audience vocabulary.",
+            )
+        )
+
+    for hit in project_entity_rule_hits(rules, title, body):
+        issues.append(
+            quality_issue(
+                "forbidden_entity_alias_found",
+                hit["severity"],
+                "entity_terms",
+                "A project-level forbidden entity or abbreviation rule matched this zet.",
+                rule_id=hit["rule_id"],
+                forbidden_match_count=hit["forbidden_match_count"],
+                allowed_term_present=hit["allowed_term_present"],
+            )
+        )
+
+    if parse_meta_hits and document_type not in {"private_working_note", "source_transcription"}:
+        issues.append(
+            quality_issue(
+                "parse_metadata_may_be_in_body",
+                "warning",
+                "canonical_body",
+                "OCR or parsing metadata appears to be in the zet body; keep confidence/log/correction metadata in receipts or parse_log fields.",
+                hit_count=len(parse_meta_hits),
+                hit_codes=parse_meta_hits,
+            )
+        )
+
+    if table_found:
+        parse_review = frontmatter.get("parse_review") if isinstance(frontmatter.get("parse_review"), dict) else {}
+        structure_reviewed = bool(parse_review.get("structure_reviewed") or parse_review.get("table_structure_reviewed"))
+        if not structure_reviewed:
+            issues.append(
+                quality_issue(
+                    "table_structure_review_missing",
+                    "warning",
+                    "ocr_table",
+                    "Markdown table content should carry a reviewed table-structure marker before it becomes canonical knowledge.",
+                )
+            )
+        if not parse_review.get("row_mapping") and not parse_review.get("source_row_mapping"):
+            issues.append(
+                quality_issue(
+                    "table_row_mapping_missing",
+                    "warning",
+                    "ocr_table",
+                    "Table-based zets should retain row/source mapping evidence for later correction and UI reuse.",
+                )
+            )
+
+    if correction_summary["body_correction_hint_found"] and not correction_summary["event_count"]:
+        issues.append(
+            quality_issue(
+                "correction_event_missing",
+                "warning",
+                "corrections",
+                "Body appears to mention corrected facts, but no structured correction_events were found.",
+            )
+        )
+    if correction_summary["incomplete_event_count"]:
+        issues.append(
+            quality_issue(
+                "correction_event_incomplete",
+                "warning",
+                "corrections",
+                "One or more correction_events are missing event_id, status, or applies_to.",
+                count=correction_summary["incomplete_event_count"],
+            )
+        )
+
+    if source_summary["missing_metadata_count"]:
+        issues.append(
+            quality_issue(
+                "source_metadata_incomplete",
+                "warning",
+                "source_refs",
+                "One or more source_refs lack acquisition or verification metadata.",
+                count=source_summary["missing_metadata_count"],
+            )
+        )
+    if source_summary["rights_review_missing_count"]:
+        issues.append(
+            quality_issue(
+                "source_rights_review_missing",
+                "warning",
+                "source_refs",
+                "One or more external/media source_refs lack public-report or rights-review metadata.",
+                count=source_summary["rights_review_missing_count"],
+            )
+        )
+
+    if artifact_summary["artifact_count"] and artifact_summary["missing_source_link_count"]:
+        issues.append(
+            quality_issue(
+                "derived_artifact_source_link_missing",
+                "warning",
+                "derived_artifacts",
+                "A derived artifact exists without explicit source zettel/source receipt links.",
+                count=artifact_summary["missing_source_link_count"],
+            )
+        )
+    if artifact_summary["artifact_count"] and artifact_summary["missing_sync_status_count"]:
+        issues.append(
+            quality_issue(
+                "derived_artifact_sync_status_missing",
+                "warning",
+                "derived_artifacts",
+                "A derived artifact exists without sync_status or last_synced_at metadata.",
+                count=artifact_summary["missing_sync_status_count"],
+            )
+        )
+
+    internal_hits = zettel_internal_leak_hits(body)
+    if external_audience and internal_hits:
+        issues.append(
+            quality_issue(
+                "external_audience_internal_residue",
+                "warning",
+                "audience",
+                "External-facing zets or reports appear to contain internal working-context residue.",
+                hit_count=len(internal_hits),
+                hit_codes=internal_hits,
+            )
+        )
+
+    blocker_count = len([issue for issue in issues if issue.get("severity") == "blocker"])
+    warning_count = len([issue for issue in issues if issue.get("severity") == "warning"])
+    quality_state = "blocked" if blocker_count else ("needs_review" if warning_count else "ready")
+    return {
+        "ok": blocker_count == 0,
+        "dry_run": True,
+        "lifecycle_action": "zet_quality_check",
+        "archive_id": read_archive_id(archive_root),
+        "zettel_id": str(frontmatter.get("id") or zettel_path.stem),
+        "zettel_path": archive_relative_path(zettel_path, archive_root),
+        "quality_state": quality_state,
+        "issue_count": len(issues),
+        "blocker_count": blocker_count,
+        "warning_count": warning_count,
+        "issues": issues,
+        "document_type": {
+            "value_present": bool(document_type),
+            "recognized": bool(document_type in ZET_QUALITY_DOCUMENT_TYPES) if document_type else False,
+            "allowed_values": sorted(ZET_QUALITY_DOCUMENT_TYPES),
+        },
+        "audience": {
+            "value_present": bool(audience),
+            "recognized": bool(audience in ZET_QUALITY_AUDIENCES) if audience else False,
+            "external_facing": external_audience,
+            "allowed_values": sorted(ZET_QUALITY_AUDIENCES),
+        },
+        "entity_rules": {
+            "rule_file": ZET_QUALITY_RULES_FILENAME,
+            "rules_loaded": bool(rules),
+            "rule_count": len(normalize_quality_rule_items(rules)),
+        },
+        "canonical_body_checks": {
+            "parse_metadata_hit_count": len(parse_meta_hits),
+            "markdown_table_found": table_found,
+            "internal_residue_hit_count": len(internal_hits),
+        },
+        "source_metadata": source_summary,
+        "correction_events": correction_summary,
+        "derived_artifacts": artifact_summary,
+        "viewer_render_check": {
+            "has_yaml_frontmatter": True,
+            "frontmatter_parse_ok": True,
+            "markdown_table_found": table_found,
+            "safe_html_profile_check_available": True,
+        },
+        "would_change": [],
+        "privacy_guards": {
+            "body_text_echoed": False,
+            "frontmatter_values_echoed": False,
+            "source_ref_values_echoed": False,
+            "matched_entity_terms_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "writes": False,
+        },
+    }
+
+
+def zet_quality_check(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
+    frontmatter, body = split_zettel_text(path.read_text(encoding="utf-8"))
+    frontmatter = json_safe(frontmatter)
+    assessment = zettel_quality_assessment(root, path, frontmatter, body)
+    blockers: list[str] = []
+    if not dry_run:
+        blockers.append("zet-quality-check is read-only and requires --dry-run.")
+    if blockers:
+        assessment = {**assessment, "ok": False, "blockers": blockers}
+    else:
+        assessment = {**assessment, "blockers": []}
+    return assessment
+
+
+def archive_development_artifact_warnings(archive_root: Path) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for marker in ARCHIVE_DEV_PROJECT_MARKERS:
+        path = archive_root / marker
+        if path.exists():
+            warnings.append(
+                {
+                    "code": "development_project_artifact_in_archive_root",
+                    "path": marker,
+                    "message": "Archive root contains a web/app development artifact; keep generated apps outside the WOM archive or under an explicitly ignored workspace.",
+                }
+            )
+    return warnings
+
+
+def archive_git_marker_warnings(archive_root: Path) -> list[dict[str, Any]]:
+    git_path = archive_root / ".git"
+    if git_path.is_dir() and not (git_path / "HEAD").is_file():
+        return [
+            {
+                "code": "git_marker_incomplete",
+                "path": ".git",
+                "message": "Archive root has a .git directory without HEAD; document the marker or remove the stale directory after human review.",
+            }
+        ]
+    return []
 
 
 def normalize_text_for_block_hash(text: str) -> str:

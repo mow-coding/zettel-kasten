@@ -1,7 +1,7 @@
 # WOM Artifact Hygiene
 
-Status: active baseline
-Date: 2026-06-07
+Status: active baseline with web/app boundary guard
+Date: 2026-06-25
 
 This document explains which WOM files are durable, which are generated, which
 are local-only, and which must never be cleaned automatically.
@@ -26,6 +26,12 @@ project intake staging:   C:\Users\<user>\zettel-kasten-<profile_slug>-objets\in
 The local archive root is the Git-friendly control plane. It holds zets,
 metadata, manifests, source maps, receipts, views, and generated local indexes.
 
+External report apps, Next.js/Vercel projects, and other general development
+projects should live outside the WOM archive root by default. A report app can
+cite or depend on zets, but its `package.json`, `node_modules/`, `.next/`,
+`.vercel/`, `.env.local`, `src/`, and `public/` state should not become archive
+knowledge candidates.
+
 The local objet store is the raw source/original file store. It can contain
 private, large, binary, or otherwise non-Git-friendly files. It is real user
 data, so tools must not read or clean it by default.
@@ -43,9 +49,9 @@ For installation today:
 | `DURABLE_ARCHIVE_RECORD` | `archive.yml`, `archive-identity.yml`, `AGENTS.md`, `zettels/`, `objects/manifests/*.jsonl`, `source-maps/*.jsonl`, `receipts/`, `views/`, `db/schema.sql`, non-secret `provider-bindings.yml`, non-secret `source-bindings.yml` | Keep. These are archive memory or control records. |
 | `DURABLE_UNTIL_RESOLVED` | `inbox/` drafts, active project intake staging decisions | Keep until minted, explicitly deferred, or explicitly abandoned. |
 | `DURABLE_WITH_EXPIRY` | `workpacks/` and transfer/export bundles with `expires_at` or a review window | Keep until expiry and explicit cleanup review. |
-| `REBUILDABLE_GENERATED` | `db/archive-index.sqlite`, `db/archive-index.sqlite-wal`, `db/archive-index.sqlite-shm`, `db/archive-index.sqlite-journal`, future search indexes and caches | Safe to rebuild later, but do not delete silently in this batch. |
+| `REBUILDABLE_GENERATED` | `db/archive-index.sqlite`, `db/archive-index.sqlite-wal`, `db/archive-index.sqlite-shm`, `db/archive-index.sqlite-journal`, `node_modules/`, `.next/`, future search indexes and caches | Safe to rebuild later, but do not delete silently in this batch. |
 | `DISPOSABLE_AFTER_REVIEW` | `tmp/`, `.wom-scratch/`, `workbench/ai-scratch/`, `tmp-*`, dry-run sandboxes, abandoned staging folders, expired workpacks after review | Disposable only after explicit review gates. |
-| `LOCAL_ONLY_SECRET_CONFIG` | `.env`, `.env.*`, keys, tokens, `profiles/local/`, `keyrings/local/`, `.archive-local/`, `rclone.conf`, credentials | Must stay local and ignored by git. Never publish. |
+| `LOCAL_ONLY_SECRET_CONFIG` | `.env`, `.env.*`, keys, tokens, `.vercel/`, `profiles/local/`, `keyrings/local/`, `.archive-local/`, `rclone.conf`, credentials | Must stay local and ignored by git. Never publish. |
 | `EXTERNAL_LIVE_NEVER_TOUCH` | private dogfood archives, any real user archive, any real local `-objets` store | Never read or mutate by default. Require explicit operator approval. |
 | `EXTERNAL_MANUAL_OR_DEFERRED` | GitHub repositories, R2/B2/S3 buckets, Neon/Postgres, provider permissions, remote object storage state | Manual or future provider flow. No automatic provider changes. |
 | `LOCAL_ONLY_COLLAB_HARNESS` | `collab/`, `.mow-harness/` | Useful operation state, but not WOM archive records. Keep local-only. |
@@ -104,6 +110,9 @@ token.json
 tmp/
 .wom-scratch/
 workbench/ai-scratch/
+node_modules/
+.next/
+.vercel/
 /collab/
 /.mow-harness/
 **/db/archive-index.sqlite
