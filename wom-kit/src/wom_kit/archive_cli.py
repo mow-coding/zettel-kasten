@@ -107,6 +107,8 @@ Commands:
           Print beginner-friendly AI explanation cards for WOM object identity and evidence layers.
   zet-quality-check
           Check one zet for entity, document-type, source, audience, correction, and derived-artifact risks.
+  status-board
+          Summarize canonical, draft, retire, source metadata, and derived-artifact status without writes.
   credential-semantic-extraction-recipe
           Print a read-only semantic recipe for splitting complex credential notes without reading secrets.
   connected-accounts
@@ -6085,6 +6087,44 @@ def command_list_zettels(args: argparse.Namespace) -> int:
                 )
             )
     return 0
+
+
+def command_status_board(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("status-board is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.archive_status_board(
+            Path(args.archive_root),
+            dry_run=True,
+            max_items=args.max_items,
+            include_quality=args.include_quality,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
+        print("Archive status board.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Canonical zets: {counts.get('canonical', 0)}")
+        print(f"Draft zets: {counts.get('draft', 0)}")
+        print(f"Minted drafts pending retire: {counts.get('minted_draft_pending_retire', 0)}")
+        print(f"Document type missing: {counts.get('document_type_missing', 0)}")
+        print(f"Audience missing: {counts.get('audience_missing', 0)}")
+        print(f"Source metadata gaps: {counts.get('source_metadata_gap', 0)}")
+        print(f"Derived artifact gaps: {counts.get('derived_artifact_gap', 0)}")
+        if args.include_quality:
+            print(f"Quality blocker candidates: {counts.get('quality_blocker_candidate', 0)}")
+            print(f"Quality warning candidates: {counts.get('quality_warning_candidate', 0)}")
+        if result.get("next_actions"):
+            print("Next actions:")
+            for action in result["next_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok", True) else 1
 
 
 def command_read_zettel(args: argparse.Namespace) -> int:
@@ -13011,6 +13051,22 @@ def build_parser() -> argparse.ArgumentParser:
     list_zettels.add_argument("--limit", type=int, default=100, help="Maximum number of zettels to return.")
     list_zettels.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     list_zettels.set_defaults(func=command_list_zettels)
+
+    status_board = subcommands.add_parser(
+        "status-board",
+        aliases=["archive-status-board", "zet-status-board"],
+        help="Read-only archive status board for canonical, draft, retire, source metadata, and derived-artifact gaps.",
+    )
+    status_board.add_argument("archive_root", help="Archive root to inspect.")
+    status_board.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    status_board.add_argument("--max-items", type=int, default=20, help="Maximum example items per board.")
+    status_board.add_argument(
+        "--include-quality",
+        action="store_true",
+        help="Also run body-inspecting zet quality checks for counts and candidate paths.",
+    )
+    status_board.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    status_board.set_defaults(func=command_status_board)
 
     read_zettel = subcommands.add_parser("read-zettel", help="Read one zettel by id or archive-relative path.")
     read_zettel.add_argument("archive_root", help="Archive root to inspect.")

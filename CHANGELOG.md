@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.146 - 2026-06-25
+
+- Added read-only `archive status-board`, with aliases
+  `archive archive-status-board` and `archive zet-status-board`, to summarize
+  archive state for beginners without requiring them to inspect `inbox/`,
+  `zettels/`, mint receipts, and draft snapshots manually.
+- The status board reports counts and limited path/id examples for canonical
+  zets, active drafts, minted drafts pending `retire-draft`, missing document
+  type/audience metadata, source metadata gaps, derived artifact source/sync
+  gaps, and optional body-inspecting quality attention counts through
+  `--include-quality`.
+- Added next-action guidance for common cleanup and metadata review paths,
+  including pending draft retirement, source metadata review, and derived
+  artifact sync review.
+- Kept the command read-only and privacy-safe: it writes nothing and does not
+  echo zet titles, body text, source-ref values, provider URLs, local absolute
+  paths, tokens, or secret values.
+- Updated README status, capability matrix, public docs, release notes, and CLI
+  tests.
+
 ## v0.3.145 - 2026-06-25
 
 - Added read-only `archive zet-quality-check`, with alias

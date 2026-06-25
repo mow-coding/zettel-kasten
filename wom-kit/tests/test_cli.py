@@ -22042,6 +22042,64 @@ state:
         self.assertNotIn("\\", result["zettels"][0]["path"])
         self.assertIn("T", result["zettels"][0]["created_at"])
 
+    def test_status_board_reports_mint_state_and_metadata_gaps_without_content_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            body_marker = "PRIVATE_BODY_MARKER_SHOULD_NOT_ECHO"
+            title_marker = "Private Title Marker Should Not Echo"
+            source_marker = "https://example.org/private-status-board-source"
+            draft_path = self.make_batch_ready_draft(
+                archive_root,
+                "zet_20260625_status_board_fixture",
+                title_marker,
+                f"# Status fixture\n\nDurable body text {body_marker} for status-board testing.\n",
+            )
+            frontmatter, body = archive_services.split_zettel_text(draft_path.read_text(encoding="utf-8"))
+            frontmatter["source_refs"] = [{"type": "external_citation", "value": source_marker, "role": "citation"}]
+            frontmatter["derived_artifacts"] = [{"artifact_ref": "report:status-board-fixture"}]
+            draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+
+            mint_code, mint_output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260625_status_board_fixture.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--allow-warnings",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(mint_code, 0, mint_output)
+
+            code, output = self.run_cli(
+                ["status-board", str(archive_root), "--dry-run", "--include-quality", "--format", "json"]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["lifecycle_action"], "archive_status_board")
+            self.assertGreaterEqual(result["counts"]["minted_draft_pending_retire"], 1)
+            self.assertGreaterEqual(result["counts"]["source_metadata_gap"], 1)
+            self.assertGreaterEqual(result["counts"]["derived_artifact_gap"], 1)
+            self.assertGreaterEqual(result["counts"]["quality_warning_candidate"], 1)
+            self.assertTrue(result["privacy_guards"]["title_values_echoed"] is False)
+            self.assertFalse(result["privacy_guards"]["source_ref_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["body_text_echoed"])
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertNotIn(body_marker, serialized)
+            self.assertNotIn(title_marker, serialized)
+            self.assertNotIn(source_marker, serialized)
+
+            text_code, text_output = self.run_cli(["archive-status-board", str(archive_root), "--dry-run"])
+            self.assertEqual(text_code, 0, text_output)
+            self.assertIn("Archive status board.", text_output)
+            self.assertNotIn(body_marker, text_output)
+            self.assertNotIn(title_marker, text_output)
+            self.assertNotIn(source_marker, text_output)
+
     def test_read_zettel_by_id_and_path(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         zettel_id = "zet_20240504_fake_lunch_thought"
