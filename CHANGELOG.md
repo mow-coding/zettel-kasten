@@ -6,6 +6,27 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.145 - 2026-06-25
+
+- Added read-only `archive zet-quality-check`, with alias
+  `archive zettel-quality-check`, to inspect one draft or canonical zet for
+  entity-term, document-type, OCR/parse metadata, table-structure,
+  correction-event, source-rights, audience, and derived-artifact dependency
+  risks before mint.
+- Added optional `zet-quality-rules.yml` project entity rules. A forbidden
+  entity alias rule can become a mint blocker, while command output reports
+  only safe rule ids/counts and does not echo matched terms, source values,
+  body text, provider URLs, or local paths.
+- `mint-zet --dry-run` now includes the same `quality_check` summary and
+  blocks only when the quality check reports blocker-severity issues.
+- `archive doctor` now warns when archive roots contain top-level web/app
+  development artifacts or an incomplete `.git` marker, helping operators keep
+  generated report apps outside WOM archive roots.
+- Added `node_modules/`, `.next/`, and `.vercel/` to generated archive
+  `.gitignore` defaults and artifact hygiene policy.
+- Updated README status, capability matrix, public docs, release notes, fake
+  archive fixtures, and CLI/hygiene tests.
+
 ## v0.3.144 - 2026-06-22
 
 - Added read-only `archive zet-self-contained-check` to report whether a

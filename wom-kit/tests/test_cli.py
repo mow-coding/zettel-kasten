@@ -21614,6 +21614,9 @@ state:
             self.assertIn("/.mow-harness/", gitignore)
             self.assertIn(".wom-scratch/", gitignore)
             self.assertIn("workbench/ai-scratch/", gitignore)
+            self.assertIn("node_modules/", gitignore)
+            self.assertIn(".next/", gitignore)
+            self.assertIn(".vercel/", gitignore)
             self.assertNotIn("/AGENTS.md", gitignore)
             self.assertIn("**/db/archive-index.sqlite", gitignore)
             self.assertIn("**/db/archive-index.sqlite-wal", gitignore)
@@ -21637,6 +21640,9 @@ state:
                     "objects/derived-text/sha256/",
                     ".wom-scratch/",
                     "workbench/ai-scratch/",
+                    "node_modules/",
+                    ".next/",
+                    ".vercel/",
                     "/collab/",
                     "/.mow-harness/",
                     "**/db/archive-index.sqlite",
@@ -21655,6 +21661,9 @@ state:
             self.assertIn("objects/derived-text/sha256/", result["missing_patterns"])
             self.assertIn(".wom-scratch/", result["missing_patterns"])
             self.assertIn("workbench/ai-scratch/", result["missing_patterns"])
+            self.assertIn("node_modules/", result["missing_patterns"])
+            self.assertIn(".next/", result["missing_patterns"])
+            self.assertIn(".vercel/", result["missing_patterns"])
             self.assertIn("/collab/", result["missing_patterns"])
             self.assertIn("**/db/archive-index.sqlite-wal", result["missing_patterns"])
             self.assertEqual(gitignore_path.read_text(encoding="utf-8"), before)
@@ -21679,6 +21688,9 @@ state:
             self.assertIn("objects/derived-text/sha256/", repaired)
             self.assertIn(".wom-scratch/", repaired)
             self.assertIn("workbench/ai-scratch/", repaired)
+            self.assertIn("node_modules/", repaired)
+            self.assertIn(".next/", repaired)
+            self.assertIn(".vercel/", repaired)
             self.assertIn("/collab/", repaired)
             self.assertIn("/.mow-harness/", repaired)
             self.assertIn("**/db/archive-index.sqlite", repaired)
@@ -21820,6 +21832,9 @@ state:
             self.assertIn("/.mow-harness/", gitignore)
             self.assertIn(".wom-scratch/", gitignore)
             self.assertIn("workbench/ai-scratch/", gitignore)
+            self.assertIn("node_modules/", gitignore)
+            self.assertIn(".next/", gitignore)
+            self.assertIn(".vercel/", gitignore)
             self.assertNotIn("/AGENTS.md", gitignore)
 
             provider_data = archive_cli.load_yaml((archive_root / "provider-bindings.yml").read_text(encoding="utf-8"))
@@ -22662,6 +22677,145 @@ state:
             self.assertTrue(result["self_contained_check"]["external_citation_urls_allowed"])
             self.assertEqual(result["self_contained_check"]["external_citation_url_count"], 1)
             self.assertIn(frontmatter["source_refs"][0], result["receipt_preview"]["source_refs"])
+
+    def test_zet_quality_check_detects_entity_parse_audience_and_derivative_risks_without_echoing_terms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            forbidden_alias = "F0RB1DD3N_ALIAS"
+            canonical_name = "CANONICAL_ENTITY_NAME"
+            (archive_root / "zet-quality-rules.yml").write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "entity_terms": [
+                            {
+                                "id": "entity_alias_rule",
+                                "canonical": canonical_name,
+                                "forbidden": [forbidden_alias],
+                                "severity": "blocker",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            draft_path = archive_root / "inbox" / "zet_20260625_quality_fixture.md"
+            frontmatter = {
+                "id": "zet_20260625_quality_fixture",
+                "title": "Quality fixture",
+                "created_at": "2026-06-25T10:00:00+09:00",
+                "updated_at": "2026-06-25T10:00:00+09:00",
+                "archive_id": "archive:personal:fake-life",
+                "status": "draft",
+                "kind": "permanent_note",
+                "document_type": "external_report",
+                "audience": "client_report",
+                "facets": {"domain": "test"},
+                "assets": [],
+                "edges": [],
+                "source_refs": [{"type": "external_citation", "value": "https://example.org/public", "role": "citation"}],
+                "derived_artifacts": [{"artifact_ref": "report:example"}],
+                "provenance": {
+                    "created_by": "person:test",
+                    "created_in": "archive:personal:fake-life",
+                    "source": "manual_test",
+                    "derived_from": [],
+                },
+                "visibility": {"scope": "private", "allowed_archives": [], "source_visibility": "private"},
+            }
+            body = (
+                "# Quality fixture\n\n"
+                f"This report accidentally uses {forbidden_alias} instead of the canonical name.\n\n"
+                "| item | confidence |\n"
+                "| --- | --- |\n"
+                "| row | 0.7 |\n\n"
+                "parse_log: temporary OCR decision note.\n"
+                "This line says an item is not a typo but has no structured correction event.\n"
+                "This is internal working note residue for a client-facing page.\n"
+            )
+            draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "zet-quality-check",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260625_quality_fixture.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            issue_codes = {issue["code"] for issue in result["issues"]}
+            self.assertEqual(code, 1, output)
+            self.assertEqual(result["quality_state"], "blocked")
+            self.assertIn("forbidden_entity_alias_found", issue_codes)
+            self.assertIn("parse_metadata_may_be_in_body", issue_codes)
+            self.assertIn("table_structure_review_missing", issue_codes)
+            self.assertIn("correction_event_missing", issue_codes)
+            self.assertIn("external_audience_internal_residue", issue_codes)
+            self.assertIn("derived_artifact_source_link_missing", issue_codes)
+            self.assertFalse(result["privacy_guards"]["matched_entity_terms_echoed"])
+            self.assertNotIn(forbidden_alias, output)
+            self.assertNotIn(canonical_name, output)
+
+    def test_mint_zet_dry_run_blocks_project_forbidden_entity_rule(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            forbidden_alias = "DO_NOT_MINT_ALIAS"
+            (archive_root / "zet-quality-rules.yml").write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "entity_terms": [
+                            {
+                                "id": "project_entity_rule",
+                                "canonical": "APPROVED_CANONICAL_ENTITY",
+                                "forbidden": [forbidden_alias],
+                                "severity": "blocker",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            draft_path = self.make_batch_ready_draft(
+                archive_root,
+                "zet_20260625_entity_block_fixture",
+                "Entity block fixture",
+                f"# Entity block fixture\n\nThis body is long enough but contains {forbidden_alias} and must stop mint.\n",
+            )
+            frontmatter, body = archive_services.split_zettel_text(draft_path.read_text(encoding="utf-8"))
+            frontmatter["document_type"] = "source_outline"
+            frontmatter["source_refs"] = [
+                {
+                    "type": "object_id",
+                    "value": "sha256:" + "a" * 64,
+                    "role": "primary_source",
+                    "acquired_at": "2026-06-25",
+                    "acquired_by": "person:test",
+                    "acquisition_method": "manual_review",
+                    "verification_status": "reviewed",
+                    "rights_status": "private_source",
+                }
+            ]
+            draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260625_entity_block_fixture.md",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertIn("Zet quality check blocked: forbidden_entity_alias_found.", result["blockers"])
+            self.assertEqual(result["quality_check"]["blocker_count"], 1)
+            self.assertNotIn(forbidden_alias, output)
 
     def test_mint_zet_consumes_explicit_ai_scratch_refs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -28991,6 +29145,22 @@ state:
             code, output = self.run_cli(["doctor", str(archive_root)])
             self.assertEqual(code, 0, output)
             self.assertIn("local_profile_gitignore_incomplete", output)
+
+    def test_doctor_warns_about_archive_root_dev_artifacts_and_incomplete_git_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "personal-archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:root-boundary")
+            self.assertEqual(init_code, 0, init_output)
+
+            (archive_root / "package.json").write_text('{"scripts":{"dev":"next dev"}}\n', encoding="utf-8")
+            (archive_root / ".git").mkdir(exist_ok=True)
+
+            code, output = self.run_cli(["doctor", str(archive_root), "--json"])
+            diagnostics = json.loads(output)
+            codes = {item["code"] for item in diagnostics}
+            self.assertEqual(code, 0, output)
+            self.assertIn("development_project_artifact_in_archive_root", codes)
+            self.assertIn("git_marker_incomplete", codes)
 
     def test_doctor_flags_secret_like_file_names(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

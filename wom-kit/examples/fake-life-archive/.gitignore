@@ -21,6 +21,11 @@ tmp/
 workbench/ai-scratch/
 tmp-*/
 
+# Web/app project state should stay outside archive roots
+node_modules/
+.next/
+.vercel/
+
 # Local-only collaboration and harness state
 /collab/
 /.mow-harness/

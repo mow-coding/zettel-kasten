@@ -39,6 +39,9 @@ REQUIRED_ARCHIVE_GITIGNORE_PATTERNS: tuple[str, ...] = (
     "tmp/",
     ".wom-scratch/",
     "workbench/ai-scratch/",
+    "node_modules/",
+    ".next/",
+    ".vercel/",
     "/collab/",
     "/.mow-harness/",
     "**/db/archive-index.sqlite",
@@ -141,6 +144,10 @@ def classify_artifact(relative_path: str) -> ArtifactObservation:
         return ArtifactObservation(path, DISPOSABLE_AFTER_REVIEW, "temporary artifact; cleanup requires review")
     if lower == ".wom-scratch" or lower.startswith(".wom-scratch/") or starts_with_path(path, "workbench/ai-scratch"):
         return ArtifactObservation(path, DISPOSABLE_AFTER_REVIEW, "AI scratch artifact; cleanup requires review")
+    if lower == "node_modules" or lower.startswith("node_modules/") or lower == ".next" or lower.startswith(".next/"):
+        return ArtifactObservation(path, REBUILDABLE_GENERATED, "web/app dependency or build artifact; keep outside WOM archive root")
+    if lower == ".vercel" or lower.startswith(".vercel/"):
+        return ArtifactObservation(path, LOCAL_ONLY_SECRET_CONFIG, "Vercel project state is local-only provider configuration")
     if "dry-run" in lower or "sandbox" in lower:
         return ArtifactObservation(path, DISPOSABLE_AFTER_REVIEW, "sandbox or dry-run artifact; cleanup requires review")
 

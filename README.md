@@ -25,10 +25,11 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.144 pre-release
+v0.3.145 pre-release
 ```
 
-Previous public baseline: v0.3.143 pre-release.
+Previous public baseline: v0.3.144 pre-release.
+Earlier public baseline: v0.3.143 pre-release.
 Earlier public baseline: v0.3.142 pre-release.
 Earlier public baseline: v0.3.141 pre-release.
 Earlier public baseline: v0.3.140 pre-release.
@@ -85,6 +86,8 @@ What exists today:
 - AI token usage observability through read-only `archive ai-usage-plan --dry-run`, approval-gated `archive ai-usage-record --approve`, and read-only `archive ai-usage-report --dry-run`, so WOM can estimate explicit context packs, record non-secret runtime token counters, and aggregate bottlenecks without storing prompts or responses,
 - private archive lifecycle tools for doctor checks, draft creation, minting with dry-run checklist guidance, generated-index-backed duplicate checks, metadata-backed mint staleness fast paths, SQLite busy-timeout/WAL hardening for generated-index write paths, standard-id source-path fast resolution for large archives, scoped `validate --since` / `validate --scope` checks with generated-index body SHA cache support and optional `--progress`, verified minted-draft retirement, delegation, receipts, search, and metadata review,
 - zet self-contained checks and AI scratch lifecycle management: public external citation URLs may stay in zet bodies or `source_refs`, private provider locators and original-file locations still require durable WOM refs, `.wom-scratch/` and `workbench/ai-scratch/` are ignored scratch areas, and approved mint can remove explicit scratch refs from the canonical zet while consuming those scratch files through a cleanup receipt,
+- read-only `archive zet-quality-check --dry-run` for entity-term, document-type, OCR/parse metadata, table-structure, correction-event, source-rights, audience, and derived-artifact dependency risks before mint; optional `zet-quality-rules.yml` project rules can make forbidden entity aliases mint blockers without echoing matched terms,
+- archive-root boundary warnings in `archive doctor` for top-level web/app development artifacts and incomplete `.git` markers, plus `.gitignore` safe defaults for `node_modules/`, `.next/`, and `.vercel/`,
 - read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading, block headers with first-read summaries, generated index health checks, saved view health, facet role diagnostics, saved view recommendations, prompt boundaries, foreign block review, projection planning with supported-surface help, shared update review/index, shared update route pointers, and ZET would-transport planning,
 - read-only derived-text coverage/toolchain/doctor/agent-contract gates, manifest-scoped completeness signals, manifest-quality checks that block false complete claims when `tool_version` or required extraction metadata is missing, including existing derived-text records as a fallback textual signal for older prehashed manifests, non-echoed tool-hint paths for PATH-missing local extractors, plus approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
 - read-only `archive ai-response-concept-guide --dry-run` for beginner-facing AI explanation cards about sha256 object identity vs location, manifests vs zets, the objet -> derived text -> zet layer split, operational term translations for edge types, lifecycle states, and connection kinds including `contains` for structural child page/database containment, plus safe routing to Notion import material-clue audits, source-map material-link planning, connection import planning, nested tree recovery planning, and ancestor crawl request planning when provider locators were omitted from imported zettel bodies or structural relations need model review, without overclaiming upload, availability, stronger tie meaning, or forced edge-type mappings,
@@ -144,6 +147,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Korean Product Language Baseline](wom-kit/docs/concepts/korean-product-language-baseline.ko.md)
 - [Korean Product Language Hygiene](wom-kit/docs/korean-product-language-hygiene.md)
 - [WOM-kit Capability Matrix](wom-kit/docs/capability-matrix.md)
+- [zet Quality Check](wom-kit/docs/zet-quality-check.md)
 - [Version Truth Source](wom-kit/docs/version-truth-source.md)
 - [Runtime Canonical Entry Points](wom-kit/docs/runtime-canonical-entrypoints.md)
 - [Derived Text Completeness Signal](wom-kit/docs/derived-text-completeness-signal.md)
@@ -348,6 +352,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.145
 v0.3.144
 v0.3.143
 v0.3.140

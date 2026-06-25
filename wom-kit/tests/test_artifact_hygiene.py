@@ -47,6 +47,9 @@ class ArtifactHygieneTests(unittest.TestCase):
             "tmp/session/report.json": check_artifact_hygiene.DISPOSABLE_AFTER_REVIEW,
             ".wom-scratch/session/report.md": check_artifact_hygiene.DISPOSABLE_AFTER_REVIEW,
             "workbench/ai-scratch/session/draft.md": check_artifact_hygiene.DISPOSABLE_AFTER_REVIEW,
+            "node_modules/pkg/index.js": check_artifact_hygiene.REBUILDABLE_GENERATED,
+            ".next/cache/build.bin": check_artifact_hygiene.REBUILDABLE_GENERATED,
+            ".vercel/project.json": check_artifact_hygiene.LOCAL_ONLY_SECRET_CONFIG,
             "profiles/local/source-roots.local.yml": check_artifact_hygiene.LOCAL_ONLY_SECRET_CONFIG,
             ".mow-harness/installed-version.txt": check_artifact_hygiene.LOCAL_ONLY_COLLAB_HARNESS,
             "collab/STATE.md": check_artifact_hygiene.LOCAL_ONLY_COLLAB_HARNESS,
@@ -69,6 +72,9 @@ class ArtifactHygieneTests(unittest.TestCase):
         self.assertIn("Missing generated archive .gitignore pattern: /.mow-harness/", formatted)
         self.assertIn("Missing generated archive .gitignore pattern: .wom-scratch/", formatted)
         self.assertIn("Missing generated archive .gitignore pattern: workbench/ai-scratch/", formatted)
+        self.assertIn("Missing generated archive .gitignore pattern: node_modules/", formatted)
+        self.assertIn("Missing generated archive .gitignore pattern: .next/", formatted)
+        self.assertIn("Missing generated archive .gitignore pattern: .vercel/", formatted)
         self.assertIn("Missing generated archive .gitignore pattern: **/db/archive-index.sqlite", formatted)
         self.assertIn("Missing generated archive .gitignore pattern: **/db/archive-index.sqlite-wal", formatted)
 
