@@ -16,6 +16,8 @@ Commands:
           Preview or approve a metadata record for a human approval handoff.
   operation-status-taxonomy
           Show how AI operators should classify success, partial, truncated, blocked, and failed results.
+  input-provenance-taxonomy
+          Show how AI operators should classify tool-discovered, receipt-verified, human-selected, and caller-supplied inputs.
   doctor  Inspect an archive for structural and policy issues.
   profile-list
           List read-only WOM profile registry entries.
@@ -2672,6 +2674,27 @@ def command_operation_status_taxonomy(args: argparse.Namespace) -> int:
         print(f"Archive: {result.get('archive_id') or '-'}")
         print(f"Status classes: {summary.get('status_class_count') or 0}")
         print("Partial/truncated count as success: no")
+        print("Writes: none")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_input_provenance_taxonomy(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("input-provenance-taxonomy is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.input_provenance_taxonomy(Path(args.archive_root), dry_run=True)
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print("Input provenance taxonomy.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Provenance classes: {summary.get('provenance_class_count') or 0}")
+        print("Caller-supplied is verified: no")
         print("Writes: none")
     return 0 if result.get("ok", True) else 1
 
@@ -11925,6 +11948,16 @@ def build_parser() -> argparse.ArgumentParser:
     operation_status_taxonomy.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
     operation_status_taxonomy.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     operation_status_taxonomy.set_defaults(func=command_operation_status_taxonomy)
+
+    input_provenance_taxonomy = subcommands.add_parser(
+        "input-provenance-taxonomy",
+        aliases=["provenance-taxonomy", "caller-input-taxonomy"],
+        help="Read-only taxonomy for tool-discovered, receipt-verified, human-selected, caller-supplied, and AI-generated inputs.",
+    )
+    input_provenance_taxonomy.add_argument("archive_root", help="Archive root to inspect.")
+    input_provenance_taxonomy.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    input_provenance_taxonomy.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    input_provenance_taxonomy.set_defaults(func=command_input_provenance_taxonomy)
 
     doctor = subcommands.add_parser("doctor", help="Inspect an archive for structural and policy issues.")
     doctor.add_argument("archive_root", nargs="?", default=".", help="Archive root to inspect.")

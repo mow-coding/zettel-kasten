@@ -529,6 +529,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("derived-artifact-staleness", command_names)
         self.assertIn("approval-handoff-record", command_names)
         self.assertIn("operation-status-taxonomy", command_names)
+        self.assertIn("input-provenance-taxonomy", command_names)
         capability = next(item for item in commands if item["name"] == "capabilities")
         self.assertIn("--machine", capability["options"])
         serialized = json.dumps(result, ensure_ascii=False)
@@ -737,6 +738,29 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("truncated", result["data"]["failure_classes"])
             self.assertIn("privacy_guards", result)
             self.assertFalse(result["privacy_guards"]["archive_body_text_read"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            self.assertEqual(before, self.archive_tree_snapshot(archive_root))
+
+    def test_input_provenance_taxonomy_marks_caller_supplied_as_unverified(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.archive_tree_snapshot(archive_root)
+            code, output = self.run_cli(["input-provenance-taxonomy", str(archive_root), "--dry-run", "--format", "json"])
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "input_provenance_taxonomy")
+            self.assertFalse(result["summary"]["caller_supplied_is_verified"])
+            classes = {item["provenance_class"]: item for item in result["data"]["provenance_classes"]}
+            self.assertTrue(classes["tool_discovered"]["verified_by_tool"])
+            self.assertTrue(classes["receipt_verified"]["verified_by_tool"])
+            self.assertFalse(classes["caller_supplied"]["verified_by_tool"])
+            self.assertFalse(classes["ai_generated"]["verified_by_tool"])
+            self.assertFalse(classes["unknown"]["verified_by_tool"])
+            self.assertIn("caller_supplied", result["data"]["unverified_classes"])
+            self.assertIn("ai_generated", result["data"]["unverified_classes"])
+            self.assertFalse(result["privacy_guards"]["archive_body_text_read"])
+            self.assertFalse(result["privacy_guards"]["input_values_echoed"])
             self.assertFalse(result["privacy_guards"]["writes"])
             self.assertEqual(before, self.archive_tree_snapshot(archive_root))
 

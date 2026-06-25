@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.152 - 2026-06-25
+
+- Added read-only `archive input-provenance-taxonomy`, with aliases
+  `archive provenance-taxonomy` and `archive caller-input-taxonomy`, to define
+  how AI operators should label the origin of command inputs.
+- Added explicit provenance classes:
+  `tool_discovered`, `receipt_verified`, `human_selected`, `caller_supplied`,
+  `ai_generated`, `fixture_supplied`, `environment_inferred`, and `unknown`.
+- Marked caller-supplied, AI-generated, fixture-supplied, environment-inferred,
+  and unknown inputs as unverified source truth.
+- Added AI operator checks so supplied inputs are not described as
+  tool-discovered or receipt-verified.
+- Updated README status, capability matrix, public docs, release notes, and CLI
+  tests.
+
 ## v0.3.151 - 2026-06-25
 
 - Added read-only `archive operation-status-taxonomy`, with aliases
