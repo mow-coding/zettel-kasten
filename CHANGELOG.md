@@ -6,6 +6,23 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.151 - 2026-06-25
+
+- Added read-only `archive operation-status-taxonomy`, with aliases
+  `archive status-taxonomy` and `archive partial-success-taxonomy`, to define
+  how AI operators should classify operation results before reporting work as
+  complete.
+- Added explicit status classes:
+  `succeeded`, `preview`, `written`, `no_change`, `partial`, `truncated`,
+  `blocked`, and `failed`.
+- Marked `partial`, `truncated`, `blocked`, and `failed` as not-success classes
+  so item-level gaps, limit caps, blockers, and unexpected errors are not
+  summarized as full success.
+- Added AI operator checks for `truncated=true`, `limit_hit=true`,
+  `omitted_count>0`, `incomplete_count>0`, dry-run mode, and privacy guards.
+- Updated README status, capability matrix, public docs, release notes, and CLI
+  tests.
+
 ## v0.3.150 - 2026-06-25
 
 - Added read-only `archive approval-handoff-plan`, with aliases
