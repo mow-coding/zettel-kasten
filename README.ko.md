@@ -23,9 +23,10 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.3.153 pre-release
+v0.3.154 pre-release
 ```
 
+이전 공개 기준: v0.3.153 pre-release.
 이전 공개 기준: v0.3.152 pre-release.
 이전 공개 기준: v0.3.151 pre-release.
 이전 공개 기준: v0.3.150 pre-release.
@@ -59,6 +60,7 @@ v0.3.153 pre-release
 - read-only `archive approval-handoff-audit --dry-run`으로 후속 작업이 handoff 기록을 승인 근거로 쓰기 전에 상태, 작업 종류, reviewed_by 등을 검사합니다. 실제 작업 실행이나 target/action 값 재출력은 하지 않습니다.
 - read-only `archive operation-status-taxonomy --dry-run`으로 AI 운영자가 succeeded/preview/written/no_change와 partial/truncated/blocked/failed를 구분하게 합니다. 일부만 성공했거나 출력이 잘린 결과를 완료로 말하지 않기 위한 기준입니다.
 - read-only `archive input-provenance-taxonomy --dry-run`으로 AI 운영자가 tool-discovered/receipt-verified 입력과 caller-supplied/AI-generated/fixture/environment-inferred/unknown 입력을 구분하게 합니다. 호출자가 준 입력을 도구가 발견한 source truth처럼 말하지 않기 위한 기준입니다.
+- read-only `archive secret-signal-taxonomy --dry-run`으로 AI 운영자가 harmless concept word와 safe ref를 실제 secret-like value, private locator, account identifier, unknown sensitive context와 구분하게 합니다.
 - `archive doctor`는 archive root의 top-level web/app development artifact와 incomplete `.git` marker를 경고하며, `.gitignore` safe default에 `node_modules/`, `.next/`, `.vercel/`을 포함합니다.
 - runtime context, profile, source/objet intake, block header, prompt boundary, foreign block review, projection, shared update review/index, shared update route preview, ZET would-transport planning을 위한 read-only preview layer,
 - derived-text coverage/toolchain/doctor/agent-contract read-only gate, PATH에 없는 로컬 추출 도구를 위한 비공개 tool-hint path, 그리고 사람 승인 뒤에만 동작하는 일부 local write path,
@@ -115,6 +117,7 @@ v0.3.153 pre-release
 - [Approval Handoff Audit](wom-kit/docs/approval-handoff-audit.md)
 - [Operation Status Taxonomy](wom-kit/docs/operation-status-taxonomy.md)
 - [Input Provenance Taxonomy](wom-kit/docs/input-provenance-taxonomy.md)
+- [Secret Signal Taxonomy](wom-kit/docs/secret-signal-taxonomy.md)
 - [Archive Status Board](wom-kit/docs/archive-status-board.md)
 - [Derived Artifact Staleness](wom-kit/docs/derived-artifact-staleness.md)
 - [zet Quality Check](wom-kit/docs/zet-quality-check.md)
@@ -257,6 +260,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.3.154
 v0.3.153
 v0.3.152
 v0.3.151
