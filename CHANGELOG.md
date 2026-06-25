@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.150 - 2026-06-25
+
+- Added read-only `archive approval-handoff-plan`, with aliases
+  `archive handoff-plan` and `archive human-approval-handoff-plan`, to define
+  the AI-to-human approval handoff storage and status lifecycle.
+- Added approval-gated `archive approval-handoff-record`, with aliases
+  `archive handoff-record` and `archive human-approval-handoff-record`, to
+  write `ops/approval-handoffs/<handoff-id>.yml` metadata plus a receipt under
+  `receipts/approval-handoffs/`.
+- The approval handoff lifecycle now has explicit statuses:
+  `needs_review`, `approved_once`, `denied`, `superseded`, and `resolved`.
+- Added operation kinds for private material reads, archive writes, external
+  provider actions, releases, credential access, derived artifact updates, and
+  other reviewed operations.
+- Kept the handoff body-safe and execution-safe: it does not execute the
+  underlying operation, read private material, call providers, check network,
+  read secrets, echo target refs, or echo requested action values.
+- Updated README status, capability matrix, public docs, release notes, and CLI
+  tests.
+
 ## v0.3.149 - 2026-06-25
 
 - Added read-only `archive operator-feedback-plan`, with aliases

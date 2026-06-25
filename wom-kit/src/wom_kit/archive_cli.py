@@ -10,6 +10,10 @@ Commands:
           Show the operator-generated feedback storage and lifecycle contract.
   operator-feedback-record
           Preview or approve a metadata record for operator-generated feedback.
+  approval-handoff-plan
+          Show the AI-to-human approval handoff storage and lifecycle contract.
+  approval-handoff-record
+          Preview or approve a metadata record for a human approval handoff.
   doctor  Inspect an archive for structural and policy issues.
   profile-list
           List read-only WOM profile registry entries.
@@ -2573,6 +2577,79 @@ def command_operator_feedback_record(args: argparse.Namespace) -> int:
             print("Blockers:")
             for blocker in result["blockers"]:
                 print(f"- {blocker}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_approval_handoff_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("approval-handoff-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.approval_handoff_plan(Path(args.archive_root), dry_run=True)
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print("Approval handoff plan.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Handoff dir: {summary.get('handoff_dir') or '-'}")
+        print(f"Receipt dir: {summary.get('receipt_dir') or '-'}")
+        print("Statuses: " + ", ".join(summary.get("statuses") or []))
+        print("Execution performed: no")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_approval_handoff_record(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print("approval-handoff-record requires exactly one of --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("approval-handoff-record requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.approval_handoff_record(
+            Path(args.archive_root),
+            handoff_id=args.handoff_id,
+            operation_kind=args.operation_kind,
+            target_ref=args.target_ref,
+            requested_action=args.requested_action,
+            status=args.status,
+            requested_by=args.requested_by,
+            reviewed_by=args.reviewed_by,
+            related_command=args.related_command,
+            related_release=args.related_release,
+            supersedes=args.supersedes,
+            resolved_in=args.resolved_in,
+            dry_run=args.dry_run,
+            approve=args.approve,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print("Approval handoff record.")
+        print(f"State: {result.get('state') or '-'}")
+        print(f"Handoff id: {summary.get('handoff_id') or '-'}")
+        print(f"Operation kind: {summary.get('operation_kind') or '-'}")
+        print(f"Status: {summary.get('status') or '-'}")
+        print(f"Record path: {summary.get('record_path') or '-'}")
+        print("Target ref echoed: no")
+        print("Requested action echoed: no")
+        print("Execution performed: no")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
 
 
@@ -11778,6 +11855,43 @@ def build_parser() -> argparse.ArgumentParser:
     operator_feedback_record.add_argument("--reviewed-by", help="Reviewer id required for approved writes.")
     operator_feedback_record.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     operator_feedback_record.set_defaults(func=command_operator_feedback_record)
+
+    approval_handoff_plan = subcommands.add_parser(
+        "approval-handoff-plan",
+        aliases=["handoff-plan", "human-approval-handoff-plan"],
+        help="Read-only plan for AI-to-human approval handoff records.",
+    )
+    approval_handoff_plan.add_argument("archive_root", help="Archive root to inspect.")
+    approval_handoff_plan.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    approval_handoff_plan.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    approval_handoff_plan.set_defaults(func=command_approval_handoff_plan)
+
+    approval_handoff_record = subcommands.add_parser(
+        "approval-handoff-record",
+        aliases=["handoff-record", "human-approval-handoff-record"],
+        help="Preview or approve a safe metadata record for a human approval handoff.",
+    )
+    approval_handoff_record.add_argument("archive_root", help="Archive root receiving the handoff metadata record.")
+    approval_handoff_record.add_argument("--handoff-id", required=True, help="Safe handoff id for ops/approval-handoffs/<id>.yml.")
+    approval_handoff_record.add_argument(
+        "--operation-kind",
+        required=True,
+        choices=archive_services.APPROVAL_HANDOFF_OPERATION_KINDS,
+        help="Operation category that needs human review.",
+    )
+    approval_handoff_record.add_argument("--target-ref", required=True, help="Safe non-secret target ref; no URLs, emails, tokens, or local paths.")
+    approval_handoff_record.add_argument("--requested-action", required=True, help="Safe non-secret action label stored in the record but not echoed.")
+    approval_handoff_record.add_argument("--status", required=True, choices=archive_services.APPROVAL_HANDOFF_STATUSES, help="Approval handoff lifecycle status.")
+    approval_handoff_record.add_argument("--requested-by", help="Optional safe non-secret actor id for the AI/operator requesting approval.")
+    approval_handoff_record.add_argument("--reviewed-by", help="Reviewer id required for approved writes.")
+    approval_handoff_record.add_argument("--related-command", action="append", help="Safe related CLI command label. May be repeated.")
+    approval_handoff_record.add_argument("--related-release", action="append", help="Safe related release label. May be repeated.")
+    approval_handoff_record.add_argument("--supersedes", help="Safe prior handoff id required when --status superseded.")
+    approval_handoff_record.add_argument("--resolved-in", help="Safe release/receipt/decision label required when --status resolved.")
+    approval_handoff_record.add_argument("--dry-run", action="store_true", help="Preview the metadata record without writing files.")
+    approval_handoff_record.add_argument("--approve", action="store_true", help="Write ops/approval-handoffs metadata and a receipt.")
+    approval_handoff_record.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    approval_handoff_record.set_defaults(func=command_approval_handoff_record)
 
     doctor = subcommands.add_parser("doctor", help="Inspect an archive for structural and policy issues.")
     doctor.add_argument("archive_root", nargs="?", default=".", help="Archive root to inspect.")

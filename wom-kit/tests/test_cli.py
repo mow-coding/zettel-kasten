@@ -527,6 +527,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("capabilities", command_names)
         self.assertIn("status-board", command_names)
         self.assertIn("derived-artifact-staleness", command_names)
+        self.assertIn("approval-handoff-record", command_names)
         capability = next(item for item in commands if item["name"] == "capabilities")
         self.assertIn("--machine", capability["options"])
         serialized = json.dumps(result, ensure_ascii=False)
@@ -620,6 +621,101 @@ class ArchiveCliTests(unittest.TestCase):
             record_text = (archive_root / "ops" / "feedback" / "agent_operator_retro_20260623.yml").read_text(encoding="utf-8")
             self.assertIn(feedback_ref, record_text)
             self.assertIn(title_marker, record_text)
+
+    def test_approval_handoff_plan_and_record_without_action_echo_or_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_code, plan_output = self.run_cli(["approval-handoff-plan", str(archive_root), "--dry-run", "--format", "json"])
+            plan = json.loads(plan_output)
+            self.assertEqual(plan_code, 0, plan_output)
+            self.assertEqual(plan["lifecycle_action"], "approval_handoff_plan")
+            self.assertEqual(plan["summary"]["handoff_dir"], "ops/approval-handoffs")
+            self.assertIn("approved_once", plan["summary"]["statuses"])
+            self.assertFalse(plan["privacy_guards"]["private_material_read"])
+            self.assertFalse(plan["privacy_guards"]["operation_executed"])
+
+            target_ref = "target:imap-material-selection"
+            requested_action = "Approve selected message body capture"
+            private_body_marker = "PRIVATE_APPROVAL_CONTEXT_SHOULD_NOT_ECHO"
+            before = self.archive_tree_snapshot(archive_root)
+            dry_code, dry_output = self.run_cli(
+                [
+                    "approval-handoff-record",
+                    str(archive_root),
+                    "--handoff-id",
+                    "imap_material_capture_review_20260625",
+                    "--operation-kind",
+                    "read_private_material",
+                    "--target-ref",
+                    target_ref,
+                    "--requested-action",
+                    requested_action,
+                    "--status",
+                    "needs_review",
+                    "--requested-by",
+                    "agent:test",
+                    "--related-command",
+                    "imap-mailbox-material-capture-approval-plan",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            dry = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertEqual(dry["state"], "preview")
+            self.assertEqual(dry["summary"]["record_path"], "ops/approval-handoffs/imap_material_capture_review_20260625.yml")
+            self.assertEqual(before, self.archive_tree_snapshot(archive_root))
+            serialized_dry = json.dumps(dry, ensure_ascii=False)
+            self.assertNotIn(target_ref, serialized_dry)
+            self.assertNotIn(requested_action, serialized_dry)
+            self.assertNotIn(private_body_marker, serialized_dry)
+            self.assertFalse(dry["privacy_guards"]["target_ref_value_echoed"])
+            self.assertFalse(dry["privacy_guards"]["requested_action_value_echoed"])
+            self.assertFalse(dry["privacy_guards"]["private_material_read"])
+            self.assertFalse(dry["privacy_guards"]["operation_executed"])
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "handoff-record",
+                    str(archive_root),
+                    "--handoff-id",
+                    "imap_material_capture_review_20260625",
+                    "--operation-kind",
+                    "read_private_material",
+                    "--target-ref",
+                    target_ref,
+                    "--requested-action",
+                    requested_action,
+                    "--status",
+                    "approved_once",
+                    "--related-release",
+                    "v0.3.150",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            approved = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertEqual(approved["state"], "written")
+            self.assertTrue(approved["approved"])
+            self.assertEqual(approved["files_written"][0], "ops/approval-handoffs/imap_material_capture_review_20260625.yml")
+            self.assertTrue((archive_root / "ops" / "approval-handoffs" / "imap_material_capture_review_20260625.yml").is_file())
+            self.assertTrue((archive_root / approved["files_written"][1]).is_file())
+            serialized_approved = json.dumps(approved, ensure_ascii=False)
+            self.assertNotIn(target_ref, serialized_approved)
+            self.assertNotIn(requested_action, serialized_approved)
+            self.assertNotIn(private_body_marker, serialized_approved)
+            self.assertFalse(approved["privacy_guards"]["operation_executed"])
+            record_text = (archive_root / "ops" / "approval-handoffs" / "imap_material_capture_review_20260625.yml").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(target_ref, record_text)
+            self.assertIn(requested_action, record_text)
+            self.assertIn("operation_executed_by_this_record: false", record_text)
 
     def test_version_command_reports_project_source_mirror_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
