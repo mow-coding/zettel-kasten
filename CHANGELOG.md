@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.155 - 2026-06-25
+
+- Added read-only `archive ai-response-contract`, with aliases
+  `archive response-contract` and `archive operator-response-contract`, to
+  define the minimum status/provenance/privacy/approval checks an AI operator
+  should apply before answering a human.
+- The contract explicitly allows a compact conversational status board and
+  states that no web UI is required.
+- It ties together operation status, input provenance, secret-signal handling,
+  approval handoff audits, and archive status-board checks without reading
+  archive body text or writing files.
+- Updated README status, capability matrix, public docs, release notes, and CLI
+  tests.
+
 ## v0.3.154 - 2026-06-25
 
 - Added read-only `archive secret-signal-taxonomy`, with aliases

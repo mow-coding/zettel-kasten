@@ -1028,6 +1028,7 @@ SECRET_SIGNAL_CLASSES = (
     "unknown_sensitive_context",
 )
 SECRET_SIGNAL_BLOCKING_CLASSES = ("secret_value_pattern", "private_locator", "account_identifier", "unknown_sensitive_context")
+AI_RESPONSE_CONTRACT_SCHEMA = "wom-kit/ai-response-contract/v0.1"
 AI_USAGE_RECEIPTS_DIR = "receipts/ai-usage"
 AI_USAGE_RECEIPT_SCHEMA = "wom-kit/ai-usage-receipt/v0.1"
 AI_USAGE_MAX_LABEL_LENGTH = 160
@@ -3974,6 +3975,117 @@ def secret_signal_taxonomy(archive_root: Path | str, *, dry_run: bool = True) ->
         "would_change": [],
         "privacy_guards": {
             "archive_body_text_read": False,
+            "sample_values_read": False,
+            "sample_values_echoed": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_paths_echoed": False,
+            "tokens_or_secrets_echoed": False,
+            "writes": False,
+        },
+    }
+
+
+def ai_response_contract(archive_root: Path | str, *, dry_run: bool = True) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    if not dry_run:
+        blockers.append("ai-response-contract is read-only and requires --dry-run.")
+
+    response_sections = [
+        {
+            "section": "operation_outcome",
+            "required": True,
+            "operator_rule": "classify the result before saying work is complete",
+            "safe_status_classes": ["succeeded", "preview", "written", "no_change"],
+            "not_success_status_classes": ["partial", "truncated", "blocked", "failed"],
+        },
+        {
+            "section": "evidence_basis",
+            "required": True,
+            "operator_rule": "name whether evidence came from command output, a receipt, a release, a tag, or a caller-supplied input",
+            "source_truth_rule": "do not describe caller-supplied or AI-generated values as tool-discovered source truth",
+        },
+        {
+            "section": "privacy_boundary",
+            "required": True,
+            "operator_rule": "do not echo secret-like values, private locators, account identifiers, local absolute paths, tokens, or secret values",
+            "safe_alternatives": ["safe refs", "archive-relative refs", "object ids", "receipt paths", "non-reversible fingerprints"],
+        },
+        {
+            "section": "approval_boundary",
+            "required": True,
+            "operator_rule": "only claim writes, live fetches, uploads, external actions, or privileged execution after explicit approval and receipt evidence",
+        },
+        {
+            "section": "remaining_work",
+            "required": True,
+            "operator_rule": "surface blockers, warnings, incomplete coverage, and next safe action instead of burying them in a summary",
+        },
+        {
+            "section": "conversation_status_board",
+            "required": False,
+            "operator_rule": "a compact conversational status board is allowed; a web UI is not required",
+            "web_ui_required": False,
+        },
+    ]
+
+    return {
+        "ok": not blockers,
+        "state": "ready" if not blockers else "blocked",
+        "dry_run": True,
+        "lifecycle_action": "ai_response_contract",
+        "archive_id": read_archive_id(root),
+        "summary": {
+            "schema": AI_RESPONSE_CONTRACT_SCHEMA,
+            "required_section_count": sum(1 for item in response_sections if item.get("required")),
+            "optional_section_count": sum(1 for item in response_sections if not item.get("required")),
+            "conversation_status_board_allowed": True,
+            "web_ui_required": False,
+            "writes": False,
+        },
+        "data": {
+            "schema": AI_RESPONSE_CONTRACT_SCHEMA,
+            "taxonomy_dependencies": [
+                "operation-status-taxonomy",
+                "input-provenance-taxonomy",
+                "secret-signal-taxonomy",
+                "approval-handoff-audit",
+                "status-board",
+            ],
+            "minimum_result_fields_to_check": [
+                "ok",
+                "state",
+                "summary",
+                "blockers",
+                "warnings",
+                "privacy_guards",
+                "would_change",
+                "files_written",
+                "receipt_path",
+            ],
+            "response_sections": response_sections,
+            "must_not_claim": [
+                "partial, truncated, blocked, or failed results are complete",
+                "caller-supplied input was discovered or verified by the tool",
+                "a dry-run preview performed a write or live external action",
+                "a future adapter boundary has already executed",
+                "secret concept words are leaked secret values by themselves",
+            ],
+            "recommended_answer_order": [
+                "outcome",
+                "evidence",
+                "privacy/approval boundary",
+                "remaining blockers or next safe action",
+            ],
+        },
+        "blockers": blockers,
+        "warnings": [],
+        "would_change": [],
+        "privacy_guards": {
+            "archive_body_text_read": False,
+            "zettel_body_text_echoed": False,
+            "source_values_echoed": False,
             "sample_values_read": False,
             "sample_values_echoed": False,
             "provider_called": False,
