@@ -531,6 +531,7 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("approval-handoff-audit", command_names)
         self.assertIn("operation-status-taxonomy", command_names)
         self.assertIn("input-provenance-taxonomy", command_names)
+        self.assertIn("secret-signal-taxonomy", command_names)
         capability = next(item for item in commands if item["name"] == "capabilities")
         self.assertIn("--machine", capability["options"])
         serialized = json.dumps(result, ensure_ascii=False)
@@ -808,6 +809,30 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("ai_generated", result["data"]["unverified_classes"])
             self.assertFalse(result["privacy_guards"]["archive_body_text_read"])
             self.assertFalse(result["privacy_guards"]["input_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["writes"])
+            self.assertEqual(before, self.archive_tree_snapshot(archive_root))
+
+    def test_secret_signal_taxonomy_does_not_treat_concept_words_as_secret_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.archive_tree_snapshot(archive_root)
+            code, output = self.run_cli(["secret-signal-taxonomy", str(archive_root), "--dry-run", "--format", "json"])
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["lifecycle_action"], "secret_signal_taxonomy")
+            self.assertFalse(result["summary"]["concept_words_are_secret_values"])
+            classes = {item["signal_class"]: item for item in result["data"]["signal_classes"]}
+            self.assertFalse(classes["concept_word"]["blocking"])
+            self.assertFalse(classes["safe_reference"]["blocking"])
+            self.assertFalse(classes["credential_reference"]["blocking"])
+            self.assertTrue(classes["secret_value_pattern"]["blocking"])
+            self.assertTrue(classes["private_locator"]["blocking"])
+            self.assertTrue(classes["account_identifier"]["blocking"])
+            self.assertIn("secret_value_pattern", result["data"]["blocking_classes"])
+            self.assertFalse(result["privacy_guards"]["sample_values_read"])
+            self.assertFalse(result["privacy_guards"]["sample_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["tokens_or_secrets_echoed"])
             self.assertFalse(result["privacy_guards"]["writes"])
             self.assertEqual(before, self.archive_tree_snapshot(archive_root))
 

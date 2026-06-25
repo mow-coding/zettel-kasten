@@ -20,6 +20,8 @@ Commands:
           Show how AI operators should classify success, partial, truncated, blocked, and failed results.
   input-provenance-taxonomy
           Show how AI operators should classify tool-discovered, receipt-verified, human-selected, and caller-supplied inputs.
+  secret-signal-taxonomy
+          Show how AI operators should distinguish secret concept words, safe refs, and secret-like values.
   doctor  Inspect an archive for structural and policy issues.
   profile-list
           List read-only WOM profile registry entries.
@@ -2736,6 +2738,27 @@ def command_input_provenance_taxonomy(args: argparse.Namespace) -> int:
         print(f"Archive: {result.get('archive_id') or '-'}")
         print(f"Provenance classes: {summary.get('provenance_class_count') or 0}")
         print("Caller-supplied is verified: no")
+        print("Writes: none")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_secret_signal_taxonomy(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("secret-signal-taxonomy is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.secret_signal_taxonomy(Path(args.archive_root), dry_run=True)
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print("Secret signal taxonomy.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Signal classes: {summary.get('signal_class_count') or 0}")
+        print("Concept words are secret values: no")
         print("Writes: none")
     return 0 if result.get("ok", True) else 1
 
@@ -12025,6 +12048,16 @@ def build_parser() -> argparse.ArgumentParser:
     input_provenance_taxonomy.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
     input_provenance_taxonomy.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     input_provenance_taxonomy.set_defaults(func=command_input_provenance_taxonomy)
+
+    secret_signal_taxonomy = subcommands.add_parser(
+        "secret-signal-taxonomy",
+        aliases=["secret-taxonomy", "sensitive-signal-taxonomy"],
+        help="Read-only taxonomy for secret concept words, safe references, private locators, and secret-like values.",
+    )
+    secret_signal_taxonomy.add_argument("archive_root", help="Archive root to inspect.")
+    secret_signal_taxonomy.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    secret_signal_taxonomy.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    secret_signal_taxonomy.set_defaults(func=command_secret_signal_taxonomy)
 
     doctor = subcommands.add_parser("doctor", help="Inspect an archive for structural and policy issues.")
     doctor.add_argument("archive_root", nargs="?", default=".", help="Archive root to inspect.")

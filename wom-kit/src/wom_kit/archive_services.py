@@ -1017,6 +1017,17 @@ INPUT_PROVENANCE_CLASSES = (
     "unknown",
 )
 INPUT_PROVENANCE_UNVERIFIED_CLASSES = ("caller_supplied", "ai_generated", "fixture_supplied", "environment_inferred", "unknown")
+SECRET_SIGNAL_TAXONOMY_SCHEMA = "wom-kit/secret-signal-taxonomy/v0.1"
+SECRET_SIGNAL_CLASSES = (
+    "concept_word",
+    "safe_reference",
+    "credential_reference",
+    "secret_value_pattern",
+    "private_locator",
+    "account_identifier",
+    "unknown_sensitive_context",
+)
+SECRET_SIGNAL_BLOCKING_CLASSES = ("secret_value_pattern", "private_locator", "account_identifier", "unknown_sensitive_context")
 AI_USAGE_RECEIPTS_DIR = "receipts/ai-usage"
 AI_USAGE_RECEIPT_SCHEMA = "wom-kit/ai-usage-receipt/v0.1"
 AI_USAGE_MAX_LABEL_LENGTH = 160
@@ -3867,6 +3878,104 @@ def input_provenance_taxonomy(archive_root: Path | str, *, dry_run: bool = True)
             "zettel_body_text_echoed": False,
             "input_values_echoed": False,
             "source_values_echoed": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_paths_echoed": False,
+            "tokens_or_secrets_echoed": False,
+            "writes": False,
+        },
+    }
+
+
+def secret_signal_taxonomy(archive_root: Path | str, *, dry_run: bool = True) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    if not dry_run:
+        blockers.append("secret-signal-taxonomy is read-only and requires --dry-run.")
+
+    signal_classes = [
+        {
+            "signal_class": "concept_word",
+            "blocking": False,
+            "meaning": "a documentation or schema word such as secret, token, credential, password, or key",
+            "ai_operator_rule": "do not treat a concept word as a leaked value by itself",
+        },
+        {
+            "signal_class": "safe_reference",
+            "blocking": False,
+            "meaning": "a non-secret label that points to a vault, OS store, approval receipt, or future adapter",
+            "ai_operator_rule": "safe refs may be shown when the command explicitly marks them safe",
+        },
+        {
+            "signal_class": "credential_reference",
+            "blocking": False,
+            "meaning": "a structured reference such as secret:ref, credential id, or vault entry label without the value",
+            "ai_operator_rule": "do not resolve or echo the actual secret value; keep it as an indirection",
+        },
+        {
+            "signal_class": "secret_value_pattern",
+            "blocking": True,
+            "meaning": "a value-shaped token, API key, password, private key block, session cookie, or high-entropy bearer string",
+            "ai_operator_rule": "block echoing, record only non-reversible fingerprints or safe receipt metadata when needed",
+        },
+        {
+            "signal_class": "private_locator",
+            "blocking": True,
+            "meaning": "a local absolute path, provider locator, private file URL, or object location that exposes where private material lives",
+            "ai_operator_rule": "do not echo; replace with durable WOM refs, manifests, object ids, or redacted summaries",
+        },
+        {
+            "signal_class": "account_identifier",
+            "blocking": True,
+            "meaning": "an email address, account id, org id, tenant id, or provider profile that can identify a private account",
+            "ai_operator_rule": "do not expose in public outputs unless an explicit public-safe policy says it is allowed",
+        },
+        {
+            "signal_class": "unknown_sensitive_context",
+            "blocking": True,
+            "meaning": "text appears near auth, provider, mailbox, credential, or private-material context but is not classified safely",
+            "ai_operator_rule": "fail closed and ask for a safer ref or approval receipt instead of guessing",
+        },
+    ]
+
+    return {
+        "ok": not blockers,
+        "state": "ready" if not blockers else "blocked",
+        "dry_run": True,
+        "lifecycle_action": "secret_signal_taxonomy",
+        "archive_id": read_archive_id(root),
+        "summary": {
+            "schema": SECRET_SIGNAL_TAXONOMY_SCHEMA,
+            "signal_class_count": len(signal_classes),
+            "blocking_class_count": len(SECRET_SIGNAL_BLOCKING_CLASSES),
+            "concept_words_are_secret_values": False,
+            "writes": False,
+        },
+        "data": {
+            "schema": SECRET_SIGNAL_TAXONOMY_SCHEMA,
+            "signal_classes": signal_classes,
+            "blocking_classes": list(SECRET_SIGNAL_BLOCKING_CLASSES),
+            "recommended_fields_for_future_commands": [
+                "secret_signal_class",
+                "secret_value_echoed",
+                "safe_reference_echoed",
+                "private_locator_echoed",
+                "account_identifier_echoed",
+            ],
+            "agent_operator_checks": [
+                "Do not flag concept words alone as leaked secret values.",
+                "Block value-shaped tokens, private locators, and account identifiers in public outputs.",
+                "Prefer safe refs, object ids, receipt paths, or non-reversible fingerprints over secret values.",
+                "When context is ambiguous and sensitive, fail closed and request a safer reference.",
+            ],
+        },
+        "blockers": blockers,
+        "warnings": [],
+        "would_change": [],
+        "privacy_guards": {
+            "archive_body_text_read": False,
+            "sample_values_read": False,
+            "sample_values_echoed": False,
             "provider_called": False,
             "network_checked": False,
             "local_absolute_paths_echoed": False,

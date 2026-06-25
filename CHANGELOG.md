@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.154 - 2026-06-25
+
+- Added read-only `archive secret-signal-taxonomy`, with aliases
+  `archive secret-taxonomy` and `archive sensitive-signal-taxonomy`, to define
+  class-aware secret and sensitive-signal handling for AI operators.
+- Added explicit signal classes:
+  `concept_word`, `safe_reference`, `credential_reference`,
+  `secret_value_pattern`, `private_locator`, `account_identifier`, and
+  `unknown_sensitive_context`.
+- Marked concept words, safe references, and credential references as not
+  blocking by themselves.
+- Marked secret-like values, private locators, account identifiers, and unknown
+  sensitive context as blocking classes for public outputs.
+- Updated README status, capability matrix, public docs, release notes, and CLI
+  tests.
+
 ## v0.3.153 - 2026-06-25
 
 - Added read-only `archive approval-handoff-audit`, with aliases
