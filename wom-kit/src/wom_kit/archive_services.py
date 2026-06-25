@@ -1029,6 +1029,7 @@ SECRET_SIGNAL_CLASSES = (
 )
 SECRET_SIGNAL_BLOCKING_CLASSES = ("secret_value_pattern", "private_locator", "account_identifier", "unknown_sensitive_context")
 AI_RESPONSE_CONTRACT_SCHEMA = "wom-kit/ai-response-contract/v0.1"
+OPERATOR_ENVELOPE_CLASS_SCHEMA = "wom-kit/operator-envelope-classes/v0.1"
 AI_USAGE_RECEIPTS_DIR = "receipts/ai-usage"
 AI_USAGE_RECEIPT_SCHEMA = "wom-kit/ai-usage-receipt/v0.1"
 AI_USAGE_MAX_LABEL_LENGTH = 160
@@ -3656,6 +3657,7 @@ def operation_status_taxonomy(archive_root: Path | str, *, dry_run: bool = True)
     blockers: list[str] = []
     if not dry_run:
         blockers.append("operation-status-taxonomy is read-only and requires --dry-run.")
+    envelope = operator_envelope_classes(status_class="blocked" if blockers else "preview")
 
     statuses = [
         {
@@ -3718,6 +3720,10 @@ def operation_status_taxonomy(archive_root: Path | str, *, dry_run: bool = True)
     return {
         "ok": not blockers,
         "state": "ready" if not blockers else "blocked",
+        "status_class": envelope["status_class"],
+        "input_provenance_class": envelope["input_provenance_class"],
+        "secret_signal_class": envelope["secret_signal_class"],
+        "operator_envelope": envelope,
         "dry_run": True,
         "lifecycle_action": "operation_status_taxonomy",
         "archive_id": read_archive_id(root),
@@ -3779,6 +3785,7 @@ def input_provenance_taxonomy(archive_root: Path | str, *, dry_run: bool = True)
     blockers: list[str] = []
     if not dry_run:
         blockers.append("input-provenance-taxonomy is read-only and requires --dry-run.")
+    envelope = operator_envelope_classes(status_class="blocked" if blockers else "preview")
 
     provenance_classes = [
         {
@@ -3842,6 +3849,10 @@ def input_provenance_taxonomy(archive_root: Path | str, *, dry_run: bool = True)
     return {
         "ok": not blockers,
         "state": "ready" if not blockers else "blocked",
+        "status_class": envelope["status_class"],
+        "input_provenance_class": envelope["input_provenance_class"],
+        "secret_signal_class": envelope["secret_signal_class"],
+        "operator_envelope": envelope,
         "dry_run": True,
         "lifecycle_action": "input_provenance_taxonomy",
         "archive_id": read_archive_id(root),
@@ -3893,6 +3904,7 @@ def secret_signal_taxonomy(archive_root: Path | str, *, dry_run: bool = True) ->
     blockers: list[str] = []
     if not dry_run:
         blockers.append("secret-signal-taxonomy is read-only and requires --dry-run.")
+    envelope = operator_envelope_classes(status_class="blocked" if blockers else "preview")
 
     signal_classes = [
         {
@@ -3942,6 +3954,10 @@ def secret_signal_taxonomy(archive_root: Path | str, *, dry_run: bool = True) ->
     return {
         "ok": not blockers,
         "state": "ready" if not blockers else "blocked",
+        "status_class": envelope["status_class"],
+        "input_provenance_class": envelope["input_provenance_class"],
+        "secret_signal_class": envelope["secret_signal_class"],
+        "operator_envelope": envelope,
         "dry_run": True,
         "lifecycle_action": "secret_signal_taxonomy",
         "archive_id": read_archive_id(root),
@@ -3991,6 +4007,7 @@ def ai_response_contract(archive_root: Path | str, *, dry_run: bool = True) -> d
     blockers: list[str] = []
     if not dry_run:
         blockers.append("ai-response-contract is read-only and requires --dry-run.")
+    envelope = operator_envelope_classes(status_class="blocked" if blockers else "preview")
 
     response_sections = [
         {
@@ -4033,6 +4050,10 @@ def ai_response_contract(archive_root: Path | str, *, dry_run: bool = True) -> d
     return {
         "ok": not blockers,
         "state": "ready" if not blockers else "blocked",
+        "status_class": envelope["status_class"],
+        "input_provenance_class": envelope["input_provenance_class"],
+        "secret_signal_class": envelope["secret_signal_class"],
+        "operator_envelope": envelope,
         "dry_run": True,
         "lifecycle_action": "ai_response_contract",
         "archive_id": read_archive_id(root),
@@ -4094,6 +4115,24 @@ def ai_response_contract(archive_root: Path | str, *, dry_run: bool = True) -> d
             "tokens_or_secrets_echoed": False,
             "writes": False,
         },
+    }
+
+
+def operator_envelope_classes(
+    *,
+    status_class: str,
+    input_provenance_class: str = "caller_supplied",
+    secret_signal_class: str = "concept_word",
+) -> dict[str, Any]:
+    return {
+        "schema": OPERATOR_ENVELOPE_CLASS_SCHEMA,
+        "status_class": status_class,
+        "input_provenance_class": input_provenance_class,
+        "secret_signal_class": secret_signal_class,
+        "classification_note": (
+            "archive_root is caller-supplied and validated before use; "
+            "these safety commands return built-in concept words and safe refs, not secret values"
+        ),
     }
 
 

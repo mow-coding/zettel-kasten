@@ -6,6 +6,18 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.156 - 2026-06-25
+
+- Added top-level `status_class`, `input_provenance_class`,
+  `secret_signal_class`, and `operator_envelope` fields to the core read-only
+  operator commands `operation-status-taxonomy`, `input-provenance-taxonomy`,
+  `secret-signal-taxonomy`, and `ai-response-contract`.
+- Added the `wom-kit/operator-envelope-classes/v0.1` schema marker for those
+  fields.
+- Documented the first operator-envelope retrofit checkpoint.
+- Updated README status, capability matrix, public docs, release notes, and CLI
+  tests.
+
 ## v0.3.155 - 2026-06-25
 
 - Added read-only `archive ai-response-contract`, with aliases
