@@ -48,6 +48,7 @@ Supporting philosophy and model docs:
 - [Input Provenance Taxonomy](input-provenance-taxonomy.md)
 - [Secret Signal Taxonomy](secret-signal-taxonomy.md)
 - [AI Response Contract](ai-response-contract.md)
+- [Operator Envelope Classes](operator-envelope-classes.md)
 - [AI Response Concept Guide](ai-response-concept-guide.md)
 - [Archive Status Board](archive-status-board.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)
