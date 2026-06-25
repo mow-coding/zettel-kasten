@@ -513,6 +513,32 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(ok_result["project_pin"]["matches_package_version"])
             self.assertEqual(ok_result["consistency_state"], "source_checkout_match")
 
+    def test_capabilities_machine_manifest_reports_real_parser_commands_without_paths(self) -> None:
+        code, output = self.run_cli(["capabilities", "--machine"])
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertTrue(result["ok"])
+        self.assertIn(result["state"], {"released_local_tag_present", "documented_release_candidate", "development_snapshot"})
+        self.assertEqual(result["summary"]["version"], archive_cli.__version__)
+        self.assertFalse(result["privacy_guards"]["network_checked"])
+        self.assertFalse(result["privacy_guards"]["writes"])
+        commands = result["data"]["commands"]
+        command_names = {item["name"] for item in commands}
+        self.assertIn("capabilities", command_names)
+        self.assertIn("status-board", command_names)
+        self.assertIn("derived-artifact-staleness", command_names)
+        capability = next(item for item in commands if item["name"] == "capabilities")
+        self.assertIn("--machine", capability["options"])
+        serialized = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn(str(KIT_ROOT), serialized)
+        self.assertNotIn(str(Path.home()), serialized)
+
+        summary_code, summary_output = self.run_cli(["capabilities", "--machine", "--no-commands"])
+        summary = json.loads(summary_output)
+        self.assertEqual(summary_code, 0, summary_output)
+        self.assertEqual(summary["data"]["commands"], [])
+        self.assertGreater(summary["summary"]["command_count"], 0)
+
     def test_version_command_reports_project_source_mirror_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = Path(tmp) / "project"
