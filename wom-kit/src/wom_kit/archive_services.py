@@ -978,6 +978,21 @@ OPERATOR_FEEDBACK_DIR = "ops/feedback"
 OPERATOR_FEEDBACK_RECEIPTS_DIR = "receipts/operator-feedback"
 OPERATOR_FEEDBACK_STATUSES = ("draft", "delivered", "acknowledged", "resolved", "archived")
 OPERATOR_FEEDBACK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,120}$")
+APPROVAL_HANDOFF_SCHEMA = "wom-kit/approval-handoff/v0.1"
+APPROVAL_HANDOFF_RECEIPT_SCHEMA = "wom-kit/approval-handoff-receipt/v0.1"
+APPROVAL_HANDOFF_DIR = "ops/approval-handoffs"
+APPROVAL_HANDOFF_RECEIPTS_DIR = "receipts/approval-handoffs"
+APPROVAL_HANDOFF_STATUSES = ("needs_review", "approved_once", "denied", "superseded", "resolved")
+APPROVAL_HANDOFF_OPERATION_KINDS = (
+    "read_private_material",
+    "write_archive_record",
+    "external_provider_action",
+    "publish_or_release",
+    "credential_access",
+    "derived_artifact_update",
+    "other",
+)
+APPROVAL_HANDOFF_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,120}$")
 AI_USAGE_RECEIPTS_DIR = "receipts/ai-usage"
 AI_USAGE_RECEIPT_SCHEMA = "wom-kit/ai-usage-receipt/v0.1"
 AI_USAGE_MAX_LABEL_LENGTH = 160
@@ -3193,6 +3208,282 @@ def operator_feedback_record(
             "network_checked": False,
             "local_absolute_paths_echoed": False,
             "tokens_or_secrets_echoed": False,
+            "writes": approve and not blockers,
+        },
+    }
+
+
+def safe_approval_handoff_id(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not APPROVAL_HANDOFF_ID_RE.match(text):
+        return None
+    if contains_forbidden_location_reference(text) or source_intake_has_provider_url(text) or source_intake_secret_like(text):
+        return None
+    return text
+
+
+def safe_approval_handoff_scalar(value: str | None, *, max_length: int = 240) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > max_length:
+        return None
+    if not safe_source_intake_plan_scalar(text):
+        return None
+    return text
+
+
+def approval_handoff_record_relative_path(handoff_id: str) -> str:
+    return f"{APPROVAL_HANDOFF_DIR}/{handoff_id}.yml"
+
+
+def approval_handoff_receipt_relative_path(handoff_id: str, timestamp: str) -> str:
+    compact = re.sub(r"[^0-9TZ]", "", timestamp)
+    return f"{APPROVAL_HANDOFF_RECEIPTS_DIR}/{handoff_id}.{compact}.json"
+
+
+def approval_handoff_plan(archive_root: Path | str, *, dry_run: bool = True) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    if not dry_run:
+        blockers.append("approval-handoff-plan is read-only and requires --dry-run.")
+    return {
+        "ok": not blockers,
+        "state": "ready" if not blockers else "blocked",
+        "dry_run": True,
+        "lifecycle_action": "approval_handoff_plan",
+        "archive_id": read_archive_id(root),
+        "summary": {
+            "handoff_dir": APPROVAL_HANDOFF_DIR,
+            "receipt_dir": APPROVAL_HANDOFF_RECEIPTS_DIR,
+            "statuses": list(APPROVAL_HANDOFF_STATUSES),
+            "operation_kinds": list(APPROVAL_HANDOFF_OPERATION_KINDS),
+            "execution_performed": False,
+        },
+        "data": {
+            "record_schema": APPROVAL_HANDOFF_SCHEMA,
+            "receipt_schema": APPROVAL_HANDOFF_RECEIPT_SCHEMA,
+            "recommended_record_command": (
+                "archive approval-handoff-record <archive-root> --handoff-id <safe-id> "
+                "--operation-kind <kind> --target-ref <safe-ref> --requested-action <safe-label> "
+                "--status needs_review --dry-run --format json"
+            ),
+            "specialized_approval_commands": [
+                "credential-access-approval-plan",
+                "imap-mailbox-material-capture-approval-plan",
+                "project-intake-record-answer",
+            ],
+            "handoff_boundary": [
+                "handoff records document the human approval state for an operation",
+                "this command never executes the underlying operation",
+                "this command never reads private material, provider data, local secrets, or external URLs",
+                "AI operators should show the summary, blockers, warnings, and next safe action before asking a human to approve",
+            ],
+            "status_lifecycle": [
+                {"status": "needs_review", "meaning": "a human decision is required before the operation continues"},
+                {"status": "approved_once", "meaning": "one future operation attempt may proceed if all other guards pass"},
+                {"status": "denied", "meaning": "the operation must not proceed"},
+                {"status": "superseded", "meaning": "a later handoff replaced this one"},
+                {"status": "resolved", "meaning": "the operation is closed by a receipt, release, or decision"},
+            ],
+        },
+        "blockers": blockers,
+        "warnings": [],
+        "would_change": [],
+        "privacy_guards": {
+            "target_ref_value_echoed": False,
+            "requested_action_value_echoed": False,
+            "private_material_read": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_paths_echoed": False,
+            "tokens_or_secrets_echoed": False,
+            "operation_executed": False,
+            "writes": False,
+        },
+    }
+
+
+def approval_handoff_record(
+    archive_root: Path | str,
+    *,
+    handoff_id: str | None,
+    operation_kind: str,
+    target_ref: str | None,
+    requested_action: str | None,
+    status: str,
+    requested_by: str | None = None,
+    reviewed_by: str | None = None,
+    related_command: list[str] | None = None,
+    related_release: list[str] | None = None,
+    supersedes: str | None = None,
+    resolved_in: str | None = None,
+    dry_run: bool = False,
+    approve: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if dry_run == approve:
+        blockers.append("approval-handoff-record requires exactly one of --dry-run or --approve.")
+
+    safe_id = safe_approval_handoff_id(handoff_id)
+    if safe_id is None:
+        blockers.append("handoff_id must be a safe id using letters, numbers, dot, underscore, or hyphen.")
+
+    normalized_kind = (operation_kind or "").strip()
+    if normalized_kind not in APPROVAL_HANDOFF_OPERATION_KINDS:
+        blockers.append("operation_kind must be one of: " + ", ".join(APPROVAL_HANDOFF_OPERATION_KINDS) + ".")
+
+    normalized_status = (status or "").strip().lower()
+    if normalized_status not in APPROVAL_HANDOFF_STATUSES:
+        blockers.append("status must be one of: " + ", ".join(APPROVAL_HANDOFF_STATUSES) + ".")
+
+    safe_target_ref = safe_approval_handoff_scalar(target_ref, max_length=240)
+    if safe_target_ref is None:
+        blockers.append("target_ref must be a safe non-secret ref, not a URL, email, token, or local path.")
+
+    safe_requested_action = safe_approval_handoff_scalar(requested_action, max_length=240)
+    if safe_requested_action is None:
+        blockers.append("requested_action must be a safe non-secret single-line label.")
+
+    requester = safe_project_intake_actor_id(requested_by) if requested_by else None
+    if requested_by and requester is None:
+        blockers.append("requested_by must be a safe non-secret actor id.")
+
+    reviewer = safe_project_intake_actor_id(reviewed_by) if reviewed_by else None
+    if approve and reviewer is None:
+        blockers.append("--approve requires a safe --reviewed-by actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    commands: list[str] = []
+    for item in related_command or []:
+        safe_command = safe_approval_handoff_scalar(item, max_length=120)
+        if safe_command is None:
+            blockers.append("related_command values must be safe non-secret labels.")
+        elif safe_command not in commands:
+            commands.append(safe_command)
+
+    releases: list[str] = []
+    for item in related_release or []:
+        safe_release = safe_approval_handoff_scalar(item, max_length=80)
+        if safe_release is None:
+            blockers.append("related_release values must be safe non-secret labels.")
+        elif safe_release not in releases:
+            releases.append(safe_release)
+
+    safe_supersedes = safe_approval_handoff_id(supersedes) if supersedes else None
+    if supersedes and safe_supersedes is None:
+        blockers.append("supersedes must be a safe handoff id.")
+    if normalized_status == "superseded" and not safe_supersedes:
+        blockers.append("superseded status requires --supersedes.")
+
+    safe_resolved_in = safe_approval_handoff_scalar(resolved_in, max_length=80) if resolved_in else None
+    if resolved_in and safe_resolved_in is None:
+        blockers.append("resolved_in must be a safe non-secret release or receipt label.")
+    if normalized_status == "resolved" and not safe_resolved_in:
+        blockers.append("resolved status requires --resolved-in.")
+
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    record_relative = approval_handoff_record_relative_path(safe_id or "invalid-handoff-id")
+    receipt_relative = approval_handoff_receipt_relative_path(safe_id or "invalid-handoff-id", now)
+    target_path = root / record_relative
+    receipt_path = root / receipt_relative
+    if target_path.exists() and approve:
+        warnings.append("Existing approval handoff record will be replaced with the approved metadata update.")
+
+    record = {
+        "schema": APPROVAL_HANDOFF_SCHEMA,
+        "handoff_id": safe_id,
+        "operation_kind": normalized_kind if normalized_kind in APPROVAL_HANDOFF_OPERATION_KINDS else None,
+        "target_ref": safe_target_ref,
+        "requested_action": safe_requested_action,
+        "status": normalized_status if normalized_status in APPROVAL_HANDOFF_STATUSES else None,
+        "requested_by": requester,
+        "reviewed_by": reviewer if approve else None,
+        "related_commands": commands,
+        "related_releases": releases,
+        "supersedes": safe_supersedes,
+        "resolved_in": safe_resolved_in,
+        "updated_at": now,
+        "operation_executed_by_this_record": False,
+        "private_material_read_by_this_record": False,
+        "external_provider_called_by_this_record": False,
+    }
+    receipt = {
+        "schema": APPROVAL_HANDOFF_RECEIPT_SCHEMA,
+        "dry_run": dry_run,
+        "approved": approve,
+        "handoff_id": safe_id,
+        "record_path": record_relative,
+        "operation_kind": normalized_kind if normalized_kind in APPROVAL_HANDOFF_OPERATION_KINDS else None,
+        "status": normalized_status if normalized_status in APPROVAL_HANDOFF_STATUSES else None,
+        "reviewed_by": reviewer if approve else None,
+        "record_sha256": sha256_text(dump_yaml(record))
+        if safe_id
+        and safe_target_ref
+        and safe_requested_action
+        and normalized_kind in APPROVAL_HANDOFF_OPERATION_KINDS
+        and normalized_status in APPROVAL_HANDOFF_STATUSES
+        else None,
+        "created_at": now,
+        "closed_actions": {
+            "operation_executed": False,
+            "private_material_read": False,
+            "provider_called": False,
+            "secrets_read": False,
+        },
+    }
+
+    if approve and not blockers:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(target_path, dump_yaml(json_safe(record)))
+        write_text_atomic(receipt_path, json.dumps(json_safe(receipt), indent=2, ensure_ascii=False) + "\n")
+
+    state = "blocked" if blockers else ("written" if approve else "preview")
+    return {
+        "ok": not blockers,
+        "state": state,
+        "dry_run": dry_run or not approve,
+        "approved": approve and not blockers,
+        "lifecycle_action": "approval_handoff_record",
+        "archive_id": read_archive_id(root),
+        "summary": {
+            "handoff_id": safe_id,
+            "operation_kind": normalized_kind if normalized_kind in APPROVAL_HANDOFF_OPERATION_KINDS else None,
+            "status": normalized_status if normalized_status in APPROVAL_HANDOFF_STATUSES else None,
+            "record_path": record_relative if safe_id else None,
+            "receipt_path": receipt_relative if approve and not blockers else None,
+            "target_ref_present": bool(safe_target_ref),
+            "requested_action_present": bool(safe_requested_action),
+            "related_command_count": len(commands),
+            "related_release_count": len(releases),
+            "operation_executed": False,
+        },
+        "data": {
+            "record_schema": APPROVAL_HANDOFF_SCHEMA,
+            "receipt_schema": APPROVAL_HANDOFF_RECEIPT_SCHEMA,
+            "status_lifecycle": list(APPROVAL_HANDOFF_STATUSES),
+            "operation_kinds": list(APPROVAL_HANDOFF_OPERATION_KINDS),
+            "handoff_only": True,
+        },
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "would_change": [] if approve and not blockers else ([record_relative, receipt_relative] if not blockers else []),
+        "files_written": [record_relative, receipt_relative] if approve and not blockers else [],
+        "privacy_guards": {
+            "target_ref_value_echoed": False,
+            "requested_action_value_echoed": False,
+            "private_material_read": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_paths_echoed": False,
+            "tokens_or_secrets_echoed": False,
+            "operation_executed": False,
             "writes": approve and not blockers,
         },
     }

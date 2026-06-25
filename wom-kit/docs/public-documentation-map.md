@@ -42,6 +42,7 @@ Supporting philosophy and model docs:
 - [Zettel-Kasten Layer](../specs/zettel-kasten.md)
 - [Agent Operator Capabilities Manifest](agent-operator-capabilities.md)
 - [Operator Feedback Lifecycle](operator-feedback-lifecycle.md)
+- [Approval Handoff Lifecycle](approval-handoff-lifecycle.md)
 - [AI Response Concept Guide](ai-response-concept-guide.md)
 - [Archive Status Board](archive-status-board.md)
 - [Derived Artifact Staleness](derived-artifact-staleness.md)
