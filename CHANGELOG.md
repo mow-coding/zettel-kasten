@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.147 - 2026-06-25
+
+- Added read-only `archive derived-artifact-staleness`, with aliases
+  `archive report-staleness` and `archive artifact-staleness`, to check
+  whether declared `derived_artifacts` may be stale because a source zet is
+  newer than the artifact's last reviewed sync timestamp.
+- The check reports stale artifacts, missing `source_zettels`, unresolved
+  source zettel refs, and unknown sync timestamps without opening external
+  report bodies or writing archive files.
+- Kept the output privacy-safe: it does not echo artifact refs, zet titles,
+  zettel body text, provider URLs, local absolute paths, tokens, or secret
+  values.
+- Updated README status, capability matrix, public docs, release notes, and CLI
+  tests.
+
 ## v0.3.146 - 2026-06-25
 
 - Added read-only `archive status-board`, with aliases

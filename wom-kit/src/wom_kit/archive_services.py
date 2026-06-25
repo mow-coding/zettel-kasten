@@ -2682,6 +2682,295 @@ def archive_status_board(
     }
 
 
+def comparable_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def public_timestamp(value: datetime | None) -> str | None:
+    value = comparable_datetime(value)
+    if value is None:
+        return None
+    return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def zettel_frontmatter_modified_time(path: Path, frontmatter: dict[str, Any]) -> datetime | None:
+    for key in ["updated_at", "modified_at", "created_at"]:
+        parsed = parse_receipt_time(frontmatter.get(key))
+        if parsed is not None:
+            return comparable_datetime(parsed)
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+    except OSError:
+        return None
+
+
+def derived_artifact_sync_time(artifact: dict[str, Any]) -> datetime | None:
+    for key in ["last_synced_at", "synced_at", "updated_at"]:
+        parsed = parse_receipt_time(artifact.get(key))
+        if parsed is not None:
+            return comparable_datetime(parsed)
+    return None
+
+
+def normalize_derived_source_zettel_ref(ref: Any) -> dict[str, str] | None:
+    if isinstance(ref, str) and ref.strip():
+        value = ref.strip()
+        if value.startswith(VALID_ZETTEL_FOLDERS):
+            return {"relative_path": value}
+        return {"zettel_id": value}
+    if isinstance(ref, dict):
+        for key in ["path", "relative_path", "zettel_path"]:
+            value = ref.get(key)
+            if isinstance(value, str) and value.strip():
+                return {"relative_path": value.strip()}
+        for key in ["zettel_id", "id"]:
+            value = ref.get(key)
+            if isinstance(value, str) and value.strip():
+                return {"zettel_id": value.strip()}
+    return None
+
+
+def derived_artifact_source_zettel_refs(artifact: dict[str, Any]) -> list[dict[str, str]]:
+    raw = artifact.get("source_zettels")
+    if raw is None:
+        raw = artifact.get("source_zettel")
+    items = raw if isinstance(raw, list) else [raw] if raw is not None else []
+    refs: list[dict[str, str]] = []
+    for item in items:
+        normalized = normalize_derived_source_zettel_ref(item)
+        if normalized is not None:
+            refs.append(normalized)
+    return refs
+
+
+def derived_artifact_staleness_item(
+    path: Path,
+    archive_root: Path,
+    frontmatter: dict[str, Any],
+    artifact: dict[str, Any],
+    artifact_index: int,
+    *,
+    state: str,
+    source_paths: list[str] | None = None,
+    unresolved_source_count: int = 0,
+    newer_source_count: int = 0,
+    last_synced_at: datetime | None = None,
+    newest_source_modified_at: datetime | None = None,
+) -> dict[str, Any]:
+    return {
+        "path": archive_relative_path(path, archive_root),
+        "zettel_id": frontmatter.get("id") if isinstance(frontmatter.get("id"), str) else path.stem,
+        "artifact_index": artifact_index,
+        "artifact_ref_present": bool(artifact.get("artifact_ref")),
+        "sync_status_present": bool(artifact.get("sync_status")),
+        "state": state,
+        "last_synced_at": public_timestamp(last_synced_at),
+        "newest_source_modified_at": public_timestamp(newest_source_modified_at),
+        "newer_source_count": newer_source_count,
+        "source_paths": source_paths or [],
+        "unresolved_source_count": unresolved_source_count,
+    }
+
+
+def derived_artifact_staleness_check(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = True,
+    max_items: int = 20,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    max_items = max(1, min(int(max_items), 100))
+    blockers: list[str] = []
+    if not dry_run:
+        blockers.append("derived-artifact-staleness is read-only and requires --dry-run.")
+
+    counts: dict[str, int] = {
+        "zets_checked": 0,
+        "zets_with_derived_artifacts": 0,
+        "artifact_count": 0,
+        "current_artifact": 0,
+        "stale_artifact": 0,
+        "unknown_sync_time": 0,
+        "missing_source_zettels": 0,
+        "unresolved_source_zettels": 0,
+    }
+    boards: dict[str, list[dict[str, Any]]] = {
+        "stale_artifacts": [],
+        "unknown_sync_time": [],
+        "missing_source_zettels": [],
+        "unresolved_source_zettels": [],
+    }
+
+    zettel_frontmatter_by_path: dict[Path, dict[str, Any]] = {}
+    zettel_path_index: dict[str, Path] = {}
+    for candidate in iter_zettel_paths(root):
+        frontmatter = read_zettel_frontmatter_only(candidate)
+        zettel_frontmatter_by_path[candidate] = frontmatter
+        zettel_id = str(frontmatter.get("id") or "").strip()
+        if zettel_id and zettel_id not in zettel_path_index:
+            zettel_path_index[zettel_id] = candidate
+
+    for path, frontmatter in zettel_frontmatter_by_path.items():
+        counts["zets_checked"] += 1
+        if not frontmatter:
+            continue
+        frontmatter = json_safe(frontmatter)
+        raw_artifacts = frontmatter.get("derived_artifacts")
+        if raw_artifacts is None:
+            raw_artifacts = frontmatter.get("external_artifacts")
+        if raw_artifacts is None:
+            raw_artifacts = frontmatter.get("projections")
+        if not isinstance(raw_artifacts, list) or not raw_artifacts:
+            continue
+        counts["zets_with_derived_artifacts"] += 1
+
+        for artifact_index, artifact in enumerate(raw_artifacts):
+            if not isinstance(artifact, dict):
+                continue
+            counts["artifact_count"] += 1
+            refs = derived_artifact_source_zettel_refs(artifact)
+            if not refs:
+                counts["missing_source_zettels"] += 1
+                append_limited(
+                    boards["missing_source_zettels"],
+                    derived_artifact_staleness_item(
+                        path,
+                        root,
+                        frontmatter,
+                        artifact,
+                        artifact_index,
+                        state="missing_source_zettels",
+                    ),
+                    max_items,
+                )
+                continue
+
+            resolved_sources: list[tuple[str, datetime | None]] = []
+            unresolved_source_count = 0
+            for ref in refs:
+                try:
+                    source_path = resolve_zettel_path(
+                        root,
+                        zettel_id=ref.get("zettel_id"),
+                        relative_path=ref.get("relative_path"),
+                        zettel_path_index=zettel_path_index,
+                    )
+                except ArchiveServiceError:
+                    unresolved_source_count += 1
+                    continue
+                source_frontmatter = read_zettel_frontmatter_only(source_path)
+                resolved_sources.append(
+                    (
+                        archive_relative_path(source_path, root),
+                        zettel_frontmatter_modified_time(source_path, source_frontmatter),
+                    )
+                )
+
+            if unresolved_source_count:
+                counts["unresolved_source_zettels"] += 1
+                append_limited(
+                    boards["unresolved_source_zettels"],
+                    derived_artifact_staleness_item(
+                        path,
+                        root,
+                        frontmatter,
+                        artifact,
+                        artifact_index,
+                        state="unresolved_source_zettels",
+                        source_paths=[source for source, _time in resolved_sources],
+                        unresolved_source_count=unresolved_source_count,
+                    ),
+                    max_items,
+                )
+                continue
+
+            last_synced_at = derived_artifact_sync_time(artifact)
+            source_times = [item_time for _source, item_time in resolved_sources if item_time is not None]
+            newest_source_time = max(source_times) if source_times else None
+            if last_synced_at is None:
+                counts["unknown_sync_time"] += 1
+                append_limited(
+                    boards["unknown_sync_time"],
+                    derived_artifact_staleness_item(
+                        path,
+                        root,
+                        frontmatter,
+                        artifact,
+                        artifact_index,
+                        state="unknown_sync_time",
+                        source_paths=[source for source, _time in resolved_sources],
+                        newest_source_modified_at=newest_source_time,
+                    ),
+                    max_items,
+                )
+                continue
+
+            newer_source_count = sum(1 for _source, item_time in resolved_sources if item_time and item_time > last_synced_at)
+            if newer_source_count:
+                counts["stale_artifact"] += 1
+                append_limited(
+                    boards["stale_artifacts"],
+                    derived_artifact_staleness_item(
+                        path,
+                        root,
+                        frontmatter,
+                        artifact,
+                        artifact_index,
+                        state="source_newer_than_artifact_sync",
+                        source_paths=[source for source, _time in resolved_sources],
+                        newer_source_count=newer_source_count,
+                        last_synced_at=last_synced_at,
+                        newest_source_modified_at=newest_source_time,
+                    ),
+                    max_items,
+                )
+            else:
+                counts["current_artifact"] += 1
+
+    findings = (
+        counts["stale_artifact"]
+        + counts["unknown_sync_time"]
+        + counts["missing_source_zettels"]
+        + counts["unresolved_source_zettels"]
+    )
+    next_actions: list[str] = []
+    if counts["stale_artifact"]:
+        next_actions.append("Review stale derived artifacts and refresh the external report from the current source zets.")
+    if counts["unknown_sync_time"]:
+        next_actions.append("Add last_synced_at to derived_artifacts after a reviewed report sync.")
+    if counts["missing_source_zettels"]:
+        next_actions.append("Add source_zettels to derived_artifacts before relying on freshness checks.")
+    if counts["unresolved_source_zettels"]:
+        next_actions.append("Fix derived_artifacts source_zettels that do not resolve to archive zets.")
+
+    return {
+        "ok": not blockers and findings == 0,
+        "dry_run": True,
+        "lifecycle_action": "derived_artifact_staleness_check",
+        "archive_id": read_archive_id(root),
+        "counts": counts,
+        "boards": boards,
+        "max_items": max_items,
+        "blockers": blockers,
+        "warnings": [],
+        "next_actions": next_actions,
+        "would_change": [],
+        "privacy_guards": {
+            "artifact_ref_values_echoed": False,
+            "zettel_body_text_echoed": False,
+            "zettel_titles_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "external_artifact_body_read": False,
+            "writes": False,
+        },
+    }
+
+
 def zettel_summary(path: Path, archive_root: Path, expected_status: str) -> dict[str, Any]:
     frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
     frontmatter = json_safe(frontmatter)
