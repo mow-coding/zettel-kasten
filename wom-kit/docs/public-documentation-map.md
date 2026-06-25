@@ -41,6 +41,7 @@ Supporting philosophy and model docs:
 - [Zettel Lifecycle](../specs/zettel-lifecycle.md)
 - [Zettel-Kasten Layer](../specs/zettel-kasten.md)
 - [AI Response Concept Guide](ai-response-concept-guide.md)
+- [Archive Status Board](archive-status-board.md)
 - [zet Quality Check](zet-quality-check.md)
 - [Source Object Storage Policy](source-object-storage-policy.md)
 - [Text Provenance Hierarchy](text-provenance-hierarchy.md)

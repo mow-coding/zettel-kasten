@@ -2467,6 +2467,221 @@ def list_zettels(archive_root: Path | str, status: str = "canonical", limit: int
     return {"zettels": zettels, "count": len(zettels)}
 
 
+def archive_status_item(
+    path: Path,
+    archive_root: Path,
+    frontmatter: dict[str, Any],
+    *,
+    folder: str,
+    expected_status: str,
+) -> dict[str, Any]:
+    raw_status = str(frontmatter.get("status") or expected_status)
+    status = raw_status if raw_status in {"draft", "canonical", "archived", "redacted"} else "other"
+    raw_document_type = zettel_quality_scalar(frontmatter, "document_type")
+    document_type = raw_document_type if raw_document_type in ZET_QUALITY_DOCUMENT_TYPES else None
+    raw_audience = zettel_quality_scalar(frontmatter, "audience")
+    audience = raw_audience if raw_audience in ZET_QUALITY_AUDIENCES else None
+    return {
+        "path": archive_relative_path(path, archive_root),
+        "zettel_id": frontmatter.get("id") if isinstance(frontmatter.get("id"), str) else path.stem,
+        "folder": folder,
+        "status": status,
+        "title_present": bool(str(frontmatter.get("title") or "").strip()),
+        "document_type": document_type,
+        "document_type_present": bool(raw_document_type),
+        "audience": audience,
+        "audience_present": bool(raw_audience),
+        "redacted": raw_status == "redacted",
+    }
+
+
+def append_limited(items: list[dict[str, Any]], item: dict[str, Any], max_items: int) -> None:
+    if len(items) < max_items:
+        items.append(item)
+
+
+def zettel_mint_receipt_gap(root: Path, frontmatter: dict[str, Any]) -> str | None:
+    mint = frontmatter.get("mint") if isinstance(frontmatter.get("mint"), dict) else {}
+    receipt_ref = mint.get("receipt_path")
+    if not receipt_ref:
+        return None
+    try:
+        receipt_path = resolve_archive_relative_path(root, str(receipt_ref))
+    except ArchivePathError:
+        return "mint_receipt_path_unsafe"
+    if not receipt_path.is_file():
+        return "mint_receipt_missing"
+    return None
+
+
+def archive_status_board(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = True,
+    max_items: int = 20,
+    include_quality: bool = False,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    max_items = max(1, min(int(max_items), 100))
+    blockers: list[str] = []
+    if not dry_run:
+        blockers.append("status-board is read-only and requires --dry-run.")
+
+    counts: dict[str, int] = {
+        "canonical": 0,
+        "draft": 0,
+        "archived": 0,
+        "redacted": 0,
+        "other_status": 0,
+        "inbox_draft": 0,
+        "canonical_folder": 0,
+        "minted_draft_pending_retire": 0,
+        "active_draft": 0,
+        "canonical_lifecycle_metadata_missing": 0,
+        "mint_receipt_gap": 0,
+        "document_type_missing": 0,
+        "audience_missing": 0,
+        "source_metadata_gap": 0,
+        "derived_artifact_gap": 0,
+        "quality_blocker_candidate": 0,
+        "quality_warning_candidate": 0,
+    }
+    boards: dict[str, list[dict[str, Any]]] = {
+        "canonical": [],
+        "active_drafts": [],
+        "minted_drafts_pending_retire": [],
+        "canonical_lifecycle_metadata_missing": [],
+        "mint_receipt_gaps": [],
+        "document_type_missing": [],
+        "audience_missing": [],
+        "source_metadata_gaps": [],
+        "derived_artifact_gaps": [],
+        "quality_attention": [],
+    }
+
+    for folder, expected_status in [("zettels", "canonical"), ("inbox", "draft")]:
+        folder_root = root / folder
+        if not folder_root.is_dir():
+            continue
+        for path in safe_archive_glob(folder_root, "*.md", root, recursive=True):
+            try:
+                text = path.read_text(encoding="utf-8")
+                frontmatter, body = split_zettel_text(text)
+            except OSError:
+                continue
+            frontmatter = json_safe(frontmatter)
+            item = archive_status_item(path, root, frontmatter, folder=folder, expected_status=expected_status)
+            status = item["status"]
+            if status in {"canonical", "draft", "archived", "redacted"}:
+                counts[status] += 1
+            else:
+                counts["other_status"] += 1
+
+            if folder == "zettels":
+                counts["canonical_folder"] += 1
+                append_limited(boards["canonical"], item, max_items)
+                if "mint" not in frontmatter and "promotion" not in frontmatter:
+                    counts["canonical_lifecycle_metadata_missing"] += 1
+                    append_limited(boards["canonical_lifecycle_metadata_missing"], item, max_items)
+                gap = zettel_mint_receipt_gap(root, frontmatter)
+                if gap:
+                    counts["mint_receipt_gap"] += 1
+                    append_limited(boards["mint_receipt_gaps"], {**item, "gap_code": gap}, max_items)
+            elif folder == "inbox":
+                counts["inbox_draft"] += 1
+                twin = is_minted_inbox_draft_twin(root, path)
+                if twin:
+                    counts["minted_draft_pending_retire"] += 1
+                    append_limited(
+                        boards["minted_drafts_pending_retire"],
+                        {
+                            **item,
+                            "canonical_path": twin.get("canonical_path"),
+                            "retire_receipt_path": twin.get("retire_receipt_path"),
+                            "next_command": f"archive retire-draft <archive-root> --path {item['path']} --dry-run",
+                        },
+                        max_items,
+                    )
+                else:
+                    counts["active_draft"] += 1
+                    append_limited(boards["active_drafts"], item, max_items)
+
+            if not item["document_type_present"]:
+                counts["document_type_missing"] += 1
+                append_limited(boards["document_type_missing"], item, max_items)
+            if not item["audience_present"]:
+                counts["audience_missing"] += 1
+                append_limited(boards["audience_missing"], item, max_items)
+
+            source_summary = source_ref_metadata_summary(frontmatter)
+            if source_summary.get("missing_metadata_count") or source_summary.get("rights_review_missing_count"):
+                counts["source_metadata_gap"] += 1
+                append_limited(boards["source_metadata_gaps"], {**item, "source_metadata": source_summary}, max_items)
+
+            artifact_summary = derived_artifact_summary(frontmatter)
+            if artifact_summary.get("missing_source_link_count") or artifact_summary.get("missing_sync_status_count"):
+                counts["derived_artifact_gap"] += 1
+                append_limited(boards["derived_artifact_gaps"], {**item, "derived_artifacts": artifact_summary}, max_items)
+
+            if include_quality:
+                quality = zettel_quality_assessment(root, path, frontmatter, body)
+                blocker_count = int(quality.get("blocker_count") or 0)
+                warning_count = int(quality.get("warning_count") or 0)
+                if blocker_count:
+                    counts["quality_blocker_candidate"] += 1
+                if warning_count:
+                    counts["quality_warning_candidate"] += 1
+                if blocker_count or warning_count:
+                    append_limited(
+                        boards["quality_attention"],
+                        {
+                            **item,
+                            "quality_state": quality.get("quality_state"),
+                            "blocker_count": blocker_count,
+                            "warning_count": warning_count,
+                            "issue_count": int(quality.get("issue_count") or 0),
+                            "next_command": f"archive zet-quality-check <archive-root> --path {item['path']} --dry-run --format json",
+                        },
+                        max_items,
+                    )
+
+    next_actions: list[str] = []
+    if counts["minted_draft_pending_retire"]:
+        next_actions.append("Review minted inbox drafts and close them with retire-draft after dry-run verification.")
+    if counts["document_type_missing"] or counts["audience_missing"]:
+        next_actions.append("Add document_type and audience to zets that will feed external artifacts.")
+    if counts["source_metadata_gap"]:
+        next_actions.append("Review source_refs with missing acquisition, verification, or rights metadata.")
+    if counts["derived_artifact_gap"]:
+        next_actions.append("Add source links and sync status to derived_artifacts before treating reports as current.")
+    if not include_quality:
+        next_actions.append("Rerun status-board with --include-quality when you want body-inspecting quality counts.")
+
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "lifecycle_action": "archive_status_board",
+        "archive_id": read_archive_id(root),
+        "counts": counts,
+        "boards": boards,
+        "include_quality": include_quality,
+        "max_items": max_items,
+        "blockers": blockers,
+        "warnings": [],
+        "next_actions": next_actions,
+        "would_change": [],
+        "privacy_guards": {
+            "body_text_echoed": False,
+            "title_values_echoed": False,
+            "unrecognized_frontmatter_values_echoed": False,
+            "source_ref_values_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "writes": False,
+        },
+    }
+
+
 def zettel_summary(path: Path, archive_root: Path, expected_status: str) -> dict[str, Any]:
     frontmatter, _body = split_zettel_text(path.read_text(encoding="utf-8"))
     frontmatter = json_safe(frontmatter)
