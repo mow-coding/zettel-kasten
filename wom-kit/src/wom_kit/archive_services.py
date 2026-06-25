@@ -972,6 +972,12 @@ OPERATIONAL_CONTEXT_RELATIVE_PATH = "ops/operational-context.yml"
 OPERATIONAL_CONTEXT_RECEIPTS_DIR = "receipts/operational-context"
 OPERATIONAL_CONTEXT_MAX_TEXT_LENGTH = 600
 OPERATIONAL_CONTEXT_MAX_LIST_ITEMS = 24
+OPERATOR_FEEDBACK_SCHEMA = "wom-kit/operator-feedback/v0.1"
+OPERATOR_FEEDBACK_RECEIPT_SCHEMA = "wom-kit/operator-feedback-receipt/v0.1"
+OPERATOR_FEEDBACK_DIR = "ops/feedback"
+OPERATOR_FEEDBACK_RECEIPTS_DIR = "receipts/operator-feedback"
+OPERATOR_FEEDBACK_STATUSES = ("draft", "delivered", "acknowledged", "resolved", "archived")
+OPERATOR_FEEDBACK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,120}$")
 AI_USAGE_RECEIPTS_DIR = "receipts/ai-usage"
 AI_USAGE_RECEIPT_SCHEMA = "wom-kit/ai-usage-receipt/v0.1"
 AI_USAGE_MAX_LABEL_LENGTH = 160
@@ -2967,6 +2973,227 @@ def derived_artifact_staleness_check(
             "local_absolute_paths_echoed": False,
             "external_artifact_body_read": False,
             "writes": False,
+        },
+    }
+
+
+def safe_operator_feedback_id(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not OPERATOR_FEEDBACK_ID_RE.match(text):
+        return None
+    if contains_forbidden_location_reference(text) or source_intake_has_provider_url(text) or source_intake_secret_like(text):
+        return None
+    return text
+
+
+def safe_operator_feedback_scalar(value: str | None, *, max_length: int = 240) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > max_length:
+        return None
+    if not safe_source_intake_plan_scalar(text):
+        return None
+    return text
+
+
+def operator_feedback_record_relative_path(feedback_id: str) -> str:
+    return f"{OPERATOR_FEEDBACK_DIR}/{feedback_id}.yml"
+
+
+def operator_feedback_receipt_relative_path(feedback_id: str, timestamp: str) -> str:
+    compact = re.sub(r"[^0-9TZ]", "", timestamp)
+    return f"{OPERATOR_FEEDBACK_RECEIPTS_DIR}/{feedback_id}.{compact}.json"
+
+
+def operator_feedback_plan(archive_root: Path | str, *, dry_run: bool = True) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    if not dry_run:
+        blockers.append("operator-feedback-plan is read-only and requires --dry-run.")
+    return {
+        "ok": not blockers,
+        "state": "ready" if not blockers else "blocked",
+        "dry_run": True,
+        "lifecycle_action": "operator_feedback_plan",
+        "archive_id": read_archive_id(root),
+        "summary": {
+            "feedback_dir": OPERATOR_FEEDBACK_DIR,
+            "receipt_dir": OPERATOR_FEEDBACK_RECEIPTS_DIR,
+            "statuses": list(OPERATOR_FEEDBACK_STATUSES),
+            "body_storage": "not_managed_by_this_command",
+            "external_submission": "future_boundary",
+        },
+        "data": {
+            "record_schema": OPERATOR_FEEDBACK_SCHEMA,
+            "receipt_schema": OPERATOR_FEEDBACK_RECEIPT_SCHEMA,
+            "recommended_record_command": (
+                "archive operator-feedback-record <archive-root> --feedback-id <safe-id> "
+                "--feedback-ref <safe-ref> --status draft --dry-run --format json"
+            ),
+            "lifecycle": [
+                {"status": "draft", "meaning": "feedback exists but has not been sent or recorded as delivered"},
+                {"status": "delivered", "meaning": "feedback was delivered to the project team or relay channel"},
+                {"status": "acknowledged", "meaning": "the project team confirmed receipt"},
+                {"status": "resolved", "meaning": "a release or decision closed the feedback"},
+                {"status": "archived", "meaning": "feedback is kept for history and no active action remains"},
+            ],
+            "storage_boundary": [
+                "operator feedback metadata belongs under ops/feedback/",
+                "user knowledge objets should not be used as the canonical lifecycle tracker for tool feedback",
+                "this command does not copy, move, read, or submit feedback body files",
+            ],
+        },
+        "blockers": blockers,
+        "warnings": [],
+        "would_change": [],
+        "privacy_guards": {
+            "feedback_body_read": False,
+            "feedback_ref_value_echoed": False,
+            "title_value_echoed": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_paths_echoed": False,
+            "tokens_or_secrets_echoed": False,
+            "writes": False,
+        },
+    }
+
+
+def operator_feedback_record(
+    archive_root: Path | str,
+    *,
+    feedback_id: str | None,
+    feedback_ref: str | None,
+    status: str,
+    title: str | None = None,
+    related_release: list[str] | None = None,
+    resolved_in: str | None = None,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if dry_run == approve:
+        blockers.append("operator-feedback-record requires exactly one of --dry-run or --approve.")
+
+    safe_id = safe_operator_feedback_id(feedback_id)
+    if safe_id is None:
+        blockers.append("feedback_id must be a safe id using letters, numbers, dot, underscore, or hyphen.")
+
+    safe_ref = safe_operator_feedback_scalar(feedback_ref, max_length=240)
+    if safe_ref is None:
+        blockers.append("feedback_ref must be a safe non-secret ref, not a URL, email, token, or local path.")
+
+    normalized_status = (status or "").strip().lower()
+    if normalized_status not in OPERATOR_FEEDBACK_STATUSES:
+        blockers.append("status must be one of: " + ", ".join(OPERATOR_FEEDBACK_STATUSES) + ".")
+
+    safe_title = safe_operator_feedback_scalar(title, max_length=240) if title else None
+    if title and safe_title is None:
+        blockers.append("title must be a safe non-secret single-line label.")
+
+    releases: list[str] = []
+    for item in related_release or []:
+        safe_release = safe_operator_feedback_scalar(item, max_length=80)
+        if safe_release is None:
+            blockers.append("related_release values must be safe non-secret labels.")
+        elif safe_release not in releases:
+            releases.append(safe_release)
+
+    safe_resolved_in = safe_operator_feedback_scalar(resolved_in, max_length=80) if resolved_in else None
+    if resolved_in and safe_resolved_in is None:
+        blockers.append("resolved_in must be a safe non-secret release label.")
+    if normalized_status == "resolved" and not safe_resolved_in:
+        blockers.append("resolved status requires --resolved-in.")
+
+    reviewer = safe_project_intake_actor_id(reviewed_by)
+    if approve and reviewer is None:
+        blockers.append("--approve requires a safe --reviewed-by actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    record_relative = operator_feedback_record_relative_path(safe_id or "invalid-feedback-id")
+    receipt_relative = operator_feedback_receipt_relative_path(safe_id or "invalid-feedback-id", now)
+    target_path = root / record_relative
+    receipt_path = root / receipt_relative
+    if target_path.exists() and approve:
+        warnings.append("Existing operator feedback record will be replaced with the approved metadata update.")
+
+    record = {
+        "schema": OPERATOR_FEEDBACK_SCHEMA,
+        "feedback_id": safe_id,
+        "feedback_ref": safe_ref,
+        "status": normalized_status,
+        "title": safe_title,
+        "related_releases": releases,
+        "resolved_in": safe_resolved_in,
+        "updated_at": now,
+        "reviewed_by": reviewer if approve else None,
+        "body_managed_by_this_record": False,
+        "external_submission_performed": False,
+    }
+    receipt = {
+        "schema": OPERATOR_FEEDBACK_RECEIPT_SCHEMA,
+        "dry_run": dry_run,
+        "approved": approve,
+        "feedback_id": safe_id,
+        "record_path": record_relative,
+        "status": normalized_status,
+        "reviewed_by": reviewer if approve else None,
+        "record_sha256": sha256_text(dump_yaml(record)) if safe_id and safe_ref and normalized_status in OPERATOR_FEEDBACK_STATUSES else None,
+        "created_at": now,
+    }
+
+    if approve and not blockers:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(target_path, dump_yaml(json_safe(record)))
+        write_text_atomic(receipt_path, json.dumps(json_safe(receipt), indent=2, ensure_ascii=False) + "\n")
+
+    state = "blocked" if blockers else ("written" if approve else "preview")
+    return {
+        "ok": not blockers,
+        "state": state,
+        "dry_run": dry_run or not approve,
+        "approved": approve and not blockers,
+        "lifecycle_action": "operator_feedback_record",
+        "archive_id": read_archive_id(root),
+        "summary": {
+            "feedback_id": safe_id,
+            "status": normalized_status if normalized_status in OPERATOR_FEEDBACK_STATUSES else None,
+            "record_path": record_relative if safe_id else None,
+            "receipt_path": receipt_relative if approve and not blockers else None,
+            "title_present": bool(safe_title),
+            "feedback_ref_present": bool(safe_ref),
+            "related_release_count": len(releases),
+            "resolved_in_present": bool(safe_resolved_in),
+        },
+        "data": {
+            "record_schema": OPERATOR_FEEDBACK_SCHEMA,
+            "receipt_schema": OPERATOR_FEEDBACK_RECEIPT_SCHEMA,
+            "status_lifecycle": list(OPERATOR_FEEDBACK_STATUSES),
+            "body_managed_by_this_command": False,
+            "external_submission_performed": False,
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+        "would_change": [] if approve and not blockers else ([record_relative, receipt_relative] if not blockers else []),
+        "files_written": [record_relative, receipt_relative] if approve and not blockers else [],
+        "privacy_guards": {
+            "feedback_body_read": False,
+            "feedback_ref_value_echoed": False,
+            "title_value_echoed": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_paths_echoed": False,
+            "tokens_or_secrets_echoed": False,
+            "writes": approve and not blockers,
         },
     }
 
