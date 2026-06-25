@@ -109,6 +109,8 @@ Commands:
           Check one zet for entity, document-type, source, audience, correction, and derived-artifact risks.
   status-board
           Summarize canonical, draft, retire, source metadata, and derived-artifact status without writes.
+  derived-artifact-staleness
+          Check whether declared derived artifacts may be stale relative to source zets.
   credential-semantic-extraction-recipe
           Print a read-only semantic recipe for splitting complex credential notes without reading secrets.
   connected-accounts
@@ -6120,6 +6122,39 @@ def command_status_board(args: argparse.Namespace) -> int:
         if args.include_quality:
             print(f"Quality blocker candidates: {counts.get('quality_blocker_candidate', 0)}")
             print(f"Quality warning candidates: {counts.get('quality_warning_candidate', 0)}")
+        if result.get("next_actions"):
+            print("Next actions:")
+            for action in result["next_actions"]:
+                print(f"- {action}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_derived_artifact_staleness(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("derived-artifact-staleness is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.derived_artifact_staleness_check(
+            Path(args.archive_root),
+            dry_run=True,
+            max_items=args.max_items,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
+        print("Derived artifact staleness check.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Derived artifacts: {counts.get('artifact_count', 0)}")
+        print(f"Current: {counts.get('current_artifact', 0)}")
+        print(f"Stale: {counts.get('stale_artifact', 0)}")
+        print(f"Unknown sync time: {counts.get('unknown_sync_time', 0)}")
+        print(f"Missing source zettels: {counts.get('missing_source_zettels', 0)}")
+        print(f"Unresolved source zettels: {counts.get('unresolved_source_zettels', 0)}")
         if result.get("next_actions"):
             print("Next actions:")
             for action in result["next_actions"]:
@@ -13067,6 +13102,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     status_board.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     status_board.set_defaults(func=command_status_board)
+
+    derived_artifact_staleness = subcommands.add_parser(
+        "derived-artifact-staleness",
+        aliases=["report-staleness", "artifact-staleness"],
+        help="Read-only freshness check for derived_artifacts against their source zets.",
+    )
+    derived_artifact_staleness.add_argument("archive_root", help="Archive root to inspect.")
+    derived_artifact_staleness.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Preview only; write nothing.",
+    )
+    derived_artifact_staleness.add_argument("--max-items", type=int, default=20, help="Maximum example items per board.")
+    derived_artifact_staleness.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    derived_artifact_staleness.set_defaults(func=command_derived_artifact_staleness)
 
     read_zettel = subcommands.add_parser("read-zettel", help="Read one zettel by id or archive-relative path.")
     read_zettel.add_argument("archive_root", help="Archive root to inspect.")

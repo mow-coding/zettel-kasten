@@ -22100,6 +22100,59 @@ state:
             self.assertNotIn(title_marker, text_output)
             self.assertNotIn(source_marker, text_output)
 
+    def test_derived_artifact_staleness_detects_source_updates_without_content_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            source_path = archive_root / "zettels" / "zet_20240504_fake_lunch_thought.md"
+            target_path = archive_root / "zettels" / "zet_20260519_fake_family_memory.md"
+            source_frontmatter, source_body = archive_services.split_zettel_text(source_path.read_text(encoding="utf-8"))
+            target_frontmatter, target_body = archive_services.split_zettel_text(target_path.read_text(encoding="utf-8"))
+            body_marker = "PRIVATE_STALENESS_BODY_MARKER"
+            artifact_ref_marker = "https://example.org/private-derived-report"
+            source_frontmatter["updated_at"] = "2026-06-25T12:00:00Z"
+            target_frontmatter["derived_artifacts"] = [
+                {
+                    "artifact_ref": artifact_ref_marker,
+                    "source_zettels": ["zet_20240504_fake_lunch_thought"],
+                    "last_synced_at": "2026-06-24T00:00:00Z",
+                    "sync_status": "synced",
+                }
+            ]
+            source_path.write_text(
+                "---\n" + archive_cli.dump_yaml(source_frontmatter) + "---\n\n" + source_body + f"\n{body_marker}\n",
+                encoding="utf-8",
+            )
+            target_path.write_text(
+                "---\n" + archive_cli.dump_yaml(target_frontmatter) + "---\n\n" + target_body + f"\n{body_marker}\n",
+                encoding="utf-8",
+            )
+            before = self.archive_tree_snapshot(archive_root)
+
+            code, output = self.run_cli(
+                ["derived-artifact-staleness", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertEqual(result["lifecycle_action"], "derived_artifact_staleness_check")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["counts"]["stale_artifact"], 1)
+            self.assertEqual(result["counts"]["current_artifact"], 0)
+            self.assertFalse(result["privacy_guards"]["artifact_ref_values_echoed"])
+            self.assertFalse(result["privacy_guards"]["zettel_body_text_echoed"])
+            self.assertFalse(result["privacy_guards"]["external_artifact_body_read"])
+            serialized = json.dumps(result, ensure_ascii=False)
+            self.assertNotIn(artifact_ref_marker, serialized)
+            self.assertNotIn(body_marker, serialized)
+            self.assertIn("zettels/zet_20260519_fake_family_memory.md", serialized)
+            self.assertIn("zettels/zet_20240504_fake_lunch_thought.md", serialized)
+            self.assertEqual(before, self.archive_tree_snapshot(archive_root))
+
+            text_code, text_output = self.run_cli(["report-staleness", str(archive_root), "--dry-run"])
+            self.assertEqual(text_code, 1, text_output)
+            self.assertIn("Derived artifact staleness check.", text_output)
+            self.assertNotIn(artifact_ref_marker, text_output)
+            self.assertNotIn(body_marker, text_output)
+
     def test_read_zettel_by_id_and_path(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"
         zettel_id = "zet_20240504_fake_lunch_thought"
