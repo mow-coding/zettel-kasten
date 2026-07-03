@@ -6,6 +6,39 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.161 - 2026-07-03
+
+- Restructured README.md and README.ko.md (docs-only, no behavior change).
+  After ~160 one-append-per-release batches the READMEs had accreted a
+  49-line "Earlier public baseline" ladder, "What exists today" bullets that
+  had grown into 1,600-3,900-character run-on sentences, and a ~200-tag
+  release list in the Versioning section.
+- The Status section now carries only the current-baseline code block, ONE
+  previous-baseline line, and a single "Full release history" pointer to
+  CHANGELOG.md and `wom-kit/docs/releases/`; the roadmap-snapshot paragraph
+  and the not-production-ready sentence are unchanged.
+- "What exists today" became a "What Exists Today" section with nine thematic
+  subsections (Archive core & lifecycle; Capture & intake; Retrieval & views;
+  Sharing & ZET previews; Privacy & redaction; AI-operator contracts &
+  runtime handoff; Provider integrations; Credentials & setup guidance;
+  Hygiene & release tooling). Every capability claim from the old monster
+  bullets survives as a shorter bullet; the section keeps its single pointer
+  to the WOM-kit Capability Matrix for the status-by-capability view. No
+  capability claims were added or dropped (claim mapping recorded in the
+  v0.3.161 decision log).
+- The Versioning section keeps its two intro sentences and now states the
+  current checkpoint tag, that every release is tagged, and where the full
+  tag history lives (CHANGELOG.md, VERSIONING.md, GitHub releases), plus a
+  compact paragraph for the checkpoint baselines that earlier release notes
+  still reference; the per-line tag list is deleted. README.ko.md received
+  the same restructure as a real Korean rendition, not a machine-literal
+  translation.
+- Adopted the README maintenance contract (recorded in the v0.3.161 decision
+  log and as an HTML comment at the top of each Status section): per release,
+  update ONLY the current-baseline line, the one previous-baseline line, and
+  (for feature releases) at most ONE thematic bullet; release history lives
+  in CHANGELOG.md and `wom-kit/docs/releases/`.
+
 ## v0.3.160 - 2026-07-03
 
 - Added the AI Intake Protocol to every runtime-visible surface

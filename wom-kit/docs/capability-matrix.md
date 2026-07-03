@@ -1,9 +1,10 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.160 AI intake protocol and store guards checkpoint
+Status: v0.3.161 README restructure checkpoint
 Date: 2026-07-03
-Version: v0.3.160, release candidate
+Version: v0.3.161, release candidate
 
+Previous checkpoint: Status: v0.3.160 AI intake protocol and store guards checkpoint
 Previous checkpoint: Status: v0.3.159 paired transcript intake and derive-text encoding checkpoint
 Previous checkpoint: Status: v0.3.158 objet-capture enablement checkpoint
 Previous checkpoint: Status: v0.3.157 honest capture guidance checkpoint
