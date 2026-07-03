@@ -21,6 +21,14 @@ C:\Users\<user>\zettel-kasten-<profile_slug>-objets
 Remote object storage remains a deferred manual external step unless the user
 explicitly chooses to plan R2, B2, S3, or another provider.
 
+Layout ruling (D2, 2026-07-03): the sibling local objet store is for bulk
+external originals under never-touch protection (represented through
+`prehashed-objet-ledger` plus `object-storage-upload-evidence` evidence).
+Capture intake stages INSIDE the archive root under `staging/incoming/` and
+lands originals in the content-addressed `objects/sha256/` store. A raw
+in-root `objets/` folder is discouraged; the migration guide lives in
+[artifact-hygiene.md](artifact-hygiene.md) section 5.
+
 ## Default Layout
 
 For a resolved WOM profile, the v0.2.21 planner proposes:

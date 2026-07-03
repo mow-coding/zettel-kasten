@@ -1,6 +1,6 @@
 # Operator Feedback Lifecycle
 
-Status: v0.3.149 approval-gated metadata checkpoint
+Status: v0.3.149 approval-gated metadata checkpoint; runtime discoverability and shipped schema files since v0.3.160
 
 WOM now gives operator-generated tool feedback a separate lifecycle surface.
 
@@ -52,6 +52,14 @@ archive feedback-record <archive-root> ...
 archive feedback-register <archive-root> ...
 ```
 
+## Runtime Discovery
+
+Since v0.3.160 the read-only plan command is part of the runtime discovery
+chain: `archive runtime-context` lists it in `recommended_first_commands`
+(appended fourth entry), `ai_runtime_order` carries step 7
+`plan_operator_feedback`, and `available_safe_actions` includes
+`run operator-feedback-plan dry-run`.
+
 ## Storage
 
 Approved metadata records go under:
@@ -65,6 +73,14 @@ Receipts go under:
 ```text
 receipts/operator-feedback/
 ```
+
+## Schemas
+
+Since v0.3.160 the record and receipt shapes ship as real schema files —
+`wom-kit/schemas/operator-feedback.schema.json` and
+`wom-kit/schemas/operator-feedback-receipt.schema.json` — matching the
+unchanged schema-id strings `wom-kit/operator-feedback/v0.1` and
+`wom-kit/operator-feedback-receipt/v0.1`.
 
 ## Statuses
 

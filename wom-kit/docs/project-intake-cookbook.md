@@ -42,8 +42,14 @@ copying objects, drafting, minting, uploading, or cleaning. This cookbook is the
 human-guided promotion spine for the selected subset that should become visible
 drafts or zets.
 
-The example commands below use `archive-objets/` as a recommended local staging
-root for new intake rehearsals. That does not mean an existing external
+Earlier revisions used a sibling `archive-objets/` as a recommended local staging
+root for new intake rehearsals. Since the intake layout ruling (D2, 2026-07-03),
+capture rehearsals stage INSIDE the archive at `staging/incoming/` — exactly what
+the commands below do — because `objet-capture-selection` requires
+archive-relative staged paths. A dated layer such as
+`staging/incoming/<YYYY-MM-DD>/` is recommended for real intake sessions, not
+required; this rehearsal keeps the bare folder. The sibling store remains the
+home for bulk external originals, and that does not mean an existing external
 content-addressed store must be moved there. Keep raw stores outside the
 Git-tracked archive unless your archive policy says otherwise, and use a safe
 `--store-ref` label when registering an externally verified prehashed ledger.

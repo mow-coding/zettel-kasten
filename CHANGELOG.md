@@ -6,6 +6,72 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.160 - 2026-07-03
+
+- Added the AI Intake Protocol to every runtime-visible surface
+  (personal/family/company AGENTS.md templates, the fake-life-archive example
+  AGENTS.md, `templates/ai-runtime/wom-archive/SKILL.md`, and
+  `docs/wom-ai-runtime-skill-plugin-layer.md`): BEFORE physically copying any
+  local file into the archive or an objet store — not just before drafting —
+  run `archive source-intake <archive-root> --dry-run --local-path <file>`,
+  stage inside the archive root, and route captures only through the reviewed
+  `objet-capture-selection` -> `objet-capture` approval chain (real archives
+  also need `objet-capture-enable`; bulk external stores go through
+  `prehashed-objet-ledger` plus `object-storage-upload-evidence` instead of
+  per-file copies).
+- Added two additive read-only doctor warnings:
+  `archive_objets_layout_noncanonical` fires whenever a raw in-root `objets/`
+  folder exists (the D2 layout signal; deliberately NOT silenced by
+  gitignoring the folder, because ignored originals silently drop out of the
+  git-push backup path), and `workspace_objet_store_git_exposure` fires when
+  an objet byte store (in-root `objets/` or the sibling `<root-name>-objets`
+  store) sits inside a git working tree whose ignore rules do not plainly
+  exclude it. Detection is filesystem-cheap and fail-quiet: stores and
+  archives that are their own VALID git repos never warn (a `.git` dir with
+  `HEAD`, or a worktree/submodule `gitdir:` pointer file whose target exists
+  with `HEAD`), while a BROKEN marker — empty `.git` dir, dangling pointer —
+  is ignored by real git and counts as ambiguous, so the guard still warns;
+  bare repositories never warn, the valid archive-is-its-own-repo case stays
+  silent (the archive `.gitignore` completeness check owns that signal), and
+  the sibling store's contents are never enumerated. Anchored `.gitignore`
+  lines only silence the warning from the store's own parent directory (an
+  anchored repo-root line does not match a nested store in git), and the fix
+  hint names the anchored or unanchored form accordingly. The exposure
+  message names the store's basename only — never a local absolute path.
+- Added the anchored `/objets/` pattern to the recommended archive
+  `.gitignore` defaults (`init`, `repair-gitignore`, doctor's completeness
+  check, `tools/check_artifact_hygiene.py`, and the fake-life-archive
+  fixture). Anchoring is deliberate: nested `objets/` folders inside staged
+  client trees keep their normal handling.
+- Ruled the official intake layout (D2, dev-team decision, 2026-07-03):
+  canonical capture intake stages INSIDE the archive root under
+  `staging/incoming/<YYYY-MM-DD>/` (date layer recommended, not required);
+  the sibling `-objets` store is for bulk external originals under
+  never-touch protection with prehashed-ledger evidence; a raw in-root
+  `objets/` folder is non-canonical, with a register-then-capture migration
+  guide in `docs/artifact-hygiene.md`. `project_intake_staging_convention`
+  (the shared check behind project-intake-plan and
+  project-intake-unpack-queue) now accepts in-archive `staging/incoming/`
+  staging as `matches_recommended_shape` with additive `matched_shape` /
+  `recommended_in_archive_shape` fields, and project-intake-staging-guide
+  (which takes no staged folder) recommends the same in-archive shape for
+  capture intake, so the runtime no
+  longer contradicts the documented canonical location; the affected docs
+  (artifact-hygiene, project-intake-session, source-object-storage-policy,
+  project-intake-cookbook, ai-assisted-onboarding-and-provider-setup,
+  new-user-flow, objet-storage-strategy, wom-ai-runtime-skill-plugin-layer)
+  now carry one consistent three-way statement.
+- Added `archive operator-feedback-plan` to the runtime discovery chain:
+  `runtime_context_recommended_first_commands` (appended fourth entry),
+  `ai_runtime_order` (new step 7 `plan_operator_feedback`), and
+  `RUNTIME_CONTEXT_SAFE_ACTIONS` (`run operator-feedback-plan dry-run`), plus
+  shipped the missing schema files
+  `wom-kit/schemas/operator-feedback.schema.json` and
+  `wom-kit/schemas/operator-feedback-receipt.schema.json` matching the
+  existing record/receipt shapes (schema-id strings unchanged), with schema
+  conformance tests that validate a real produced record and receipt and
+  reject subset-covered breakage (const/enum/required/type).
+
 ## v0.3.159 - 2026-07-03
 
 - Added paired transcript intake: a selection-manifest item MAY carry a

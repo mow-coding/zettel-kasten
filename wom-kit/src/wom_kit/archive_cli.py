@@ -451,6 +451,7 @@ RECOMMENDED_GITIGNORE_PATTERNS = [
     "**/db/archive-index.sqlite-journal",
     "objects/sha256/",
     "objects/derived-text/sha256/",
+    "/objets/",
 ]
 SECRET_FILENAME_EXACT = {
     ".env",
@@ -1072,6 +1073,12 @@ class Doctor:
             self.warn(item["code"], item["message"], self.archive_root / item["path"])
         for item in archive_services.archive_git_marker_warnings(self.archive_root):
             self.warn(item["code"], item["message"], self.archive_root / item["path"])
+        for item in archive_services.archive_objet_store_layout_and_git_exposure_warnings(self.archive_root):
+            # `path` is an archive-relative name or a bare store basename;
+            # never join-and-echo an absolute path for sibling stores, and
+            # bypass `_display_path` (its resolve() is CWD-dependent and would
+            # mangle the bare name when doctor runs from inside the archive).
+            self.diagnostics.append(Diagnostic("WARN", item["code"], item["message"], item["path"]))
 
     def _check_v02_recommendations(self) -> None:
         for relative in RECOMMENDED_V02_FILES:
@@ -11728,6 +11735,9 @@ def write_safe_gitignore(target: Path) -> None:
                 "# Local content-addressed objet byte store (manifests/receipts stay tracked)",
                 "objects/sha256/",
                 "objects/derived-text/sha256/",
+                "",
+                "# Raw in-root objet store must never be tracked (non-canonical layout; see artifact-hygiene migration guide)",
+                "/objets/",
                 "",
             ]
         ),

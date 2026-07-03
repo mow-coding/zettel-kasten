@@ -25,10 +25,11 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.159 pre-release
+v0.3.160 pre-release
 ```
 
-Previous public baseline: v0.3.158 pre-release.
+Previous public baseline: v0.3.159 pre-release.
+Earlier public baseline: v0.3.158 pre-release.
 Earlier public baseline: v0.3.157 pre-release.
 Earlier public baseline: v0.3.156 pre-release.
 Earlier public baseline: v0.3.155 pre-release.
@@ -118,6 +119,7 @@ What exists today:
 - read-only `archive ai-response-concept-guide --dry-run` for beginner-facing AI explanation cards about sha256 object identity vs location, manifests vs zets, the objet -> derived text -> zet layer split, operational term translations for edge types, lifecycle states, and connection kinds including `contains` for structural child page/database containment, plus safe routing to Notion import material-clue audits, source-map material-link planning, connection import planning, nested tree recovery planning, and ancestor crawl request planning when provider locators were omitted from imported zettel bodies or structural relations need model review, without overclaiming upload, availability, stronger tie meaning, or forced edge-type mappings,
 - approval-gated `.gitignore` repair for missing WOM-kit safe defaults,
 - human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
+- a normative AI intake protocol on every runtime-visible surface (AGENTS.md templates, the runtime SKILL.md, and the skill/plugin layer doc): source-intake dry-run BEFORE physically copying any local file into the archive or an objet store, in-archive `staging/incoming/` capture staging as the canonical intake location (D2), reviewed selection -> approved capture as the only capture authority, and prehashed-ledger evidence for bulk external stores, plus two additive read-only doctor guards (`archive_objets_layout_noncanonical` for a raw in-root `objets/` folder with a documented migration guide, and `workspace_objet_store_git_exposure` when an objet byte store may be tracked by an enclosing git working tree) and the anchored `/objets/` `.gitignore` safe default,
 - paired transcript intake through `archive objet-capture-selection --derived-text-staged-path`: one reviewed selection manifest approves both a staged original and its already-extracted transcript (raw-byte `approved_text_sha256` commitment, full staged-path-parity confinement), and one `archive objet-capture` run publishes the original and registers the derived text bound to the minted object_id, with additive item/run `status_class` (`partial` = original durable, derived retriable) and BOM-aware derive-text decoding (BOM-marked UTF-8/UTF-16 stored as BOM-less UTF-8 with raw-byte provenance; UTF-32 and BOM-less non-UTF-8 block deterministically),
 - owner-approved real-archive objet capture enablement through `archive objet-capture-enable`: a read-only dry-run eligibility report, an approval-gated singleton `ops/capture-enablement.yml` consent record with a receipt trail, explicit never-touch name acknowledgment, forward-only revocation with `--reenable` protection, and doctor visibility, so a real (non-sandbox) archive can run local objet capture only after explicit, receipted, revocable owner consent; the record is a consent marker in the same write-trust domain, not a security boundary,
 - read-only Tiro meeting transcript import planning from archive-internal manifests, preserving meeting metadata, speaker turns, timestamps, confidence, and optional audio objet refs without echoing transcript text, participant names, source URLs, audio filenames, local paths, account ids, emails, tokens, or secrets,
@@ -391,6 +393,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.160
 v0.3.159
 v0.3.158
 v0.3.157

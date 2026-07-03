@@ -39,3 +39,6 @@ node_modules/
 # Local content-addressed stores
 objects/sha256/
 objects/derived-text/sha256/
+
+# Raw in-root objet store must never be tracked (non-canonical layout)
+/objets/

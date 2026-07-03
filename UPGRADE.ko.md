@@ -152,6 +152,68 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.159` To `v0.3.160`
+
+이 release는 AI intake protocol(파일을 물리적으로 복사하기 전의
+source-intake 게이트), doctor의 objet 저장소 git 가드 2종, `/objets/`
+gitignore 안전 기본값, D2 intake 배치 규칙, operator-feedback 발견성 및
+schema 파일을 추가합니다.
+
+운영자에게 보이는 변경:
+
+- STRICT 게이트 영향(의도된 결정, 두 단계): 첫째, `/objets/`가 권장
+  `.gitignore` 기본값에 추가되었기 때문에 v0.3.160 이전에 만든 모든
+  아카이브는 — `objets/` 폴더가 없어도 — 기존 경고
+  `local_profile_gitignore_incomplete`가 새로 발생하며, 이것만으로도
+  `archive validate`(기본적으로 warning에서 실패)와 `archive doctor
+  --strict`가 실패합니다. `archive repair-gitignore <archive-root>
+  --approve --reviewed-by <actor>`를 한 번 실행하면 해소됩니다. 둘째, 새
+  doctor 경고 `archive_objets_layout_noncanonical`(아카이브 루트 바로 아래
+  raw `objets/` 폴더 존재)와 `workspace_objet_store_git_exposure`(objet
+  바이트 저장소가 상위 git working tree에 tracking될 수 있음)는 in-root
+  `objets/` 폴더에 원본을 보관하거나 저장소가 노출된 아카이브에서 같은
+  게이트와 `archive runtime-context --strict`를 실패시킬 수 있습니다 —
+  `wom-kit/docs/artifact-hygiene.md` 5절의 migration 가이드를 완료할 때까지.
+  layout 경고는 폴더를 gitignore해도 의도적으로 꺼지지 않습니다: ignore된
+  원본은 git push 백업 경로에서 조용히 빠지기 때문에, 폴더를 비울 때까지
+  경고가 유지됩니다.
+- gitignore 변경은 추가 라인뿐입니다: 앵커된 `/objets/`(staged 트리 내부의
+  중첩 `objets/` 폴더에는 영향 없음)가 권장 기본값에 추가되며, 기존
+  아카이브는 `archive repair-gitignore <archive-root> --approve
+  --reviewed-by <actor>`로 반영합니다(반영 전까지는 위의 완전성 경고가
+  strict 게이트를 실패시킵니다). 정직한 주의 2가지: 이미 커밋된
+  파일은 untrack되지 않고(필요 시 사람 검토 후 `git rm --cached`), 형제
+  `<root-name>-objets` 저장소는 `objets/` 패턴과 일치하지 않으므로 exposure
+  경고가 실제 폴더 이름을 안내합니다 — 저장소가 repository 루트의 직접
+  하위 폴더면 앵커된 `/<name>/` 라인을, 더 깊이 있으면(앵커된 루트 라인은
+  중첩 경로와 일치하지 않으므로) 앵커 없는 `<name>/` 라인을 안내합니다.
+- JSON 소비자에게는 추가 필드만 보입니다: `staging_convention`에
+  `matched_shape`, `recommended_in_archive_shape`,
+  `in_archive_staging_supports_capture`가 추가되고,
+  `recommended_first_commands`에 operator-feedback-plan 항목이 뒤에
+  추가되며, `ai_runtime_order`에 step 7 `plan_operator_feedback`이
+  추가됩니다. `available_safe_actions`에는 `run operator-feedback-plan
+  dry-run`이 다른 read-only dry-run 액션들 옆, 리스트 중간(8개 중 3번째)에
+  삽입됩니다. 전체 리스트나 위치를 고정(pin)한 소비자는 새 항목을 반영해야
+  합니다.
+- in-archive staging이 canonical이 됩니다:
+  `<archive-root>/staging/incoming/` 아래 폴더는 이제 project-intake-plan과
+  project-intake-unpack-queue에서 `follows_staging_convention: true`로
+  보고되고, staged 폴더를 받지 않는 project-intake-staging-guide는 추가
+  필드 `recommended_in_archive_shape` /
+  `in_archive_staging_supports_capture`로 같은 in-archive 형태를 capture
+  intake용으로 권장합니다. 형제
+  `zettel-kasten-<profile_slug>-objets\intake\<project_slug>` 형태는 대량
+  외부 원본용으로 계속 허용됩니다.
+- 새 schema 파일 `wom-kit/schemas/operator-feedback.schema.json`과
+  `wom-kit/schemas/operator-feedback-receipt.schema.json`은 변경 없는 기존
+  record/receipt 형태를 기술하며, schema-id 문자열은 그대로입니다
+  (`wom-kit/operator-feedback/v0.1`,
+  `wom-kit/operator-feedback-receipt/v0.1`). record migration은 없습니다.
+- 아카이브 migration은 필요하지 않습니다.
+  `wom-kit/docs/releases/v0.3.160.md`와
+  `wom-kit/docs/artifact-hygiene.md`를 참고하세요.
+
 ## From `v0.3.158` To `v0.3.159`
 
 이 release는 짝지은(paired) transcript intake(승인 한 번으로 staged 원본과

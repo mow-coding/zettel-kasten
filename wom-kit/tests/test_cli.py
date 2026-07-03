@@ -470,6 +470,251 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assertIn("0 error(s), 0 warning(s)", output)
 
+    def doctor_warning_codes(self, archive_root: Path) -> list[str]:
+        code, output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+        self.assertEqual(code, 0, output)
+        return [item["code"] for item in json.loads(output)]
+
+    def write_working_tree_marker(self, root: Path) -> None:
+        (root / ".git").mkdir()
+        (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+    def test_doctor_objet_layout_warning_fires_on_in_root_objets_and_is_not_gitignore_silenceable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            archive_root = self.copy_fake_archive(workspace / "archive")
+            # Deterministic git topology: the archive is its own repo, so no
+            # repository above the temp dir can influence the exposure check.
+            self.write_working_tree_marker(archive_root)
+
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertNotIn("archive_objets_layout_noncanonical", codes)
+            self.assertNotIn("workspace_objet_store_git_exposure", codes)
+
+            objets = archive_root / "objets"
+            objets.mkdir()
+            (objets / "meeting-recording.m4a").write_text("fake original bytes", encoding="utf-8")
+
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertIn("archive_objets_layout_noncanonical", codes)
+            # The archive-is-its-own-repo case is the supported workflow: the
+            # archive .gitignore (which ships `/objets/`) governs, so the
+            # git-exposure warning stays silent...
+            self.assertNotIn("workspace_objet_store_git_exposure", codes)
+            # ...and the D2 layout warning is deliberately NOT silenced by the
+            # gitignore pattern: gitignored originals stop being versioned, so
+            # the migration reminder must stay loud until the folder is empty.
+            gitignore = archive_root / ".gitignore"
+            self.assertIn("/objets/", gitignore.read_text(encoding="utf-8").splitlines())
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertIn("archive_objets_layout_noncanonical", codes)
+
+    def test_doctor_objet_store_git_exposure_fires_under_workspace_repo_and_respects_gitignores(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            # A git repo at the WORKSPACE root, above the archive.
+            self.write_working_tree_marker(workspace)
+            archive_root = self.copy_fake_archive(workspace / "archive")
+            (archive_root / "objets").mkdir()
+
+            # The shipped archive .gitignore contains `/objets/`, which is a
+            # nested .gitignore under the workspace repo: protected, silent.
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertIn("archive_objets_layout_noncanonical", codes)
+            self.assertNotIn("workspace_objet_store_git_exposure", codes)
+
+            # Strip the pattern from the archive .gitignore: now the raw store
+            # may be tracked by the workspace repo, so the exposure warning fires.
+            gitignore = archive_root / ".gitignore"
+            lines = [
+                line
+                for line in gitignore.read_text(encoding="utf-8").splitlines()
+                if line.strip() != "/objets/"
+            ]
+            gitignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertIn("workspace_objet_store_git_exposure", codes)
+
+            # An ANCHORED `/objets/` at the WORKSPACE root does not match the
+            # nested archive/objets store in real git, so it must not silence.
+            (workspace / ".gitignore").write_text("/objets/\n", encoding="utf-8")
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertIn("workspace_objet_store_git_exposure", codes)
+
+            # An unanchored covering pattern in the WORKSPACE root .gitignore
+            # genuinely excludes the nested store and silences the warning.
+            (workspace / ".gitignore").write_text("objets/\n", encoding="utf-8")
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertNotIn("workspace_objet_store_git_exposure", codes)
+
+    def test_doctor_sibling_objet_store_git_exposure_and_own_repo_silence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            self.write_working_tree_marker(workspace)
+            archive_root = self.copy_fake_archive(workspace / "archive")
+            sibling_store = workspace / "archive-objets"
+            sibling_store.mkdir()
+            (sibling_store / "huge-original.bin").write_text("fake bulk original", encoding="utf-8")
+
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertIn("workspace_objet_store_git_exposure", codes)
+            # The sibling store is outside the archive root: the warning must
+            # name only the store basename, never a local absolute path.
+            code, output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            exposure = [
+                item for item in json.loads(output) if item["code"] == "workspace_objet_store_git_exposure"
+            ]
+            self.assertEqual(len(exposure), 1, output)
+            self.assertIn("archive-objets", exposure[0]["message"])
+            self.assertNotIn(str(workspace), json.dumps(exposure))
+
+            # The pattern `objets/` does NOT match `archive-objets`; the fix
+            # names the store's actual directory name, and adding it silences.
+            (workspace / ".gitignore").write_text("objets/\n", encoding="utf-8")
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertIn("workspace_objet_store_git_exposure", codes)
+            (workspace / ".gitignore").write_text("objets/\n/archive-objets/\n", encoding="utf-8")
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertNotIn("workspace_objet_store_git_exposure", codes)
+
+            # A sibling store that is its own VALID git working tree (here via
+            # a worktree/submodule `.git` pointer file whose gitdir target
+            # exists and has HEAD) is governed by its own repository: silent
+            # even without any gitignore pattern.
+            (workspace / ".gitignore").unlink()
+            worktree_git_dir = workspace / "main-repo-git" / "worktrees" / "store"
+            worktree_git_dir.mkdir(parents=True)
+            (worktree_git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+            (sibling_store / ".git").write_text("gitdir: ../main-repo-git/worktrees/store\n", encoding="utf-8")
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertNotIn("workspace_objet_store_git_exposure", codes)
+
+            # A BROKEN `.git` marker (dangling `gitdir:` pointer) is ignored
+            # by real git — the workspace repo tracks the store's contents —
+            # so ambiguous counts as exposed, never as an own-repo exit.
+            (sibling_store / ".git").write_text("gitdir: ../somewhere/.git/worktrees/store\n", encoding="utf-8")
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertIn("workspace_objet_store_git_exposure", codes)
+            (sibling_store / ".git").unlink()
+
+            # Same for an empty `.git` DIRECTORY inside the store: git treats
+            # it as invalid and the enclosing repo tracks the raw originals.
+            (sibling_store / ".git").mkdir()
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertIn("workspace_objet_store_git_exposure", codes)
+
+    def test_doctor_objet_store_git_exposure_broken_git_markers_still_warn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            self.write_working_tree_marker(workspace)
+            archive_root = self.copy_fake_archive(workspace / "archive")
+            objets = archive_root / "objets"
+            objets.mkdir()
+            (objets / "recording.m4a").write_text("fake original bytes", encoding="utf-8")
+            gitignore = archive_root / ".gitignore"
+            lines = [
+                line
+                for line in gitignore.read_text(encoding="utf-8").splitlines()
+                if line.strip() != "/objets/"
+            ]
+            gitignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+            # An empty `.git` dir INSIDE the store is invalid to real git: the
+            # workspace repo tracks objets/ contents anyway, so the exposure
+            # warning must not fail open on the broken marker.
+            (objets / ".git").mkdir()
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertIn("workspace_objet_store_git_exposure", codes)
+
+            # A broken `.git` at the ARCHIVE root is equally invalid: it does
+            # not take the archive-is-its-own-repo silent exit (that exit
+            # requires a valid marker); git_marker_incomplete co-fires.
+            (objets / ".git").rmdir()
+            (archive_root / ".git").mkdir()
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertIn("workspace_objet_store_git_exposure", codes)
+            self.assertIn("git_marker_incomplete", codes)
+
+            # Restoring the archive .gitignore pattern silences the exposure
+            # (nested .gitignore protects regardless of the broken marker).
+            gitignore.write_text(
+                "\n".join(lines + ["/objets/"]) + "\n", encoding="utf-8"
+            )
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertNotIn("workspace_objet_store_git_exposure", codes)
+
+    def test_doctor_objet_store_git_exposure_anchored_lines_only_count_in_store_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            self.write_working_tree_marker(workspace)
+            nested_parent = workspace / "data"
+            nested_parent.mkdir()
+            archive_root = self.copy_fake_archive(nested_parent / "archive")
+            sibling_store = nested_parent / "archive-objets"
+            sibling_store.mkdir()
+            (sibling_store / "big.bin").write_text("fake bulk original", encoding="utf-8")
+
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertIn("workspace_objet_store_git_exposure", codes)
+            # The store is NESTED below the git root, so the message must not
+            # recommend the anchored repo-root line (which git would not
+            # match); it recommends the unanchored form instead.
+            code, output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            exposure = [
+                item for item in json.loads(output) if item["code"] == "workspace_objet_store_git_exposure"
+            ]
+            self.assertEqual(len(exposure), 1, output)
+            self.assertIn("unanchored `archive-objets/`", exposure[0]["message"])
+
+            # An ANCHORED `/archive-objets/` at the git root does not match
+            # the nested store in real git, so it must not silence the warning.
+            (workspace / ".gitignore").write_text("/archive-objets/\n", encoding="utf-8")
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertIn("workspace_objet_store_git_exposure", codes)
+
+            # The unanchored form at the git root genuinely excludes it: silent.
+            (workspace / ".gitignore").write_text("archive-objets/\n", encoding="utf-8")
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertNotIn("workspace_objet_store_git_exposure", codes)
+
+            # An anchored line in the store's PARENT directory .gitignore is
+            # git-correct there and also silences.
+            (workspace / ".gitignore").unlink()
+            (nested_parent / ".gitignore").write_text("/archive-objets/\n", encoding="utf-8")
+            codes = self.doctor_warning_codes(archive_root)
+            self.assertNotIn("workspace_objet_store_git_exposure", codes)
+
+    def test_init_and_repair_gitignore_cover_root_objets_pattern(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "throwaway-archive"
+            code, output = self.init_personal_archive(root)
+            self.assertEqual(code, 0, output)
+            gitignore = root / ".gitignore"
+            self.assertIn("/objets/", gitignore.read_text(encoding="utf-8").splitlines())
+
+            lines = [
+                line
+                for line in gitignore.read_text(encoding="utf-8").splitlines()
+                if line.strip() != "/objets/"
+            ]
+            gitignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+            dry_code, dry_output = self.run_cli(["repair-gitignore", str(root), "--dry-run", "--format", "json"])
+            dry = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertIn("/objets/", dry["missing_patterns"])
+
+            approve_code, approve_output = self.run_cli(
+                ["repair-gitignore", str(root), "--approve", "--reviewed-by", "person:test", "--format", "json"]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertIn("/objets/", gitignore.read_text(encoding="utf-8").splitlines())
+
     def test_version_commands_report_running_cli_and_project_pin_status(self) -> None:
         code, output = self.run_cli(["--version"])
         self.assertEqual(code, 0, output)
@@ -626,6 +871,69 @@ class ArchiveCliTests(unittest.TestCase):
             record_text = (archive_root / "ops" / "feedback" / "agent_operator_retro_20260623.yml").read_text(encoding="utf-8")
             self.assertIn(feedback_ref, record_text)
             self.assertIn(title_marker, record_text)
+
+    def test_operator_feedback_record_and_receipt_conform_to_shipped_schema_files(self) -> None:
+        from wom_kit import schema_validator
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            code, output = self.run_cli(
+                [
+                    "operator-feedback-record",
+                    str(archive_root),
+                    "--feedback-id",
+                    "schema_conformance_check_20260703",
+                    "--feedback-ref",
+                    "feedback:schema-conformance-check",
+                    "--status",
+                    "resolved",
+                    "--resolved-in",
+                    "v0.3.160",
+                    "--title",
+                    "Schema conformance rehearsal",
+                    "--related-release",
+                    "v0.3.149",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["state"], "written")
+
+            record_path = archive_root / result["files_written"][0]
+            receipt_path = archive_root / result["files_written"][1]
+            # YAML 1.1 may parse unquoted ISO timestamps into datetime objects;
+            # the in-house validator treats date/datetime as strings on purpose.
+            record = archive_cli.load_yaml(record_path.read_text(encoding="utf-8"))
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+            record_issues = schema_validator.validate_schema(record, "operator-feedback.schema.json")
+            self.assertEqual([issue.message for issue in record_issues], [])
+            receipt_issues = schema_validator.validate_schema(receipt, "operator-feedback-receipt.schema.json")
+            self.assertEqual([issue.message for issue in receipt_issues], [])
+
+            # The negative checks break only subset-covered constraints
+            # (const / enum / required / type), so a pass here proves the
+            # validator actually enforces the schema instead of ignoring it.
+            broken_record = dict(record)
+            broken_record["status"] = "not-a-status"
+            broken_record.pop("feedback_ref")
+            broken_issues = schema_validator.validate_schema(broken_record, "operator-feedback.schema.json")
+            self.assertTrue(any(issue.code == "schema_enum" for issue in broken_issues))
+            self.assertTrue(any(issue.code == "schema_required" for issue in broken_issues))
+
+            broken_receipt = dict(receipt)
+            broken_receipt["schema"] = "wom-kit/other-schema/v9.9"
+            broken_receipt["record_sha256"] = 12345
+            broken_receipt_issues = schema_validator.validate_schema(
+                broken_receipt, "operator-feedback-receipt.schema.json"
+            )
+            self.assertTrue(any(issue.code == "schema_const" for issue in broken_receipt_issues))
+            self.assertTrue(any(issue.code == "schema_type" for issue in broken_receipt_issues))
 
     def test_approval_handoff_plan_and_record_without_action_echo_or_execution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2024,6 +2332,10 @@ class ArchiveCliTests(unittest.TestCase):
                 "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
             )
             self.assertEqual(
+                entrypoints["recommended_first_commands"][3]["command"],
+                "archive operator-feedback-plan <archive-root> --dry-run --format json",
+            )
+            self.assertEqual(
                 [step["action"] for step in entrypoints["ai_runtime_order"]],
                 [
                     "run_runtime_context",
@@ -2032,6 +2344,7 @@ class ArchiveCliTests(unittest.TestCase):
                     "read_local_agent_instructions",
                     "run_ai_response_concept_guide",
                     "choose_material_link_route",
+                    "plan_operator_feedback",
                 ],
             )
             material_commands = [route["command"] for route in entrypoints["material_link_routes"]]
@@ -2065,6 +2378,7 @@ class ArchiveCliTests(unittest.TestCase):
                     self.assertTrue(entrypoint_statuses[relative]["exists"])
             self.assertIn("run ai-response-concept-guide dry-run", result["available_safe_actions"])
             self.assertIn("run operational-context dry-run", result["available_safe_actions"])
+            self.assertIn("run operator-feedback-plan dry-run", result["available_safe_actions"])
             self.assertIn("create draft in inbox", result["available_safe_actions"])
             self.assertIn("mint only through CLI approve path", result["available_safe_actions"])
 
@@ -26051,8 +26365,40 @@ state:
             result = json.loads(output)
             self.assertFalse(result["follows_staging_convention"])
             self.assertEqual(result["staging_convention"]["status"], "outside_recommended_shape")
+            self.assertIsNone(result["staging_convention"]["matched_shape"])
             self.assertTrue(result["warnings"])
             self.assertTrue(any("restage" in action.lower() for action in result["next_safe_actions"]))
+
+    def test_project_intake_plan_accepts_in_archive_capture_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
+            staged = archive_root / "staging" / "incoming" / "2026-07-03" / "alpha-project"
+            staged.mkdir(parents=True)
+            (staged / "fake-note.txt").write_text("fake staged note", encoding="utf-8")
+
+            code, output = self.run_cli(
+                ["project-intake-plan", str(archive_root), "--staged-folder", str(staged), "--dry-run", "--format", "json"]
+            )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["follows_staging_convention"])
+            self.assertEqual(result["staging_convention"]["status"], "matches_recommended_shape")
+            self.assertEqual(result["staging_convention"]["matched_shape"], "in_archive_capture_staging")
+            self.assertTrue(result["staging_convention"]["in_archive_staging_supports_capture"])
+            self.assertEqual(result["warnings"], [])
+
+            # The <YYYY-MM-DD> layer is recommended, not required: the shipped
+            # cookbook stages at bare staging/incoming/ and must stay canonical.
+            bare = archive_root / "staging" / "incoming"
+            code, output = self.run_cli(
+                ["project-intake-plan", str(archive_root), "--staged-folder", str(bare), "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["follows_staging_convention"])
+            self.assertEqual(result["staging_convention"]["matched_shape"], "in_archive_capture_staging")
 
     def test_project_intake_decisions_dry_run_writes_nothing_and_hides_answers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

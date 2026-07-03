@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit operator feedback receipt",
+  "type": "object",
+  "required": [
+    "schema",
+    "dry_run",
+    "approved",
+    "feedback_id",
+    "record_path",
+    "status",
+    "reviewed_by",
+    "record_sha256",
+    "created_at"
+  ],
+  "properties": {
+    "schema": {"type": "string", "const": "wom-kit/operator-feedback-receipt/v0.1"},
+    "dry_run": {"type": "boolean"},
+    "approved": {"type": "boolean"},
+    "feedback_id": {"type": "string"},
+    "record_path": {"type": "string"},
+    "status": {
+      "type": "string",
+      "enum": ["draft", "delivered", "acknowledged", "resolved", "archived"]
+    },
+    "reviewed_by": {"type": ["string", "null"]},
+    "record_sha256": {"type": ["string", "null"]},
+    "created_at": {"type": "string"}
+  }
+}

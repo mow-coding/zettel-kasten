@@ -163,6 +163,72 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.159` To `v0.3.160`
+
+This release adds the AI intake protocol (source-intake before any physical
+file copy), two objet-store git guards in doctor, the `/objets/` gitignore
+safe default, the D2 intake layout ruling, and operator-feedback
+discoverability plus schema files.
+
+Operator-visible notes:
+
+- STRICT-GATE IMPACT (deliberate, not merely additive), in two tiers. First,
+  EVERY archive created before v0.3.160 — with or without an `objets/`
+  folder — now trips the pre-existing `local_profile_gitignore_incomplete`
+  warning, because `/objets/` joined the recommended `.gitignore` defaults;
+  that alone fails `archive validate` (fails on warnings unless
+  `--allow-warnings`) and `archive doctor --strict` until one
+  `archive repair-gitignore <archive-root> --approve --reviewed-by <actor>`
+  run adds the line. Second, the new doctor warnings
+  `archive_objets_layout_noncanonical` (a raw in-root `objets/` folder
+  exists) and `workspace_objet_store_git_exposure` (an objet byte store may
+  be tracked by an enclosing git working tree) can fail the same gates plus
+  `archive runtime-context --strict` for archives that keep originals in an
+  in-root `objets/` folder or an exposed store — until the migration guide
+  in `wom-kit/docs/artifact-hygiene.md` section 5 is followed. The layout
+  warning is intentionally NOT silenced by gitignoring the folder: ignored
+  originals silently drop out of the git-push backup path, so the reminder
+  stays loud until the folder is emptied through the reviewed capture chain.
+- Gitignore additions are additive lines only: `/objets/` (anchored — nested
+  `objets/` folders inside staged trees are unaffected) joins the recommended
+  defaults; existing archives pick it up with
+  `archive repair-gitignore <archive-root> --approve --reviewed-by <actor>`
+  (until then the completeness warning fails strict gates, as above).
+  Two honest gitignore caveats: it does not untrack already-committed files
+  (human-reviewed `git rm --cached` if that happened), and the sibling
+  `<root-name>-objets` store is NOT matched by `objets/` — the exposure
+  warning names the store's actual directory name, as an anchored
+  `/<name>/` line when the store is a direct child of the repository root
+  and as an unanchored `<name>/` line when it sits deeper (an anchored
+  repo-root line would not match a nested store in git).
+- JSON consumers see additive fields only: `staging_convention` gains
+  `matched_shape`, `recommended_in_archive_shape`, and
+  `in_archive_staging_supports_capture`; `recommended_first_commands` gains a
+  fourth (appended) operator-feedback-plan entry; `ai_runtime_order` gains
+  step 7 `plan_operator_feedback`; `available_safe_actions` gains
+  `run operator-feedback-plan dry-run` INSERTED mid-list next to the other
+  read-only dry-run actions (position 3 of 8). Consumers that pinned the FULL
+  `ai_runtime_order` list, the exact `recommended_first_commands` length, or
+  `available_safe_actions` positions must account for the new entries.
+- In-archive staging is now canonical: folders under
+  `<archive-root>/staging/incoming/` report
+  `follows_staging_convention: true` from project-intake-plan and
+  project-intake-unpack-queue instead of `outside_recommended_shape`, and
+  project-intake-staging-guide (which takes no staged folder) recommends the
+  same in-archive shape for capture intake via the additive
+  `recommended_in_archive_shape` / `in_archive_staging_supports_capture`
+  fields. The sibling
+  `zettel-kasten-<profile_slug>-objets\intake\<project_slug>` shape stays
+  accepted for bulk external originals.
+- New schema files `wom-kit/schemas/operator-feedback.schema.json` and
+  `wom-kit/schemas/operator-feedback-receipt.schema.json` describe the
+  UNCHANGED shipped record/receipt shapes; schema-id strings are unchanged
+  (`wom-kit/operator-feedback/v0.1`,
+  `wom-kit/operator-feedback-receipt/v0.1`). No record migration.
+- No archive migration is required. See
+  `wom-kit/docs/releases/v0.3.160.md` and
+  `wom-kit/docs/artifact-hygiene.md`.
+
 ## From `v0.3.158` To `v0.3.159`
 
 This release adds paired transcript intake (one approval covers a staged
