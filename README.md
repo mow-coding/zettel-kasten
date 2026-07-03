@@ -22,64 +22,23 @@ Inside WOM:
 
 ## Status
 
+<!--
+Maintenance contract (decision log 2026-07-03, v0.3.161): per release, update
+ONLY (1) the current-baseline line in the code block below, (2) the single
+previous-baseline line, and (3) for feature releases, at most ONE thematic
+bullet under "What Exists Today". Release history lives in CHANGELOG.md and
+wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
+-->
+
 Current public baseline:
 
 ```text
-v0.3.160 pre-release
+v0.3.161 pre-release
 ```
 
-Previous public baseline: v0.3.159 pre-release.
-Earlier public baseline: v0.3.158 pre-release.
-Earlier public baseline: v0.3.157 pre-release.
-Earlier public baseline: v0.3.156 pre-release.
-Earlier public baseline: v0.3.155 pre-release.
-Earlier public baseline: v0.3.154 pre-release.
-Earlier public baseline: v0.3.153 pre-release.
-Earlier public baseline: v0.3.152 pre-release.
-Earlier public baseline: v0.3.151 pre-release.
-Earlier public baseline: v0.3.150 pre-release.
-Earlier public baseline: v0.3.149 pre-release.
-Earlier public baseline: v0.3.148 pre-release.
-Earlier public baseline: v0.3.147 pre-release.
-Earlier public baseline: v0.3.146 pre-release.
-Earlier public baseline: v0.3.145 pre-release.
-Earlier public baseline: v0.3.144 pre-release.
-Earlier public baseline: v0.3.143 pre-release.
-Earlier public baseline: v0.3.142 pre-release.
-Earlier public baseline: v0.3.141 pre-release.
-Earlier public baseline: v0.3.140 pre-release.
-Earlier public baseline: v0.3.139 pre-release.
-Earlier public baseline: v0.3.138 pre-release.
-Earlier public baseline: v0.3.137 pre-release.
-Earlier public baseline: v0.3.136 pre-release.
-Earlier public baseline: v0.3.135 pre-release.
-Earlier public baseline: v0.3.134 pre-release.
-Earlier public baseline: v0.3.133 pre-release.
-Earlier public baseline: v0.3.132 pre-release.
-Earlier public baseline: v0.3.131 pre-release.
-Earlier public baseline: v0.3.130 pre-release.
-Earlier public baseline: v0.3.129 pre-release.
-Earlier public baseline: v0.3.128 pre-release.
-Earlier public baseline: v0.3.127 pre-release.
-Earlier public baseline: v0.3.126 pre-release.
-Earlier public baseline: v0.3.125 pre-release.
-Earlier public baseline: v0.3.124 pre-release.
-Earlier public baseline: v0.3.123 pre-release.
-Earlier public baseline: v0.3.122 pre-release.
-Earlier public baseline: v0.3.121 pre-release.
-Earlier public baseline: v0.3.120 pre-release.
-Earlier public baseline: v0.3.119 pre-release.
-Earlier public baseline: v0.3.118 pre-release.
-Earlier public baseline: v0.3.117 pre-release.
-Earlier public baseline: v0.3.116 pre-release.
-Earlier public baseline: v0.3.115 pre-release.
-Earlier public baseline: v0.3.114 pre-release.
-Earlier public baseline: v0.3.113 pre-release.
-Earlier public baseline: v0.3.112 pre-release.
-Earlier public baseline: v0.3.111 pre-release.
-Earlier public baseline: v0.3.110 pre-release.
-Earlier edge-write baseline: v0.3.109 pre-release.
-Earlier compatibility checkpoint: v0.3.87 pre-release.
+Previous public baseline: v0.3.160 pre-release.
+
+Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
 This repository is a public showcase and reference implementation workspace. It is not production-ready yet.
 
@@ -90,11 +49,60 @@ control layer, and `v0.5.x` is planned for ZET real-use feedback. See the
 [WOM Product Roadmap](wom-kit/docs/product-roadmap.md) for the phase gates and
 future-only boundaries.
 
-What exists today:
+## What Exists Today
+
+Shipped surfaces, grouped by theme. Each bullet is one shipped capability; for
+the status-by-capability view (real implementation, read-only preview,
+approval-gated write, or docs-only), see the
+[WOM-kit Capability Matrix](wom-kit/docs/capability-matrix.md).
+
+### Archive core & lifecycle
 
 - a public WOM/zet/ZET design baseline with specs, schemas, fake archives, release notes, and work logs,
 - a public version-line roadmap that explains how the pre-1.0 minor lines map to idea, implementation, WOM feedback, UI/control-layer, and ZET feedback phases,
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
+- private archive lifecycle tools for doctor checks, draft creation, minting with dry-run checklist guidance, verified minted-draft retirement, delegation, receipts, search, and metadata review,
+- generated-index-backed duplicate checks, metadata-backed mint staleness fast paths, SQLite busy-timeout/WAL hardening for generated-index write paths, and standard-id source-path fast resolution for large archives,
+- scoped `validate --since` / `validate --scope` checks with generated-index body SHA cache support and optional `--progress`,
+- read-only `archive zet-quality-check --dry-run` for entity-term, document-type, OCR/parse metadata, table-structure, correction-event, source-rights, audience, and derived-artifact dependency risks before mint; optional `zet-quality-rules.yml` project rules can make forbidden entity aliases mint blockers without echoing matched terms,
+- read-only `archive status-board --dry-run` for beginner-facing archive state counts across canonical zets, active drafts, minted drafts pending retire, document/audience metadata gaps, source metadata gaps, derived-artifact sync gaps, and optional body-inspecting quality counts without echoing titles, bodies, source values, provider URLs, or local paths,
+- read-only `archive derived-artifact-staleness --dry-run` for checking whether declared `derived_artifacts` may be stale because a source zet is newer than the artifact's last reviewed sync. It writes nothing, opens no external report, and does not echo artifact refs, titles, bodies, provider URLs, or local paths,
+- a v0.2.x freeze / v0.3.0 entry boundary document plus a narrow v0.3.0 write boundary that stays local-first and body-safe,
+
+### Capture & intake
+
+- human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
+- a normative AI intake protocol on every runtime-visible surface (AGENTS.md templates, the runtime SKILL.md, and the skill/plugin layer doc),
+- source-intake dry-run BEFORE physically copying any local file into the archive or an objet store, with in-archive `staging/incoming/` capture staging as the canonical intake location (D2),
+- reviewed selection -> approved capture as the only capture authority, plus prehashed-ledger evidence for bulk external stores,
+- two additive read-only doctor guards (`archive_objets_layout_noncanonical` for a raw in-root `objets/` folder with a documented migration guide, and `workspace_objet_store_git_exposure` when an objet byte store may be tracked by an enclosing git working tree) plus the anchored `/objets/` `.gitignore` safe default,
+- paired transcript intake through `archive objet-capture-selection --derived-text-staged-path`: one reviewed selection manifest approves both a staged original and its already-extracted transcript (raw-byte `approved_text_sha256` commitment, full staged-path-parity confinement),
+- one `archive objet-capture` run that publishes the original and registers the derived text bound to the minted object_id, with additive item/run `status_class` (`partial` = original durable, derived retriable),
+- BOM-aware derive-text decoding (BOM-marked UTF-8/UTF-16 stored as BOM-less UTF-8 with raw-byte provenance; UTF-32 and BOM-less non-UTF-8 block deterministically),
+- owner-approved real-archive objet capture enablement through `archive objet-capture-enable`: a read-only dry-run eligibility report and an approval-gated singleton `ops/capture-enablement.yml` consent record with a receipt trail, so a real (non-sandbox) archive can run local objet capture only after explicit, receipted, revocable owner consent,
+- explicit never-touch name acknowledgment, forward-only revocation with `--reenable` protection, and doctor visibility for that consent record; the record is a consent marker in the same write-trust domain, not a security boundary,
+- read-only derived-text coverage/toolchain/doctor/agent-contract gates, manifest-scoped completeness signals, and manifest-quality checks that block false complete claims when `tool_version` or required extraction metadata is missing,
+- existing derived-text records as a fallback textual signal for older prehashed manifests, plus non-echoed tool-hint paths for PATH-missing local extractors,
+- approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
+
+### Retrieval & views
+
+- read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading, block headers with first-read summaries, and prompt boundaries,
+- generated index health checks, saved view health, facet role diagnostics, saved view recommendations,
+- read-only objet reference resolution, presigned URL planning, and zettel objet link previews for mapping `sha256:<hex>` refs to safe local/external candidates,
+
+### Sharing & ZET previews
+
+- read-only previews for foreign block review, projection planning with supported-surface help, shared update review/index, shared update route pointers, and ZET would-transport planning,
+- approval-gated local write paths for selected private archive, foreign-block review records, and the first v0.3.0 shared update attestation/review record,
+
+### Privacy & redaction
+
+- zet self-contained checks and AI scratch lifecycle management: public external citation URLs may stay in zet bodies or `source_refs`, private provider locators and original-file locations still require durable WOM refs, `.wom-scratch/` and `workbench/ai-scratch/` are ignored scratch areas, and approved mint can remove explicit scratch refs from the canonical zet while consuming those scratch files through a cleanup receipt,
+- read-only `archive secret-signal-taxonomy --dry-run` for AI operators that need to distinguish harmless secret/credential/token concept words and safe refs from actual secret-like values, private locators, account identifiers, or unknown sensitive context,
+
+### AI-operator contracts & runtime handoff
+
 - read-only WOM-kit version truth-source checks through `archive --version`, `archive version --format json`, parent project installed-version pin discovery from archive roots, and runtime-context version metadata,
 - read-only `archive capabilities --machine` for AI operators that need a stable `ok/state/summary/data/blockers/warnings` envelope listing the executable local CLI commands, aliases, required positionals, options, nested subcommands, and local release identity without calling GitHub or providers,
 - read-only `archive operator-feedback-plan --dry-run` and approval-gated `archive operator-feedback-record --approve` for tracking operator-generated tool feedback under `ops/feedback/` with draft/delivered/acknowledged/resolved/archived lifecycle metadata, without reading feedback bodies, submitting externally, or mixing feedback lifecycle state into user knowledge `objets/`,
@@ -102,40 +110,78 @@ What exists today:
 - read-only `archive approval-handoff-audit --dry-run` for checking a handoff record before a future operation uses it as approval evidence, without executing the operation or echoing target/action values,
 - read-only `archive operation-status-taxonomy --dry-run` for AI operators that need to distinguish succeeded/preview/written/no_change from partial/truncated/blocked/failed results before telling a human that work is complete,
 - read-only `archive input-provenance-taxonomy --dry-run` for AI operators that need to distinguish tool-discovered and receipt-verified inputs from caller-supplied, AI-generated, fixture, environment-inferred, or unknown inputs before treating them as source truth,
-- read-only `archive secret-signal-taxonomy --dry-run` for AI operators that need to distinguish harmless secret/credential/token concept words and safe refs from actual secret-like values, private locators, account identifiers, or unknown sensitive context,
 - read-only `archive ai-response-contract --dry-run` for AI operators that need a conversational status-board contract before answering a human: outcome, evidence basis, privacy/approval boundary, remaining work, and no web UI requirement,
 - core read-only operator commands now expose top-level `status_class`, `input_provenance_class`, `secret_signal_class`, and `operator_envelope` fields so AI operators can apply the response contract without inferring those classes from prose,
 - runtime-context canonical entrypoint metadata so AI runtimes can see which archive-relative files/directories to treat as start-here and authoritative sources, plus machine-readable `ai_runtime_order`, `recommended_first_commands`, and `material_link_routes` that hand off from `runtime-context` to `AGENTS.md` and `ai-response-concept-guide`,
 - AI operational context rehydration through `ops/operational-context.yml`, runtime-context field `operational_context`, and approval-gated `archive operational-context` updates with receipts, so an AI runtime can recover mission, scope, state, gotchas, reviewed decisions, and next actions after context compression without reading broad archive bodies first,
 - AI token usage observability through read-only `archive ai-usage-plan --dry-run`, approval-gated `archive ai-usage-record --approve`, and read-only `archive ai-usage-report --dry-run`, so WOM can estimate explicit context packs, record non-secret runtime token counters, and aggregate bottlenecks without storing prompts or responses,
-- private archive lifecycle tools for doctor checks, draft creation, minting with dry-run checklist guidance, generated-index-backed duplicate checks, metadata-backed mint staleness fast paths, SQLite busy-timeout/WAL hardening for generated-index write paths, standard-id source-path fast resolution for large archives, scoped `validate --since` / `validate --scope` checks with generated-index body SHA cache support and optional `--progress`, verified minted-draft retirement, delegation, receipts, search, and metadata review,
-- zet self-contained checks and AI scratch lifecycle management: public external citation URLs may stay in zet bodies or `source_refs`, private provider locators and original-file locations still require durable WOM refs, `.wom-scratch/` and `workbench/ai-scratch/` are ignored scratch areas, and approved mint can remove explicit scratch refs from the canonical zet while consuming those scratch files through a cleanup receipt,
-- read-only `archive zet-quality-check --dry-run` for entity-term, document-type, OCR/parse metadata, table-structure, correction-event, source-rights, audience, and derived-artifact dependency risks before mint; optional `zet-quality-rules.yml` project rules can make forbidden entity aliases mint blockers without echoing matched terms,
-- read-only `archive status-board --dry-run` for beginner-facing archive state counts across canonical zets, active drafts, minted drafts pending retire, document/audience metadata gaps, source metadata gaps, derived-artifact sync gaps, and optional body-inspecting quality counts without echoing titles, bodies, source values, provider URLs, or local paths,
-- read-only `archive derived-artifact-staleness --dry-run` for checking whether declared `derived_artifacts` may be stale because a source zet is newer than the artifact's last reviewed sync. It writes nothing, opens no external report, and does not echo artifact refs, titles, bodies, provider URLs, or local paths,
-- archive-root boundary warnings in `archive doctor` for top-level web/app development artifacts and incomplete `.git` markers, plus `.gitignore` safe defaults for `node_modules/`, `.next/`, and `.vercel/`,
-- read-only preview layers for runtime context, profiles, source/objet intake, overview-first zet reading, block headers with first-read summaries, generated index health checks, saved view health, facet role diagnostics, saved view recommendations, prompt boundaries, foreign block review, projection planning with supported-surface help, shared update review/index, shared update route pointers, and ZET would-transport planning,
-- read-only derived-text coverage/toolchain/doctor/agent-contract gates, manifest-scoped completeness signals, manifest-quality checks that block false complete claims when `tool_version` or required extraction metadata is missing, including existing derived-text records as a fallback textual signal for older prehashed manifests, non-echoed tool-hint paths for PATH-missing local extractors, plus approval-gated single-file and JSONL batch derived text capture for registering already extracted parser/OCR/ASR/vision text against source objets,
 - read-only `archive ai-response-concept-guide --dry-run` for beginner-facing AI explanation cards about sha256 object identity vs location, manifests vs zets, the objet -> derived text -> zet layer split, operational term translations for edge types, lifecycle states, and connection kinds including `contains` for structural child page/database containment, plus safe routing to Notion import material-clue audits, source-map material-link planning, connection import planning, nested tree recovery planning, and ancestor crawl request planning when provider locators were omitted from imported zettel bodies or structural relations need model review, without overclaiming upload, availability, stronger tie meaning, or forced edge-type mappings,
-- approval-gated `.gitignore` repair for missing WOM-kit safe defaults,
-- human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
-- a normative AI intake protocol on every runtime-visible surface (AGENTS.md templates, the runtime SKILL.md, and the skill/plugin layer doc): source-intake dry-run BEFORE physically copying any local file into the archive or an objet store, in-archive `staging/incoming/` capture staging as the canonical intake location (D2), reviewed selection -> approved capture as the only capture authority, and prehashed-ledger evidence for bulk external stores, plus two additive read-only doctor guards (`archive_objets_layout_noncanonical` for a raw in-root `objets/` folder with a documented migration guide, and `workspace_objet_store_git_exposure` when an objet byte store may be tracked by an enclosing git working tree) and the anchored `/objets/` `.gitignore` safe default,
-- paired transcript intake through `archive objet-capture-selection --derived-text-staged-path`: one reviewed selection manifest approves both a staged original and its already-extracted transcript (raw-byte `approved_text_sha256` commitment, full staged-path-parity confinement), and one `archive objet-capture` run publishes the original and registers the derived text bound to the minted object_id, with additive item/run `status_class` (`partial` = original durable, derived retriable) and BOM-aware derive-text decoding (BOM-marked UTF-8/UTF-16 stored as BOM-less UTF-8 with raw-byte provenance; UTF-32 and BOM-less non-UTF-8 block deterministically),
-- owner-approved real-archive objet capture enablement through `archive objet-capture-enable`: a read-only dry-run eligibility report, an approval-gated singleton `ops/capture-enablement.yml` consent record with a receipt trail, explicit never-touch name acknowledgment, forward-only revocation with `--reenable` protection, and doctor visibility, so a real (non-sandbox) archive can run local objet capture only after explicit, receipted, revocable owner consent; the record is a consent marker in the same write-trust domain, not a security boundary,
+
+### Provider integrations
+
+Tiro:
+
 - read-only Tiro meeting transcript import planning from archive-internal manifests, preserving meeting metadata, speaker turns, timestamps, confidence, and optional audio objet refs without echoing transcript text, participant names, source URLs, audio filenames, local paths, account ids, emails, tokens, or secrets,
 - read-only Tiro full-data lossless recovery planning, approval-gated live Tiro REST fetch into a private raw bundle from `env:` or Windows Credential Manager-backed `keyring:` / `credential-manager:` refs, and approval-gated raw Tiro recovery bundle capture into WOM objets, preserving private raw bundle bytes while reporting only hashes, counts, archive-relative paths, and gap categories,
-- read-only beginner setup manual with KeePassXC first-vault field walkthroughs, KeePassXC CSV bulk migration import/merge guidance, Cloudflare R2 bucket/API-token field walkthroughs with Korean/English label hints and S3 credential-pair guidance, and Notion nested recovery human-step guidance that translates low-level ancestor/fetch/fixture/merge terms into location-oriented user language before one-time approval and live structure fetch handoff; `archive notion-recover` can now use a local `file:<path>` token-file fallback without echoing the file path or token, `archive notion-connection-plan --dry-run` records the one-click Notion connection product contract, `archive notion-oauth-connection-preflight --dry-run` validates the secret-blind local OAuth runtime contract before any future browser/callback/token exchange flow, and Notion provider failures are classified into action categories such as token, permission/page-share, rate-limit, network, or provider-availability without raw error echo, while live browser OAuth, callback servers, token exchange, and keyring/vault token storage remain future adapter boundaries, connected accounts bridge with separate credential-catalog status, plus read-only credential reference planning, inventory, external store recommendation including account recovery and break-glass redundancy scenarios, vault onboarding planning, credential semantic extraction recipe with recovery-code/break-glass routing hints, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, CLI-only KeePassXC write execution with non-secret execution receipts, adapter readiness planning, adapter manifest preview, and adapter audit receipt preview for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
-- read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces, plus text-first external export planning with explicit large-media trap detection before broad workspace/database downloads, approved external imports that preserve explicit safe object refs, safe `source_refs`, safe facets, and safe zettel id overrides from manifests into imported drafts, optional Notion body locator conversion to reviewed `objet:` refs, read-only Notion connection import planning for typed-edge candidates with base connection edge vocabulary including `contains` for structural child page/database/view containment and model-gap escalation when no active edge type fits, approval-gated link type migration for stale archive-local `types.yml` plus receipt-backed safe `link-types-v0.3` migration revert when the migration receipt says which edge types were added and those types remain unused and unchanged from the base template, a read-only connection evidence parser contract before real export parsing, a sanitized fixture parser that emits candidate edge previews without writes, read-only connection edge intelligence planning that separates relationship meaning from source mechanism, distinguishes ambiguous candidates from human-review-required candidates, flags provisional candidates before human approval, and recommends `supersedes` for sanitized version-chain hints plus `contains` for sanitized containment hints, read-only Notion nested tree recovery planning that assigns leaf pages to known generation roots, derives safe content classes from node kinds when needed, blocks oversized nested-tree fixtures instead of returning partial success, reports untraceable parent chains instead of guessing from partial mirrors, provides read-only Notion ancestor crawl request planning with generation/ref scope filters and a recursive fetch adapter execution contract, implements the first approval-gated local Notion ancestor structure fetch adapter that writes only sanitized ancestor fixtures plus non-secret receipts after credential approval, keeps Notion media byte fetch/page body capture behind separate future gates, documents that untraceable leaf recovery should be scoped by leaf/root/ancestor refs rather than generation id when the generation is still unknown, builds nested tree fixture previews from reviewed block mirror metadata, merges sanitized ancestor result nodes with immediate after-merge replanning, verifies client nested-tree issues from sanitized local fixture bundles, and packages the minimal sanitized fixture request contract for client follow-up, approval-gated single-edge zettel edge writes for reviewed zet-to-zet or zet-to-objet links including safe `zet:notion:<id>` target resolution, plus approval-gated policy batch zettel edge writes that route only high-confidence policy matches through the single-edge gate, reuse one preloaded object-manifest index for objet targets and one zettel id/path index for zet-target batches, leave the rest in a human review queue, resolve batch plans archive-relative first, and can skip already-written edge rows on explicit request, receipt-based `revert-edge` and `revert-batch` commands for approved edge rollback without deleting original receipts, manifest-aware object-storage recommendation matching with surfaced bucket names, exact next commands, Cloudflare R2 setup field guidance, adapter readiness planning, operation request packaging, upload execution-contract planning, presigned URL planning, approval-gated external upload evidence registration, and read-only upload evidence auditing before live provider adapters,
-- read-only IMAP mailbox source planning, operation request packaging, schema-validated adapter manifest previews, approval-gated local adapter manifest writes, adapter readiness checks, mailbox selection planning, adapter audit receipt previews, approval-gated local adapter audit receipt writes, adapter preflight checks, adapter execution-contract planning, a first approval-gated local IMAP header metadata scan for Gmail, Naver, and generic IMAP account refs, an offline audit checkpoint for those header scan execution receipts, read-only material selection, capture request, capture execution-contract planning, and material capture approval audits, approval-gated non-secret material selection records, and approval-gated material capture approval receipts before future body/attachment/derived-text work,
+
+Notion:
+
+- Notion nested recovery human-step guidance that translates low-level ancestor/fetch/fixture/merge terms into location-oriented user language before one-time approval and live structure fetch handoff,
+- `archive notion-recover` with a local `file:<path>` token-file fallback that echoes neither the file path nor the token,
+- `archive notion-connection-plan --dry-run` for the one-click Notion connection product contract, and `archive notion-oauth-connection-preflight --dry-run` for validating the secret-blind local OAuth runtime contract before any future browser/callback/token exchange flow,
+- Notion provider failure classification into action categories such as token, permission/page-share, rate-limit, network, or provider-availability without raw error echo, while live browser OAuth, callback servers, token exchange, and keyring/vault token storage remain future adapter boundaries,
+- read-only human artifact store planning for WordPress, Joplin, Notion, Obsidian, Evernote, generic Markdown, and generic workspace surfaces,
+- text-first external export planning with explicit large-media trap detection before broad workspace/database downloads,
+- approved external imports that preserve explicit safe object refs, safe `source_refs`, safe facets, and safe zettel id overrides from manifests into imported drafts, plus optional Notion body locator conversion to reviewed `objet:` refs,
+- read-only Notion connection import planning for typed-edge candidates with base connection edge vocabulary including `contains` for structural child page/database/view containment and model-gap escalation when no active edge type fits,
+- approval-gated link type migration for stale archive-local `types.yml`, plus receipt-backed safe `link-types-v0.3` migration revert when the migration receipt says which edge types were added and those types remain unused and unchanged from the base template,
+- a read-only connection evidence parser contract before real export parsing, and a sanitized fixture parser that emits candidate edge previews without writes,
+- read-only connection edge intelligence planning that separates relationship meaning from source mechanism, distinguishes ambiguous candidates from human-review-required candidates, flags provisional candidates before human approval, and recommends `supersedes` for sanitized version-chain hints plus `contains` for sanitized containment hints,
+- read-only Notion nested tree recovery planning that assigns leaf pages to known generation roots, derives safe content classes from node kinds when needed, blocks oversized nested-tree fixtures instead of returning partial success, and reports untraceable parent chains instead of guessing from partial mirrors,
+- read-only Notion ancestor crawl request planning with generation/ref scope filters and a recursive fetch adapter execution contract, plus documentation that untraceable leaf recovery should be scoped by leaf/root/ancestor refs rather than generation id when the generation is still unknown,
+- the first approval-gated local Notion ancestor structure fetch adapter, which writes only sanitized ancestor fixtures plus non-secret receipts after credential approval, while Notion media byte fetch and page body capture stay behind separate future gates,
+- local nested-tree recovery tooling that builds nested tree fixture previews from reviewed block mirror metadata, merges sanitized ancestor result nodes with immediate after-merge replanning, verifies client nested-tree issues from sanitized local fixture bundles, and packages the minimal sanitized fixture request contract for client follow-up,
 - documented Notion page snapshot and `store-ref` boundaries for page/block JSON exports,
-- read-only objet reference resolution, presigned URL planning, zettel objet link previews for mapping `sha256:<hex>` refs to safe local/external candidates, one-zettel plus archive-wide Notion provider locator to manifested objet link planning and reviewed rewrite planning without echoing provider URLs or creating provider URLs, import material-clue auditing plus scaled source-map/ledger based Notion material-link planning for imported zets whose body locators were already omitted, approval-gated Notion objet manifest locator fingerprint labels so reviewed manifests can match later locator plans without storing raw provider locator text, and approval-gated Notion locator conversion to reviewed `embed` edges without rewriting zettel body text,
-- approval-gated local write paths for selected private archive, foreign-block review records, and the first v0.3.0 shared update attestation/review record,
-- a v0.2.x freeze / v0.3.0 entry boundary document plus a narrow v0.3.0 write boundary that stays local-first and body-safe,
+- one-zettel plus archive-wide Notion provider locator to manifested objet link planning and reviewed rewrite planning without echoing provider URLs or creating provider URLs,
+- import material-clue auditing plus scaled source-map/ledger based Notion material-link planning for imported zets whose body locators were already omitted,
+- approval-gated Notion objet manifest locator fingerprint labels so reviewed manifests can match later locator plans without storing raw provider locator text, and approval-gated Notion locator conversion to reviewed `embed` edges without rewriting zettel body text,
+
+Zettel edge writes:
+
+- approval-gated single-edge zettel edge writes for reviewed zet-to-zet or zet-to-objet links including safe `zet:notion:<id>` target resolution,
+- approval-gated policy batch zettel edge writes that route only high-confidence policy matches through the single-edge gate, reuse one preloaded object-manifest index for objet targets and one zettel id/path index for zet-target batches, leave the rest in a human review queue, resolve batch plans archive-relative first, and can skip already-written edge rows on explicit request,
+- receipt-based `revert-edge` and `revert-batch` commands for approved edge rollback without deleting original receipts,
+
+Object storage:
+
+- manifest-aware object-storage recommendation matching with surfaced bucket names, exact next commands, and Cloudflare R2 setup field guidance,
+- object-storage adapter readiness planning, operation request packaging, upload execution-contract planning, and presigned URL planning,
+- approval-gated external upload evidence registration and read-only upload evidence auditing before live provider adapters,
+
+IMAP:
+
+- read-only IMAP mailbox source planning, operation request packaging, schema-validated adapter manifest previews, and approval-gated local adapter manifest writes,
+- IMAP adapter readiness checks, mailbox selection planning, adapter audit receipt previews, approval-gated local adapter audit receipt writes, adapter preflight checks, and adapter execution-contract planning,
+- a first approval-gated local IMAP header metadata scan for Gmail, Naver, and generic IMAP account refs, plus an offline audit checkpoint for those header scan execution receipts,
+- read-only material selection, capture request, capture execution-contract planning, and material capture approval audits, plus approval-gated non-secret material selection records and approval-gated material capture approval receipts before future body/attachment/derived-text work,
+
+### Credentials & setup guidance
+
+- a read-only beginner setup manual with KeePassXC first-vault field walkthroughs, KeePassXC CSV bulk migration import/merge guidance, and Cloudflare R2 bucket/API-token field walkthroughs with Korean/English label hints and S3 credential-pair guidance,
+- connected accounts bridge with separate credential-catalog status,
+- read-only credential reference planning, inventory, and external store recommendation including account recovery and break-glass redundancy scenarios,
+- vault onboarding planning, credential semantic extraction recipe with recovery-code/break-glass routing hints, and plaintext migration planning,
+- future access broker planning, local approval receipt preview/write, credential policy checking, and KeePassXC command preflight,
+- CLI-only KeePassXC write execution with non-secret execution receipts,
+- credential adapter readiness planning, adapter manifest preview, and adapter audit receipt preview for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
+
+### Hygiene & release tooling
+
+- archive-root boundary warnings in `archive doctor` for top-level web/app development artifacts and incomplete `.git` markers, plus `.gitignore` safe defaults for `node_modules/`, `.next/`, and `.vercel/`,
+- approval-gated `.gitignore` repair for missing WOM-kit safe defaults,
 - local public-release hygiene tools for links, Korean product language, privacy, release readiness, and branch-protection planning.
 
-For a status-by-capability view, see the [WOM-kit Capability Matrix](wom-kit/docs/capability-matrix.md).
-
-What does not exist yet:
+## What Does Not Exist Yet
 
 - production-grade installation and platform support,
 - broad real OS keyring read/write adapters beyond the narrow approval-gated Tiro Windows Credential Manager read, secret retrieval for other providers, OAuth flows, OpenAI API calls, or paid OCR API calls,
@@ -393,208 +439,22 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.160
-v0.3.159
-v0.3.158
-v0.3.157
-v0.3.156
-v0.3.155
-v0.3.154
-v0.3.153
-v0.3.152
-v0.3.151
-v0.3.150
-v0.3.149
-v0.3.148
-v0.3.147
-v0.3.146
-v0.3.145
-v0.3.144
-v0.3.143
-v0.3.140
-v0.3.139
-v0.3.138
-v0.3.137
-v0.3.136
-v0.3.135
-v0.3.134
-v0.3.133
-v0.3.132
-v0.3.131
-v0.3.130
-v0.3.129
-v0.3.128
-v0.3.127
-v0.3.126
-v0.3.125
-v0.3.124
-v0.3.123
-v0.3.122
-v0.3.121
-v0.3.120
-v0.3.119
-v0.3.118
-v0.3.117
-v0.3.116
-v0.3.115
-v0.3.114
-v0.3.113
-v0.3.112
-v0.3.111
-v0.3.110
-v0.3.109
-v0.3.108
-v0.3.107
-v0.3.106
-v0.3.105
-v0.3.104
-v0.3.103
-v0.3.102
-v0.3.101
-v0.3.100
-v0.3.99
-v0.3.98
-v0.3.97
-v0.3.96
-v0.3.95
-v0.3.94
-v0.3.93
-v0.3.92
-v0.3.91
-v0.3.90
-v0.3.89
-v0.3.88
-v0.3.87
-v0.3.86
-v0.3.85
-v0.3.84
-v0.3.83
-v0.3.82
-v0.3.81
-v0.3.80
-v0.3.79
-v0.3.78
-v0.3.77
-v0.3.76
-v0.3.75
-v0.3.74
-v0.3.73
-v0.3.72
-v0.3.71
-v0.3.70
-v0.3.69
-v0.3.68
-v0.3.67
-v0.3.66
-v0.3.65
-v0.3.61
-v0.3.60
-v0.3.59
-v0.3.58
-v0.3.57
-v0.3.56
-v0.3.55
-v0.3.54
-v0.3.53
-v0.3.52
-v0.3.51
-v0.3.50
-v0.3.49
-v0.3.48
-v0.3.47
-v0.3.46
-v0.3.45
-v0.3.44
-v0.3.43
-v0.3.42
-v0.3.41
-v0.3.38
-v0.3.37
-v0.3.31
-v0.3.30
-v0.3.29
-v0.3.28
-v0.3.27
-v0.3.26
-v0.3.25
-v0.3.24
-v0.3.23
-v0.3.22
-v0.3.21
-v0.3.20
-v0.3.19
-v0.3.18
-v0.3.17
-v0.3.16
-v0.3.15
-v0.3.14
-v0.3.13
-v0.3.12
-v0.3.11
-v0.3.10
-v0.3.9
-v0.3.8
-v0.3.7
-v0.3.6
-v0.3.5
-v0.3.4
-v0.3.3
-v0.3.2
-v0.3.1
-v0.3.0
-v0.2.60
-v0.2.59
-v0.2.58
-v0.2.57
-v0.2.56
-v0.2.55
-v0.2.54
-v0.2.53
-v0.2.52
-v0.2.51
-v0.2.50
-v0.2.49
-v0.2.48
-v0.2.47
-v0.2.46
-v0.2.45
-v0.2.44
-v0.2.43
-v0.2.42
-v0.2.41
-v0.2.40
-v0.2.39
-v0.2.38
-v0.2.37
-v0.2.36
-v0.2.35
-v0.2.34
-v0.2.33
-v0.2.32
-v0.2.31
-v0.2.30
-v0.2.29
-v0.2.28
-v0.2.27
-v0.2.26
-v0.2.25
-v0.2.24
-v0.2.23
-v0.2.22
-v0.2.21
-v0.2.20
-v0.2.18
-v0.2.17
-v0.2.16
-v0.2.15
-v0.2.14
-v0.2.13
-v0.2.12
-v0.2.11
-v0.2.10
-v0.2.9
-v1.0.0
+v0.3.161 (current checkpoint)
 ```
+
+Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.
+The full release history lives in [CHANGELOG.md](CHANGELOG.md) and the
+[GitHub releases page](https://github.com/mow-coding/zettel-kasten/releases);
+[VERSIONING.md](VERSIONING.md) explains the versioning policy.
+
+Notable compatibility checkpoints in the v0.3.x line include the
+v0.3.137 pre-release, v0.3.134 pre-release,
+v0.3.133 pre-release, v0.3.123 pre-release, v0.3.122 pre-release,
+v0.3.117 pre-release, and v0.3.116 pre-release baselines, the
+v0.3.109 pre-release edge-write baseline, and the v0.3.87 pre-release
+compatibility checkpoint. The v0.2.x line closed at v0.2.60, with v0.2.57,
+v0.2.56, v0.2.55, and v0.2.54 as the late v0.2.x checkpoints before the
+freeze.
 
 Same major protocol version should mean expected compatibility. Different major versions may need migration or compatibility bridges.
 
