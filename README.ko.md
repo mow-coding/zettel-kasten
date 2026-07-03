@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.163 pre-release
+v0.3.164 pre-release
 ```
 
-이전 공개 기준: v0.3.162 pre-release.
+이전 공개 기준: v0.3.163 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -124,7 +124,7 @@ Object storage:
 
 - 버킷명·정확한 다음 명령·Cloudflare R2 설정 필드 안내를 곁들인 manifest-aware object-storage 추천, adapter readiness/operation request/execution-contract/presigned URL 계획,
 - approval-gated 외부 upload evidence 등록과 read-only upload evidence 감사(라이브 provider adapter 이전 단계),
-- 라이브 업로드 어댑터 Stage 1: digest-aware idempotency, 로컬 RAW 바이트 검증, 강화된 원자적 manifest 기록을 갖춘 approval-gated `object-storage-upload-plan`/`-verify`/`object-storage-upload` 명령. 라이브 전송 계층을 포함하지 않으며, 이후 사람 게이트 단계 전까지 `--approve`는 닫힌 상태로 실패,
+- 라이브 업로드 어댑터 Stage 2: 단일 네트워킹 seam 뒤에 손으로 구현한 실제 AWS SigV4 R2/S3 전송 계층(새 의존성 없음), (단일 PUT·multipart 모두에 적용되는) bounded 재시도 루프, 하드 누적 PUT 상한, 프로바이더의 체크섬 표면에 의존하지 않고 재다운로드-후-해시로 검증하는 전체 객체 무결성, orphan 정리, tiered tiny-first 게이트. 이제 실제 업로드 능력을 갖췄지만 라이브 `--approve`는 여전히 env 자격 증명·충족된 tiered 게이트·endpoint/bucket 없이는 닫힌 상태로 실패하며, 첫 사람 실행 라이브 객체 전까지 `unproven_against_live_provider` 상태를 유지,
 
 IMAP:
 

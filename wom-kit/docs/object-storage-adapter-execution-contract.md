@@ -76,10 +76,38 @@ provider-specific policy has explicitly verified that equivalence for the exact
 upload mode. Multipart uploads and encrypted objects can make ETag unsuitable as
 a SHA-256 proof.
 
+Stage 2 (v0.3.164) makes this concrete, and does so WITHOUT depending on any
+provider-stored SHA-256 checksum. This is deliberate: a stored server-side
+whole-object SHA-256 is not reliably available on the target. On both AWS S3 and
+Cloudflare R2 a SHA-256 multipart checksum can only be COMPOSITE (a
+checksum-of-checksums that never equals the whole-object digest); full-object
+multipart checksums are CRC-only. R2 additionally does not implement
+GetObjectAttributes and marks the `x-amz-checksum-*` headers "Feature Not
+Implemented". A design that relied on `x-amz-checksum-sha256` + `FULL_OBJECT` +
+GetObjectAttributes therefore could never confirm a genuine upload against R2.
+
+Instead, the whole-object proof is **re-download-and-hash**: after a PUT or a
+completed multipart upload, the transport issues a `HeadObject` (presence +
+`Content-Length`) and then a `GetObject`, streams the returned bytes, and computes
+their SHA-256, returning it as lowercase hex. The WOM executor compares that hex
+to the object id byte-for-byte. This is identical for single-part and multipart
+objects and depends on no provider checksum surface. The upload requests still
+sign the real payload SHA-256 in SigV4 (`x-amz-content-sha256`), so the provider
+independently validates each PUT/part body on the wire; we simply do not rely on
+the provider to store or surface a whole-object SHA-256. If the object cannot be
+read back and hashed to the object id, the object FAILS — it is never confirmed on
+ETag or size alone, and a completed-but-wrong object is deleted. The one live
+residual (`unproven_against_live_provider` until the first live object) is
+signature ACCEPTANCE by R2's authorizer and read-after-write consistency, not any
+checksum-surface question.
+
 Official references checked for this checkpoint:
 
 - AWS S3 object integrity and checksum documentation:
   <https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html>
+- AWS S3 multipart checksum algorithm/type support table (SHA-256 is
+  composite-only; full-object multipart is CRC-only):
+  <https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity-upload.html>
 - AWS S3 `PutObject` API checksum fields:
   <https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html>
 - AWS S3 object and ETag documentation:

@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.163 pre-release
+v0.3.164 pre-release
 ```
 
-Previous public baseline: v0.3.162 pre-release.
+Previous public baseline: v0.3.163 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -158,7 +158,7 @@ Object storage:
 - manifest-aware object-storage recommendation matching with surfaced bucket names, exact next commands, and Cloudflare R2 setup field guidance,
 - object-storage adapter readiness planning, operation request packaging, upload execution-contract planning, and presigned URL planning,
 - approval-gated external upload evidence registration and read-only upload evidence auditing before live provider adapters,
-- Stage 1 of the live upload adapter as approval-gated `object-storage-upload-plan`/`-verify`/`object-storage-upload` commands with digest-aware idempotency, local RAW-byte verification, and hardened atomic manifest writes, that ships no live transport and fails `--approve` closed until a later human-gated stage,
+- Stage 2 of the live upload adapter: a real hand-rolled AWS SigV4 R2/S3 transport behind a single networking seam (no new dependency), with a bounded retry loop (single-PUT and multipart), a hard cumulative PUT ceiling, whole-object integrity verified by re-download-and-hash (no dependence on any provider checksum surface), orphan cleanup, and a tiered tiny-first gate; the capability is now real but a live `--approve` still fails closed without env credentials, a met tiered gate, and endpoint/bucket, and stays `unproven_against_live_provider` until the first human-run live object,
 
 IMAP:
 

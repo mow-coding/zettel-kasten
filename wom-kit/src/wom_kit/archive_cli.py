@@ -1982,6 +1982,18 @@ class Doctor:
                 self.error("object_storage_upload_key_hint_mismatch", "Execution receipt key_hint must match its object id digest.", path)
             if data.get("checksum_algorithm") != archive_services.OBJECT_STORAGE_CHECKSUM_ALGORITHM:
                 self.error("object_storage_upload_checksum_invalid", "Execution receipt checksum_algorithm must be sha256.", path)
+            # RC5 / SA-3: retry_summary must be scalar-only — no nested provider
+            # body, headers, or error text ever reaches a durable receipt.
+            retry_summary = data.get("retry_summary")
+            if isinstance(retry_summary, dict):
+                for value in retry_summary.values():
+                    if not isinstance(value, (int, float, str, bool)) and value is not None:
+                        self.error(
+                            "object_storage_upload_retry_summary_not_scalar",
+                            "Execution receipt retry_summary must contain scalar counters only.",
+                            path,
+                        )
+                        break
 
             # §4.1 / RC3: a success receipt must have advanced a wom_uploaded manifest
             # location that passes the wom_uploaded audit (both by_wom_kit flags true,
@@ -5280,6 +5292,11 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
     if approve and not (args.reviewed_by or "").strip():
         print("object-storage-upload requires --reviewed-by when --approve is used.", file=sys.stderr)
         return 1
+    # Stage 2: wire the production send seam only for a real --approve run. The
+    # default sender is the ONLY place stdlib networking is reachable; --dry-run
+    # never builds it. The service still fails closed without env creds, a met
+    # tiered gate, and a resolvable endpoint/bucket.
+    send = archive_services._default_urllib_sender() if approve else None
     try:
         result = archive_services.object_storage_upload_run(
             Path(args.archive_root),
@@ -5293,6 +5310,10 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
             reviewed_by=args.reviewed_by,
             approve=approve,
             dry_run=bool(args.dry_run),
+            send=send,
+            endpoint_host=getattr(args, "endpoint_host", None),
+            bucket=getattr(args, "bucket", None),
+            region=getattr(args, "region", None),
         )
     except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
@@ -13259,6 +13280,9 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_upload.add_argument("--store-ref", help="Safe store label/ref. Required. Do not pass URLs, bucket names, paths, tokens, or secrets.")
     object_storage_upload.add_argument("--access-key-id-ref", help="Access key id ref (env: required at first live).")
     object_storage_upload.add_argument("--secret-access-key-ref", help="Secret access key ref (env: required at first live).")
+    object_storage_upload.add_argument("--endpoint-host", help="Non-secret S3 endpoint host, e.g. <account>.r2.cloudflarestorage.com. Required for a real --approve upload.")
+    object_storage_upload.add_argument("--bucket", help="Non-secret bucket name for the real upload. Required for a real --approve upload.")
+    object_storage_upload.add_argument("--region", help="S3 region. Defaults to 'auto' for cloudflare-r2; required for generic-s3.")
     object_storage_upload.add_argument("--only", help="Upload only this object id (sha256:<hex> or bare 64 hex). Tiny-first.")
     object_storage_upload.add_argument("--max-objects", type=int, help="REFUSE if the resolved plan exceeds this count.")
     object_storage_upload.add_argument("--skip-uploaded", action="store_true", help="Digest-aware manifest + remote-HEAD idempotency.")

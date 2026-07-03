@@ -152,6 +152,31 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.163` To `v0.3.164`
+
+이 release는 object-storage 업로드 어댑터(WOM #11)의 Stage 2, 즉 실제 AWS SigV4
+R2/S3 호환 업로드 전송 계층을 추가합니다. 이제 WOM은 승인된 object-storage
+업로드에 대해 네트워크 CAPABLE하지만, capable이 곧 자동 실행을 뜻하지는 않습니다.
+
+운영자에게 보이는 변경:
+
+- archive 마이그레이션이나 해시 변경은 없습니다. 업로드 명령을 직접 실행하기
+  전까지 기존 receipt와 manifest는 영향을 받지 않습니다.
+- 여전히 의존성 추가는 없습니다. 전송 계층은 기존 `urllib` seam 위에
+  `hashlib`/`hmac`/`base64`로 손수 구현했으며 `wom-kit/pyproject.toml`은 계속
+  PyYAML 전용입니다.
+- 라이브 `--approve` 업로드는 다음을 모두 요구합니다: env 전용 자격 증명 ref
+  (`--access-key-id-ref env:...`, `--secret-access-key-ref env:...`), 안전한
+  `--reviewed-by`, 확인 가능한 비밀 아닌 `--endpoint-host`와 `--bucket`
+  (cloudflare-r2는 region 기본값 `auto`), 그리고 충족된 tiered tiny-first 게이트.
+  대량 first-live 실행은 작은 객체 하나를 먼저 증명하기 전까지 `tiered_gate_unmet`
+  로 거부됩니다. 하드 누적 PUT 상한이 실행 전체의 비용을 제한합니다.
+- 라이브를 tiny-first로 검증하세요. 작은 객체 하나를 끝까지 업로드하고 실행
+  receipt·manifest `wom_uploaded` 전이·원격 after-HEAD를 손으로 확인한 뒤 tier를
+  올리세요. 릴리스 노트에 정확한 runbook이 있습니다. 첫 라이브 객체가 확인되기
+  전까지 receipt와 릴리스 노트는 `unproven_against_live_provider: true`를
+  유지합니다. `wom-kit/docs/releases/v0.3.164.md` 참고.
+
 ## From `v0.3.162` To `v0.3.163`
 
 이 release는 object-storage 업로드 어댑터(WOM #11)의 Stage 1을 세 개의 승인 게이트
