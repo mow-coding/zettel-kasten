@@ -85,6 +85,12 @@ Commands:
           Record reviewed external upload evidence and update manifest locations without provider calls.
   object-storage-upload-evidence-audit
           Audit upload evidence receipts and manifest locations without provider calls.
+  object-storage-upload-plan
+          Plan a content-addressed object-storage upload with digest-aware idempotency (no network, no secret).
+  object-storage-upload-verify
+          Verify planned objects' local RAW bytes hash to their object id (no network, no secret).
+  object-storage-upload
+          Stage-1 upload command; --approve fails closed (no live transport in this release).
   connection-edge-intelligence-plan
           Classify sanitized connection fixture candidates into meaning/mechanism review signals.
   notion-nested-tree-plan
@@ -883,6 +889,7 @@ class Doctor:
             ("mint-receipts", self._check_mint_receipts),
             ("retired-draft-receipts", self._check_retired_draft_receipts),
             ("reconcile-receipts", self._check_reconcile_receipts),
+            ("object-storage-execution-receipts", self._check_object_storage_execution_receipts),
             ("delegate-receipts", self._check_delegate_receipts),
             ("capture-enablement", self._check_capture_enablement),
             ("zettel-kasten-layer", self._check_zettel_kasten_layer),
@@ -903,6 +910,7 @@ class Doctor:
             ("mint-receipts", self._check_mint_receipts),
             ("retired-draft-receipts", self._check_retired_draft_receipts),
             ("reconcile-receipts", self._check_reconcile_receipts),
+            ("object-storage-execution-receipts", self._check_object_storage_execution_receipts),
             ("scoped-edge-receipts", self._check_scoped_edge_receipts),
             ("zettel-kasten-layer", self._check_zettel_kasten_layer),
         ]
@@ -1929,6 +1937,100 @@ class Doctor:
             for field in ["zettel", "mint_receipt", "result"]:
                 if not isinstance(data.get(field), dict):
                     self.error("mint_reconcile_field_missing", f"Reconcile receipt must contain object field: {field}.", path)
+
+    def _check_object_storage_execution_receipts(self) -> None:
+        root = self.archive_root / archive_services.OBJECT_STORAGE_EXECUTIONS_DIR
+        if not root.is_dir():
+            return
+        paths = []
+        for path in sorted(root.glob("*.object-storage-upload.json")):
+            if not self._path_stays_inside_archive(path):
+                continue
+            paths.append(path)
+        total = len(paths)
+        # §4.1 / RC3: audit the wom_uploaded MANIFEST LOCATION each success receipt
+        # advanced, not just the receipt. Build an object_id -> record lookup once.
+        manifest_by_object_id: dict[str, dict[str, Any]] = {}
+        for record in archive_services.load_manifest_records(self.archive_root):
+            if isinstance(record, dict):
+                object_id = str(record.get("object_id") or "").lower()
+                if object_id:
+                    manifest_by_object_id.setdefault(object_id, record)
+        for index, path in enumerate(paths, start=1):
+            if index == 1 or index == total or index % 250 == 0:
+                self._progress(
+                    "object-storage-execution-receipts",
+                    self._display_path(path) or "object-storage execution receipt",
+                    index,
+                    total,
+                )
+            data = self._load_json_file(path)
+            if not isinstance(data, dict):
+                continue
+            self._check_schema(data, archive_services.OBJECT_STORAGE_UPLOAD_RECEIPT_SCHEMA, path)
+            if data.get("operation") != "upload_object":
+                self.error("object_storage_upload_operation_invalid", "Execution receipt operation must be upload_object.", path)
+            if data.get("dry_run") is not False:
+                self.error("object_storage_upload_dry_run_invalid", "Applied execution receipt must have dry_run false.", path)
+            if not data.get("reviewed_by"):
+                self.error("object_storage_upload_reviewer_missing", "Applied execution receipt must include reviewed_by.", path)
+            if data.get("receipt_path") != self._display_path(path):
+                self.error("object_storage_upload_path_mismatch", "Execution receipt receipt_path must match its archive-relative path.", path)
+            digest = str(data.get("object_id") or "").removeprefix("sha256:").lower()
+            expected_key_hint = f"sha256/{digest[:2]}/{digest}" if archive_services.SHA256_RE.match(digest) else None
+            if expected_key_hint is None or data.get("key_hint") != expected_key_hint:
+                self.error("object_storage_upload_key_hint_mismatch", "Execution receipt key_hint must match its object id digest.", path)
+            if data.get("checksum_algorithm") != archive_services.OBJECT_STORAGE_CHECKSUM_ALGORITHM:
+                self.error("object_storage_upload_checksum_invalid", "Execution receipt checksum_algorithm must be sha256.", path)
+
+            # §4.1 / RC3: a success receipt must have advanced a wom_uploaded manifest
+            # location that passes the wom_uploaded audit (both by_wom_kit flags true,
+            # key_strategy, execution_receipt_ref safe) AND the digest invariant.
+            if str(data.get("result_status") or "") in {"uploaded", "skipped_remote_same"}:
+                object_id = str(data.get("object_id") or "").lower()
+                provider_kind = str(data.get("provider_kind") or "")
+                store_ref = str(data.get("store_ref") or "")
+                receipt_relative = self._display_path(path)
+                record = manifest_by_object_id.get(object_id)
+                if record is None:
+                    self.error(
+                        "object_storage_upload_manifest_record_missing",
+                        "Execution receipt object_id has no manifest record to carry its wom_uploaded location.",
+                        path,
+                    )
+                else:
+                    locations = record.get("locations") if isinstance(record.get("locations"), list) else []
+                    matched_location = None
+                    for location in locations:
+                        if not isinstance(location, dict):
+                            continue
+                        if location.get("availability") != "wom_uploaded":
+                            continue
+                        if location.get("execution_receipt_ref") != receipt_relative:
+                            continue
+                        matched_location = location
+                        break
+                    if matched_location is None:
+                        self.error(
+                            "object_storage_upload_wom_location_missing",
+                            "No wom_uploaded manifest location links to this execution receipt.",
+                            path,
+                        )
+                    else:
+                        location_errors = archive_services.object_storage_wom_uploaded_audit_location_errors(
+                            matched_location,
+                            digest=digest,
+                            provider_kind=provider_kind,
+                            store_ref=store_ref,
+                        )
+                        for message in location_errors:
+                            self.error("object_storage_upload_wom_location_invalid", message, path)
+                        if not archive_services.object_storage_location_digest_matches_record(matched_location, object_id):
+                            self.error(
+                                "object_storage_upload_wom_location_digest_mismatch",
+                                "wom_uploaded manifest location key_hint digest does not match its record object_id.",
+                                path,
+                            )
 
     def _check_scoped_edge_receipts(self) -> None:
         if not self.validate_scope.active() or not self.validate_scope.edge_receipt_paths:
@@ -5123,6 +5225,82 @@ def command_object_storage_adapter_execution_contract(args: argparse.Namespace) 
     return 0 if result.get("ok", True) else 1
 
 
+def command_object_storage_upload_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("object-storage-upload-plan is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.object_storage_upload_plan(
+            Path(args.archive_root),
+            provider_kind=args.provider_kind,
+            store_ref=args.store_ref,
+            access_key_id_ref=args.access_key_id_ref,
+            secret_access_key_ref=args.secret_access_key_ref,
+            only=args.only,
+            max_objects=args.max_objects,
+            skip_uploaded=bool(args.skip_uploaded),
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print_object_storage_upload_plan_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def command_object_storage_upload_verify(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("object-storage-upload-verify is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.object_storage_upload_verify(
+            Path(args.archive_root),
+            provider_kind=args.provider_kind,
+            store_ref=args.store_ref,
+            only=args.only,
+            max_objects=args.max_objects,
+            dry_run=True,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print_object_storage_upload_verify_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def command_object_storage_upload(args: argparse.Namespace) -> int:
+    # Three-way gate (mirrors command_remint_reconcile); service re-enforces it.
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("object-storage-upload requires exactly one of --dry-run or --approve.", file=sys.stderr)
+        return 1
+    approve = bool(args.approve)
+    if approve and not (args.reviewed_by or "").strip():
+        print("object-storage-upload requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.object_storage_upload_run(
+            Path(args.archive_root),
+            provider_kind=args.provider_kind,
+            store_ref=args.store_ref,
+            access_key_id_ref=args.access_key_id_ref,
+            secret_access_key_ref=args.secret_access_key_ref,
+            only=args.only,
+            max_objects=args.max_objects,
+            skip_uploaded=bool(args.skip_uploaded),
+            reviewed_by=args.reviewed_by,
+            approve=approve,
+            dry_run=bool(args.dry_run),
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print_object_storage_upload_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
 def command_imap_mailbox_operation_request_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("imap-mailbox-operation-request-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -6341,6 +6519,62 @@ def print_object_storage_adapter_execution_contract_result(result: dict[str, Any
         print("Next safe actions:")
         for action in result["next_safe_actions"]:
             print(f"- {action}")
+
+
+def print_object_storage_upload_plan_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
+    print(f"Object storage upload plan: {'ready' if result.get('ok') else 'blocked'}")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Provider: {result.get('provider_kind') or '-'}")
+    print(f"Store ref: {result.get('store_ref') or '-'}")
+    print(f"Object count: {plan.get('object_count')}")
+    print(f"Would upload: {plan.get('would_upload')}")
+    print(f"Already uploaded: {plan.get('already_uploaded')}")
+    print("Live execution allowed now: no")
+    print("Provider API called: no")
+    print("Credential value read: no")
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+
+
+def print_object_storage_upload_verify_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"Object storage upload verify: {'ready' if result.get('ok') else 'blocked'}")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Verified: {result.get('verified_count')}")
+    print(f"Mismatch: {result.get('mismatch_count')}")
+    print("Provider API called: no")
+    print("Writes: none")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+
+
+def print_object_storage_upload_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"Object storage upload: {result.get('execution_status') or '-'}")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Provider: {result.get('provider_kind') or '-'}")
+    print(f"Store ref: {result.get('store_ref') or '-'}")
+    print(f"Reviewed by: {result.get('reviewed_by') or '-'}")
+    print(f"Receipts written: {len(result.get('receipts_written') or [])}")
+    print(f"Manifest updates: {result.get('manifest_updates')}")
+    print("Live execution allowed now: no")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
 
 
 def print_imap_mailbox_operation_request_plan_result(result: dict[str, Any], output_format: str) -> None:
@@ -12968,6 +13202,71 @@ def build_parser() -> argparse.ArgumentParser:
     )
     object_storage_adapter_execution_contract.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_adapter_execution_contract.set_defaults(func=command_object_storage_adapter_execution_contract)
+
+    object_storage_upload_plan = subcommands.add_parser(
+        "object-storage-upload-plan",
+        aliases=["object-storage-upload-plan-preview", "objet-storage-upload-plan"],
+        help="Plan a content-addressed object-storage upload with digest-aware idempotency. Read-only; no network, no secret.",
+    )
+    object_storage_upload_plan.add_argument("archive_root", help="Archive root to inspect.")
+    object_storage_upload_plan.add_argument(
+        "--provider-kind",
+        choices=sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS),
+        default="cloudflare-r2",
+        help="Object-storage provider kind label.",
+    )
+    object_storage_upload_plan.add_argument("--store-ref", help="Safe store label/ref. Do not pass URLs, bucket names, paths, tokens, or secrets.")
+    object_storage_upload_plan.add_argument("--access-key-id-ref", help="Access key id ref (env:/keyring:/...). Shape-checked only; value not read.")
+    object_storage_upload_plan.add_argument("--secret-access-key-ref", help="Secret access key ref (env:/keyring:/...). Shape-checked only; value not read.")
+    object_storage_upload_plan.add_argument("--only", help="Plan only this object id (sha256:<hex> or bare 64 hex).")
+    object_storage_upload_plan.add_argument("--max-objects", type=int, help="REFUSE (not truncate) if the resolved plan exceeds this count.")
+    object_storage_upload_plan.add_argument("--skip-uploaded", action="store_true", help="Verdict already_uploaded only on a digest-matched wom_uploaded location.")
+    object_storage_upload_plan.add_argument("--dry-run", action="store_true", help="Required. Plan only; never calls providers, reads secrets, or writes files.")
+    object_storage_upload_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    object_storage_upload_plan.set_defaults(func=command_object_storage_upload_plan)
+
+    object_storage_upload_verify = subcommands.add_parser(
+        "object-storage-upload-verify",
+        aliases=["object-storage-local-byte-verify", "objet-storage-upload-verify"],
+        help="Verify planned objects' local RAW bytes hash to their object id. Read-only; no network, no secret.",
+    )
+    object_storage_upload_verify.add_argument("archive_root", help="Archive root to inspect.")
+    object_storage_upload_verify.add_argument(
+        "--provider-kind",
+        choices=sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS),
+        default="cloudflare-r2",
+        help="Object-storage provider kind label.",
+    )
+    object_storage_upload_verify.add_argument("--store-ref", help="Optional safe store label/ref. Do not pass URLs, paths, tokens, or secrets.")
+    object_storage_upload_verify.add_argument("--only", help="Verify only this object id (sha256:<hex> or bare 64 hex).")
+    object_storage_upload_verify.add_argument("--max-objects", type=int, help="REFUSE if the resolved plan exceeds this count.")
+    object_storage_upload_verify.add_argument("--dry-run", action="store_true", help="Required. Verify local bytes only; never calls providers or writes files.")
+    object_storage_upload_verify.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    object_storage_upload_verify.set_defaults(func=command_object_storage_upload_verify)
+
+    object_storage_upload = subcommands.add_parser(
+        "object-storage-upload",
+        aliases=["object-storage-upload-execute", "objet-storage-upload"],
+        help="Stage-1 object-storage upload command; --approve fails closed (no live transport in this release).",
+    )
+    object_storage_upload.add_argument("archive_root", help="Archive root to update.")
+    object_storage_upload.add_argument(
+        "--provider-kind",
+        choices=sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS),
+        default="cloudflare-r2",
+        help="Object-storage provider kind label.",
+    )
+    object_storage_upload.add_argument("--store-ref", help="Safe store label/ref. Required. Do not pass URLs, bucket names, paths, tokens, or secrets.")
+    object_storage_upload.add_argument("--access-key-id-ref", help="Access key id ref (env: required at first live).")
+    object_storage_upload.add_argument("--secret-access-key-ref", help="Secret access key ref (env: required at first live).")
+    object_storage_upload.add_argument("--only", help="Upload only this object id (sha256:<hex> or bare 64 hex). Tiny-first.")
+    object_storage_upload.add_argument("--max-objects", type=int, help="REFUSE if the resolved plan exceeds this count.")
+    object_storage_upload.add_argument("--skip-uploaded", action="store_true", help="Digest-aware manifest + remote-HEAD idempotency.")
+    object_storage_upload.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
+    object_storage_upload.add_argument("--dry-run", action="store_true", help="Preview the plan and execution-receipt shape without provider calls, byte reads, or secret reads.")
+    object_storage_upload.add_argument("--approve", action="store_true", help="Attempt the live upload. Stage 1: fails closed (no live transport in this release).")
+    object_storage_upload.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    object_storage_upload.set_defaults(func=command_object_storage_upload)
 
     imap_mailbox_operation_request = subcommands.add_parser(
         "imap-mailbox-operation-request-plan",

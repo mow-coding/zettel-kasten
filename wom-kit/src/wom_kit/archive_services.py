@@ -22,7 +22,7 @@ import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, Protocol
 
 from . import __version__ as WOM_KIT_VERSION
 from .paths import (
@@ -1727,6 +1727,22 @@ OBJECT_STORAGE_ADAPTER_EXECUTION_CONTRACT_OPERATIONS = {
     "upload_object",
 }
 OBJECT_STORAGE_UPLOAD_KEY_STRATEGY = "sha256_content_addressed"
+# Live upload adapter (WOM #11) Stage 1 constants (§5 of the locked spec).
+OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES = 5 * 1024 * 1024 * 1024  # 5 GiB; >= this => multipart
+OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES = 64 * 1024 * 1024  # 64 MiB parts
+OBJECT_STORAGE_CHECKSUM_ALGORITHM = "sha256"
+OBJECT_STORAGE_EXECUTIONS_DIR = "receipts/providers/object-storage-executions"
+OBJECT_STORAGE_UPLOAD_RECEIPT_SCHEMA = "object-storage-upload-receipt.schema.json"
+OBJECT_STORAGE_UPLOAD_RESULT_STATUSES = {
+    "uploaded",
+    "skipped_already_present",
+    "skipped_remote_same",
+    "remote_conflict_different_bytes",
+    "failed_auth",
+    "failed_rate_limited",
+    "failed_upload",
+    "failed_secret_guard",
+}
 OBJECT_STORAGE_PROVIDER_TOKEN_ENVS = {
     "cloudflare-r2": "R2_TOKEN",
     "aws-s3": "AWS_OBJECT_STORAGE_TOKEN",
@@ -9349,6 +9365,25 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     try:
         with tmp.open("w", encoding="utf-8", newline="\n") as handle:
             handle.write(json.dumps(json_safe(payload), indent=2, ensure_ascii=False, default=str) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Durable temp+fsync+os.replace writer for JSONL/text files.
+
+    Mirrors _atomic_write_json but for arbitrary text (e.g. manifest JSONL).
+    A crash before os.replace leaves the original file byte-identical; the
+    temp part-file is always cleaned up.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / (path.name + ".part-" + secrets.token_hex(8))
+    try:
+        with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, path)
@@ -41016,6 +41051,7 @@ def object_storage_upload_evidence_register(
     }
     receipt_path = object_storage_upload_evidence_write_receipt(root, receipt, registered_at)
     added_locations = update_manifest_with_object_storage_upload_evidence(
+        root,
         manifest_path,
         provider_kind=normalized_provider,
         store_ref=normalized_store_ref,
@@ -41232,6 +41268,7 @@ def object_storage_upload_evidence_location(
 
 
 def update_manifest_with_object_storage_upload_evidence(
+    root: Path,
     manifest_path: Path,
     *,
     provider_kind: str,
@@ -41240,38 +41277,46 @@ def update_manifest_with_object_storage_upload_evidence(
     registered_at: str,
     matched_items: list[dict[str, Any]],
 ) -> int:
+    """Append external-evidence object_storage locations to matched manifest records.
+
+    R4 hardening: this read-modify-write now (a) holds the shared
+    _ObjetCaptureManifestLock so a concurrent objet-capture cannot interleave,
+    and (b) writes via _atomic_write_text (temp+fsync+os.replace) so a crash
+    mid-write can never corrupt the ~19k-record manifest.
+    """
     matched_by_id = {str(item.get("object_id") or ""): item for item in matched_items}
     changed_count = 0
-    rewritten_lines: list[str] = []
-    for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line:
-            rewritten_lines.append(raw_line)
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            rewritten_lines.append(raw_line)
-            continue
-        object_id = str(record.get("object_id") or "")
-        item = matched_by_id.get(object_id)
-        if item and not item.get("already_present"):
-            locations = record.get("locations") if isinstance(record.get("locations"), list) else []
-            locations.append(
-                object_storage_upload_evidence_location(
-                    digest=str(item.get("sha256") or "").removeprefix("sha256:"),
-                    provider_kind=provider_kind,
-                    store_ref=store_ref,
-                    receipt_path=receipt_path,
-                    registered_at=registered_at,
+    with _ObjetCaptureManifestLock(root):
+        rewritten_lines: list[str] = []
+        for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line:
+                rewritten_lines.append(raw_line)
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                rewritten_lines.append(raw_line)
+                continue
+            object_id = str(record.get("object_id") or "")
+            item = matched_by_id.get(object_id)
+            if item and not item.get("already_present"):
+                locations = record.get("locations") if isinstance(record.get("locations"), list) else []
+                locations.append(
+                    object_storage_upload_evidence_location(
+                        digest=str(item.get("sha256") or "").removeprefix("sha256:"),
+                        provider_kind=provider_kind,
+                        store_ref=store_ref,
+                        receipt_path=receipt_path,
+                        registered_at=registered_at,
+                    )
                 )
-            )
-            record["locations"] = locations
-            changed_count += 1
-            rewritten_lines.append(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
-        else:
-            rewritten_lines.append(raw_line)
-    manifest_path.write_text("\n".join(rewritten_lines) + "\n", encoding="utf-8")
+                record["locations"] = locations
+                changed_count += 1
+                rewritten_lines.append(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+            else:
+                rewritten_lines.append(raw_line)
+        _atomic_write_text(manifest_path, "\n".join(rewritten_lines) + "\n")
     return changed_count
 
 
@@ -41580,6 +41625,62 @@ def object_storage_upload_evidence_audit_location_errors(
     evidence_registered_at = location.get("evidence_registered_at")
     if not isinstance(evidence_registered_at, str) or not evidence_registered_at:
         errors.append("manifest object-storage location must include evidence_registered_at.")
+    return errors
+
+
+def object_storage_location_digest_matches_record(location: dict[str, Any], object_id: str) -> bool:
+    """RC3 digest invariant: an object_storage location's key_hint digest must
+
+    equal the enclosing manifest record's object_id digest. Used by the audit
+    and doctor to close the digest-blind false-skip / mismatched-advance hole.
+    """
+    if not isinstance(location, dict):
+        return False
+    digest = str(object_id or "").removeprefix("sha256:").lower()
+    if not SHA256_RE.match(digest):
+        return False
+    return location.get("key_hint") == f"sha256/{digest[:2]}/{digest}"
+
+
+def object_storage_wom_uploaded_audit_location_errors(
+    location: dict[str, Any],
+    *,
+    digest: str,
+    provider_kind: str,
+    store_ref: str,
+) -> list[str]:
+    """Audit invariants for a WOM live-upload (`wom_uploaded`) location (§4.1).
+
+    Distinct from the external-evidence `declared_uploaded` branch: both
+    by_wom_kit flags MUST be true and execution_receipt_ref MUST be present as a
+    safe archive-relative execution-receipt path. The digest invariant (RC3) is
+    enforced on this branch too.
+    """
+    errors: list[str] = []
+    if location.get("provider") != "object_storage":
+        errors.append("manifest wom_uploaded location provider must be object_storage.")
+    if location.get("provider_kind") != provider_kind:
+        errors.append("manifest wom_uploaded location provider_kind does not match the receipt.")
+    if location.get("store_ref") != store_ref:
+        errors.append("manifest wom_uploaded location store_ref does not match the receipt.")
+    if not isinstance(location.get("store_ref"), str) or not safe_object_storage_ref(str(location.get("store_ref") or "")):
+        errors.append("manifest wom_uploaded location store_ref is not a safe label.")
+    if location.get("availability") != "wom_uploaded":
+        errors.append("manifest wom_uploaded location must use wom_uploaded availability.")
+    if location.get("content_addressed") is not True:
+        errors.append("manifest wom_uploaded location must be content-addressed.")
+    if location.get("key_strategy") != OBJECT_STORAGE_UPLOAD_KEY_STRATEGY:
+        errors.append("manifest wom_uploaded location key_strategy is not sha256 content-addressed.")
+    expected_key_hint = f"sha256/{digest[:2]}/{digest}" if SHA256_RE.match(digest) else None
+    if expected_key_hint is None or location.get("key_hint") != expected_key_hint:
+        errors.append("manifest wom_uploaded location key_hint does not match the object id.")
+    if location.get("byte_verification_by_wom_kit") is not True:
+        errors.append("manifest wom_uploaded location must claim WOM-kit byte verification.")
+    if location.get("provider_confirmation_by_wom_kit") is not True:
+        errors.append("manifest wom_uploaded location must claim WOM-kit provider confirmation.")
+    receipt_ref = location.get("execution_receipt_ref")
+    if not isinstance(receipt_ref, str) or not safe_object_storage_execution_receipt_relative(receipt_ref):
+        errors.append("manifest wom_uploaded location execution_receipt_ref is not a safe execution-receipt path.")
     return errors
 
 
@@ -55075,6 +55176,1213 @@ def source_intake_next_safe_actions(result: dict[str, Any]) -> list[str]:
             *actions,
         ]
     return []
+
+
+# ---------------------------------------------------------------------------
+# WOM #11 live object-storage upload adapter — Stage 1 (v0.3.163).
+#
+# NO-NETWORK BOUNDARY: this module ships NO transport that performs a socket
+# operation. The upload spine calls the provider only through an injected
+# ObjectStorageTransport. Stage 1 ships the abstract interface plus a
+# NullTransport whose every method raises, and object_storage_resolve_transport
+# returns None for every provider. There is no boto3/httpx/requests import on
+# this path and no branch that resolves a live client. A Stage-2 code change is
+# required to wire a real transport — it cannot land silently.
+# ---------------------------------------------------------------------------
+
+
+class ObjectStorageTransportNotImplemented(ArchiveServiceError):
+    """Raised when a live object-storage transport method is invoked in Stage 1."""
+
+
+class ObjectStorageSecretLeak(ArchiveServiceError):
+    """Raised when a durable-surface delta fails the §6 secret/location leak guard.
+
+    Carries NO secret and NO provider body (RC5) — only a fixed message. The
+    caller catches it on the write path to roll back and record failed_secret_guard.
+    """
+
+
+class ObjectStorageTransport(Protocol):
+    """Abstract S3-compatible transport. No live implementation ships in Stage 1.
+
+    Every return value is a scalar-only dict: NO secret, NO url, NO bucket, and
+    NO provider error body is ever returned to the caller (RC5).
+    """
+
+    def head_object(self, *, key: str) -> dict[str, Any]:
+        # -> {"present": bool, "size": int | None, "checksum_sha256": str | None}
+        ...
+
+    def put_object(self, *, key: str, data_path: Path, size: int, content_sha256: str) -> dict[str, Any]:
+        # -> {"status_class": "ok"|"auth"|"rate_limited"|"failed",
+        #     "size": int, "checksum_sha256": str | None, "etag_opaque": str | None}
+        ...
+
+    def create_multipart(self, *, key: str) -> str:
+        ...
+
+    def put_part(self, *, key: str, upload_id: str, part_number: int, data: bytes) -> dict[str, Any]:
+        # -> {"etag_opaque": str | None, "part_number": int}
+        ...
+
+    def complete_multipart(
+        self, *, key: str, upload_id: str, parts: list[dict[str, Any]], content_sha256: str
+    ) -> dict[str, Any]:
+        # -> same shape as put_object result
+        ...
+
+    def abort_multipart(self, *, key: str, upload_id: str) -> None:
+        ...
+
+
+class NullTransport:
+    """Stage-1 transport whose every method raises. Ships in place of a live client."""
+
+    def head_object(self, *, key: str) -> dict[str, Any]:
+        raise ObjectStorageTransportNotImplemented(
+            "object-storage-upload has no live transport in this release (Stage 1)."
+        )
+
+    def put_object(self, *, key: str, data_path: Path, size: int, content_sha256: str) -> dict[str, Any]:
+        raise ObjectStorageTransportNotImplemented(
+            "object-storage-upload has no live transport in this release (Stage 1)."
+        )
+
+    def create_multipart(self, *, key: str) -> str:
+        raise ObjectStorageTransportNotImplemented(
+            "object-storage-upload has no live transport in this release (Stage 1)."
+        )
+
+    def put_part(self, *, key: str, upload_id: str, part_number: int, data: bytes) -> dict[str, Any]:
+        raise ObjectStorageTransportNotImplemented(
+            "object-storage-upload has no live transport in this release (Stage 1)."
+        )
+
+    def complete_multipart(
+        self, *, key: str, upload_id: str, parts: list[dict[str, Any]], content_sha256: str
+    ) -> dict[str, Any]:
+        raise ObjectStorageTransportNotImplemented(
+            "object-storage-upload has no live transport in this release (Stage 1)."
+        )
+
+    def abort_multipart(self, *, key: str, upload_id: str) -> None:
+        raise ObjectStorageTransportNotImplemented(
+            "object-storage-upload has no live transport in this release (Stage 1)."
+        )
+
+
+def object_storage_resolve_transport(provider_kind: str) -> ObjectStorageTransport | None:
+    # Stage 1: no live transport is wired. A Stage-2 change adds the real
+    # R2/S3 client here; that wire does not exist in this release.
+    return None
+
+
+def object_storage_content_addressed_key_hint(digest: str) -> str:
+    clean = str(digest or "").removeprefix("sha256:").lower()
+    return f"sha256/{clean[:2]}/{clean}"
+
+
+def safe_object_storage_execution_receipt_relative(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text or not text.isascii():
+        return False
+    if text.startswith("/") or ":" in text or "\x00" in text or ".." in text.split("/"):
+        return False
+    if not text.startswith(f"{OBJECT_STORAGE_EXECUTIONS_DIR}/"):
+        return False
+    if not text.endswith(".object-storage-upload.json"):
+        return False
+    return True
+
+
+def resolve_credential_value(credential_ref: str, credential_store: str | None) -> tuple[str | None, dict[str, Any]]:
+    """Shared ref->value resolver (generalization of tiro_read_credential_value).
+
+    Dispatch is inherited verbatim: env: -> os.environ; keyring/credential-manager
+    -> OS credential store; secret/wallet -> unsupported (blocks).
+    """
+    return tiro_read_credential_value(credential_ref, credential_store)
+
+
+def assert_no_secret_or_location_leak(serialized: str, *, key_values: list[str]) -> list[str]:
+    """Primary+backstop leak gate (§6, RC1/RC2/RC4).
+
+    Returns a list of guard-hit codes. Empty list => clean. PRIMARY control is
+    direct containment of BOTH resolved key values as substrings of the fully
+    serialized output — this catches the 64-hex/40-char secret the regexes miss.
+    """
+    hits: list[str] = []
+    text = serialized if isinstance(serialized, str) else str(serialized)
+    for value in key_values:
+        if isinstance(value, str) and value and value in text:
+            hits.append("secret_value_contained")
+            break
+    # Backstop scanners (defense in depth, NOT the primary guarantee).
+    if DRAFT_SECRET_VALUE_RE.search(text):
+        hits.append("draft_secret_value_backstop")
+    if GITHUB_SECRET_LIKE_RE.search(text):
+        hits.append("github_secret_like_backstop")
+    if contains_forbidden_location_reference(text):
+        hits.append("forbidden_location_reference")
+    return unique_preserve_order(hits)
+
+
+def object_storage_wom_uploaded_location_matches(
+    locations: list[Any],
+    *,
+    provider_kind: str,
+    store_ref: str,
+    digest: str,
+) -> bool:
+    """Digest-aware Layer A (RC3 + R1). An object is `already_uploaded` for
+
+    --skip-uploaded ONLY if a location has provider==object_storage, matching
+    (provider_kind, store_ref), availability==wom_uploaded (NOT declared_uploaded),
+    AND key_hint == sha256/<first2>/<digest>. declared_uploaded and manifest-only
+    hits never cost-skip a live PUT.
+    """
+    expected_key_hint = object_storage_content_addressed_key_hint(digest)
+    clean_digest = str(digest or "").removeprefix("sha256:").lower()
+    if not SHA256_RE.match(clean_digest):
+        return False
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        if location.get("provider") != "object_storage":
+            continue
+        if str(location.get("provider_kind") or "") != provider_kind:
+            continue
+        if str(location.get("store_ref") or "") != store_ref:
+            continue
+        if location.get("availability") != "wom_uploaded":
+            continue
+        if location.get("key_hint") != expected_key_hint:
+            continue
+        return True
+    return False
+
+
+def object_storage_wom_uploaded_location(
+    *,
+    digest: str,
+    provider_kind: str,
+    store_ref: str,
+    execution_receipt_ref: str,
+    uploaded_at: str,
+) -> dict[str, Any]:
+    """Provider-confirmed WOM live-upload location (§4.1). availability=wom_uploaded,
+
+    both by_wom_kit flags true.
+    """
+    return {
+        "provider": "object_storage",
+        "provider_kind": provider_kind,
+        "store_ref": store_ref,
+        "availability": "wom_uploaded",
+        "content_addressed": True,
+        "key_strategy": OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+        "key_hint": object_storage_content_addressed_key_hint(digest),
+        "byte_verification_by_wom_kit": True,
+        "provider_confirmation_by_wom_kit": True,
+        "execution_receipt_ref": execution_receipt_ref,
+        "uploaded_at": uploaded_at,
+    }
+
+
+class ResumeLedger:
+    """Crash-safe append-only JSONL ledger (R3, §3.3).
+
+    Rows are allowlist-built scalars only (RC5). append() does a real fsync'd
+    append; read() tolerates at most one torn trailing line (a crash mid-append).
+    The ledger is READ on every re-run and is authoritative for "this object's
+    PUT already succeeded," independent of the manifest (written last).
+    """
+
+    LEDGER_ROW_FIELDS = (
+        "object_id",
+        "key_hint",
+        "result_status",
+        "bytes",
+        "part_count",
+        "attempts",
+        "completed_at",
+    )
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    @classmethod
+    def build_row(cls, values: dict[str, Any]) -> dict[str, Any]:
+        return {field: values.get(field) for field in cls.LEDGER_ROW_FIELDS}
+
+    def append(self, row: dict[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        safe_row = self.build_row(row)
+        line = json.dumps(safe_row, ensure_ascii=False, separators=(",", ":")) + "\n"
+        with self.path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(line)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+    @staticmethod
+    def read(path: Path) -> list[dict[str, Any]]:
+        if not path.is_file():
+            return []
+        raw_lines = path.read_text(encoding="utf-8").splitlines()
+        rows: list[dict[str, Any]] = []
+        for index, raw_line in enumerate(raw_lines):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                # Tolerate a torn trailing line only (crash mid-append).
+                if index == len(raw_lines) - 1:
+                    continue
+                raise
+            if isinstance(parsed, dict):
+                rows.append(parsed)
+        return rows
+
+    def terminal_success_object_ids(self) -> set[str]:
+        done: set[str] = set()
+        for row in self.read(self.path):
+            if row.get("result_status") in {"uploaded", "skipped_remote_same"}:
+                object_id = str(row.get("object_id") or "")
+                if object_id:
+                    done.add(object_id)
+        return done
+
+
+def object_storage_execution_case_id(archive_id: str, digest: str, created_at: str) -> str:
+    payload = {"archive_id": archive_id, "digest": digest, "created_at": created_at}
+    fingerprint = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"objstore-{digest[:12]}-{fingerprint}"
+
+
+def object_storage_resume_ledger_case_id(
+    archive_id: str, digest: str, provider_kind: str, store_ref: str
+) -> str:
+    """Deterministic ledger id for R3 resume authority (NO timestamp).
+
+    The resume ledger must map the SAME object (in the same archive, provider,
+    and store) to the SAME file across separate runs, so a crash between the
+    ledger append and the manifest advance is recoverable — every re-run reads
+    the same ledger and honours its terminal-success rows. Unlike the receipt
+    case_id (which folds in a wall-clock created_at for monotonic immutability),
+    this id folds in NO time component. It keys on the destination coordinates so
+    the same bytes bound for two different stores keep separate ledgers.
+    """
+    payload = {
+        "archive_id": archive_id,
+        "digest": digest,
+        "provider_kind": str(provider_kind or "").strip().lower(),
+        "store_ref": str(store_ref or "").strip(),
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"objstore-resume-{digest[:12]}-{fingerprint}"
+
+
+def object_storage_resume_ledger_path(
+    root: Path, *, archive_id: str, digest: str, provider_kind: str, store_ref: str
+) -> Path:
+    """Resolve the deterministic resume-ledger path for one object (R3)."""
+    ledger_case_id = object_storage_resume_ledger_case_id(
+        archive_id, digest, provider_kind, store_ref
+    )
+    return archive_internal_path(
+        root, f"{OBJECT_STORAGE_EXECUTIONS_DIR}/{ledger_case_id}.resume-ledger.jsonl"
+    )
+
+
+def object_storage_write_execution_receipt(root: Path, case_id: str, receipt: dict[str, Any]) -> str:
+    """Write a monotonic-suffixed immutable execution receipt via _atomic_write_json."""
+    receipts_dir = archive_internal_path(root, OBJECT_STORAGE_EXECUTIONS_DIR)
+    receipts_dir.mkdir(parents=True, exist_ok=True)
+    suffix = 0
+    while True:
+        name = f"{case_id}.object-storage-upload.json" if suffix == 0 else f"{case_id}.{suffix}.object-storage-upload.json"
+        candidate = receipts_dir / name
+        if not candidate.exists():
+            relative = f"{OBJECT_STORAGE_EXECUTIONS_DIR}/{name}"
+            receipt["receipt_path"] = relative
+            _atomic_write_json(candidate, receipt)
+            return relative
+        suffix += 1
+
+
+def object_storage_execute_one_upload(
+    *,
+    transport: ObjectStorageTransport,
+    key: str,
+    data_path: Path,
+    size: int,
+    content_sha256: str,
+    multipart_threshold_bytes: int,
+    skip_uploaded: bool,
+    ledger: ResumeLedger,
+) -> dict[str, Any]:
+    """Per-object upload spine (§2.3). Ledger read -> HEAD-before -> PUT/multipart
+
+    -> HEAD-after -> ledger append. All provider exceptions reduce to a
+    status_class; NO error body is ever surfaced (RC5).
+
+    skip_uploaded is part of the spec §2.3 signature but does NOT gate the
+    HEAD-before here: the Layer-A manifest cost-skip is decided UPSTREAM in
+    object_storage_upload_run (a plan row with idempotency_verdict
+    "already_uploaded" short-circuits before this executor is called). Inside the
+    executor the only unconditional cost-skip is ledger authority (§3.3): a
+    terminal-success ledger row means the object is already done. When the
+    HEAD-before does run it is authoritative (Layer B), so a deleted-remote is
+    correctly re-uploaded on a full-HEAD sweep (skip_uploaded=False).
+    """
+    _ = skip_uploaded  # Layer-A cost-skip is enforced upstream; see docstring.
+    object_id = f"sha256:{content_sha256}"
+    key_hint = key
+    # Ledger authority: a terminal-success row means this object is done (§3.3, T-fake4).
+    if object_id in ledger.terminal_success_object_ids():
+        return {
+            "object_id": object_id,
+            "key_hint": key_hint,
+            "result_status": "skipped_already_present",
+            "bytes": 0,
+            "part_count": 0,
+            "attempts": 0,
+            "provider_api_called": False,
+        }
+
+    attempts = 0
+    try:
+        # HEAD-before (Layer B correctness). Only suppressed by Layer A upstream.
+        head_before = transport.head_object(key=key)
+        attempts += 1
+        if head_before.get("present"):
+            remote_size = head_before.get("size")
+            remote_checksum = head_before.get("checksum_sha256")
+            if remote_size == size and remote_checksum == content_sha256:
+                result = {
+                    "object_id": object_id,
+                    "key_hint": key_hint,
+                    "result_status": "skipped_remote_same",
+                    "bytes": 0,
+                    "part_count": 0,
+                    "attempts": attempts,
+                    "provider_api_called": True,
+                }
+                ledger.append(ResumeLedger.build_row({**result, "completed_at": _object_storage_now_iso()}))
+                return result
+            # Present but different bytes: fail closed, never overwrite.
+            return {
+                "object_id": object_id,
+                "key_hint": key_hint,
+                "result_status": "remote_conflict_different_bytes",
+                "bytes": 0,
+                "part_count": 0,
+                "attempts": attempts,
+                "provider_api_called": True,
+            }
+
+        # remote_absent -> upload.
+        if size >= multipart_threshold_bytes:
+            put_result, part_count = _object_storage_multipart_put(
+                transport=transport, key=key, data_path=data_path, content_sha256=content_sha256
+            )
+        else:
+            put_result = transport.put_object(
+                key=key, data_path=data_path, size=size, content_sha256=content_sha256
+            )
+            part_count = 1
+        attempts += 1
+        status_class = str(put_result.get("status_class") or "failed")
+        if status_class == "auth":
+            return _object_storage_failed_result(object_id, key_hint, "failed_auth", attempts)
+        if status_class == "rate_limited":
+            return _object_storage_failed_result(object_id, key_hint, "failed_rate_limited", attempts)
+        if status_class != "ok":
+            return _object_storage_failed_result(object_id, key_hint, "failed_upload", attempts)
+
+        # HEAD-after: verify non-secret size + full-object sha256. Never pass on size alone.
+        head_after = transport.head_object(key=key)
+        attempts += 1
+        if not head_after.get("present"):
+            return _object_storage_failed_result(object_id, key_hint, "failed_upload", attempts)
+        if head_after.get("size") != size or head_after.get("checksum_sha256") != content_sha256:
+            return _object_storage_failed_result(object_id, key_hint, "failed_upload", attempts)
+
+        result = {
+            "object_id": object_id,
+            "key_hint": key_hint,
+            "result_status": "uploaded",
+            "bytes": size,
+            "part_count": part_count,
+            "attempts": attempts,
+            "provider_api_called": True,
+        }
+        ledger.append(ResumeLedger.build_row({**result, "completed_at": _object_storage_now_iso()}))
+        return result
+    except ObjectStorageTransportNotImplemented:
+        raise
+    except ArchiveServiceError:
+        # Any provider-adjacent error is reduced to a status class; no body surfaced.
+        return _object_storage_failed_result(object_id, key_hint, "failed_upload", attempts)
+
+
+def _object_storage_failed_result(object_id: str, key_hint: str, status: str, attempts: int) -> dict[str, Any]:
+    return {
+        "object_id": object_id,
+        "key_hint": key_hint,
+        "result_status": status,
+        "bytes": 0,
+        "part_count": 0,
+        "attempts": attempts,
+        "provider_api_called": True,
+    }
+
+
+def _object_storage_multipart_put(
+    *, transport: ObjectStorageTransport, key: str, data_path: Path, content_sha256: str
+) -> tuple[dict[str, Any], int]:
+    upload_id = transport.create_multipart(key=key)
+    parts: list[dict[str, Any]] = []
+    part_number = 0
+    try:
+        with data_path.open("rb") as handle:
+            while True:
+                chunk = handle.read(OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES)
+                if not chunk:
+                    break
+                part_number += 1
+                part = transport.put_part(
+                    key=key, upload_id=upload_id, part_number=part_number, data=chunk
+                )
+                parts.append(part)
+        completed = transport.complete_multipart(
+            key=key, upload_id=upload_id, parts=parts, content_sha256=content_sha256
+        )
+        return completed, part_number
+    except ArchiveServiceError:
+        try:
+            transport.abort_multipart(key=key, upload_id=upload_id)
+        except ArchiveServiceError:
+            pass
+        return {"status_class": "failed"}, part_number
+
+
+def _object_storage_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _object_storage_upload_plan_candidate(
+    root: Path,
+    *,
+    object_id: str,
+    provider_kind: str,
+    store_ref: str,
+    skip_uploaded: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Resolve one object into a plan row: local path, size, key_hint, verdict."""
+    resolution = resolve_objet_ref(root, object_id=object_id, dry_run=True)
+    digest = str(object_id or "").removeprefix("sha256:").lower()
+    key_hint = object_storage_content_addressed_key_hint(digest)
+    local_relative = None
+    size_bytes = None
+    for candidate in resolution.get("local_candidates") or []:
+        if candidate.get("exists"):
+            local_relative = candidate.get("archive_relative_path")
+            break
+    if local_relative:
+        try:
+            local_path = archive_internal_path(root, str(local_relative))
+            if local_path.is_file():
+                size_bytes = local_path.stat().st_size
+        except (ArchiveServiceError, ArchivePathError, OSError):
+            local_relative = None
+    record = find_manifest_record(root, object_id)
+    locations = record.get("locations") if isinstance(record, dict) and isinstance(record.get("locations"), list) else []
+    already_uploaded = object_storage_wom_uploaded_location_matches(
+        locations, provider_kind=provider_kind, store_ref=store_ref, digest=digest
+    )
+    verdict = "already_uploaded" if (skip_uploaded and already_uploaded) else "would_upload"
+    return {
+        "object_id": object_id,
+        "key_hint": key_hint,
+        "size_bytes": size_bytes,
+        "local_available": bool(local_relative),
+        "local_relative": local_relative,
+        "wom_uploaded_present": already_uploaded,
+        "idempotency_verdict": verdict,
+    }
+
+
+def _object_storage_upload_base_result(
+    *,
+    lifecycle_action: str,
+    archive_id: str,
+    provider_kind: str,
+    store_ref: str | None,
+    dry_run: bool,
+    approve: bool,
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "lifecycle_action": lifecycle_action,
+        "archive_id": archive_id,
+        "provider_kind": provider_kind,
+        "store_ref": store_ref,
+        "current_capability": {
+            "live_object_upload_adapter_implemented": False,
+            "provider_api_call_implemented": False,
+            "upload_plan_implemented": True,
+            "local_byte_verification_implemented": True,
+        },
+        "closed_actions": {
+            "provider_api_called": False,
+            "credential_value_read": False,
+            "object_file_bytes_read": False,
+            "files_written": False,
+            "manifest_updated": False,
+        },
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "bucket_names_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "generated_urls_echoed": False,
+        },
+    }
+
+
+def _object_storage_resolve_upload_targets(
+    root: Path,
+    *,
+    only: str | None,
+    max_objects: int | None,
+    blockers: list[str],
+) -> list[str]:
+    """Resolve the full object_id target set (service-layer, before any credential read)."""
+    object_ids: list[str] = []
+    if only:
+        normalized = normalize_object_id(str(only), blockers)
+        if normalized:
+            object_ids.append(normalized)
+    else:
+        for record in load_manifest_records(root):
+            object_id = str(record.get("object_id") or "")
+            if OBJECT_ID_RE.match(object_id):
+                object_ids.append(object_id)
+    # RC6: --max-objects REFUSES from the FULL resolved plan length, before credential read.
+    if max_objects is not None and len(object_ids) > max_objects:
+        blockers.append(
+            f"max_objects_refuse: resolved plan has {len(object_ids)} objects but --max-objects is {max_objects}."
+        )
+    return object_ids
+
+
+def _object_storage_validate_credential_refs(
+    *,
+    access_key_id_ref: str | None,
+    secret_access_key_ref: str | None,
+    blockers: list[str],
+) -> dict[str, Any]:
+    summary = {
+        "access_key_id_ref_store": None,
+        "secret_access_key_ref_store": None,
+        "access_key_id_ref_shape_ok": False,
+        "secret_access_key_ref_shape_ok": False,
+    }
+    access_ref = str(access_key_id_ref or "").strip()
+    secret_ref = str(secret_access_key_ref or "").strip()
+    if not access_ref or not safe_credential_ref(access_ref):
+        blockers.append("access_key_id_ref must be a safe env/keyring/credential-manager/secret/wallet ref.")
+    else:
+        summary["access_key_id_ref_shape_ok"] = True
+        summary["access_key_id_ref_store"] = credential_ref_store(access_ref)
+    if not secret_ref or not safe_credential_ref(secret_ref):
+        blockers.append("secret_access_key_ref must be a safe env/keyring/credential-manager/secret/wallet ref.")
+    else:
+        summary["secret_access_key_ref_shape_ok"] = True
+        summary["secret_access_key_ref_store"] = credential_ref_store(secret_ref)
+    return summary
+
+
+def object_storage_upload_plan(
+    archive_root: Path | str,
+    *,
+    provider_kind: str = "cloudflare-r2",
+    store_ref: str | None = None,
+    access_key_id_ref: str | None = None,
+    secret_access_key_ref: str | None = None,
+    only: str | None = None,
+    max_objects: int | None = None,
+    skip_uploaded: bool = False,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """Read-only upload planner (§1.1). Writes nothing, reads no secret."""
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("object-storage-upload-plan is read-only and requires --dry-run.")
+
+    normalized_provider = str(provider_kind or "").strip().lower()
+    if normalized_provider not in OBJECT_STORAGE_ALLOWED_PROVIDERS:
+        blockers.append("provider_kind must be a supported object-storage provider kind.")
+    normalized_store_ref = str(store_ref or "").strip()
+    if not normalized_store_ref or not safe_object_storage_ref(normalized_store_ref):
+        blockers.append("store_ref must be a safe store label; do not pass a URL, path, token, or secret.")
+
+    credential_summary = _object_storage_validate_credential_refs(
+        access_key_id_ref=access_key_id_ref,
+        secret_access_key_ref=secret_access_key_ref,
+        blockers=blockers,
+    )
+
+    object_ids = _object_storage_resolve_upload_targets(
+        root, only=only, max_objects=max_objects, blockers=blockers
+    )
+
+    plan_rows: list[dict[str, Any]] = []
+    would_upload = 0
+    already_uploaded = 0
+    if not blockers:
+        for object_id in object_ids:
+            row = _object_storage_upload_plan_candidate(
+                root,
+                object_id=object_id,
+                provider_kind=normalized_provider,
+                store_ref=normalized_store_ref,
+                skip_uploaded=skip_uploaded,
+                dry_run=True,
+            )
+            plan_rows.append(row)
+            if row["idempotency_verdict"] == "already_uploaded":
+                already_uploaded += 1
+            else:
+                would_upload += 1
+
+    result = _object_storage_upload_base_result(
+        lifecycle_action="object_storage_upload_plan",
+        archive_id=archive_id,
+        provider_kind=normalized_provider,
+        store_ref=normalized_store_ref or None,
+        dry_run=True,
+        approve=False,
+    )
+    result.update(
+        {
+            "ok": not blockers,
+            "key_strategy": OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+            "credential_refs": credential_summary,
+            "plan": {
+                "object_count": len(object_ids),
+                "would_upload": would_upload,
+                "already_uploaded": already_uploaded,
+                "objects": plan_rows,
+            },
+            "live_execution_allowed_now": False,
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+        }
+    )
+    return result
+
+
+def object_storage_upload_verify(
+    archive_root: Path | str,
+    *,
+    provider_kind: str = "cloudflare-r2",
+    store_ref: str | None = None,
+    only: str | None = None,
+    max_objects: int | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """Read-only local RAW-byte verification (§1.2). sha256_path over RAW bytes ==
+
+    the object_id digest. Never uses bytes_normalized_for_content_compare.
+    """
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("object-storage-upload-verify is read-only and requires --dry-run.")
+
+    normalized_provider = str(provider_kind or "").strip().lower()
+    if normalized_provider not in OBJECT_STORAGE_ALLOWED_PROVIDERS:
+        blockers.append("provider_kind must be a supported object-storage provider kind.")
+    normalized_store_ref = str(store_ref or "").strip()
+    if normalized_store_ref and not safe_object_storage_ref(normalized_store_ref):
+        blockers.append("store_ref must be a safe store label; do not pass a URL, path, token, or secret.")
+
+    object_ids = _object_storage_resolve_upload_targets(
+        root, only=only, max_objects=max_objects, blockers=blockers
+    )
+
+    verifications: list[dict[str, Any]] = []
+    verified_count = 0
+    mismatch_count = 0
+    if not blockers:
+        for object_id in object_ids:
+            digest = str(object_id).removeprefix("sha256:").lower()
+            resolution = resolve_objet_ref(root, object_id=object_id, dry_run=True)
+            local_relative = None
+            for candidate in resolution.get("local_candidates") or []:
+                if candidate.get("exists"):
+                    local_relative = candidate.get("archive_relative_path")
+                    break
+            verified = False
+            size_bytes = None
+            if local_relative:
+                try:
+                    local_path = archive_internal_path(root, str(local_relative))
+                    if local_path.is_file():
+                        size_bytes = local_path.stat().st_size
+                        verified = sha256_path(local_path) == digest
+                except (ArchiveServiceError, ArchivePathError, OSError):
+                    verified = False
+            verifications.append(
+                {"object_id": object_id, "verified": verified, "size_bytes": size_bytes}
+            )
+            if verified:
+                verified_count += 1
+            else:
+                mismatch_count += 1
+
+    result = _object_storage_upload_base_result(
+        lifecycle_action="object_storage_upload_verify",
+        archive_id=archive_id,
+        provider_kind=normalized_provider,
+        store_ref=normalized_store_ref or None,
+        dry_run=True,
+        approve=False,
+    )
+    result.update(
+        {
+            "ok": not blockers,
+            "local_byte_verification": verifications,
+            "verified_count": verified_count,
+            "mismatch_count": mismatch_count,
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+        }
+    )
+    return result
+
+
+def object_storage_upload_run(
+    archive_root: Path | str,
+    *,
+    provider_kind: str = "cloudflare-r2",
+    store_ref: str | None = None,
+    access_key_id_ref: str | None = None,
+    secret_access_key_ref: str | None = None,
+    only: str | None = None,
+    max_objects: int | None = None,
+    skip_uploaded: bool = False,
+    reviewed_by: str | None = None,
+    approve: bool = False,
+    dry_run: bool = False,
+    transport: ObjectStorageTransport | None = None,
+) -> dict[str, Any]:
+    """Mutating upload command (§1.3). Stage 1 fails closed on --approve with no
+
+    injected transport (live_transport_not_implemented). Service layer re-enforces
+    every gate so a direct service/MCP call cannot bypass the CLI gate.
+    """
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run and approve:
+        blockers.append("Use either --dry-run or --approve, not both.")
+    if not dry_run and not approve:
+        blockers.append("object-storage-upload requires exactly one of --dry-run or --approve.")
+
+    normalized_provider = str(provider_kind or "").strip().lower()
+    if normalized_provider not in OBJECT_STORAGE_ALLOWED_PROVIDERS:
+        blockers.append("provider_kind must be a supported object-storage provider kind.")
+    normalized_store_ref = str(store_ref or "").strip()
+    if not normalized_store_ref or not safe_object_storage_ref(normalized_store_ref):
+        blockers.append("store_ref must be a safe store label; do not pass a URL, path, token, or secret.")
+
+    normalized_reviewer = str(reviewed_by or "").strip()
+    if approve and not normalized_reviewer:
+        blockers.append("object-storage-upload requires --reviewed-by when --approve is used.")
+
+    credential_summary = _object_storage_validate_credential_refs(
+        access_key_id_ref=access_key_id_ref,
+        secret_access_key_ref=secret_access_key_ref,
+        blockers=blockers,
+    )
+
+    object_ids = _object_storage_resolve_upload_targets(
+        root, only=only, max_objects=max_objects, blockers=blockers
+    )
+
+    # Resolve/inject transport. Stage 1: resolver returns None for every provider.
+    resolved_transport = transport if transport is not None else object_storage_resolve_transport(normalized_provider)
+
+    # Approve-path structural gates evaluated BEFORE any credential read / byte read.
+    if approve:
+        access_ref = str(access_key_id_ref or "").strip()
+        secret_ref = str(secret_access_key_ref or "").strip()
+        # RC7 env-only-first-live: both refs must be env: at first live.
+        if credential_ref_store(access_ref) != "env" or credential_ref_store(secret_ref) != "env":
+            blockers.append(
+                "env_only_first_live: --approve requires both credential refs to be env: refs in this release."
+            )
+        if resolved_transport is None:
+            blockers.append(
+                "live_transport_not_implemented: object-storage-upload has no live transport in this "
+                "release (Stage 1). --approve cannot reach a provider. Inject a transport in tests."
+            )
+
+    result = _object_storage_upload_base_result(
+        lifecycle_action="object_storage_upload_run",
+        archive_id=archive_id,
+        provider_kind=normalized_provider,
+        store_ref=normalized_store_ref or None,
+        dry_run=dry_run,
+        approve=approve,
+    )
+
+    # Build the plan preview (no bytes read, no secret read).
+    plan_rows: list[dict[str, Any]] = []
+    if not blockers:
+        for object_id in object_ids:
+            plan_rows.append(
+                _object_storage_upload_plan_candidate(
+                    root,
+                    object_id=object_id,
+                    provider_kind=normalized_provider,
+                    store_ref=normalized_store_ref,
+                    skip_uploaded=skip_uploaded,
+                    dry_run=True,
+                )
+            )
+
+    execution_results: list[dict[str, Any]] = []
+    receipts_written: list[str] = []
+    key_values_for_guard: list[str] = []
+    # Preserved copy of the resolved key values for the FINAL whole-payload gate.
+    # Lives past the per-object finally; hard-cleared immediately after the final gate.
+    final_gate_key_values: list[str] = []
+    manifest_updates = 0
+
+    if approve and not blockers and resolved_transport is not None:
+        # This branch is unreachable in Stage 1 (resolver returns None); it is the
+        # tested-with-injected-fake path. Credentials read ONLY here.
+        access_ref = str(access_key_id_ref or "").strip()
+        secret_ref = str(secret_access_key_ref or "").strip()
+        access_value = None
+        secret_value = None
+        try:
+            access_value, _ = resolve_credential_value(access_ref, credential_ref_store(access_ref))
+            secret_value, _ = resolve_credential_value(secret_ref, credential_ref_store(secret_ref))
+            if not access_value or not secret_value:
+                blockers.append("credential_value_unresolved: a credential ref did not resolve to a value.")
+            else:
+                key_values_for_guard = [access_value, secret_value]
+                final_gate_key_values = [access_value, secret_value]
+                result["closed_actions"]["credential_value_read"] = True
+
+                def _leak_guard(serialized_delta: str) -> list[str]:
+                    return assert_no_secret_or_location_leak(
+                        serialized_delta, key_values=key_values_for_guard
+                    )
+
+                created_paths: list[Path] = []
+                try:
+                    for row in plan_rows:
+                        object_id = row["object_id"]
+                        digest = str(object_id).removeprefix("sha256:").lower()
+                        if row["idempotency_verdict"] == "already_uploaded":
+                            execution_results.append(
+                                {
+                                    "object_id": object_id,
+                                    "key_hint": row["key_hint"],
+                                    "result_status": "skipped_already_present",
+                                    "bytes": 0,
+                                    "part_count": 0,
+                                    "attempts": 0,
+                                    "provider_api_called": False,
+                                }
+                            )
+                            continue
+                        if not row["local_available"]:
+                            blockers.append(f"local_bytes_missing_for_object: {object_id[:20]}")
+                            continue
+                        local_path = archive_internal_path(root, str(row["local_relative"]))
+                        # Before-hash on RAW bytes (§3.4).
+                        result["closed_actions"]["object_file_bytes_read"] = True
+                        local_digest = sha256_path(local_path)
+                        if local_digest != digest:
+                            execution_results.append(
+                                _object_storage_failed_result(object_id, row["key_hint"], "failed_upload", 0)
+                            )
+                            continue
+                        size = local_path.stat().st_size
+                        case_id = object_storage_execution_case_id(archive_id, digest, _object_storage_now_iso())
+                        # R3: the RESUME LEDGER path is deterministic (no timestamp), so a
+                        # re-run reads the SAME ledger and honours its terminal-success rows.
+                        # The receipt case_id above stays timestamped for monotonic immutability.
+                        ledger = ResumeLedger(
+                            object_storage_resume_ledger_path(
+                                root,
+                                archive_id=archive_id,
+                                digest=digest,
+                                provider_kind=normalized_provider,
+                                store_ref=normalized_store_ref,
+                            )
+                        )
+                        one = object_storage_execute_one_upload(
+                            transport=resolved_transport,
+                            key=row["key_hint"],
+                            data_path=local_path,
+                            size=size,
+                            content_sha256=digest,
+                            multipart_threshold_bytes=OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
+                            skip_uploaded=skip_uploaded,
+                            ledger=ledger,
+                        )
+                        result["closed_actions"]["provider_api_called"] = True
+                        uploaded_at = _object_storage_now_iso()
+                        # Build execution receipt (scalar allowlist only, RC5).
+                        receipt = _object_storage_build_execution_receipt(
+                            archive_id=archive_id,
+                            object_id=object_id,
+                            provider_kind=normalized_provider,
+                            store_ref=normalized_store_ref,
+                            key_hint=row["key_hint"],
+                            result=one,
+                            reviewed_by=normalized_reviewer,
+                            uploaded_at=uploaded_at,
+                        )
+                        # §6 leak gate on the fully-serialized receipt BEFORE write.
+                        serialized = json.dumps(json_safe(receipt), ensure_ascii=False, default=str)
+                        guard_hits = assert_no_secret_or_location_leak(serialized, key_values=key_values_for_guard)
+                        if guard_hits:
+                            execution_results.append(
+                                _object_storage_failed_result(object_id, row["key_hint"], "failed_secret_guard", 0)
+                            )
+                            continue
+                        if one["result_status"] in {"uploaded", "skipped_remote_same"}:
+                            receipt_relative = object_storage_write_execution_receipt(root, case_id, receipt)
+                            created_paths.append(archive_internal_path(root, receipt_relative))
+                            receipts_written.append(receipt_relative)
+                            result["closed_actions"]["files_written"] = True
+                            # Manifest transition to wom_uploaded via the R4-hardened writer
+                            # path. The manifest-location DELTA is leak-gated BEFORE write (§6);
+                            # a leak raises ObjectStorageSecretLeak and rolls back.
+                            try:
+                                manifest_updates += _object_storage_apply_wom_uploaded_location(
+                                    root,
+                                    object_id=object_id,
+                                    provider_kind=normalized_provider,
+                                    store_ref=normalized_store_ref,
+                                    digest=digest,
+                                    execution_receipt_ref=receipt_relative,
+                                    uploaded_at=uploaded_at,
+                                    leak_guard=_leak_guard,
+                                )
+                            except ObjectStorageSecretLeak:
+                                execution_results.append(
+                                    _object_storage_failed_result(
+                                        object_id, row["key_hint"], "failed_secret_guard", 0
+                                    )
+                                )
+                                continue
+                            if manifest_updates:
+                                result["closed_actions"]["manifest_updated"] = True
+                        one_public = {k: v for k, v in one.items()}
+                        one_public["execution_receipt_ref"] = receipts_written[-1] if receipts_written else None
+                        execution_results.append(one_public)
+                except OSError:
+                    for created in created_paths:
+                        created.unlink(missing_ok=True)
+                    cleanup_empty_archive_dirs(root, created_paths)
+                    blockers.append("upload_write_rolled_back: an OSError rolled back created files.")
+        finally:
+            access_value = None
+            secret_value = None
+            key_values_for_guard = []
+
+    result.update(
+        {
+            "ok": not blockers,
+            "execution_status": "blocked" if blockers else ("preview" if dry_run else "executed"),
+            "key_strategy": OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+            "reviewed_by": normalized_reviewer or None,
+            "credential_refs": credential_summary,
+            "plan": {"object_count": len(object_ids), "objects": plan_rows},
+            "execution_results": execution_results,
+            "receipts_written": receipts_written,
+            "manifest_updates": manifest_updates,
+            "live_execution_allowed_now": False,
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+        }
+    )
+    result["closed_actions"]["files_written"] = bool(receipts_written)
+
+    # FINAL leak gate over the WHOLE return payload (§6, every exit path). This
+    # covers the return payload AND the ledger/execution-result deltas embedded in
+    # it, in addition to the per-receipt (line above) and per-manifest-delta gates.
+    # Only runs when a credential was actually resolved (the live/injected path);
+    # the dry-run and blocked paths carry no secret by construction.
+    if final_gate_key_values:
+        payload_serialized = json.dumps(json_safe(result), ensure_ascii=False, default=str)
+        if assert_no_secret_or_location_leak(payload_serialized, key_values=final_gate_key_values):
+            # Defense-in-depth: a secret reached the payload despite the scalar
+            # allowlists. Scrub every durable-echo field and fail closed — no
+            # secret, no provider body leaves this function.
+            final_gate_key_values = []
+            for created in list(receipts_written):
+                archive_internal_path(root, created).unlink(missing_ok=True)
+            result["execution_results"] = [
+                _object_storage_failed_result(
+                    str(item.get("object_id") or ""), str(item.get("key_hint") or ""),
+                    "failed_secret_guard", 0,
+                )
+                for item in execution_results
+            ]
+            result["receipts_written"] = []
+            result["ok"] = False
+            result["execution_status"] = "blocked"
+            result["blockers"] = unique_preserve_order(
+                list(result.get("blockers") or []) + ["failed_secret_guard: final payload leak gate fired."]
+            )
+            result["closed_actions"]["files_written"] = False
+    final_gate_key_values = []
+    return result
+
+
+def _object_storage_build_execution_receipt(
+    *,
+    archive_id: str,
+    object_id: str,
+    provider_kind: str,
+    store_ref: str,
+    key_hint: str,
+    result: dict[str, Any],
+    reviewed_by: str,
+    uploaded_at: str,
+) -> dict[str, Any]:
+    """Assemble the execution receipt from a FIXED scalar allowlist (RC5).
+
+    Never built from provider bodies or caught exception args.
+    """
+    return {
+        "schema": OBJECT_STORAGE_UPLOAD_RECEIPT_SCHEMA,
+        "receipt_id": None,
+        "receipt_path": None,
+        "lifecycle_action": "object_storage_upload_execute",
+        "operation": "upload_object",
+        "dry_run": False,
+        "archive_id": archive_id,
+        "object_id": object_id,
+        "provider_kind": provider_kind,
+        "store_ref": store_ref,
+        "key_strategy": OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+        "key_hint": key_hint,
+        "result_status": str(result.get("result_status") or "failed_upload"),
+        "bytes_uploaded": int(result.get("bytes") or 0),
+        "checksum_algorithm": OBJECT_STORAGE_CHECKSUM_ALGORITHM,
+        "retry_summary": {
+            "attempts": int(result.get("attempts") or 0),
+            "last_status_class": str(result.get("result_status") or "failed_upload"),
+            "backoff_ms_total": 0,
+        },
+        "object_count": 1,
+        "reviewed_by": reviewed_by,
+        "availability_transition": {"from": "declared_uploaded_or_none", "to": "wom_uploaded"},
+        "manifest_update_applied": result.get("result_status") in {"uploaded", "skipped_remote_same"},
+        "privacy_guards": {
+            "secret_values_echoed": False,
+            "exact_credential_refs_echoed": False,
+            "bucket_names_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "generated_urls_echoed": False,
+        },
+    }
+
+
+def _object_storage_apply_wom_uploaded_location(
+    root: Path,
+    *,
+    object_id: str,
+    provider_kind: str,
+    store_ref: str,
+    digest: str,
+    execution_receipt_ref: str,
+    uploaded_at: str,
+    leak_guard: Callable[[str], list[str]] | None = None,
+) -> int:
+    """Append a wom_uploaded location to the object's manifest record, under the
+
+    shared manifest lock + atomic write (R4). Returns 1 if a record was updated.
+    When leak_guard is supplied, the serialized manifest-location DELTA is passed
+    through it BEFORE the write (§6: gate the manifest delta on the write path);
+    a non-empty result raises ObjectStorageSecretLeak so the caller rolls back.
+    """
+    manifest_path = archive_internal_path(root, "objects/manifests/files.jsonl")
+    if not manifest_path.is_file():
+        return 0
+    new_location = object_storage_wom_uploaded_location(
+        digest=digest,
+        provider_kind=provider_kind,
+        store_ref=store_ref,
+        execution_receipt_ref=execution_receipt_ref,
+        uploaded_at=uploaded_at,
+    )
+    if leak_guard is not None:
+        location_serialized = json.dumps(json_safe(new_location), ensure_ascii=False, default=str)
+        if leak_guard(location_serialized):
+            raise ObjectStorageSecretLeak(
+                "manifest-location delta failed the secret/location leak guard (§6)."
+            )
+    changed = 0
+    with _ObjetCaptureManifestLock(root):
+        rewritten_lines: list[str] = []
+        for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line:
+                rewritten_lines.append(raw_line)
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                rewritten_lines.append(raw_line)
+                continue
+            if str(record.get("object_id") or "").lower() == object_id.lower():
+                locations = record.get("locations") if isinstance(record.get("locations"), list) else []
+                already = object_storage_wom_uploaded_location_matches(
+                    locations, provider_kind=provider_kind, store_ref=store_ref, digest=digest
+                )
+                if not already:
+                    locations.append(new_location)
+                    record["locations"] = locations
+                    changed += 1
+                rewritten_lines.append(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+            else:
+                rewritten_lines.append(raw_line)
+        if changed:
+            _atomic_write_text(manifest_path, "\n".join(rewritten_lines) + "\n")
+    return changed
 
 
 def object_storage_context(root: Path) -> dict[str, Any]:

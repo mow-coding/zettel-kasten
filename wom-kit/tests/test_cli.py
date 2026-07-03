@@ -37,6 +37,72 @@ if str(SRC_ROOT) not in sys.path:
 from wom_kit import archive_cli, archive_services
 
 
+class _FakeObjectStorageTransport:
+    """In-memory injected transport for the object-storage upload spine tests.
+
+    Exercises the full spine (HEAD-before/PUT/HEAD-after/multipart) with no
+    network and no new dependency.
+    """
+
+    def __init__(self, *, present=None, present_size=None, present_checksum=None, put_status="ok", truncate_multipart=False):
+        self.store = {}
+        self.creds_seen = []
+        self.put_calls = 0
+        self.multipart_calls = 0
+        self._part_bytes = {}
+        self._present = present  # None | "same" | "different"
+        self._present_size = present_size
+        self._present_checksum = present_checksum
+        self._put_status = put_status
+        self._truncate_multipart = truncate_multipart
+
+    def head_object(self, *, key):
+        if key in self.store:
+            v = self.store[key]
+            return {"present": True, "size": v["size"], "checksum_sha256": v["sha"]}
+        if self._present == "same" and self._present_size is not None:
+            return {"present": True, "size": self._present_size, "checksum_sha256": self._present_checksum}
+        if self._present == "different" and self._present_size is not None:
+            return {"present": True, "size": self._present_size, "checksum_sha256": "0" * 64}
+        return {"present": False, "size": None, "checksum_sha256": None}
+
+    def put_object(self, *, key, data_path, size, content_sha256):
+        self.put_calls += 1
+        if self._put_status != "ok":
+            return {"status_class": self._put_status, "size": 0, "checksum_sha256": None, "etag_opaque": None}
+        self.store[key] = {"size": size, "sha": content_sha256}
+        return {"status_class": "ok", "size": size, "checksum_sha256": content_sha256, "etag_opaque": "etag-opaque"}
+
+    def create_multipart(self, *, key):
+        self.multipart_calls += 1
+        return "upload-1"
+
+    def put_part(self, *, key, upload_id, part_number, data):
+        self._part_bytes[key] = self._part_bytes.get(key, 0) + len(data)
+        return {"etag_opaque": f"part-{part_number}", "part_number": part_number}
+
+    def complete_multipart(self, *, key, upload_id, parts, content_sha256):
+        if self._truncate_multipart:
+            # Simulate a provider that cannot confirm a whole-object sha256.
+            self.store[key] = {"size": 1, "sha": "0" * 64}
+            return {"status_class": "ok"}
+        # The after-HEAD compares against the real object size; record the true
+        # accumulated byte count and content sha so HEAD-after passes.
+        self.store[key] = {"size": self._part_bytes.get(key, 0), "sha": content_sha256}
+        return {"status_class": "ok"}
+
+    def abort_multipart(self, *, key, upload_id):
+        pass
+
+
+_R2_ACCESS_KEY_ID = "AKIAFAKEEXAMPLEID1234"
+# TRUE secret shapes (RC2): a 64-char lowercase-hex R2 secret and a 40-char AWS secret.
+_R2_SECRET_HEX64 = "3f786850e387550fdab836ed7e6dc881de23001b3f786850e387550fdab836ed"
+_AWS_SECRET_40 = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+_FAKE_SHA_A = "acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+_FAKE_SHA_B = "9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647"
+
+
 class ArchiveCliTests(unittest.TestCase):
     def run_cli(self, args: list[str], stdin_text: str | None = None) -> tuple[int, str]:
         buffer = io.StringIO()
@@ -11766,6 +11832,557 @@ state:
             self.assertFalse(result["closed_actions"]["files_written"])
             self.assertNotIn(receipt_relative, output)
             self.assertNotIn(sha_a, output)
+
+    # ------------------------------------------------------------------
+    # WOM #11 object-storage upload adapter (Stage 1) — no-network boundary,
+    # fake-transport spine, idempotency, secret-free proof, guards, R4.
+    # ------------------------------------------------------------------
+
+    def _upload_run(self, root, **kwargs):
+        defaults = dict(
+            provider_kind="cloudflare-r2",
+            store_ref="r2-upload-20260704",
+            access_key_id_ref="env:WOM_R2_ACCESS_KEY_ID",
+            secret_access_key_ref="env:WOM_R2_SECRET_ACCESS_KEY",
+        )
+        defaults.update(kwargs)
+        return archive_services.object_storage_upload_run(root, **defaults)
+
+    # --- No-network boundary ---
+
+    def test_object_storage_upload_plan_and_verify_write_zero_files(self) -> None:  # T-NN1
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+            plan = archive_services.object_storage_upload_plan(
+                archive_root,
+                provider_kind="cloudflare-r2",
+                store_ref="r2-upload-20260704",
+                access_key_id_ref="env:WOM_R2_ACCESS_KEY_ID",
+                secret_access_key_ref="env:WOM_R2_SECRET_ACCESS_KEY",
+                skip_uploaded=True,
+                dry_run=True,
+            )
+            verify = archive_services.object_storage_upload_verify(
+                archive_root, provider_kind="cloudflare-r2", dry_run=True
+            )
+            self.assertTrue(plan["ok"], plan)
+            self.assertTrue(verify["ok"], verify)
+            self.assertFalse(plan["closed_actions"]["credential_value_read"])
+            self.assertFalse(plan["closed_actions"]["provider_api_called"])
+            self.assertFalse(plan["closed_actions"]["files_written"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+    def test_object_storage_upload_approve_without_transport_fails_closed(self) -> None:  # T-NN2
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+            result = self._upload_run(
+                archive_root,
+                only=f"sha256:{_FAKE_SHA_A}",
+                max_objects=1,
+                reviewed_by="kim",
+                approve=True,
+            )
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["execution_status"], "blocked")
+            self.assertTrue(
+                any("live_transport_not_implemented" in b for b in result["blockers"]),
+                result["blockers"],
+            )
+            self.assertFalse(result["closed_actions"]["files_written"])
+            self.assertFalse(result["closed_actions"]["credential_value_read"])
+            self.assertFalse(result["closed_actions"]["object_file_bytes_read"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+    def test_object_storage_upload_import_audit_has_no_live_transport(self) -> None:  # T-NN3
+        import inspect
+
+        source = inspect.getsource(archive_services)
+        self.assertNotIn("import boto3", source)
+        self.assertNotIn("import httpx", source)
+        self.assertNotIn("import requests", source)
+        # The upload symbols must not reference a network client on their path.
+        for symbol in (
+            archive_services.object_storage_upload_run,
+            archive_services.object_storage_execute_one_upload,
+            archive_services.object_storage_resolve_transport,
+            archive_services._object_storage_multipart_put,
+        ):
+            src = inspect.getsource(symbol)
+            for needle in ("urllib.request", "socket.", "ssl.", "http.client"):
+                self.assertNotIn(needle, src, f"{symbol.__name__} references {needle}")
+        # The resolver returns None for every allowed provider.
+        for provider in sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS):
+            self.assertIsNone(archive_services.object_storage_resolve_transport(provider))
+
+    def test_object_storage_upload_capability_flags_are_false(self) -> None:  # T-NN4
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan = archive_services.object_storage_upload_plan(
+                archive_root,
+                provider_kind="cloudflare-r2",
+                store_ref="r2-upload-20260704",
+                access_key_id_ref="env:WOM_R2_ACCESS_KEY_ID",
+                secret_access_key_ref="env:WOM_R2_SECRET_ACCESS_KEY",
+                dry_run=True,
+            )
+            self.assertIs(plan["current_capability"]["live_object_upload_adapter_implemented"], False)
+            self.assertIs(plan["current_capability"]["provider_api_call_implemented"], False)
+        matrix = (KIT_ROOT / "docs" / "capability-matrix.md").read_text(encoding="utf-8")
+        self.assertIn("`live_object_upload_adapter_implemented` and `provider_api_call_implemented` are false", matrix)
+
+    # --- Fake-transport spine ---
+
+    def test_object_storage_upload_fake_transport_full_spine(self) -> None:  # T-fake1
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                result = self._upload_run(
+                    archive_root,
+                    only=f"sha256:{_FAKE_SHA_A}",
+                    max_objects=1,
+                    reviewed_by="kim",
+                    approve=True,
+                    transport=transport,
+                )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["execution_status"], "executed")
+            self.assertEqual(len(result["receipts_written"]), 1)
+            self.assertEqual(result["manifest_updates"], 1)
+            self.assertTrue(result["closed_actions"]["credential_value_read"])
+            self.assertTrue(result["closed_actions"]["provider_api_called"])
+            exec_result = result["execution_results"][0]
+            self.assertEqual(exec_result["result_status"], "uploaded")
+            self.assertEqual(exec_result["bytes"], 151)
+
+            # Manifest transitioned to wom_uploaded with both flags true.
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [json.loads(l) for l in manifest_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            record = next(r for r in records if r["object_id"] == f"sha256:{_FAKE_SHA_A}")
+            locs = [l for l in record["locations"] if l.get("provider") == "object_storage"]
+            self.assertEqual(len(locs), 1)
+            self.assertEqual(locs[0]["availability"], "wom_uploaded")
+            self.assertTrue(locs[0]["byte_verification_by_wom_kit"])
+            self.assertTrue(locs[0]["provider_confirmation_by_wom_kit"])
+            self.assertEqual(locs[0]["key_hint"], f"sha256/{_FAKE_SHA_A[:2]}/{_FAKE_SHA_A}")
+
+            # Receipt scalar facts; ledger scalar-only.
+            receipt = json.loads((archive_root / result["receipts_written"][0]).read_text(encoding="utf-8"))
+            self.assertEqual(receipt["result_status"], "uploaded")
+            self.assertEqual(receipt["reviewed_by"], "kim")
+            self.assertEqual(receipt["checksum_algorithm"], "sha256")
+            self.assertFalse(receipt["dry_run"])
+            ledger_files = list((archive_root / "receipts" / "providers" / "object-storage-executions").glob("*.resume-ledger.jsonl"))
+            self.assertEqual(len(ledger_files), 1)
+            rows = archive_services.ResumeLedger.read(ledger_files[0])
+            for row in rows:
+                self.assertEqual(set(row.keys()), set(archive_services.ResumeLedger.LEDGER_ROW_FIELDS))
+
+    def test_object_storage_upload_rerun_skips_via_ledger_and_manifest(self) -> None:  # T-fake2
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                self._upload_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", approve=True, transport=transport, skip_uploaded=True)
+                first_puts = transport.put_calls
+                # Re-run with --skip-uploaded: Layer A wom_uploaded match => no new PUT.
+                result2 = self._upload_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", approve=True, transport=transport, skip_uploaded=True)
+            self.assertEqual(first_puts, 1)
+            self.assertEqual(transport.put_calls, 1, "second run must not PUT again")
+            self.assertEqual(result2["execution_results"][0]["result_status"], "skipped_already_present")
+
+    def test_object_storage_upload_declared_uploaded_never_skips(self) -> None:  # T-fake3
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            # Register a declared_uploaded location via the existing evidence command.
+            ledger = Path(tmp) / "ext.jsonl"
+            ledger.write_text(json.dumps({"sha256": _FAKE_SHA_A, "bytes": 151, "status": "uploaded"}) + "\n", encoding="utf-8")
+            code, _ = self.run_cli([
+                "object-storage-upload-evidence", str(archive_root), "--ledger", str(ledger),
+                "--provider-kind", "cloudflare-r2", "--store-ref", "r2-upload-20260704",
+                "--approve", "--reviewed-by", "person:test", "--format", "json",
+            ])
+            self.assertEqual(code, 0)
+            plan = archive_services.object_storage_upload_plan(
+                archive_root, provider_kind="cloudflare-r2", store_ref="r2-upload-20260704",
+                access_key_id_ref="env:WOM_R2_ACCESS_KEY_ID", secret_access_key_ref="env:WOM_R2_SECRET_ACCESS_KEY",
+                only=f"sha256:{_FAKE_SHA_A}", skip_uploaded=True, dry_run=True,
+            )
+            row = plan["plan"]["objects"][0]
+            self.assertEqual(row["idempotency_verdict"], "would_upload")
+            self.assertFalse(row["wom_uploaded_present"])
+
+    def test_object_storage_upload_ledger_authority_on_rerun(self) -> None:  # T-fake4
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key_hint = f"sha256/{_FAKE_SHA_A[:2]}/{_FAKE_SHA_A}"
+            ledger_path = archive_root / "receipts" / "providers" / "object-storage-executions" / "case.resume-ledger.jsonl"
+            ledger = archive_services.ResumeLedger(ledger_path)
+            ledger.append(archive_services.ResumeLedger.build_row({
+                "object_id": f"sha256:{_FAKE_SHA_A}", "key_hint": key_hint,
+                "result_status": "uploaded", "bytes": 151, "part_count": 1, "attempts": 3, "completed_at": "2026-07-04T00:00:00Z",
+            }))
+            transport = _FakeObjectStorageTransport()
+            local_path = archive_root / "objects" / "sample" / "fake-school-record.txt"
+            result = archive_services.object_storage_execute_one_upload(
+                transport=transport, key=key_hint, data_path=local_path, size=151,
+                content_sha256=_FAKE_SHA_A, multipart_threshold_bytes=archive_services.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
+                skip_uploaded=True, ledger=ledger,
+            )
+            self.assertEqual(result["result_status"], "skipped_already_present")
+            self.assertEqual(transport.put_calls, 0)
+
+    def test_object_storage_upload_multipart_branch_and_truncated_fail(self) -> None:  # T-fake5
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            local_path = archive_root / "objects" / "sample" / "fake-school-record.txt"
+            digest = archive_services.sha256_path(local_path)
+            size = local_path.stat().st_size
+            key_hint = f"sha256/{digest[:2]}/{digest}"
+            # Threshold below the file size forces multipart.
+            ledger = archive_services.ResumeLedger(Path(tmp) / "l1.jsonl")
+            transport = _FakeObjectStorageTransport()
+            ok = archive_services.object_storage_execute_one_upload(
+                transport=transport, key=key_hint, data_path=local_path, size=size,
+                content_sha256=digest, multipart_threshold_bytes=1, skip_uploaded=False, ledger=ledger,
+            )
+            self.assertEqual(ok["result_status"], "uploaded")
+            self.assertEqual(transport.multipart_calls, 1)
+            # Truncated multipart (wrong whole-object sha) must FAIL, never pass on size alone.
+            ledger2 = archive_services.ResumeLedger(Path(tmp) / "l2.jsonl")
+            trunc = _FakeObjectStorageTransport(truncate_multipart=True)
+            failed = archive_services.object_storage_execute_one_upload(
+                transport=trunc, key=key_hint, data_path=local_path, size=size,
+                content_sha256=digest, multipart_threshold_bytes=1, skip_uploaded=False, ledger=ledger2,
+            )
+            self.assertEqual(failed["result_status"], "failed_upload")
+
+    def test_object_storage_upload_deleted_remote_forces_reupload(self) -> None:  # T-fake6
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            local_path = archive_root / "objects" / "sample" / "fake-school-record.txt"
+            digest = archive_services.sha256_path(local_path)
+            key_hint = f"sha256/{digest[:2]}/{digest}"
+            ledger = archive_services.ResumeLedger(Path(tmp) / "l.jsonl")
+            # Fake HEAD reports absent on a full-HEAD sweep (skip_uploaded=False).
+            transport = _FakeObjectStorageTransport(present=None)
+            result = archive_services.object_storage_execute_one_upload(
+                transport=transport, key=key_hint, data_path=local_path, size=local_path.stat().st_size,
+                content_sha256=digest, multipart_threshold_bytes=archive_services.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
+                skip_uploaded=False, ledger=ledger,
+            )
+            self.assertEqual(result["result_status"], "uploaded")
+            self.assertEqual(transport.put_calls, 1)
+
+    def test_object_storage_upload_remote_conflict_never_overwrites(self) -> None:  # T-fake7
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            local_path = archive_root / "objects" / "sample" / "fake-school-record.txt"
+            digest = archive_services.sha256_path(local_path)
+            size = local_path.stat().st_size
+            key_hint = f"sha256/{digest[:2]}/{digest}"
+            ledger = archive_services.ResumeLedger(Path(tmp) / "l.jsonl")
+            transport = _FakeObjectStorageTransport(present="different", present_size=size)
+            result = archive_services.object_storage_execute_one_upload(
+                transport=transport, key=key_hint, data_path=local_path, size=size,
+                content_sha256=digest, multipart_threshold_bytes=archive_services.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
+                skip_uploaded=False, ledger=ledger,
+            )
+            self.assertEqual(result["result_status"], "remote_conflict_different_bytes")
+            self.assertEqual(transport.put_calls, 0)
+
+    def test_object_storage_upload_error_injection_no_leak(self) -> None:  # T-fake8
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            local_path = archive_root / "objects" / "sample" / "fake-school-record.txt"
+            digest = archive_services.sha256_path(local_path)
+            size = local_path.stat().st_size
+            key_hint = f"sha256/{digest[:2]}/{digest}"
+            for put_status, expected in (("auth", "failed_auth"), ("rate_limited", "failed_rate_limited"), ("failed", "failed_upload")):
+                ledger = archive_services.ResumeLedger(Path(tmp) / f"l-{put_status}.jsonl")
+                transport = _FakeObjectStorageTransport(put_status=put_status)
+                result = archive_services.object_storage_execute_one_upload(
+                    transport=transport, key=key_hint, data_path=local_path, size=size,
+                    content_sha256=digest, multipart_threshold_bytes=archive_services.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
+                    skip_uploaded=False, ledger=ledger,
+                )
+                self.assertEqual(result["result_status"], expected)
+                # No provider body / error text reaches a durable field.
+                serialized = json.dumps(result)
+                self.assertNotIn("StringToSign", serialized)
+                self.assertNotIn("SignatureDoesNotMatch", serialized)
+
+    # --- Digest-aware idempotency & verify ---
+
+    def test_object_storage_upload_different_digest_is_would_upload(self) -> None:  # T-idem1
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            # Inject a wom_uploaded location with a DIFFERENT digest on record A.
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [json.loads(l) for l in manifest_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            other_digest = "b" * 64
+            for r in records:
+                if r["object_id"] == f"sha256:{_FAKE_SHA_A}":
+                    r["locations"].append({
+                        "provider": "object_storage", "provider_kind": "cloudflare-r2",
+                        "store_ref": "r2-upload-20260704", "availability": "wom_uploaded",
+                        "content_addressed": True, "key_strategy": "sha256_content_addressed",
+                        "key_hint": f"sha256/{other_digest[:2]}/{other_digest}",
+                        "byte_verification_by_wom_kit": True, "provider_confirmation_by_wom_kit": True,
+                    })
+            manifest_path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n", encoding="utf-8")
+            plan = archive_services.object_storage_upload_plan(
+                archive_root, provider_kind="cloudflare-r2", store_ref="r2-upload-20260704",
+                access_key_id_ref="env:WOM_R2_ACCESS_KEY_ID", secret_access_key_ref="env:WOM_R2_SECRET_ACCESS_KEY",
+                only=f"sha256:{_FAKE_SHA_A}", skip_uploaded=True, dry_run=True,
+            )
+            self.assertEqual(plan["plan"]["objects"][0]["idempotency_verdict"], "would_upload")
+
+    def test_object_storage_upload_verify_matching_and_corrupt(self) -> None:  # T-verify1
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            ok = archive_services.object_storage_upload_verify(
+                archive_root, provider_kind="cloudflare-r2", only=f"sha256:{_FAKE_SHA_A}", dry_run=True
+            )
+            self.assertTrue(ok["local_byte_verification"][0]["verified"])
+            # Corrupt the local bytes -> verified false.
+            (archive_root / "objects" / "sample" / "fake-school-record.txt").write_bytes(b"corrupted")
+            bad = archive_services.object_storage_upload_verify(
+                archive_root, provider_kind="cloudflare-r2", only=f"sha256:{_FAKE_SHA_A}", dry_run=True
+            )
+            self.assertFalse(bad["local_byte_verification"][0]["verified"])
+
+    # --- Secret-free proof (RC1/RC2, load-bearing) ---
+
+    def test_object_storage_upload_true_secret_shapes_absent_everywhere(self) -> None:  # T-secret1
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _AWS_SECRET_40, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                result = self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport,
+                )
+            serialized_return = json.dumps(result, default=str)
+            self.assertNotIn(_R2_SECRET_HEX64, serialized_return)
+            self.assertNotIn(_AWS_SECRET_40, serialized_return)
+            # Receipt + ledger + manifest delta.
+            for rel in result["receipts_written"]:
+                text = (archive_root / rel).read_text(encoding="utf-8")
+                self.assertNotIn(_R2_SECRET_HEX64, text)
+                self.assertNotIn(_AWS_SECRET_40, text)
+            manifest_text = (archive_root / "objects" / "manifests" / "files.jsonl").read_text(encoding="utf-8")
+            self.assertNotIn(_R2_SECRET_HEX64, manifest_text)
+            self.assertNotIn(_AWS_SECRET_40, manifest_text)
+            ledger_dir = archive_root / "receipts" / "providers" / "object-storage-executions"
+            for lf in ledger_dir.glob("*.resume-ledger.jsonl"):
+                self.assertNotIn(_R2_SECRET_HEX64, lf.read_text(encoding="utf-8"))
+
+    def test_object_storage_secret_guard_direct_containment_is_primary(self) -> None:  # T-secret1 (control proof)
+        # The guard must catch the true secret shapes that the regex backstops miss.
+        for secret in (_R2_SECRET_HEX64, _AWS_SECRET_40):
+            regex_backstop_hit = bool(archive_services.DRAFT_SECRET_VALUE_RE.search(secret) or archive_services.GITHUB_SECRET_LIKE_RE.search(secret))
+            self.assertFalse(regex_backstop_hit, "backstop should NOT catch a bare R2/AWS secret; direct containment must")
+            hits = archive_services.assert_no_secret_or_location_leak(f'{{"x":"{secret}"}}', key_values=[secret])
+            self.assertIn("secret_value_contained", hits)
+
+    # --- Guards ---
+
+    def test_object_storage_upload_max_objects_refuse_at_service_layer(self) -> None:  # T-max1
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            # Fake archive has 2 manifest records; --max-objects 1 with no --only must REFUSE.
+            result = archive_services.object_storage_upload_plan(
+                archive_root, provider_kind="cloudflare-r2", store_ref="r2-upload-20260704",
+                access_key_id_ref="env:WOM_R2_ACCESS_KEY_ID", secret_access_key_ref="env:WOM_R2_SECRET_ACCESS_KEY",
+                max_objects=1, dry_run=True,
+            )
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("max_objects_refuse" in b for b in result["blockers"]), result["blockers"])
+
+    def test_object_storage_upload_env_only_first_live_blocker(self) -> None:  # T-env1
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            transport = _FakeObjectStorageTransport()
+            result = self._upload_run(
+                archive_root,
+                access_key_id_ref="keyring:wom-r2-access",
+                secret_access_key_ref="keyring:wom-r2-secret",
+                only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", approve=True, transport=transport,
+            )
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("env_only_first_live" in b for b in result["blockers"]), result["blockers"])
+            self.assertEqual(transport.put_calls, 0)
+
+    # --- R4 crash-safety ---
+
+    def test_object_storage_manifest_writer_atomic_rollback(self) -> None:  # T-R4
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            original_bytes = manifest_path.read_bytes()
+            matched_items = [{"object_id": f"sha256:{_FAKE_SHA_A}", "sha256": _FAKE_SHA_A, "already_present": False}]
+            real_replace = archive_services.os.replace
+
+            def failing_replace(src, dst):
+                if str(dst).endswith("files.jsonl"):
+                    raise OSError("simulated crash before replace")
+                return real_replace(src, dst)
+
+            with patch.object(archive_services.os, "replace", side_effect=failing_replace):
+                with self.assertRaises(OSError):
+                    archive_services.update_manifest_with_object_storage_upload_evidence(
+                        archive_root, manifest_path,
+                        provider_kind="cloudflare-r2", store_ref="r2-upload-20260704",
+                        receipt_path="receipts/providers/object-storage-upload-evidence/x.json",
+                        registered_at="2026-07-04T00:00:00Z", matched_items=matched_items,
+                    )
+            # Original manifest is byte-identical; no temp part-file left behind.
+            self.assertEqual(manifest_path.read_bytes(), original_bytes)
+            leftover = list(manifest_path.parent.glob("files.jsonl.part-*"))
+            self.assertEqual(leftover, [])
+
+    # --- R3 cross-run resume authority (deterministic ledger path) ---
+
+    def test_object_storage_upload_resume_ledger_is_authoritative_across_runs(self) -> None:  # T-fake2b
+        # A crash BETWEEN the ledger append and the manifest advance must be
+        # recoverable: RUN2 reads the SAME ledger and does NOT re-PUT, and there
+        # is exactly ONE ledger file for the object across both runs.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport1 = _FakeObjectStorageTransport()
+                self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport1,
+                )
+                self.assertEqual(transport1.put_calls, 1)
+                ledger_dir = archive_root / "receipts" / "providers" / "object-storage-executions"
+                ledgers_after_run1 = sorted(ledger_dir.glob("*.resume-ledger.jsonl"))
+                self.assertEqual(len(ledgers_after_run1), 1, "run1 must create exactly one resume ledger")
+
+                # Simulate the exact post-crash state the ledger exists to cover:
+                # strip the wom_uploaded manifest location the run just wrote.
+                manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+                records = [json.loads(l) for l in manifest_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+                for record in records:
+                    if record.get("object_id") == f"sha256:{_FAKE_SHA_A}":
+                        record["locations"] = [
+                            loc for loc in record.get("locations", [])
+                            if loc.get("availability") != "wom_uploaded"
+                        ]
+                manifest_path.write_text(
+                    "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n", encoding="utf-8"
+                )
+
+                # RUN2 (resume): a NEW transport whose store is empty. Ledger authority
+                # (not the manifest, not the fake's memory) must suppress the PUT.
+                transport2 = _FakeObjectStorageTransport()
+                result2 = self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport2,
+                )
+            self.assertEqual(transport2.put_calls, 0, "resume must not re-PUT; ledger is authoritative across runs")
+            self.assertEqual(result2["execution_results"][0]["result_status"], "skipped_already_present")
+            ledgers_after_run2 = sorted(ledger_dir.glob("*.resume-ledger.jsonl"))
+            self.assertEqual(
+                [p.name for p in ledgers_after_run2], [p.name for p in ledgers_after_run1],
+                "the resume ledger path must be deterministic (stable) across runs",
+            )
+
+    # --- §6 leak gate is wired over the manifest delta AND the return payload ---
+
+    def test_object_storage_upload_manifest_delta_leak_gate_fails_closed(self) -> None:  # T-secret2
+        # If a credential value ever reaches the wom_uploaded manifest-location
+        # delta, the leak gate must fire BEFORE the manifest is advanced: the run
+        # fails closed with failed_secret_guard, the secret appears nowhere, and
+        # the manifest carries no wom_uploaded location.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            real_builder = archive_services.object_storage_wom_uploaded_location
+
+            def leaky_builder(*, digest, provider_kind, store_ref, execution_receipt_ref, uploaded_at):
+                location = real_builder(
+                    digest=digest, provider_kind=provider_kind, store_ref=store_ref,
+                    execution_receipt_ref=execution_receipt_ref, uploaded_at=uploaded_at,
+                )
+                # Adversarial: a future edit threads the raw secret into the delta.
+                location["debug_note"] = _R2_SECRET_HEX64
+                return location
+
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                with patch.object(archive_services, "object_storage_wom_uploaded_location", side_effect=leaky_builder):
+                    transport = _FakeObjectStorageTransport()
+                    result = self._upload_run(
+                        archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                        reviewed_by="kim", approve=True, transport=transport,
+                    )
+            self.assertEqual(result["execution_results"][0]["result_status"], "failed_secret_guard")
+            self.assertEqual(result["manifest_updates"], 0)
+            # Secret appears in neither the return payload nor the manifest on disk.
+            self.assertNotIn(_R2_SECRET_HEX64, json.dumps(result, default=str))
+            self.assertNotIn(_R2_SECRET_HEX64, manifest_path.read_text(encoding="utf-8"))
+            self.assertNotIn("wom_uploaded", manifest_path.read_text(encoding="utf-8"))
+
+    # --- §4.1 doctor audits the wom_uploaded manifest location (RC3) ---
+
+    def test_object_storage_execution_receipt_doctor_audits_wom_location(self) -> None:  # T-audit1
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                result = self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport,
+                )
+            self.assertEqual(result["execution_results"][0]["result_status"], "uploaded")
+
+            # Baseline: a well-formed wom_uploaded location + receipt passes doctor.
+            base_code, base_output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            self.assertEqual(base_code, 0, base_output)
+
+            # Corrupt the wom_uploaded manifest location: flip a required by_wom_kit
+            # flag. The doctor must now audit the LOCATION and fail.
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [json.loads(l) for l in manifest_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            for record in records:
+                if record.get("object_id") == f"sha256:{_FAKE_SHA_A}":
+                    for loc in record.get("locations", []):
+                        if loc.get("availability") == "wom_uploaded":
+                            loc["byte_verification_by_wom_kit"] = False
+            manifest_path.write_text(
+                "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n", encoding="utf-8"
+            )
+            bad_code, bad_output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            self.assertEqual(bad_code, 1, bad_output)
+            self.assertIn("object_storage_upload_wom_location_invalid", bad_output)
 
     def test_resolve_objet_ref_reports_local_and_external_candidates_without_paths_or_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

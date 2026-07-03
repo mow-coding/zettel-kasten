@@ -152,6 +152,33 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.162` To `v0.3.163`
+
+이 release는 object-storage 업로드 어댑터(WOM #11)의 Stage 1을 세 개의 승인 게이트
+명령으로 추가하고, 공유 object-storage manifest 기록기를 안전하게 강화합니다.
+
+운영자에게 보이는 변경:
+
+- 새 명령만 추가되며 자동으로 실행되는 것은 없습니다. `archive
+  object-storage-upload-plan --dry-run`과 `archive object-storage-upload-verify
+  --dry-run`은 읽기 전용이며 아무것도 쓰지 않습니다. `archive
+  object-storage-upload`는 `--dry-run`/`--approve` 중 정확히 하나가 필요하고,
+  `--approve`에는 안전한 `--reviewed-by`가 필요합니다.
+- 어댑터는 아직 업로드할 수 없습니다. 이것은 단계적 롤아웃의 Stage 1입니다. 라이브
+  전송 계층이 포함되어 있지 않으므로 `archive object-storage-upload --approve`는
+  자격 증명이나 바이트를 읽기 전에 `live_transport_not_implemented`로 닫힌 상태로
+  실패합니다. 프로바이더에 도달하는 환경 변수나 플래그는 없으며, 라이브 전송에는
+  Stage 2 코드 변경이 필요합니다.
+- archive 마이그레이션이나 해시 변경은 없습니다. manifest 기록 강화는 추가적
+  변경입니다. 공유 object-storage manifest 기록기는 이제 manifest 잠금을 획득하고
+  원자적으로(temp+fsync+os.replace) 기록하므로 기존
+  `object-storage-upload-evidence` 명령도 함께 보호됩니다. 업로드 명령을 직접
+  실행하기 전까지 기존 receipt와 manifest는 영향을 받지 않습니다.
+- `wom-kit/schemas/object-storage-upload-receipt.schema.json`, object-storage
+  실행 receipt용 doctor 점검, 읽기 전용 MCP 도구 `object_storage_upload_plan`과
+  `object_storage_upload_verify`가 추가되었습니다.
+  `wom-kit/docs/releases/v0.3.163.md` 참고.
+
 ## From `v0.3.161` To `v0.3.162`
 
 이 release는 `archive remint-reconcile`를 추가합니다. canonical zet의 바이트가

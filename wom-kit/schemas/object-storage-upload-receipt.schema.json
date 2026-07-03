@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit object-storage upload execution receipt",
+  "type": "object",
+  "required": [
+    "schema",
+    "receipt_path",
+    "lifecycle_action",
+    "operation",
+    "dry_run",
+    "archive_id",
+    "object_id",
+    "provider_kind",
+    "store_ref",
+    "key_strategy",
+    "key_hint",
+    "result_status",
+    "bytes_uploaded",
+    "checksum_algorithm",
+    "retry_summary",
+    "object_count",
+    "reviewed_by",
+    "privacy_guards"
+  ],
+  "properties": {
+    "schema": {"type": "string", "const": "object-storage-upload-receipt.schema.json"},
+    "receipt_id": {"type": ["string", "null"]},
+    "receipt_path": {"type": "string"},
+    "lifecycle_action": {"type": "string", "enum": ["object_storage_upload_execute"]},
+    "operation": {"type": "string", "enum": ["upload_object"]},
+    "dry_run": {"type": "boolean"},
+    "archive_id": {"type": "string"},
+    "object_id": {"type": "string"},
+    "provider_kind": {"type": "string"},
+    "store_ref": {"type": "string"},
+    "key_strategy": {"type": "string", "enum": ["sha256_content_addressed"]},
+    "key_hint": {"type": "string"},
+    "result_status": {
+      "type": "string",
+      "enum": [
+        "uploaded",
+        "skipped_already_present",
+        "skipped_remote_same",
+        "remote_conflict_different_bytes",
+        "failed_auth",
+        "failed_rate_limited",
+        "failed_upload",
+        "failed_secret_guard"
+      ]
+    },
+    "bytes_uploaded": {"type": "integer"},
+    "checksum_algorithm": {"type": "string", "enum": ["sha256"]},
+    "retry_summary": {"type": "object"},
+    "object_count": {"type": "integer"},
+    "reviewed_by": {"type": "string"},
+    "availability_transition": {"type": "object"},
+    "manifest_update_applied": {"type": "boolean"},
+    "privacy_guards": {"type": "object"}
+  }
+}

@@ -278,6 +278,41 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "object_storage_upload_plan",
+        "description": "Plan a content-addressed object-storage upload with digest-aware idempotency. Read-only; never calls providers, retrieves secrets, reads object bytes, uploads, or writes files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "provider_kind": {"type": "string", "enum": sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS), "default": "cloudflare-r2"},
+                "store_ref": {"type": "string"},
+                "access_key_id_ref": {"type": "string"},
+                "secret_access_key_ref": {"type": "string"},
+                "only": {"type": "string"},
+                "max_objects": {"type": "integer"},
+                "skip_uploaded": {"type": "boolean", "default": False},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
+        "name": "object_storage_upload_verify",
+        "description": "Verify planned objects' local RAW bytes hash to their object id. Read-only; never calls providers, retrieves secrets, uploads, or writes files.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "provider_kind": {"type": "string", "enum": sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS), "default": "cloudflare-r2"},
+                "store_ref": {"type": "string"},
+                "only": {"type": "string"},
+                "max_objects": {"type": "integer"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "human_artifact_store_plan",
         "description": "Plan a user-facing human artifact surface. Read-only; never creates notes, publishes posts, uploads files, starts OAuth, calls providers, mints, or runs ZET transport.",
         "inputSchema": {
@@ -2735,6 +2770,10 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_object_storage_operation_request_plan(arguments)
     if name == "object_storage_adapter_execution_contract":
         return tool_object_storage_adapter_execution_contract(arguments)
+    if name == "object_storage_upload_plan":
+        return tool_object_storage_upload_plan(arguments)
+    if name == "object_storage_upload_verify":
+        return tool_object_storage_upload_verify(arguments)
     if name == "human_artifact_store_plan":
         return tool_human_artifact_store_plan(arguments)
     if name == "imap_mailbox_plan":
@@ -3162,6 +3201,53 @@ def tool_object_storage_adapter_execution_contract(arguments: dict[str, Any]) ->
     )
     state = str(result.get("contract_state") or ("passed" if result["ok"] else "blocked"))
     return tool_success_result(f"object_storage_adapter_execution_contract: {state}.", result)
+
+
+def _optional_max_objects_arg(arguments: dict[str, Any]) -> int | None:
+    value = arguments.get("max_objects")
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ToolError("max_objects must be an integer.")
+
+
+def tool_object_storage_upload_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("object_storage_upload_plan is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.object_storage_upload_plan,
+        archive_root,
+        provider_kind=optional_string_arg(arguments, "provider_kind") or "cloudflare-r2",
+        store_ref=optional_string_arg(arguments, "store_ref"),
+        access_key_id_ref=optional_string_arg(arguments, "access_key_id_ref"),
+        secret_access_key_ref=optional_string_arg(arguments, "secret_access_key_ref"),
+        only=optional_string_arg(arguments, "only"),
+        max_objects=_optional_max_objects_arg(arguments),
+        skip_uploaded=bool(arguments.get("skip_uploaded", False)),
+        dry_run=True,
+    )
+    state = "ready" if result.get("ok") else "blocked"
+    return tool_success_result(f"object_storage_upload_plan: {state}.", result)
+
+
+def tool_object_storage_upload_verify(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("object_storage_upload_verify is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.object_storage_upload_verify,
+        archive_root,
+        provider_kind=optional_string_arg(arguments, "provider_kind") or "cloudflare-r2",
+        store_ref=optional_string_arg(arguments, "store_ref"),
+        only=optional_string_arg(arguments, "only"),
+        max_objects=_optional_max_objects_arg(arguments),
+        dry_run=True,
+    )
+    state = "ready" if result.get("ok") else "blocked"
+    return tool_success_result(f"object_storage_upload_verify: {state}.", result)
 
 
 def tool_human_artifact_store_plan(arguments: dict[str, Any]) -> dict[str, Any]:

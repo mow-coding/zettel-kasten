@@ -640,6 +640,8 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("object_storage_adapter_readiness_plan", tool_names)
             self.assertIn("object_storage_operation_request_plan", tool_names)
             self.assertIn("object_storage_adapter_execution_contract", tool_names)
+            self.assertIn("object_storage_upload_plan", tool_names)
+            self.assertIn("object_storage_upload_verify", tool_names)
             self.assertIn("human_artifact_store_plan", tool_names)
             self.assertIn("tiro_import_plan", tool_names)
             self.assertIn("connection_import_plan", tool_names)
@@ -1889,6 +1891,71 @@ class McpServerTests(unittest.TestCase):
                 dry_run_result = dry_run_response["result"]
                 self.assertTrue(dry_run_result["isError"])
                 self.assertIn("dry-run only", dry_run_result["structuredContent"]["error"])
+            finally:
+                self.stop_server(process)
+
+    def test_object_storage_upload_plan_and_verify_tools_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                plan_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "object_storage_upload_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "provider_kind": "cloudflare-r2",
+                                "store_ref": "r2-upload-20260704",
+                                "access_key_id_ref": "env:WOM_R2_ACCESS_KEY_ID",
+                                "secret_access_key_ref": "env:WOM_R2_SECRET_ACCESS_KEY",
+                                "skip_uploaded": True,
+                            },
+                        },
+                    },
+                )
+                plan_result = plan_response["result"]
+                self.assertFalse(plan_result["isError"], plan_result)
+                plan_structured = plan_result["structuredContent"]
+                self.assertTrue(plan_structured["ok"], plan_structured)
+                self.assertEqual(plan_structured["lifecycle_action"], "object_storage_upload_plan")
+                self.assertFalse(plan_structured["current_capability"]["live_object_upload_adapter_implemented"])
+                self.assertFalse(plan_structured["current_capability"]["provider_api_call_implemented"])
+                self.assertFalse(plan_structured["closed_actions"]["credential_value_read"])
+
+                verify_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "object_storage_upload_verify",
+                            "arguments": {"archive_root": str(allowed_archive), "provider_kind": "cloudflare-r2"},
+                        },
+                    },
+                )
+                verify_result = verify_response["result"]
+                self.assertFalse(verify_result["isError"], verify_result)
+                self.assertEqual(verify_result["structuredContent"]["lifecycle_action"], "object_storage_upload_verify")
+
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
             finally:
                 self.stop_server(process)
 

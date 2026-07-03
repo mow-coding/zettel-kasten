@@ -163,6 +163,33 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.162` To `v0.3.163`
+
+This release adds Stage 1 of the object-storage upload adapter (WOM #11) as three
+new approval-gated commands, plus an additive hardening of the shared
+object-storage manifest writer.
+
+Operator-visible notes:
+
+- New commands only; nothing runs automatically. `archive
+  object-storage-upload-plan --dry-run` and `archive object-storage-upload-verify
+  --dry-run` are read-only and write nothing. `archive object-storage-upload`
+  requires exactly one of `--dry-run`/`--approve` and a safe `--reviewed-by` with
+  `--approve`.
+- The adapter CANNOT upload yet. This is Stage 1 of a staged rollout: no live
+  transport ships, so `archive object-storage-upload --approve` fails closed with
+  `live_transport_not_implemented` before any credential read or byte read. There
+  is no env var or flag that reaches a provider; a Stage-2 code change is required.
+- No archive migration and no hash change. The manifest-write hardening is
+  additive: the shared object-storage manifest writer now holds the manifest lock
+  and writes atomically (temp+fsync+os.replace), which also protects the existing
+  `object-storage-upload-evidence` command. Existing receipts and manifests are
+  unaffected until you choose to run an upload command.
+- Added `wom-kit/schemas/object-storage-upload-receipt.schema.json`, a doctor
+  check for object-storage execution receipts, and read-only MCP tools
+  `object_storage_upload_plan` and `object_storage_upload_verify`. See
+  `wom-kit/docs/releases/v0.3.163.md`.
+
 ## From `v0.3.161` To `v0.3.162`
 
 This release adds `archive remint-reconcile`, an honest way to re-issue a mint
