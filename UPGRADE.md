@@ -163,6 +163,58 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.158` To `v0.3.159`
+
+This release adds paired transcript intake (one approval covers a staged
+original plus its already-extracted transcript) and BOM-aware derive-text
+encoding.
+
+Operator-visible notes:
+
+- ADDITIVE manifest field + NEW action string: a selection item MAY carry a
+  `derived_text` sub-object (`staged_text_path`, `approved_text_sha256` over
+  RAW bytes, `derivation_kind`, `tool_name`, `tool_version`, `review_status`,
+  optional model/confidence/language/born_digital). Paired manifests MUST use
+  `action: local_objet_capture_with_derived_text_approved` and `schema:
+  wom-kit/b4-selection/v0.3`. Kits at v0.3.158 or earlier refuse paired
+  manifests with `selection_action_invalid` — fail-closed by design. The
+  mechanism matters: the old envelope validator ignores the `schema` field
+  (it was write-only) and ignores unknown item keys, so the ACTION string is
+  the only lever that makes old kits refuse instead of silently capturing the
+  original and dropping the approved derived half. v0.3.159 starts validating
+  the `schema` field (`selection_schema_invalid`): plain manifests require
+  the v0.2 schema every generated manifest already carries; hand-built
+  manifests without a `schema` field must add it.
+- utf-8-sig hash-identity change (NOT additive): before this release a UTF-8
+  BOM survived validation and the raw bytes were stored WITH the BOM. The BOM
+  is now stripped before storage, so the same utf-8-sig input produces a
+  different `text_sha256`/`derived_text_id` than a pre-upgrade capture, and a
+  post-upgrade re-run of that input creates a SECOND record instead of
+  `skip_already_present`. BOM-less UTF-8 input is unaffected (stored bytes ==
+  raw bytes).
+- Receipt schema bumps: `wom-kit/objet-capture-receipt/v0.2` ->
+  `wom-kit/objet-capture-receipt/v0.3` (items may carry a `derived_text`
+  sub-result; additive `status_class` at item and run level; derived summary
+  counters on paired runs) and `wom-kit/derived-text-capture-receipt/v0.1` ->
+  `wom-kit/derived-text-capture-receipt/v0.2` (`source_text_encoding`,
+  `source_text_sha256`, and `paired_with` on paired registrations). The
+  derived-text RECORD schema stays `wom-kit/derived-text-record/v0.1` with
+  additive optional provenance fields.
+- New blockers: `approved_text_content_mismatch`, `unsafe_staged_text_path`,
+  `blocked_by_original`, `derived_text_registration_failed`,
+  `selection_schema_invalid`, `text_file_bom_encoding_unsupported`,
+  `text_file_bom_encoding_undecodable`, `text_file_contains_nul`,
+  `text_file_too_large`. `text_file_not_utf8` is now raised for BOM-less
+  non-UTF-8 input only and gains a static hint. Paired-manifest metadata
+  validation reuses the existing derive-text `*_invalid` vocabulary
+  (`derivation_kind_invalid`, `review_status_invalid`, `tool_name_invalid`,
+  `tool_version_invalid`, `confidence_invalid`, `language_invalid`,
+  `born_digital_invalid`) and adds `model_name_invalid` /
+  `model_version_invalid` for non-string optional model fields.
+- No archive migration is required. See
+  `wom-kit/docs/releases/v0.3.159.md` and the Encoding section of
+  `wom-kit/docs/derived-text.md`.
+
 ## From `v0.3.157` To `v0.3.158`
 
 This release adds owner-approved real-archive objet capture enablement.

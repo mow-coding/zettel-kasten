@@ -8739,6 +8739,31 @@ def command_objet_capture_selection(args: argparse.Namespace) -> int:
     if args.approve and not args.reviewed_by:
         print("objet-capture-selection requires --reviewed-by when --approve is used.", file=sys.stderr)
         return 1
+    pairing_values = [
+        args.derivation_kind,
+        args.tool_name,
+        args.tool_version,
+        args.review_status,
+        args.model_name,
+        args.model_version,
+        args.confidence,
+        args.language,
+        True if args.born_digital else None,
+    ]
+    if args.derived_text_staged_path is None and any(value is not None for value in pairing_values):
+        print(
+            "Derived-text pairing flags require --derived-text-staged-path.",
+            file=sys.stderr,
+        )
+        return 1
+    if args.derived_text_staged_path is not None and any(
+        value is None for value in [args.derivation_kind, args.tool_name, args.tool_version, args.review_status]
+    ):
+        print(
+            "--derived-text-staged-path requires --derivation-kind, --tool-name, --tool-version, and --review-status.",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         result = archive_services.objet_capture_selection_manifest(
@@ -8751,6 +8776,16 @@ def command_objet_capture_selection(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             approve=args.approve,
             reviewed_by=args.reviewed_by,
+            derived_text_staged_path=args.derived_text_staged_path,
+            derivation_kind=args.derivation_kind,
+            tool_name=args.tool_name,
+            tool_version=args.tool_version,
+            review_status=args.review_status,
+            model_name=args.model_name,
+            model_version=args.model_version,
+            confidence=args.confidence,
+            language=args.language,
+            born_digital=args.born_digital,
         )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
@@ -14714,6 +14749,27 @@ def build_parser() -> argparse.ArgumentParser:
     objet_capture_selection.add_argument("--item-id", default="item", help="Safe item id for the selection manifest.")
     objet_capture_selection.add_argument("--manifest-id", help="Optional safe manifest id; defaults from the object hash.")
     objet_capture_selection.add_argument("--project-intake-receipt", help="Optional archive-relative project-intake decisions receipt.")
+    objet_capture_selection.add_argument(
+        "--derived-text-staged-path",
+        help="Optional archive-relative staged transcript/text file to pair with the staged original in ONE approval.",
+    )
+    objet_capture_selection.add_argument(
+        "--derivation-kind",
+        choices=sorted(archive_services.DERIVED_TEXT_DERIVATION_KINDS),
+        help="How the paired text was derived from the staged original (required with --derived-text-staged-path).",
+    )
+    objet_capture_selection.add_argument("--tool-name", help="Extractor/OCR/ASR/vision tool name for the paired text (required with --derived-text-staged-path).")
+    objet_capture_selection.add_argument("--tool-version", help="Extractor/OCR/ASR/vision tool version for the paired text (required with --derived-text-staged-path).")
+    objet_capture_selection.add_argument(
+        "--review-status",
+        choices=sorted(archive_services.DERIVED_TEXT_REVIEW_STATUSES),
+        help="Review status for the paired text (required with --derived-text-staged-path).",
+    )
+    objet_capture_selection.add_argument("--model-name", help="Optional model name for model-dependent paired-text derivations.")
+    objet_capture_selection.add_argument("--model-version", help="Optional model version for model-dependent paired-text derivations.")
+    objet_capture_selection.add_argument("--confidence", type=float, help="Optional paired-text confidence from 0.0 to 1.0.")
+    objet_capture_selection.add_argument("--language", help="Optional BCP-47-ish language tag for the paired text, e.g. ko or en.")
+    objet_capture_selection.add_argument("--born-digital", action="store_true", help="Mark the paired text as extracted from born-digital content.")
     objet_capture_selection.add_argument("--dry-run", action="store_true", help="Preview the selection manifest without writing.")
     objet_capture_selection.add_argument("--approve", action="store_true", help="Write the reviewed selection manifest only; does not run capture.")
     objet_capture_selection.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")

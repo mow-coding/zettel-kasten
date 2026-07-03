@@ -152,6 +152,57 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.158` To `v0.3.159`
+
+이 release는 짝지은(paired) transcript intake(승인 한 번으로 staged 원본과
+이미 추출된 transcript를 함께 처리)와 BOM 인식 derive-text 인코딩을
+추가합니다.
+
+운영자에게 보이는 변경:
+
+- 추가(ADDITIVE) manifest 필드 + 새 action 문자열: selection item은
+  `derived_text` 하위 객체(`staged_text_path`, RAW 바이트에 대한
+  `approved_text_sha256`, `derivation_kind`, `tool_name`, `tool_version`,
+  `review_status`, 선택적 model/confidence/language/born_digital)를 가질 수
+  있습니다. 짝지은 manifest는 반드시 `action:
+  local_objet_capture_with_derived_text_approved`와 `schema:
+  wom-kit/b4-selection/v0.3`을 씁니다. v0.3.158 이하 kit은 짝지은 manifest를
+  `selection_action_invalid`로 거부합니다 — 의도된 fail-closed입니다.
+  메커니즘이 중요합니다: 예전 envelope 검증기는 `schema` 필드를 무시하고
+  (write-only였음) 알 수 없는 item key도 무시하므로, 예전 kit이 원본만
+  캡처하고 승인된 derived 절반을 조용히 버리는 대신 거부하게 만드는 유일한
+  지렛대가 ACTION 문자열입니다. v0.3.159부터 `schema` 필드를 검증합니다
+  (`selection_schema_invalid`): 일반 manifest는 생성기가 항상 써 온 v0.2
+  schema를 요구하고, 손으로 만든 `schema` 없는 manifest는 필드를 추가해야
+  합니다.
+- utf-8-sig 해시 정체성 변경(추가적이지 않음): 이 release 전에는 UTF-8 BOM이
+  검증을 통과했고 raw 바이트가 BOM을 포함한 채 저장되었습니다. 이제 저장 전에
+  BOM을 제거하므로, 같은 utf-8-sig 입력이 업그레이드 전 캡처와 다른
+  `text_sha256`/`derived_text_id`를 만들고, 업그레이드 후 같은 입력을 다시
+  실행하면 `skip_already_present` 대신 두 번째 record가 생깁니다. BOM 없는
+  UTF-8 입력은 영향이 없습니다(저장 바이트 == raw 바이트).
+- receipt schema 상향: `wom-kit/objet-capture-receipt/v0.2` ->
+  `wom-kit/objet-capture-receipt/v0.3` (item이 `derived_text` 하위 결과를
+  가질 수 있고, item/run 단위의 추가 `status_class`, 짝지은 실행에서 derived
+  요약 카운터), 그리고 `wom-kit/derived-text-capture-receipt/v0.1` ->
+  `wom-kit/derived-text-capture-receipt/v0.2` (`source_text_encoding`,
+  `source_text_sha256`, 짝지은 등록의 `paired_with`). derived-text RECORD
+  schema는 `wom-kit/derived-text-record/v0.1` 그대로이고 선택적 provenance
+  필드만 추가됩니다.
+- 새 blocker: `approved_text_content_mismatch`, `unsafe_staged_text_path`,
+  `blocked_by_original`, `derived_text_registration_failed`,
+  `selection_schema_invalid`, `text_file_bom_encoding_unsupported`,
+  `text_file_bom_encoding_undecodable`, `text_file_contains_nul`,
+  `text_file_too_large`. `text_file_not_utf8`은 이제 BOM 없는 비 UTF-8
+  입력에만 쓰이고 정적 hint가 붙습니다. 짝지은 manifest의 메타데이터 검증은
+  기존 derive-text `*_invalid` 어휘(`derivation_kind_invalid`,
+  `review_status_invalid`, `tool_name_invalid`, `tool_version_invalid`,
+  `confidence_invalid`, `language_invalid`, `born_digital_invalid`)를
+  재사용하고, 문자열이 아닌 선택적 model 필드에 대해 `model_name_invalid` /
+  `model_version_invalid`를 추가합니다.
+- archive migration은 필요 없습니다. `wom-kit/docs/releases/v0.3.159.md`와
+  `wom-kit/docs/derived-text.md`의 Encoding 절을 보세요.
+
 ## From `v0.3.157` To `v0.3.158`
 
 이 release는 실제(비 sandbox) archive의 local objet capture를 소유자 승인으로 여는 기능을 추가합니다.

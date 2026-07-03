@@ -1,7 +1,7 @@
 # Derived Text Capture
 
-Status: implemented local CLI, first slice
-Date: 2026-06-13
+Status: implemented local CLI; paired transcript intake and BOM-aware encoding since v0.3.159
+Date: 2026-07-03
 
 Derived text is text produced from a source objet:
 
@@ -141,6 +141,105 @@ APIs, run OCR, run ASR, run parsers, or run LLM vision.
 
 Batch mode reuses the same write path for each item. Approved batch runs may
 write item-level receipts under `receipts/derived-text-capture/`.
+
+## Paired Transcript Intake (v0.3.159)
+
+When a vendor tool exports an original plus its transcript side by side (for
+example Samsung Voice Recorder's `.m4a` + UTF-16 `.txt`), ONE reviewed
+selection manifest can approve both halves:
+
+```powershell
+python wom-kit\cli\archive.py objet-capture-selection <archive-root> `
+  --staged-path staging/incoming/call-2026-07-01.m4a `
+  --source-intake-receipt receipts/sources/<plan>.json `
+  --derived-text-staged-path staging/incoming/call-2026-07-01.txt `
+  --derivation-kind asr `
+  --tool-name samsung-voice-recorder `
+  --tool-version <version> `
+  --review-status unreviewed `
+  --approve --reviewed-by <actor> --format json
+```
+
+The generated manifest item carries a `derived_text` sub-object inside the
+hashed manifest: `staged_text_path` (archive-relative), `approved_text_sha256`
+(over the RAW file bytes — the always-blocking approval commitment mirroring
+`approved_object_id`; a swapped transcript blocks with
+`approved_text_content_mismatch`), the four required metadata fields
+(`derivation_kind`, `tool_name`, `tool_version`, `review_status`), and the
+optional `model_name`/`model_version`/`confidence`/`language`/`born_digital`.
+Paired manifests use `action: local_objet_capture_with_derived_text_approved`
+and `schema: wom-kit/b4-selection/v0.3`; pre-0.3.159 kits refuse them with
+`selection_action_invalid` (fail-closed) instead of dropping the derived half.
+
+`objet-capture --selection <path> --dry-run|--approve` then processes both
+halves in one run: phase 1 publishes the original and fsyncs its manifest
+line; phase 2 registers the derived text bound to the minted `object_id`. A
+blocked original never reads its transcript (`blocked_by_original`). If the
+original lands but the derived half blocks, the item and run report the
+additive `status_class: partial` with `ok: false`; re-running the SAME
+selection repairs it (the original half skips, the derived half retries), or
+finish with standalone `derive-text capture --source-object-id <minted id>`.
+The objet receipt (schema v0.3) item carries the full `derived_text`
+sub-result including the derived receipt path; the derived receipt (schema
+v0.2) carries `paired_with: {selection_manifest_id, selection_manifest_sha256,
+item_id}`.
+
+`staged_text_path` confinement has full parity with `staged_path` (containment,
+internal-prefix block, reserved device names, never-touch, per-component
+symlink/junction checks, `duplicate_selection_target` when a file appears as
+both an original and a transcript source).
+
+Honest scope notes:
+
+- Paired intake does NOT preserve raw transcript bytes: the stored text is
+  transcoded UTF-8, so `staged-cleanup-check` will correctly report the staged
+  `.txt` as `not_preserved` (preservation requires an `objects/sha256` copy
+  hashing to the raw digest). When raw-byte preservation matters, use the
+  deferred list or a separate objet capture of the `.txt` itself.
+- The v0.3.158 capture-enablement gate covers the paired derived half only
+  because the pair runs INSIDE objet-capture; standalone derive-text capture
+  remains ungated by design (`gate_scope` unchanged).
+- Standalone `--text-file` accepts arbitrary absolute local paths; the
+  manifest-carried `staged_text_path` is stricter because it is a persisted
+  approval record. This asymmetry is deliberate.
+
+## Encoding (v0.3.159)
+
+Derived-text capture decodes input with a deterministic BOM-only ladder — no
+chardet, no guessing, strict decoding everywhere — on ALL paths (standalone
+single-file, `--from-manifest` batch, paired):
+
+| Input | Result |
+|---|---|
+| UTF-8 BOM (`EF BB BF`) | decoded `utf-8-sig`, BOM stripped |
+| UTF-32 LE/BE BOM | blocked `text_file_bom_encoding_unsupported` (checked BEFORE UTF-16: the UTF-32-LE BOM prefix-collides with UTF-16-LE's) |
+| UTF-16 LE/BE BOM | strict decode, label from the sniffed BOM |
+| no BOM | strict UTF-8 (exactly the old acceptance; stored bytes == raw bytes) |
+
+Failure modes: a BOM-marked file whose bytes do not strictly decode blocks
+with `text_file_bom_encoding_undecodable` plus a `detected_bom` field; decoded
+text containing U+0000 blocks with `text_file_contains_nul` (the file is
+likely BOM-less UTF-16/UTF-32 — transcode it); BOM-less non-UTF-8 keeps the
+legacy `text_file_not_utf8` blocker with a hint naming the auto-handled
+encodings. Files larger than the 64 MiB `DERIVED_TEXT_MAX_SOURCE_BYTES` cap
+block with `text_file_too_large` before any bytes are read.
+
+The stored text is decode -> strip leading BOM -> encode UTF-8, and NOTHING
+else: CRLF and all other line endings are preserved byte-for-byte (the
+transcript is evidence). `text_sha256`, `text_logical_key`,
+`derived_text_id`, `size_bytes`, and lossless verification are all computed
+over the STORED normalized UTF-8 bytes; `source_text_encoding` and
+`source_text_sha256` (raw input bytes) are recorded in the record's
+`provenance` and in receipts so the raw input stays reconstructible.
+
+Dedupe collapse: two encodings of identical text collapse to one
+`derived_text_id`. The second registration is `skip_already_present` and the
+stored record keeps the FIRST registration's `source_text_encoding`; the
+second run's receipt still records the second source's encoding and raw hash.
+
+Identity note for upgraders: utf-8-sig files were accepted before v0.3.159
+with the BOM stored in the bytes, so the same utf-8-sig input now yields a
+different `text_sha256`/`derived_text_id` than before (see UPGRADE.md).
 
 ## Vocabulary
 

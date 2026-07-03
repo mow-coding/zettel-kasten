@@ -6,6 +6,55 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.159 - 2026-07-03
+
+- Added paired transcript intake: a selection-manifest item MAY carry a
+  `derived_text` sub-object (`staged_text_path`, `approved_text_sha256` over
+  the RAW file bytes, `derivation_kind`, `tool_name`, `tool_version`,
+  `review_status`, plus optional model/confidence/language/born_digital), so
+  ONE human approval covers both the staged original and its already-extracted
+  transcript. `objet-capture-selection` gains the pairing flags
+  (`--derived-text-staged-path`, `--derivation-kind`, `--tool-name`,
+  `--tool-version`, `--review-status`, `--model-name`, `--model-version`,
+  `--confidence`, `--language`, `--born-digital`).
+- Paired manifests use the NEW action string
+  `local_objet_capture_with_derived_text_approved` and schema
+  `wom-kit/b4-selection/v0.3`; pre-0.3.159 kits refuse them with
+  `selection_action_invalid` instead of silently dropping the derived half
+  (fail-closed by design). Plain manifests keep the old action and the v0.2
+  schema; the envelope validator now validates the `schema` field for the
+  first time (`selection_schema_invalid`).
+- `objet-capture --approve` runs in two phases inside one lock: originals
+  publish and their manifest lines are flushed+fsynced FIRST, then each
+  derived half registers through the derive-text store bound to the minted
+  `object_id` (`paired_with` back-link on the derived receipt). A blocked
+  original never reads its transcript (`blocked_by_original`); a failing
+  derived half never aborts the run (`derived_text_registration_failed`) and
+  reports item/run `status_class: partial` with re-run repair guidance.
+- Added deterministic BOM-only encoding handling to derived-text capture
+  (standalone, batch, and paired): BOM-marked UTF-8 (`utf-8-sig`) and UTF-16
+  LE/BE decode strictly and are stored as BOM-less UTF-8 with line endings
+  preserved; UTF-32 BOMs block with `text_file_bom_encoding_unsupported`;
+  BOM-marked-but-undecodable input blocks with
+  `text_file_bom_encoding_undecodable` (+ `detected_bom`); decoded text
+  containing U+0000 blocks with `text_file_contains_nul`; BOM-less non-UTF-8
+  keeps `text_file_not_utf8` with an extended hint. `source_text_encoding` and
+  `source_text_sha256` (raw bytes) are recorded in record provenance and
+  receipts; identity/verification stay keyed to the STORED UTF-8 bytes.
+- utf-8-sig identity change (NOT additive): previously the UTF-8 BOM survived
+  validation and raw bytes were stored WITH the BOM; the BOM is now stripped,
+  so the same utf-8-sig input yields a different `text_sha256`/
+  `derived_text_id` than before and a post-upgrade re-run creates a second
+  record instead of `skip_already_present`.
+- Added `DERIVED_TEXT_MAX_SOURCE_BYTES` (64 MiB) with blocker
+  `text_file_too_large`, checked on the fstat size before reading; hardened
+  the standalone `--text-file` reader to an O_NOFOLLOW-fd + fstat read.
+- Schema bumps: `objet-capture` receipt v0.2 -> v0.3 (items carry the
+  `derived_text` sub-result, `status_class`, derived summary counters);
+  derived-text capture receipt v0.1 -> v0.2 (`source_text_encoding`,
+  `source_text_sha256`, `paired_with` on paired runs). The derived-text
+  RECORD schema stays v0.1 with additive optional provenance fields.
+
 ## v0.3.158 - 2026-07-03
 
 - Added `archive objet-capture-enable` (alias `archive capture-enable`): an

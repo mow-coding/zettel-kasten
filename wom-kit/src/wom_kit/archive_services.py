@@ -52,8 +52,13 @@ DERIVED_TEXT_CAPTURE_RECEIPTS_DIR = "receipts/derived-text-capture"
 DERIVED_TEXT_DERIVATION_KINDS = {"parser", "ocr", "asr", "llm_vision"}
 DERIVED_TEXT_REVIEW_STATUSES = {"unreviewed", "human_corrected"}
 DERIVED_TEXT_UNKNOWN_VERSION_LABELS = {"unknown", "n/a", "na", "none", "unspecified", "todo", "tbd"}
-DERIVED_TEXT_CAPTURE_RECEIPT_SCHEMA = "wom-kit/derived-text-capture-receipt/v0.1"
+DERIVED_TEXT_CAPTURE_RECEIPT_SCHEMA = "wom-kit/derived-text-capture-receipt/v0.2"
 DERIVED_TEXT_RECORD_SCHEMA = "wom-kit/derived-text-record/v0.1"
+# Deterministic size cap for text sources (standalone --text-file, batch manifests, and
+# paired staged_text_path): decode+re-encode peaks at roughly 3-4x the input for UTF-16,
+# and paired intake makes a one-typo giant file likely, so the cap is checked on the
+# fstat size BEFORE any bytes are read and blocks with text_file_too_large.
+DERIVED_TEXT_MAX_SOURCE_BYTES = 64 * 1024 * 1024
 DERIVED_TEXT_CAPTURE_MANIFEST_REQUIRED_FIELDS = (
     "source_object_id",
     "text_file",
@@ -182,7 +187,10 @@ DERIVED_TEXT_TOOLCHAIN_DOCTOR_FAMILIES = (
         "format_family": "plain_text_or_markup",
         "candidate_extensions": sorted(DERIVED_TEXT_PLAIN_TEXT_EXTENSIONS),
         "ready_when_any": ["built-in utf-8 text parser"],
-        "notes": ["Built-in text handling still needs encoding review before capture."],
+        "notes": [
+            "Built-in text handling auto-decodes BOM-marked UTF-8 and UTF-16 (LE/BE) to stored UTF-8; "
+            "UTF-32 BOMs and BOM-less non-UTF-8 input block deterministically and must be transcoded to UTF-8."
+        ],
     },
     {
         "format_family": "office_open_xml_word",
@@ -49959,6 +49967,10 @@ def project_intake_item_plan(
         "--format",
         "json",
     ]
+    source_metadata = (
+        source_plan.get("source_metadata") if isinstance(source_plan.get("source_metadata"), dict) else {}
+    )
+    selected_mime = source_metadata.get("mime") or mime
 
     return {
         "ok": not blockers,
@@ -49988,6 +50000,19 @@ def project_intake_item_plan(
             "capture_requires_separate_selection_manifest": True,
             "selection_manifest_command_available": True,
             "selection_manifest_generated": False,
+            "paired_derived_text_available": True,
+            **(
+                {
+                    "paired_derived_text_hint": (
+                        "audio source selected: if a vendor transcript exists next to the original, add "
+                        "--derived-text-staged-path <archive-relative-transcript> (with --derivation-kind asr, "
+                        "--tool-name, --tool-version, --review-status) to objet-capture-selection so one "
+                        "approval covers both halves"
+                    )
+                }
+                if str(selected_mime or "").startswith("audio/")
+                else {}
+            ),
             "automatic_execution_authorized": False,
         },
         "privacy_guards": {
@@ -54190,6 +54215,7 @@ def source_intake_next_safe_actions(result: dict[str, Any]) -> list[str]:
         return [
             "register or scan the source in metadata-only mode if needed",
             "stage the file inside the archive root, then prepare an approved selection with objet-capture-selection",
+            "when a vendor transcript exists next to the original, build ONE paired selection with objet-capture-selection --derived-text-staged-path <archive-relative-transcript> so a single approval covers both halves",
             "run objet-capture --selection <selection-path> --dry-run first; capture requires a sandbox-marked archive or an owner-approved capture-enablement record (inspect with `archive objet-capture-enable <archive-root> --dry-run`)",
             "for bytes already stored externally, register evidence with prehashed-objet-ledger and object-storage-upload-evidence",
             *actions,
@@ -59008,6 +59034,47 @@ def derived_text_identity_digest(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _derived_text_pair_metadata_blockers(
+    *,
+    derivation_kind: Any,
+    tool_name: Any,
+    tool_version: Any,
+    review_status: Any,
+    confidence: Any,
+    language: Any,
+    model_name: Any = None,
+    model_version: Any = None,
+    born_digital: Any = False,
+) -> list[str]:
+    # Shared source-object-free validation: standalone capture (via
+    # _derived_text_metadata_blockers), selection generation, and paired envelope
+    # validation all reuse this so a validly-approved pair can never be blocked by
+    # a divergent reimplementation.
+    blockers: list[str] = []
+    if derivation_kind not in DERIVED_TEXT_DERIVATION_KINDS:
+        blockers.append("derivation_kind_invalid")
+    if review_status not in DERIVED_TEXT_REVIEW_STATUSES:
+        blockers.append("review_status_invalid")
+    for label, value in [("tool_name", tool_name), ("tool_version", tool_version)]:
+        if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value or "\x00" in value:
+            blockers.append(f"{label}_invalid")
+    for label, value in [("model_name", model_name), ("model_version", model_version)]:
+        if value is not None and not isinstance(value, str):
+            blockers.append(f"{label}_invalid")
+    if language is not None and (
+        not isinstance(language, str) or "\n" in language or "\r" in language or "\x00" in language
+    ):
+        blockers.append("language_invalid")
+    if confidence is not None:
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+            blockers.append("confidence_invalid")
+        elif confidence < 0 or confidence > 1:
+            blockers.append("confidence_invalid")
+    if not isinstance(born_digital, bool):
+        blockers.append("born_digital_invalid")
+    return unique_preserve_order(blockers)
+
+
 def _derived_text_metadata_blockers(
     *,
     source_object_id: str,
@@ -59020,26 +59087,52 @@ def _derived_text_metadata_blockers(
 ) -> list[str]:
     blockers: list[str] = []
     normalize_object_id(source_object_id, blockers)
-    if derivation_kind not in DERIVED_TEXT_DERIVATION_KINDS:
-        blockers.append("derivation_kind_invalid")
-    if review_status not in DERIVED_TEXT_REVIEW_STATUSES:
-        blockers.append("review_status_invalid")
-    for label, value in [("tool_name", tool_name), ("tool_version", tool_version)]:
-        if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value or "\x00" in value:
-            blockers.append(f"{label}_invalid")
-    if language is not None and ("\n" in language or "\r" in language or "\x00" in language):
-        blockers.append("language_invalid")
-    if confidence is not None:
-        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
-            blockers.append("confidence_invalid")
-        elif confidence < 0 or confidence > 1:
-            blockers.append("confidence_invalid")
+    blockers.extend(
+        _derived_text_pair_metadata_blockers(
+            derivation_kind=derivation_kind,
+            tool_name=tool_name,
+            tool_version=tool_version,
+            review_status=review_status,
+            confidence=confidence,
+            language=language,
+        )
+    )
     return unique_preserve_order(blockers)
 
 
+# Static, blocker-keyed hint strings (never vary with the input, so they are safe to
+# echo on refusal). text_file_not_utf8 keeps its legacy code for BOM-less input only;
+# BOM-marked files always report a BOM-specific blocker instead (D8/D9).
+DERIVED_TEXT_ENCODING_BLOCKER_HINTS = {
+    "text_file_not_utf8": (
+        "BOM-less text must be valid UTF-8; BOM-marked UTF-8 (utf-8-sig) and UTF-16 LE/BE are "
+        "auto-handled; transcode any other encoding to UTF-8 before capture"
+    ),
+    "text_file_bom_encoding_unsupported": (
+        "a UTF-32 BOM was detected; UTF-32 is not auto-decoded — transcode the file to UTF-8 before capture"
+    ),
+    "text_file_bom_encoding_undecodable": (
+        "the file carries a BOM but its bytes do not decode strictly in that encoding "
+        "(truncated, odd-length, or corrupt); re-export or repair the file, then transcode to UTF-8"
+    ),
+    "text_file_contains_nul": (
+        "decoded text contains U+0000; the file is likely BOM-less UTF-16/UTF-32 — "
+        "transcode it to UTF-8 before capture"
+    ),
+    "text_file_too_large": (
+        "the text source exceeds the deterministic 64 MiB derived-text source cap; "
+        "split or trim the file before capture"
+    ),
+}
+
+
 def _derived_text_read_source_file(text_file: Path | str) -> tuple[bytes | None, list[str]]:
+    # O_NOFOLLOW-fd + fstat read closes the previous lstat->read_bytes TOCTOU window.
+    # The Windows O_NOFOLLOW residual is the same documented policy as the objet-capture
+    # fd reader (see the comment at _objet_capture_fsync_dir): on platforms without
+    # O_NOFOLLOW the lstat pre-check remains the guard. Returns RAW bytes only; decoding
+    # is _derived_text_decode_source_bytes' job.
     path = Path(text_file)
-    blockers: list[str] = []
     try:
         entry_stat = os.lstat(path)
     except FileNotFoundError:
@@ -59052,15 +59145,78 @@ def _derived_text_read_source_file(text_file: Path | str) -> tuple[bytes | None,
         return None, ["text_file_is_directory"]
     if not stat.S_ISREG(entry_stat.st_mode):
         return None, ["text_file_special_not_allowed"]
+    open_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        data = path.read_bytes()
+        fd = os.open(str(path), open_flags)
     except OSError:
         return None, ["text_file_unreadable"]
     try:
-        data.decode("utf-8")
+        fd_stat = os.fstat(fd)
+        if not stat.S_ISREG(fd_stat.st_mode):
+            return None, ["text_file_special_not_allowed"]
+        if fd_stat.st_size > DERIVED_TEXT_MAX_SOURCE_BYTES:
+            return None, ["text_file_too_large"]
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks), []
+    except OSError:
+        return None, ["text_file_unreadable"]
+    finally:
+        os.close(fd)
+
+
+def _derived_text_decode_source_bytes(
+    raw: bytes,
+) -> tuple[bytes | None, str | None, str | None, list[str]]:
+    """Deterministic BOM-only decode ladder: no chardet, no guessing, strict everywhere.
+
+    Returns (stored_utf8_bytes | None, source_text_encoding | None, detected_bom | None,
+    blockers). The ladder ORDER is load-bearing: UTF-32-LE's BOM (FF FE 00 00) prefix-
+    collides with UTF-16-LE's (FF FE), and a UTF-16 decode of UTF-32 bytes "succeeds" as
+    NUL-interleaved mojibake, so the 4-byte UTF-32 BOM check runs BEFORE the 2-byte
+    UTF-16 check. The transform is decode -> strip leading BOM -> encode UTF-8; line
+    endings (CRLF included) are preserved byte-for-byte (D11: the transcript is
+    evidence). On the BOM-less UTF-8 path stored bytes == raw bytes.
+    """
+    detected_bom: str | None = None
+    encoding_label: str
+    codec: str
+    if raw[:3] == b"\xef\xbb\xbf":
+        detected_bom = "utf-8-sig"
+        encoding_label = "utf-8-sig"
+        codec = "utf-8-sig"
+    elif raw[:4] == b"\xff\xfe\x00\x00" or raw[:4] == b"\x00\x00\xfe\xff":
+        detected_bom = "utf-32-le" if raw[:4] == b"\xff\xfe\x00\x00" else "utf-32-be"
+        return None, None, detected_bom, ["text_file_bom_encoding_unsupported"]
+    elif raw[:2] == b"\xff\xfe":
+        # The recorded label comes from the SNIFFED BOM, not the codec name.
+        detected_bom = "utf-16-le"
+        encoding_label = "utf-16-le"
+        codec = "utf-16"
+    elif raw[:2] == b"\xfe\xff":
+        detected_bom = "utf-16-be"
+        encoding_label = "utf-16-be"
+        codec = "utf-16"
+    else:
+        encoding_label = "utf-8"
+        codec = "utf-8"
+    try:
+        text = raw.decode(codec, errors="strict")
     except UnicodeDecodeError:
-        blockers.append("text_file_not_utf8")
-    return data, blockers
+        if detected_bom is not None:
+            # Integrity problem (odd-length/truncated UTF-16, lone surrogates,
+            # UTF-8-BOM-then-invalid), not an unsupported encoding (D9).
+            return None, None, detected_bom, ["text_file_bom_encoding_undecodable"]
+        return None, None, None, ["text_file_not_utf8"]
+    if "\x00" in text:
+        # Post-decode validity rule (D10): the only deterministic guard for BOM-less
+        # UTF-16-of-ASCII (byte-valid UTF-8) and the backstop for any UTF-32 survivor.
+        return None, None, detected_bom, ["text_file_contains_nul"]
+    return text.encode("utf-8"), encoding_label, detected_bom, []
 
 
 def _derived_text_build_record(
@@ -59082,6 +59238,8 @@ def _derived_text_build_record(
     born_digital: bool,
     captured_at: str,
     reviewed_by: str | None,
+    source_text_encoding: str | None = None,
+    source_text_sha256: str | None = None,
 ) -> dict[str, Any]:
     digest = derived_text_identity_digest(
         source_object_id=source_object_id,
@@ -59111,13 +59269,20 @@ def _derived_text_build_record(
             "text_logical_key": text_logical_key,
             "mime": "text/plain; charset=utf-8",
             "size_bytes": size_bytes,
-            "provenance": {
-                "source": "derived_text_capture",
-                "created_in": f"archive:{archive_id}",
-                "captured_at": captured_at,
-                "captured_by": reviewed_by,
-                "source_text_filename": text_filename,
-            },
+            "provenance": drop_none_values(
+                {
+                    "source": "derived_text_capture",
+                    "created_in": f"archive:{archive_id}",
+                    "captured_at": captured_at,
+                    "captured_by": reviewed_by,
+                    "source_text_filename": text_filename,
+                    # Raw-byte provenance (D12): identity/store/verification key on the
+                    # STORED normalized UTF-8 bytes; these two fields keep the raw input
+                    # reconstructible for audit without changing the identity rule.
+                    "source_text_encoding": source_text_encoding,
+                    "source_text_sha256": source_text_sha256,
+                }
+            ),
         }
     )
 
@@ -59161,6 +59326,53 @@ def _derived_text_capture_run(
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     captured_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    raw_bytes, file_blockers = _derived_text_read_source_file(text_file)
+    return _derived_text_capture_core(
+        root,
+        archive_id,
+        raw_bytes=raw_bytes,
+        file_blockers=file_blockers,
+        text_filename=Path(text_file).name,
+        source_object_id=source_object_id,
+        derivation_kind=derivation_kind,
+        tool_name=tool_name,
+        tool_version=tool_version,
+        review_status=review_status,
+        approve=approve,
+        reviewed_by=reviewed_by,
+        captured_at=captured_at,
+        model_name=model_name,
+        model_version=model_version,
+        confidence=confidence,
+        language=language,
+        born_digital=born_digital,
+        source_presence="manifest_lookup",
+    )
+
+
+def _derived_text_capture_core(
+    root: Path,
+    archive_id: str,
+    *,
+    raw_bytes: bytes | None,
+    file_blockers: list[str],
+    text_filename: str,
+    source_object_id: str,
+    derivation_kind: str,
+    tool_name: str,
+    tool_version: str,
+    review_status: str,
+    approve: bool,
+    reviewed_by: str | None,
+    captured_at: str,
+    model_name: str | None = None,
+    model_version: str | None = None,
+    confidence: float | int | None = None,
+    language: str | None = None,
+    born_digital: bool = False,
+    source_presence: str = "manifest_lookup",
+    paired_with: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     blockers = _derived_text_metadata_blockers(
         source_object_id=source_object_id,
         derivation_kind=derivation_kind,
@@ -59173,14 +59385,31 @@ def _derived_text_capture_run(
     normalized_source_object_id = normalize_object_id(source_object_id, []) if not blockers else ""
     source_record_present = False
     if normalized_source_object_id:
-        source_record_present = find_manifest_record(root, normalized_source_object_id) is not None
-        if not source_record_present:
-            blockers.append("source_object_missing")
+        if source_presence == "paired_same_run":
+            # Usable ONLY by the paired objet-capture path: phase ordering (original
+            # bytes durable -> original manifest line flushed+fsynced -> derived
+            # registration) guarantees the source record is durable on approve and
+            # planned-non-blocked on dry-run. find_manifest_record reads the manifest
+            # from DISK while the paired run's objet manifest handle is buffered, so a
+            # disk lookup here would deterministically fail; the caller passes the
+            # object_id minted/confirmed in phase 1 instead (no per-item full rescan).
+            source_record_present = True
+        else:
+            source_record_present = find_manifest_record(root, normalized_source_object_id) is not None
+            if not source_record_present:
+                blockers.append("source_object_missing")
 
-    text_bytes, file_blockers = _derived_text_read_source_file(text_file)
     blockers.extend(file_blockers)
-    if blockers or text_bytes is None:
-        return {
+    stored_bytes: bytes | None = None
+    source_text_encoding: str | None = None
+    detected_bom: str | None = None
+    if raw_bytes is not None and not file_blockers:
+        stored_bytes, source_text_encoding, detected_bom, decode_blockers = _derived_text_decode_source_bytes(
+            raw_bytes
+        )
+        blockers.extend(decode_blockers)
+    if blockers or stored_bytes is None or raw_bytes is None:
+        blocked: dict[str, Any] = {
             "ok": False,
             "dry_run": not approve,
             "lifecycle_action": "derived_text_capture_plan" if not approve else "derived_text_capture",
@@ -59196,13 +59425,80 @@ def _derived_text_capture_run(
             "warnings": [],
             "would_change": [],
         }
+        if detected_bom is not None:
+            blocked["detected_bom"] = detected_bom
+        hints = {
+            code: DERIVED_TEXT_ENCODING_BLOCKER_HINTS[code]
+            for code in blocked["blockers"]
+            if code in DERIVED_TEXT_ENCODING_BLOCKER_HINTS
+        }
+        if hints:
+            blocked["blocker_hints"] = hints
+        return blocked
 
+    return _derived_text_register(
+        root,
+        archive_id=archive_id,
+        stored_text_bytes=stored_bytes,
+        source_text_encoding=source_text_encoding,
+        source_text_sha256=hashlib.sha256(raw_bytes).hexdigest(),
+        text_filename=text_filename,
+        source_object_id=normalized_source_object_id,
+        source_record_present=source_record_present,
+        derivation_kind=derivation_kind,
+        tool_name=tool_name,
+        tool_version=tool_version,
+        review_status=review_status,
+        approve=approve,
+        reviewed_by=reviewed_by,
+        captured_at=captured_at,
+        model_name=model_name,
+        model_version=model_version,
+        confidence=confidence,
+        language=language,
+        born_digital=born_digital,
+        paired_with=paired_with,
+    )
+
+
+def _derived_text_register(
+    root: Path,
+    *,
+    archive_id: str,
+    stored_text_bytes: bytes,
+    source_text_encoding: str | None,
+    source_text_sha256: str,
+    text_filename: str,
+    source_object_id: str,
+    source_record_present: bool,
+    derivation_kind: str,
+    tool_name: str,
+    tool_version: str,
+    review_status: str,
+    approve: bool,
+    reviewed_by: str | None,
+    captured_at: str,
+    model_name: str | None = None,
+    model_version: str | None = None,
+    confidence: float | int | None = None,
+    language: str | None = None,
+    born_digital: bool = False,
+    paired_with: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    # Everything from record-build through store-write/verify, manifest append+fsync,
+    # and receipt write, under _DerivedTextManifestLock. Identity (text_sha256,
+    # text_logical_key, derived_text_id, size_bytes) and lossless verification are
+    # computed over the STORED normalized UTF-8 bytes (D12); the raw-byte provenance
+    # travels alongside as source_text_encoding/source_text_sha256.
+    normalized_source_object_id = source_object_id
+    blockers: list[str] = []
     warnings: list[str] = []
-    if len(text_bytes) == 0:
+    if len(stored_text_bytes) == 0:
+        # Keyed to STORED length so a BOM-only file still warns.
         warnings.append("zero_byte_text")
+    text_bytes = stored_text_bytes
     text_sha256 = hashlib.sha256(text_bytes).hexdigest()
     text_logical_key = f"{DERIVED_TEXT_STORE_PREFIX}/{text_sha256[:2]}/{text_sha256}.txt"
-    text_filename = Path(text_file).name
     record = _derived_text_build_record(
         archive_id=archive_id,
         source_object_id=normalized_source_object_id,
@@ -59221,6 +59517,8 @@ def _derived_text_capture_run(
         born_digital=born_digital,
         captured_at=captured_at,
         reviewed_by=reviewed_by,
+        source_text_encoding=source_text_encoding,
+        source_text_sha256=source_text_sha256,
     )
     derived_text_id = str(record["derived_text_id"])
     dest = archive_internal_path(root, text_logical_key)
@@ -59256,6 +59554,8 @@ def _derived_text_capture_run(
         "text_logical_key": text_logical_key,
         "size_bytes": len(text_bytes),
         "mime": "text/plain; charset=utf-8",
+        "source_text_encoding": source_text_encoding,
+        "source_text_sha256": source_text_sha256,
     }
     planned_writes: list[str] = []
     if planned_action in ("capture", "re_materialize"):
@@ -59350,6 +59650,8 @@ def _derived_text_capture_run(
         "source_object_id": normalized_source_object_id,
         "text_sha256": text_sha256,
         "text_logical_key": text_logical_key,
+        "source_text_encoding": source_text_encoding,
+        "source_text_sha256": source_text_sha256,
         "derivation_kind": derivation_kind,
         "review_status": review_status,
         "planned_action": action,
@@ -59366,6 +59668,11 @@ def _derived_text_capture_run(
         "blockers": unique_preserve_order(blockers),
         "warnings": warnings,
     }
+    if paired_with is not None:
+        # Paired-intake back-link (D7): the derived receipt is minted before the objet
+        # receipt exists, so the file-path link can only point objet -> derived; this
+        # hash-keyed reference is the reverse pointer.
+        receipt["paired_with"] = paired_with
     if not (blockers and "receipts_dir_unavailable" in blockers):
         receipt_path_value = _derived_text_write_receipt(root, receipt, captured_at)
     return {
@@ -59758,7 +60065,14 @@ def derived_text_capture_manifest_apply(
 OBJET_CAPTURE_RECEIPTS_DIR = "receipts/objet-capture"
 OBJET_CAPTURE_SELECTION_MANIFESTS_DIR = "receipts/objet-capture-selections"
 OBJET_CAPTURE_SELECTION_ACTION = "local_objet_capture_approved"
-OBJET_CAPTURE_RECEIPT_SCHEMA = "wom-kit/objet-capture-receipt/v0.2"
+# Paired manifests (>= 1 item carrying a derived_text sub-object) MUST use this action
+# string: `action` exact-match is the only lever pre-0.3.159 kits enforce, so old kits
+# refuse paired manifests with selection_action_invalid instead of silently capturing
+# the original and dropping the approved derived half (D3, fail-closed by design).
+OBJET_CAPTURE_SELECTION_ACTION_WITH_DERIVED_TEXT = "local_objet_capture_with_derived_text_approved"
+OBJET_CAPTURE_SELECTION_SCHEMA = "wom-kit/b4-selection/v0.2"
+OBJET_CAPTURE_SELECTION_SCHEMA_WITH_DERIVED_TEXT = "wom-kit/b4-selection/v0.3"
+OBJET_CAPTURE_RECEIPT_SCHEMA = "wom-kit/objet-capture-receipt/v0.3"
 CAPTURE_ENABLEMENT_SCHEMA = "wom-kit/capture-enablement/v0.1"
 CAPTURE_ENABLEMENT_RECEIPT_SCHEMA = "wom-kit/capture-enablement-receipt/v0.1"
 CAPTURE_ENABLEMENT_RELATIVE_PATH = "ops/capture-enablement.yml"
@@ -60024,9 +60338,22 @@ def objet_capture_path_chain_blockers(root: Path, relative: str) -> list[str]:
 
 
 def objet_capture_envelope_blockers(selection: dict[str, Any], archive_id: str) -> list[str]:
+    # Structural checks only; filesystem checks stay in per-item processing.
     blockers: list[str] = []
-    if selection.get("action") != OBJET_CAPTURE_SELECTION_ACTION:
+    action = selection.get("action")
+    paired = action == OBJET_CAPTURE_SELECTION_ACTION_WITH_DERIVED_TEXT
+    if action not in (OBJET_CAPTURE_SELECTION_ACTION, OBJET_CAPTURE_SELECTION_ACTION_WITH_DERIVED_TEXT):
         blockers.append("selection_action_invalid")
+    elif selection.get("schema") != (
+        # v0.3.159: the schema field is validated for the first time (it was write-only
+        # before: generated on every persisted manifest, never read back). Paired
+        # manifests require the v0.3 schema; plain manifests keep requiring the v0.2
+        # schema every persisted manifest already carries.
+        OBJET_CAPTURE_SELECTION_SCHEMA_WITH_DERIVED_TEXT
+        if paired
+        else OBJET_CAPTURE_SELECTION_SCHEMA
+    ):
+        blockers.append("selection_schema_invalid")
     items = selection.get("items")
     if not isinstance(items, list) or not items or any(not isinstance(item, dict) for item in items):
         blockers.append("selection_items_invalid")
@@ -60048,6 +60375,44 @@ def objet_capture_envelope_blockers(selection: dict[str, Any], archive_id: str) 
         except ArchivePathError:
             continue
     if len(staged_keys) != len(set(staged_keys)):
+        blockers.append("duplicate_selection_target")
+    # Cross-consistency, fail-closed in BOTH directions: derived_text items under the
+    # plain action, and a paired action carrying no derived_text item at all, both
+    # refuse with selection_action_invalid.
+    derived_items = [item for item in items if "derived_text" in item]
+    if paired and items and not derived_items:
+        blockers.append("selection_action_invalid")
+    if action == OBJET_CAPTURE_SELECTION_ACTION and derived_items:
+        blockers.append("selection_action_invalid")
+    staged_text_keys: list[str] = []
+    for item in derived_items:
+        derived = item.get("derived_text")
+        if not isinstance(derived, dict):
+            blockers.append("selection_items_invalid")
+            continue
+        try:
+            staged_text_keys.append(
+                normalize_archive_relative_path(str(derived.get("staged_text_path") or ""))
+            )
+        except ArchivePathError:
+            blockers.append("unsafe_staged_text_path")
+        normalize_object_id(str(derived.get("approved_text_sha256") or ""), blockers)
+        blockers.extend(
+            _derived_text_pair_metadata_blockers(
+                derivation_kind=derived.get("derivation_kind"),
+                tool_name=derived.get("tool_name"),
+                tool_version=derived.get("tool_version"),
+                review_status=derived.get("review_status"),
+                confidence=derived.get("confidence"),
+                language=derived.get("language"),
+                model_name=derived.get("model_name"),
+                model_version=derived.get("model_version"),
+                born_digital=derived.get("born_digital", False),
+            )
+        )
+    # One file must not be both an approved original and a transcript source in one
+    # run, and transcript sources must be unique across items.
+    if len(staged_text_keys) != len(set(staged_text_keys)) or set(staged_text_keys) & set(staged_keys):
         blockers.append("duplicate_selection_target")
     return unique_preserve_order(blockers)
 
@@ -60237,12 +60602,38 @@ def objet_capture_selection_manifest(
     dry_run: bool = False,
     approve: bool = False,
     reviewed_by: str | None = None,
+    derived_text_staged_path: str | None = None,
+    derivation_kind: str | None = None,
+    tool_name: str | None = None,
+    tool_version: str | None = None,
+    review_status: str | None = None,
+    model_name: str | None = None,
+    model_version: str | None = None,
+    confidence: float | int | None = None,
+    language: str | None = None,
+    born_digital: bool = False,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     capture_enabled = read_capture_enablement(root).get("valid") is True
     blockers: list[str] = []
     warnings: list[str] = []
+    paired = derived_text_staged_path is not None
+    if not paired and any(
+        value is not None
+        for value in [
+            derivation_kind,
+            tool_name,
+            tool_version,
+            review_status,
+            model_name,
+            model_version,
+            confidence,
+            language,
+            True if born_digital else None,
+        ]
+    ):
+        blockers.append("Derived-text pairing flags require --derived-text-staged-path.")
     if dry_run is approve:
         blockers.append("Choose exactly one mode: --dry-run or --approve.")
     reviewer = safe_project_intake_actor_id(reviewed_by)
@@ -60360,6 +60751,75 @@ def objet_capture_selection_manifest(
         elif plan is not None:
             blockers.append("source_intake_evidence_invalid")
 
+    normalized_text_path = ""
+    text_digest: str | None = None
+    derived_text_item: dict[str, Any] | None = None
+    if paired:
+        # A bad pair must block HERE, before a human ever approves it: the full
+        # staged_path-parity confinement chain, the raw-byte commitment hash, and the
+        # same metadata validation the capture path enforces (minus source_object_id,
+        # which is only minted at capture time).
+        required_pair_flags = {
+            "--derivation-kind": derivation_kind,
+            "--tool-name": tool_name,
+            "--tool-version": tool_version,
+            "--review-status": review_status,
+        }
+        missing_flags = [flag for flag, value in required_pair_flags.items() if value is None]
+        if missing_flags:
+            blockers.append(
+                "Paired derived text requires " + ", ".join(sorted(missing_flags)) + "."
+            )
+        else:
+            blockers.extend(
+                _derived_text_pair_metadata_blockers(
+                    derivation_kind=derivation_kind,
+                    tool_name=tool_name,
+                    tool_version=tool_version,
+                    review_status=review_status,
+                    confidence=confidence,
+                    language=language,
+                    model_name=model_name,
+                    model_version=model_version,
+                    born_digital=born_digital,
+                )
+            )
+        normalized_text_path, text_path_blockers = _objet_capture_staged_text_path_blockers(
+            root, derived_text_staged_path, capture_enabled=capture_enabled
+        )
+        blockers.extend(text_path_blockers)
+        if normalized_text_path and normalized_staged and normalized_text_path == normalized_staged:
+            # One file must not be both the approved original and its transcript source.
+            blockers.append("duplicate_selection_target")
+        if normalized_text_path and not blockers:
+            raw_text_bytes, text_read_blockers = _objet_capture_read_staged_text_bytes(
+                root, normalized_text_path
+            )
+            blockers.extend(text_read_blockers)
+            if raw_text_bytes is not None:
+                # approved_text_sha256 commits the RAW file bytes (D2/D12): the stored
+                # derived text is transcoded UTF-8, but the approval binds the input.
+                text_digest = hashlib.sha256(raw_text_bytes).hexdigest()
+                if len(raw_text_bytes) == 0:
+                    warnings.append("zero_byte_text")
+        derived_text_item = drop_none_values(
+            {
+                "staged_text_path": normalized_text_path,
+                "approved_text_sha256": f"sha256:{text_digest}" if text_digest else "",
+                "derivation_kind": derivation_kind,
+                "tool_name": tool_name.strip() if isinstance(tool_name, str) else tool_name,
+                "tool_version": tool_version.strip() if isinstance(tool_version, str) else tool_version,
+                "review_status": review_status,
+                "model_name": model_name.strip() if isinstance(model_name, str) and model_name.strip() else None,
+                "model_version": model_version.strip()
+                if isinstance(model_version, str) and model_version.strip()
+                else None,
+                "confidence": confidence,
+                "language": language.strip() if isinstance(language, str) and language.strip() else None,
+                "born_digital": born_digital,
+            }
+        )
+
     if digest and not normalized_manifest_id:
         normalized_manifest_id = f"selection:{digest[:16]}"
     captured_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -60374,10 +60834,16 @@ def objet_capture_selection_manifest(
         "source_intake_receipt_path": normalized_receipt,
         "source_intake_plan_sha256": plan_sha256,
     }
+    if derived_text_item is not None:
+        item["derived_text"] = derived_text_item
     selection = {
         "manifest_id": normalized_manifest_id or "selection:pending",
-        "schema": "wom-kit/b4-selection/v0.2",
-        "action": OBJET_CAPTURE_SELECTION_ACTION,
+        "schema": OBJET_CAPTURE_SELECTION_SCHEMA_WITH_DERIVED_TEXT
+        if paired
+        else OBJET_CAPTURE_SELECTION_SCHEMA,
+        "action": OBJET_CAPTURE_SELECTION_ACTION_WITH_DERIVED_TEXT
+        if paired
+        else OBJET_CAPTURE_SELECTION_ACTION,
         "archive_id": archive_id,
         "created_at": captured_at,
         "created_by": reviewer,
@@ -60416,6 +60882,19 @@ def objet_capture_selection_manifest(
             "expected_mime": mime,
             "source_intake_receipt_path": normalized_receipt or None,
             "source_intake_plan_sha256": plan_sha256 or None,
+            **(
+                {
+                    "derived_text": {
+                        # Archive-relative path only: absolute_local_paths_echoed stays false.
+                        "staged_text_path": normalized_text_path or None,
+                        "approved_text_sha256": f"sha256:{text_digest}" if text_digest else None,
+                        "derivation_kind": derivation_kind,
+                        "review_status": review_status,
+                    }
+                }
+                if paired
+                else {}
+            ),
         },
         "selection_manifest": selection if not blockers else None,
         "privacy_guards": {
@@ -60467,6 +60946,88 @@ def objet_capture_selection_manifest(
         }
     )
     return result
+
+
+def _objet_capture_staged_text_path_blockers(
+    root: Path,
+    raw_staged_text: Any,
+    *,
+    capture_enabled: bool,
+) -> tuple[str, list[str]]:
+    """Full confinement parity with staged_path for a manifest-carried transcript path.
+
+    Mirrors _objet_capture_process_item's chain exactly: normalize + resolve +
+    containment, internal-prefix block (this is what stops a transcript "source"
+    pointing INTO receipts/ or objects/ — including objects/derived-text/sha256 itself,
+    i.e. laundering archive-internal content in as new derived text), reserved device
+    names, enablement-aware never-touch, and the per-component symlink/junction chain.
+    """
+    try:
+        normalized = normalize_archive_relative_path(str(raw_staged_text or ""))
+        src = resolve_archive_relative_path(root, normalized)
+    except ArchivePathError:
+        return "", ["unsafe_staged_text_path"]
+    first_segment = normalized.split("/", 1)[0].lower()
+    if first_segment in OBJET_CAPTURE_INTERNAL_PREFIXES:
+        return normalized, ["unsafe_staged_text_path"]
+    for part in PurePosixPath(normalized).parts:
+        if part.split(".", 1)[0].lower() in OBJET_CAPTURE_RESERVED_DEVICE_NAMES:
+            return normalized, ["reserved_device_name"]
+    if not is_path_within_root(src, root):
+        return normalized, ["unsafe_staged_text_path"]
+    if capture_enabled:
+        # Enabled roots: never-touch applies to the archive-relative components only,
+        # mirroring the staged_path call site. The derived store key
+        # objects/derived-text/sha256/<aa>/<hash>.txt has constant parts that can never
+        # match the never-touch patterns, so only the source path needs this check.
+        if objet_capture_relative_parts_never_touch(PurePosixPath(normalized).parts):
+            return normalized, ["resolved_path_never_touch"]
+    elif target_looks_external_live_never_touch(src):
+        return normalized, ["resolved_path_never_touch"]
+    chain_blockers = objet_capture_path_chain_blockers(root, normalized)
+    if chain_blockers:
+        return normalized, [chain_blockers[0]]
+    return normalized, []
+
+
+def _objet_capture_read_staged_text_bytes(root: Path, normalized: str) -> tuple[bytes | None, list[str]]:
+    # Raw bytes via O_NOFOLLOW-fd + fstat (same pattern as the staged_path reader),
+    # closing the lstat->read TOCTOU. The Windows O_NOFOLLOW residual is already
+    # documented policy (see the comment at _objet_capture_fsync_dir); the lstat
+    # pre-check plus the per-component chain check remain the guard there.
+    unresolved = root.joinpath(*PurePosixPath(normalized).parts)
+    try:
+        entry_stat = os.lstat(unresolved)
+    except FileNotFoundError:
+        return None, ["source_missing"]
+    except OSError:
+        return None, ["source_unreadable"]
+    if stat.S_ISDIR(entry_stat.st_mode):
+        return None, ["staged_path_is_directory"]
+    if not stat.S_ISREG(entry_stat.st_mode):
+        return None, ["special_file_not_allowed"]
+    open_flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(str(unresolved), open_flags)
+    except OSError:
+        return None, ["source_unreadable"]
+    try:
+        fd_stat = os.fstat(fd)
+        if not stat.S_ISREG(fd_stat.st_mode):
+            return None, ["special_file_not_allowed"]
+        if fd_stat.st_size > DERIVED_TEXT_MAX_SOURCE_BYTES:
+            return None, ["text_file_too_large"]
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks), []
+    except OSError:
+        return None, ["source_unreadable"]
+    finally:
+        os.close(fd)
 
 
 def _objet_capture_process_item(
@@ -60708,6 +61269,177 @@ def _objet_capture_process_item(
         os.close(fd)
 
 
+OBJET_CAPTURE_ORIGINAL_OK_ACTIONS = frozenset(
+    {"captured", "repair_appended", "re_materialized", "skip_already_present"}
+)
+OBJET_CAPTURE_ORIGINAL_OK_PLANNED_ACTIONS = frozenset(
+    {"capture", "repair_append", "re_materialize", "skip_already_present"}
+)
+
+
+def _objet_capture_derived_text_initial_subresult() -> dict[str, Any]:
+    # The initialized not-attempted state: visible on the receipt only when phase 2 was
+    # never reached (a phase-1 abort); `aborted` then reflects reality at run level.
+    return {
+        "derived_text_id": None,
+        "staged_text_path": None,
+        "planned_action": None,
+        "action": None,
+        "item_status": "not_attempted",
+        "source_text_encoding": None,
+        "source_text_sha256": None,
+        "text_sha256": None,
+        "text_logical_key": None,
+        "manifest_record_appended": False,
+        "stored_sha256_verified": False,
+        "blockers": [],
+        "warnings": [],
+    }
+
+
+def _objet_capture_paired_derived_text(
+    root: Path,
+    archive_id: str,
+    item: dict[str, Any],
+    original_result: dict[str, Any],
+    *,
+    approve: bool,
+    reviewed_by: str | None,
+    captured_at: str,
+    capture_enabled: bool,
+    selection: dict[str, Any],
+    selection_sha256: str,
+    planned_derived_ids: set[str] | None = None,
+    planned_text_keys: set[str] | None = None,
+) -> dict[str, Any]:
+    """Process the derived-text half of one paired item (phase 2 of _objet_capture_run).
+
+    Returns the item-level derived_text sub-result. Never raises for per-item input
+    problems; the caller wraps unexpected exceptions into derived_text_registration_failed.
+    """
+    derived = item.get("derived_text")
+    sub = _objet_capture_derived_text_initial_subresult()
+    original_state = original_result.get("action") if approve else original_result.get("planned_action")
+    original_ok = original_state in (
+        OBJET_CAPTURE_ORIGINAL_OK_ACTIONS if approve else OBJET_CAPTURE_ORIGINAL_OK_PLANNED_ACTIONS
+    )
+    if not isinstance(derived, dict):
+        sub["item_status"] = "blocked"
+        sub["blockers"].append("selection_items_invalid")
+        return sub
+    if not original_ok:
+        # Never register (or even hash) text against an uncommitted object (D17);
+        # the text file is not read in this case.
+        sub["item_status"] = "blocked"
+        sub["blockers"].append("blocked_by_original")
+        return sub
+    normalized_text, path_blockers = _objet_capture_staged_text_path_blockers(
+        root, derived.get("staged_text_path"), capture_enabled=capture_enabled
+    )
+    sub["staged_text_path"] = normalized_text or None
+    if path_blockers:
+        sub["item_status"] = "blocked"
+        sub["blockers"].extend(path_blockers)
+        return sub
+    raw_bytes, read_blockers = _objet_capture_read_staged_text_bytes(root, normalized_text)
+    if read_blockers or raw_bytes is None:
+        sub["item_status"] = "blocked"
+        sub["blockers"].extend(read_blockers or ["source_unreadable"])
+        # Hint parity with the standalone reader: static blocker-keyed hints only
+        # (e.g. text_file_too_large), never input-derived content.
+        read_hints = {
+            code: DERIVED_TEXT_ENCODING_BLOCKER_HINTS[code]
+            for code in sub["blockers"]
+            if code in DERIVED_TEXT_ENCODING_BLOCKER_HINTS
+        }
+        if read_hints:
+            sub["blocker_hints"] = read_hints
+        return sub
+    # Approval commitment on RAW bytes, immediately before registration (and in dry-run
+    # planning): the mirror of the approved_object_id check on the original half.
+    commitment_blockers: list[str] = []
+    approved_text = normalize_object_id(str(derived.get("approved_text_sha256") or ""), commitment_blockers)
+    raw_digest = hashlib.sha256(raw_bytes).hexdigest()
+    if commitment_blockers or approved_text != f"sha256:{raw_digest}":
+        sub["item_status"] = "blocked"
+        sub["blockers"].append("approved_text_content_mismatch")
+        return sub
+    core = _derived_text_capture_core(
+        root,
+        archive_id,
+        raw_bytes=raw_bytes,
+        file_blockers=[],
+        text_filename=PurePosixPath(normalized_text).name,
+        source_object_id=str(original_result.get("object_id") or ""),
+        derivation_kind=str(derived.get("derivation_kind") or ""),
+        tool_name=str(derived.get("tool_name") or ""),
+        tool_version=str(derived.get("tool_version") or ""),
+        review_status=str(derived.get("review_status") or ""),
+        approve=approve,
+        reviewed_by=reviewed_by,
+        captured_at=captured_at,
+        model_name=derived.get("model_name"),
+        model_version=derived.get("model_version"),
+        confidence=derived.get("confidence"),
+        language=derived.get("language"),
+        born_digital=bool(derived.get("born_digital", False)),
+        source_presence="paired_same_run",
+        paired_with={
+            "selection_manifest_id": str(selection.get("manifest_id") or ""),
+            "selection_manifest_sha256": selection_sha256,
+            "item_id": str(item.get("item_id") or ""),
+        },
+    )
+    sub.update(
+        {
+            "derived_text_id": core.get("derived_text_id"),
+            "planned_action": core.get("planned_action"),
+            "action": core.get("action") if approve else None,
+            "item_status": core.get("item_status"),
+            "source_text_encoding": core.get("source_text_encoding"),
+            "source_text_sha256": core.get("source_text_sha256"),
+            "text_sha256": core.get("text_sha256"),
+            "text_logical_key": core.get("text_logical_key"),
+            "manifest_record_appended": bool(core.get("manifest_record_appended", False)),
+            "stored_sha256_verified": bool(core.get("stored_sha256_verified", False)),
+            "blockers": list(core.get("blockers", [])),
+            "warnings": list(core.get("warnings", [])),
+        }
+    )
+    if core.get("detected_bom") is not None:
+        sub["detected_bom"] = core["detected_bom"]
+    if core.get("blocker_hints"):
+        sub["blocker_hints"] = core["blocker_hints"]
+    if approve:
+        sub["receipt_path"] = core.get("receipt_path")
+        return sub
+    sub["planned_writes"] = list(core.get("planned_writes", []))
+    derived_text_id = str(core.get("derived_text_id") or "")
+    text_logical_key = str(core.get("text_logical_key") or "")
+    if (
+        planned_derived_ids is not None
+        and planned_text_keys is not None
+        and core.get("ok")
+        and derived_text_id
+        and text_logical_key
+    ):
+        # Dry-run must predict the same intra-run collapse apply performs when two
+        # paired items carry byte-identical transcripts (same simulation as the
+        # derive-text batch dry-run).
+        if derived_text_id in planned_derived_ids:
+            sub["planned_action"] = "skip_already_present"
+            sub["item_status"] = "skipped"
+            sub["planned_writes"] = []
+        elif text_logical_key in planned_text_keys and sub.get("planned_action") == "capture":
+            sub["planned_action"] = "repair_append"
+            sub["item_status"] = "ready"
+            sub["planned_writes"] = [f"{DERIVED_TEXT_MANIFEST_RELATIVE_PATH} (+1 line)"]
+        if sub.get("planned_action") in ("capture", "repair_append", "re_materialize"):
+            planned_derived_ids.add(derived_text_id)
+            planned_text_keys.add(text_logical_key)
+    return sub
+
+
 def _objet_capture_write_receipt(root: Path, receipt: dict[str, Any], captured_at: str) -> str:
     receipts_dir = archive_internal_path(root, OBJET_CAPTURE_RECEIPTS_DIR)
     receipts_dir.mkdir(parents=True, exist_ok=True)
@@ -60725,6 +61457,57 @@ def _objet_capture_write_receipt(root: Path, receipt: dict[str, Any], captured_a
             receipt_path.unlink(missing_ok=True)
             raise
         return f"{OBJET_CAPTURE_RECEIPTS_DIR}/{capture_id}.json"
+
+
+def _objet_capture_item_all_blockers(entry: dict[str, Any]) -> list[str]:
+    derived_sub = entry.get("derived_text")
+    if isinstance(derived_sub, dict):
+        return [*entry.get("blockers", []), *derived_sub.get("blockers", [])]
+    return list(entry.get("blockers", []))
+
+
+def _objet_capture_item_all_warnings(entry: dict[str, Any]) -> list[str]:
+    derived_sub = entry.get("derived_text")
+    if isinstance(derived_sub, dict):
+        return [*entry.get("warnings", []), *derived_sub.get("warnings", [])]
+    return list(entry.get("warnings", []))
+
+
+def _objet_capture_item_status_class(entry: dict[str, Any], *, approve: bool) -> str:
+    # Additive v0.3.151 OPERATION_STATUS_CLASSES field for mixed-outcome paired items;
+    # the original action vocabulary is untouched. `partial` means the original half is
+    # durable (ok:false, terminal:false) and the derived half is retriable.
+    original_state = entry.get("action") if approve else entry.get("planned_action")
+    ok_states = OBJET_CAPTURE_ORIGINAL_OK_ACTIONS if approve else OBJET_CAPTURE_ORIGINAL_OK_PLANNED_ACTIONS
+    if original_state not in ok_states:
+        return "blocked"
+    derived_sub = entry.get("derived_text")
+    if isinstance(derived_sub, dict) and (
+        derived_sub.get("blockers") or derived_sub.get("item_status") == "not_attempted"
+    ):
+        return "partial"
+    return "written" if approve else "preview"
+
+
+def _objet_capture_run_status_class(item_results: list[dict[str, Any]], *, approve: bool) -> str:
+    classes = [str(entry.get("status_class") or "") for entry in item_results]
+    if classes and all(value == "blocked" for value in classes):
+        return "blocked"
+    if any(value == "partial" for value in classes) or (
+        "blocked" in classes and any(value != "blocked" for value in classes)
+    ):
+        return "partial"
+    return "written" if approve else "preview"
+
+
+OBJET_CAPTURE_PARTIAL_NEXT_SAFE_ACTIONS = [
+    "Re-run objet-capture with the SAME selection manifest: already-completed halves are "
+    "idempotent (skip_already_present) and blocked halves are retried (idempotent repair).",
+    "If the partial item carried a paired derived_text half, you can instead complete the pair "
+    "via standalone capture: archive derive-text capture <archive-root> "
+    "--source-object-id <object_id from this receipt> --text-file <staged transcript> "
+    "--approve --reviewed-by <actor>.",
+]
 
 
 def _objet_capture_run(
@@ -60784,6 +61567,7 @@ def _objet_capture_run(
         return {
             "ok": False,
             **base_output,
+            "status_class": "blocked",
             "items": [],
             "blockers": unique_preserve_order(envelope_blockers),
             "warnings": unique_preserve_order(context_warnings),
@@ -60807,6 +61591,8 @@ def _objet_capture_run(
             canonical_ids = objet_capture_canonical_record_ids(load_manifest_records(root))
             manifest_handle: Any = None
             try:
+                # Phase 1 — original halves, byte-for-byte unchanged in what they write
+                # (publish bytes -> manifest_appender record).
                 for item in items_sorted:
 
                     def manifest_appender(record: dict[str, Any]) -> None:
@@ -60821,38 +61607,91 @@ def _objet_capture_run(
                         )
 
                     try:
-                        item_results.append(
-                            _objet_capture_process_item(
-                                root,
-                                item,
-                                approve=True,
-                                canonical_ids=canonical_ids,
-                                appended_this_run=appended_this_run,
-                                captured_at=captured_at,
-                                reviewed_by=reviewed_by,
-                                selection=selection,
-                                selection_sha256=selection_sha256,
-                                manifest_appender=manifest_appender,
-                                capture_enabled=capture_enabled,
-                            )
+                        item_result = _objet_capture_process_item(
+                            root,
+                            item,
+                            approve=True,
+                            canonical_ids=canonical_ids,
+                            appended_this_run=appended_this_run,
+                            captured_at=captured_at,
+                            reviewed_by=reviewed_by,
+                            selection=selection,
+                            selection_sha256=selection_sha256,
+                            manifest_appender=manifest_appender,
+                            capture_enabled=capture_enabled,
                         )
                     except Exception:
                         aborted = True
                         raise
-            finally:
+                    if "derived_text" in item:
+                        item_result["derived_text"] = _objet_capture_derived_text_initial_subresult()
+                    item_results.append(item_result)
+
+                # Phase boundary — ordering is load-bearing: original bytes durable ->
+                # original manifest line durable (flush+fsync+close) -> derived
+                # registration. The reverse partial (a derived record referencing a
+                # nonexistent object_id after a crash) must be impossible by
+                # construction: nothing in the codebase detects or repairs that
+                # direction. find_manifest_record also reads the manifest from disk,
+                # which is why phase 2 may not run against a buffered handle.
                 if manifest_handle is not None:
                     manifest_handle.flush()
                     os.fsync(manifest_handle.fileno())
                     manifest_handle.close()
+                    manifest_handle = None
+
+                # Phase 2 — derived halves, same sorted order, inside the still-held
+                # _ObjetCaptureManifestLock. _DerivedTextManifestLock nests inside it:
+                # lock order is ObjetCapture -> DerivedText, never the reverse; no
+                # reverse ordering exists anywhere in this file — keep it that way.
+                for item, item_result in zip(items_sorted, item_results):
+                    if "derived_text" not in item:
+                        continue
+                    try:
+                        item_result["derived_text"] = _objet_capture_paired_derived_text(
+                            root,
+                            archive_id,
+                            item,
+                            item_result,
+                            approve=True,
+                            reviewed_by=reviewed_by,
+                            captured_at=captured_at,
+                            capture_enabled=capture_enabled,
+                            selection=selection,
+                            selection_sha256=selection_sha256,
+                        )
+                    except Exception:
+                        # Exception containment: _derived_text_write_receipt re-raises
+                        # OSError after cleanup; ANY phase-2 exception converts to an
+                        # item-level derived blocker and must NOT set aborted or kill
+                        # the remaining items.
+                        failed = _objet_capture_derived_text_initial_subresult()
+                        failed["item_status"] = "blocked"
+                        failed["blockers"].append("derived_text_registration_failed")
+                        item_result["derived_text"] = failed
+            finally:
+                if manifest_handle is not None:
+                    # Defensive abort path only: the phase boundary above already
+                    # flushed, fsynced, and closed the handle on the normal path.
+                    manifest_handle.flush()
+                    os.fsync(manifest_handle.fileno())
+                    manifest_handle.close()
+                # Receipt built and written AFTER both phases (always-written
+                # guarantee preserved): if phase 2 was never reached, derived
+                # sub-results carry their initialized not-attempted state and
+                # `aborted` reflects reality.
+                for entry in item_results:
+                    entry["status_class"] = _objet_capture_item_status_class(entry, approve=True)
                 summary = objet_capture_summary(item_results, approve=True)
                 run_blockers = unique_preserve_order(
-                    [code for entry in item_results for code in entry["blockers"]]
+                    [code for entry in item_results for code in _objet_capture_item_all_blockers(entry)]
                 )
                 receipt = {
                     "receipt_id": None,
                     "schema": OBJET_CAPTURE_RECEIPT_SCHEMA,
                     "dry_run": False,
                     "ok": not run_blockers and not aborted,
+                    "status_class": _objet_capture_run_status_class(item_results, approve=True),
                     "aborted": aborted,
                     "archive_id": archive_id,
                     "selection_manifest_id": str(selection.get("manifest_id") or ""),
@@ -60864,14 +61703,21 @@ def _objet_capture_run(
                     "summary": summary,
                     "blockers": run_blockers,
                     "warnings": unique_preserve_order(
-                        [*context_warnings, *[code for entry in item_results for code in entry["warnings"]]]
+                        [
+                            *context_warnings,
+                            *[code for entry in item_results for code in _objet_capture_item_all_warnings(entry)],
+                        ]
                     ),
                 }
                 receipt_path_value = _objet_capture_write_receipt(root, receipt, captured_at)
-        run_blockers = unique_preserve_order([code for entry in item_results for code in entry["blockers"]])
-        return {
+        run_blockers = unique_preserve_order(
+            [code for entry in item_results for code in _objet_capture_item_all_blockers(entry)]
+        )
+        run_status_class = _objet_capture_run_status_class(item_results, approve=True)
+        result = {
             "ok": not run_blockers and not aborted,
             **base_output,
+            "status_class": run_status_class,
             "aborted": aborted,
             "reviewed_by": reviewed_by,
             "captured_at": captured_at,
@@ -60880,9 +61726,17 @@ def _objet_capture_run(
             "summary": objet_capture_summary(item_results, approve=True),
             "blockers": run_blockers,
             "warnings": unique_preserve_order(
-                [*context_warnings, *[code for entry in item_results for code in entry["warnings"]]]
+                [
+                    *context_warnings,
+                    *[code for entry in item_results for code in _objet_capture_item_all_warnings(entry)],
+                ]
             ),
         }
+        if run_status_class == "partial":
+            # v0.3.151 ai_operator_rule: a partial outcome must point at the safe
+            # completion routes. No absolute local paths are echoed.
+            result["next_safe_actions"] = list(OBJET_CAPTURE_PARTIAL_NEXT_SAFE_ACTIONS)
+        return result
 
     canonical_ids = objet_capture_canonical_record_ids(load_manifest_records(root))
     for item in items_sorted:
@@ -60901,27 +61755,65 @@ def _objet_capture_run(
                 capture_enabled=capture_enabled,
             )
         )
-    run_blockers = unique_preserve_order([code for entry in item_results for code in entry["blockers"]])
+    # Plan the derived half for each paired item whose original half is non-blocked.
+    # This runs the SAME confinement chain + commitment check + decode as apply and
+    # plans with source_presence="paired_same_run": routing through the unmodified
+    # standalone path would report source_object_missing (the original is not yet
+    # manifested), violating the dry-run-predicts-apply invariant.
+    planned_derived_ids: set[str] = set()
+    planned_text_keys: set[str] = set()
+    for item, item_result in zip(items_sorted, item_results):
+        if "derived_text" not in item:
+            continue
+        item_result["derived_text"] = _objet_capture_paired_derived_text(
+            root,
+            archive_id,
+            item,
+            item_result,
+            approve=False,
+            reviewed_by=None,
+            captured_at=captured_at,
+            capture_enabled=capture_enabled,
+            selection=selection,
+            selection_sha256=selection_sha256,
+            planned_derived_ids=planned_derived_ids,
+            planned_text_keys=planned_text_keys,
+        )
+    for entry in item_results:
+        entry["status_class"] = _objet_capture_item_status_class(entry, approve=False)
+    run_blockers = unique_preserve_order(
+        [code for entry in item_results for code in _objet_capture_item_all_blockers(entry)]
+    )
     planned_writes: list[str] = []
     for entry in item_results:
         if entry["planned_action"] in ("capture", "re_materialize") and entry["logical_key"]:
             planned_writes.append(entry["logical_key"])
         if entry["planned_action"] in ("capture", "repair_append"):
             planned_writes.append("objects/manifests/files.jsonl (+1 line)")
+        derived_sub = entry.get("derived_text")
+        if isinstance(derived_sub, dict):
+            planned_writes.extend(
+                value for value in derived_sub.get("planned_writes") or [] if isinstance(value, str)
+            )
+    run_status_class = _objet_capture_run_status_class(item_results, approve=False)
     timestamp_compact = re.sub(r"[^0-9TZ]", "", captured_at)
-    return {
+    result = {
         "ok": not run_blockers,
         **base_output,
+        "status_class": run_status_class,
         "items": item_results,
         "proposed_receipt_path": f"{OBJET_CAPTURE_RECEIPTS_DIR}/{timestamp_compact}-{secrets.token_hex(6)}.json",
         "planned_writes": planned_writes,
         "summary": objet_capture_summary(item_results, approve=False),
         "blockers": run_blockers,
         "warnings": unique_preserve_order(
-            [*context_warnings, *[code for entry in item_results for code in entry["warnings"]]]
+            [*context_warnings, *[code for entry in item_results for code in _objet_capture_item_all_warnings(entry)]]
         ),
         "would_change": planned_writes,
     }
+    if run_status_class == "partial":
+        result["next_safe_actions"] = list(OBJET_CAPTURE_PARTIAL_NEXT_SAFE_ACTIONS)
+    return result
 
 
 def objet_capture_summary(item_results: list[dict[str, Any]], *, approve: bool) -> dict[str, int]:
@@ -60933,20 +61825,41 @@ def objet_capture_summary(item_results: list[dict[str, Any]], *, approve: bool) 
         elif planned in counts:
             counts[planned] += 1
     if approve:
-        return {
+        summary = {
             "captured": counts["capture"],
             "repair_appended": counts["repair_append"],
             "re_materialized": counts["re_materialize"],
             "skipped": counts["skip_already_present"],
             "blocked": counts["blocked"],
         }
-    return {
-        "would_capture": counts["capture"],
-        "would_repair_append": counts["repair_append"],
-        "would_re_materialize": counts["re_materialize"],
-        "would_skip": counts["skip_already_present"],
-        "blocked": counts["blocked"],
-    }
+    else:
+        summary = {
+            "would_capture": counts["capture"],
+            "would_repair_append": counts["repair_append"],
+            "would_re_materialize": counts["re_materialize"],
+            "would_skip": counts["skip_already_present"],
+            "blocked": counts["blocked"],
+        }
+    # Additive derived-text counters, present only when the run carried >= 1 paired
+    # item, so plain-run summaries stay byte-identical to v0.3.158.
+    derived_subs = [
+        entry.get("derived_text") for entry in item_results if isinstance(entry.get("derived_text"), dict)
+    ]
+    if derived_subs:
+        if approve:
+            summary["derived_text_written"] = sum(1 for sub in derived_subs if sub.get("item_status") == "written")
+            summary["derived_text_skipped"] = sum(1 for sub in derived_subs if sub.get("item_status") == "skipped")
+            summary["derived_text_blocked"] = sum(
+                1 for sub in derived_subs if sub.get("item_status") in ("blocked", "not_attempted")
+            )
+        else:
+            summary["would_register_derived_text"] = sum(
+                1 for sub in derived_subs if sub.get("item_status") == "ready"
+            )
+            summary["derived_text_blocked"] = sum(
+                1 for sub in derived_subs if sub.get("item_status") in ("blocked", "not_attempted")
+            )
+    return summary
 
 
 def staged_cleanup_check(
