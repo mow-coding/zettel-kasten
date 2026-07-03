@@ -1,9 +1,10 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.156 operator envelope class fields checkpoint
-Date: 2026-06-25
-Version: v0.3.156, release candidate
+Status: v0.3.157 honest capture guidance checkpoint
+Date: 2026-07-03
+Version: v0.3.157, release candidate
 
+Previous checkpoint: Status: v0.3.156 operator envelope class fields checkpoint
 Previous checkpoint: Status: v0.3.155 AI response contract checkpoint
 Previous checkpoint: Status: v0.3.154 secret signal taxonomy checkpoint
 Previous checkpoint: Status: v0.3.153 approval handoff audit checkpoint

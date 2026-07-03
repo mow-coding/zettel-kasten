@@ -53744,7 +53744,10 @@ def source_intake_plan(
         )
 
     if not result_body["object_storage_context"]["object_storage_configured"]:
-        warnings.append("Run the object storage / objet setup planner before real objet capture.")
+        warnings.append(
+            "Object storage is not configured in provider-bindings.yml; "
+            "run archive object-storage --dry-run to plan setup before real objet capture."
+        )
 
     if blockers:
         result_body["objet_status"] = "blocked"
@@ -53939,8 +53942,12 @@ def apply_local_path_source_intake(
             "derived_from": [f"candidate:{safe_slug(label)}"],
         }
 
-    if not local_path_inside_registered_source_root(root, candidate):
-        warnings.append("Local file is outside registered source roots; register or scan the source before real objet capture.")
+    # Archive-internal files (e.g. staging/incoming) are archive content, not an
+    # unregistered external source, so the source-root warning does not apply to them.
+    if not is_path_within_root(candidate, root) and not local_path_inside_registered_source_root(root, candidate):
+        warnings.append(
+            "Local file is outside registered source roots; register its source root with archive add-source or scan the source before real objet capture."
+        )
     if candidate.suffix.lower() in {".md", ".markdown", ".txt"}:
         warnings.append(".md/.txt files may already be zets or text notes; confirm whether this is an objet before capture.")
 
@@ -54182,8 +54189,9 @@ def source_intake_next_safe_actions(result: dict[str, Any]) -> list[str]:
     if status == "candidate_unmanifested":
         return [
             "register or scan the source in metadata-only mode if needed",
-            "run the object storage / objet setup planner before real objet capture",
-            "wait for a future explicit objet capture/import flow before canonical object_id citation",
+            "stage the file inside the archive root, then prepare an approved selection with objet-capture-selection",
+            "run objet-capture --selection <selection-path> --dry-run first; capture requires a sandbox-marked archive in this version",
+            "for bytes already stored externally, register evidence with prehashed-objet-ledger and object-storage-upload-evidence",
             *actions,
         ]
     if status == "provider_reference":
@@ -59776,6 +59784,12 @@ OBJET_CAPTURE_MIME_BY_EXTENSION = {
     ".jpg": "image/jpeg",
     ".json": "application/json",
     ".jsonl": "application/x-ndjson",
+    # audio/mp4 is the standard MP4-audio mime; source-intake (mimetypes.guess_type)
+    # records the same value only where the platform mimetypes db maps .m4a — the
+    # stdlib table has no .m4a entry, which is exactly why this fixed entry is needed.
+    # MP4-family magic ("ftyp") sits at byte offset 4, so the startswith-based
+    # OBJET_CAPTURE_MAGIC_SIGNATURES map cannot express it; the extension entry is required.
+    ".m4a": "audio/mp4",
     ".md": "text/markdown",
     ".mp3": "audio/mpeg",
     ".mp4": "video/mp4",
@@ -59828,13 +59842,27 @@ def objet_capture_sandbox_blockers(root: Path) -> list[str]:
     return ["sandbox_marker_required"]
 
 
+OBJET_CAPTURE_REFUSAL_HINTS = {
+    "sandbox_marker_required": (
+        "objet-capture currently runs only on sandbox-marked archives (a .wom-sandbox marker file "
+        "or top-level environment: sandbox in archive.yml); real-archive capture enablement is a "
+        "separate planned flow"
+    ),
+    "external_live_never_touch": (
+        "this path matches the external live-store protection pattern; capture refuses it by design"
+    ),
+}
+
+
 def objet_capture_refusal(blocked_by: str, *, dry_run: bool) -> dict[str, Any]:
     # Blocker-only on refusal: no item provenance, filenames, or receipt paths may be echoed.
+    # Static, blocker-keyed hint strings are allowed because they never vary with the selection.
     return {
         "ok": False,
         "dry_run": dry_run,
         "lifecycle_action": "objet_capture_plan" if dry_run else "objet_capture",
         "blocked_by": blocked_by,
+        "hint": OBJET_CAPTURE_REFUSAL_HINTS.get(blocked_by),
         "items": [],
         "blockers": [blocked_by],
         "warnings": [],

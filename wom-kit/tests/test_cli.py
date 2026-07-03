@@ -13718,6 +13718,83 @@ state:
             self.assertTrue(any("outside registered source roots" in warning for warning in result["warnings"]))
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
+    def test_source_intake_candidate_unmanifested_routes_to_objet_capture_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = self.copy_fake_archive(tmp_root / "archive")
+            source_file = tmp_root / "field-recording.pdf"
+            source_file.write_text("fake pdf metadata only\n", encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--local-path",
+                    str(source_file),
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["objet_status"], "candidate_unmanifested")
+            actions = result["next_safe_actions"]
+            self.assertTrue(any("objet-capture-selection" in action for action in actions), actions)
+            self.assertTrue(any("objet-capture --selection" in action for action in actions), actions)
+            self.assertTrue(any("prehashed-objet-ledger" in action for action in actions), actions)
+            self.assertNotIn("future explicit objet capture", output)
+            self.assertNotIn("objet setup planner", output)
+
+    def test_source_intake_source_root_warning_skips_archive_internal_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = self.copy_fake_archive(tmp_root / "archive")
+            internal_file = archive_root / "staging" / "incoming" / "scan.pdf"
+            internal_file.parent.mkdir(parents=True, exist_ok=True)
+            internal_file.write_text("fake pdf metadata only\n", encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--local-path",
+                    str(internal_file),
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["objet_status"], "candidate_unmanifested")
+            self.assertFalse(
+                any("outside registered source roots" in warning for warning in result["warnings"]),
+                result["warnings"],
+            )
+
+            external_file = tmp_root / "external.pdf"
+            external_file.write_text("fake pdf metadata only\n", encoding="utf-8")
+            code, output = self.run_cli(
+                [
+                    "source-intake",
+                    str(archive_root),
+                    "--dry-run",
+                    "--local-path",
+                    str(external_file),
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            external_warnings = [
+                warning for warning in result["warnings"] if "outside registered source roots" in warning
+            ]
+            self.assertEqual(len(external_warnings), 1, result["warnings"])
+            self.assertIn("archive add-source", external_warnings[0])
+
     def test_source_intake_requires_exactly_one_locator(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -14210,7 +14287,8 @@ state:
             self.assertEqual(code, 0, output)
             self.assertFalse(result["object_storage_context"]["object_storage_configured"])
             self.assertTrue(result["object_storage_context"]["manual_setup_required"])
-            self.assertTrue(any("object storage / objet setup planner" in warning for warning in result["warnings"]))
+            self.assertTrue(any("archive object-storage --dry-run" in warning for warning in result["warnings"]))
+            self.assertTrue(any("provider-bindings.yml" in warning for warning in result["warnings"]))
 
     def test_source_intake_refs_work_with_create_draft_and_mint_preview(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -30256,6 +30334,30 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(record["mime"], "text/plain")
             self.assertEqual(record["provenance"]["source"], "b4_local_objet_capture")
 
+    def test_objet_capture_m4a_manifests_audio_mp4_mime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            # MP4-family magic ("ftyp") sits at byte offset 4, so the mime must come from
+            # the .m4a extension entry (the standard MP4-audio mime; the platform-backed
+            # mimetypes db that source-intake uses maps .m4a only on some systems).
+            staged_path, digest = self._stage(archive_root, "memo.m4a", b"\x00\x00\x00\x20ftypM4A fake audio bytes")
+            plan_path, plan_sha = self._plan(archive_root)
+            selection = self._selection(
+                tmp, "archive:personal:capture", [self._item(staged_path, digest, plan_path, plan_sha)]
+            )
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["items"][0]["mime"], "audio/mp4")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [
+                json.loads(line)
+                for line in manifest_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            captured = [r for r in records if r.get("object_id") == f"sha256:{digest}"]
+            self.assertEqual(len(captured), 1)
+            self.assertEqual(captured[0]["mime"], "audio/mp4")
+
     def test_objet_capture_writes_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root, selection, _ = self._simple_capture_setup(tmp)
@@ -30468,6 +30570,35 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertFalse(list(archive_root.rglob("*.part-*")))
             self.assertFalse((archive_root / "receipts" / "objet-capture").exists())
 
+    def test_objet_capture_refusal_hint_is_static_and_leaks_no_selection_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, _ = self._simple_capture_setup(tmp)
+            (archive_root / ".wom-sandbox").unlink()
+
+            code, output = self.run_cli(
+                [
+                    "objet-capture",
+                    str(archive_root),
+                    "--selection",
+                    str(selection),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["blocked_by"], "sandbox_marker_required")
+            self.assertIn("sandbox-marked archives", result["hint"])
+            self.assertIn(".wom-sandbox", result["hint"])
+            self.assertIn("separate planned flow", result["hint"])
+            self.assertEqual(result["items"], [], "refusal output must be blocker-only")
+            # Leak assertion: the staged filename/path from the selection must not be echoed.
+            self.assertNotIn("note.txt", output)
+            self.assertNotIn("staging/incoming", output)
+            self.assertNotIn(str(selection), output)
+
     def test_objet_capture_sandbox_marker_requires_top_level_yaml_environment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root, selection, _ = self._simple_capture_setup(tmp)
@@ -30528,6 +30659,7 @@ class ObjetCaptureTests(unittest.TestCase):
             result = archive_services.objet_capture_dry_run(archive_root, selection)
             self.assertFalse(result["ok"])
             self.assertEqual(result["blocked_by"], "external_live_never_touch")
+            self.assertIn("external live-store protection pattern", result["hint"])
 
     def test_objet_capture_never_deletes_staged_original(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

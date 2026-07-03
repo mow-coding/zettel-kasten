@@ -6,6 +6,33 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.157 - 2026-07-03
+
+- Fixed stale `source-intake` guidance that predated local objet capture
+  (v0.3.2): `candidate_unmanifested` next safe actions now route to
+  `objet-capture-selection`, `objet-capture --selection <selection-path>
+  --dry-run`, and the `prehashed-objet-ledger` /
+  `object-storage-upload-evidence` external-evidence path instead of telling
+  operators to wait for a future capture flow.
+- Named the real commands in `source-intake` warnings: the missing
+  object-storage warning now points at `archive object-storage --dry-run`, and
+  the source-root warning now points at `archive add-source`.
+- Stopped emitting the "outside registered source roots" warning for files that
+  already resolve inside the archive root; it now fires only for genuinely
+  external files.
+- Added static, selection-independent `hint` strings to `objet-capture`
+  refusals for `sandbox_marker_required` and `external_live_never_touch` while
+  keeping the blocker-only refusal contract (no filenames, provenance, or
+  receipt paths).
+- Added `.m4a` -> `audio/mp4` (the standard MP4-audio mime) to the
+  deterministic objet-capture mime map; `source-intake` records the same value
+  where the platform mimetypes database maps `.m4a`.
+- Corrected the artifact-hygiene "Current Gaps" doc: local objet capture exists
+  (v0.3.2+) for sandbox-marked archives; only real-archive capture enablement
+  is still future work.
+- Updated README status, capability matrix checkpoint, source-intake planner
+  doc, release notes, and CLI tests.
+
 ## v0.3.156 - 2026-06-25
 
 - Added top-level `status_class`, `input_provenance_class`,
