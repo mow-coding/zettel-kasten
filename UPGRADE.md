@@ -163,6 +163,32 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.157` To `v0.3.158`
+
+This release adds owner-approved real-archive objet capture enablement.
+
+Operator-visible notes:
+
+- New CLI command `archive objet-capture-enable <archive-root>` (alias
+  `archive capture-enable`): `--dry-run` is a read-only eligibility report;
+  `--approve --reviewed-by <actor>` writes a receipt under
+  `receipts/capture-enablement/` first and the singleton
+  `ops/capture-enablement.yml` consent record second; `--revoke --approve`
+  revokes; pattern-matched root names require
+  `--acknowledge-never-touch-name`; re-approving over a revoked record
+  requires `--reenable`. The command is CLI-only and not exposed via MCP.
+- No JSON fields are renamed. `objet-capture` refusals gain one ADDED field,
+  `enablement_state`; the `blocked_by` ids are unchanged.
+- The hint TEXT of both `objet-capture` refusal hints changed (hints are
+  static strings, not a parsing contract). Downstream copies of the
+  `"separate planned flow"` substring assertion need the same update.
+- Per-item never-touch semantics change for validly-enabled roots only:
+  the pattern is evaluated on archive-relative components below the enabled
+  root. Non-enabled roots, including all sandbox-marked archives without an
+  enablement record, behave exactly as before.
+- No archive migration is required. See `wom-kit/docs/capture-enablement.md`
+  and `wom-kit/docs/releases/v0.3.158.md`.
+
 ## From `v0.3.4` To `v0.3.5`
 
 This release is a compatible field-feedback fast-follow for derived-text

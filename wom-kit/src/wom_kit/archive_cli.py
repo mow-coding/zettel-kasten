@@ -882,6 +882,7 @@ class Doctor:
             ("mint-receipts", self._check_mint_receipts),
             ("retired-draft-receipts", self._check_retired_draft_receipts),
             ("delegate-receipts", self._check_delegate_receipts),
+            ("capture-enablement", self._check_capture_enablement),
             ("zettel-kasten-layer", self._check_zettel_kasten_layer),
             ("local-profile-secret-safety", self._check_local_profile_and_secret_safety),
         ]
@@ -2147,6 +2148,49 @@ class Doctor:
         }
         return data_path in actionable_paths
 
+    def _check_capture_enablement(self) -> None:
+        enablement = archive_services.read_capture_enablement(self.archive_root)
+        state = enablement.get("state")
+        if state == "absent":
+            return
+        record_path = self.archive_root / "ops" / "capture-enablement.yml"
+        record = enablement.get("record") if isinstance(enablement.get("record"), dict) else {}
+        if state == "enabled":
+            # str() on the *_at values on purpose: YAML 1.1 parses unquoted ISO dates
+            # into datetime objects and this display must never raise or gate on that.
+            self.info(
+                "capture_enablement_enabled",
+                "Objet capture enablement is active for this archive "
+                f"(reviewed_by {str(record.get('reviewed_by'))}, enabled_at {str(record.get('enabled_at'))}).",
+                record_path,
+            )
+            receipts_dir = self.archive_root / "receipts" / "capture-enablement"
+            receipts = sorted(receipts_dir.glob("*.json")) if receipts_dir.is_dir() else []
+            if not receipts:
+                self.warn(
+                    "capture_enablement_receipts_missing",
+                    "Objet capture enablement record is valid but no enablement receipts exist under "
+                    "receipts/capture-enablement/; re-approve with objet-capture-enable so the audit "
+                    "trail matches the record.",
+                    record_path,
+                )
+            return
+        if state == "revoked":
+            self.info(
+                "capture_enablement_revoked",
+                "Objet capture enablement was revoked "
+                f"(revoked_by {str(record.get('revoked_by'))}, revoked_at {str(record.get('revoked_at'))}).",
+                record_path,
+            )
+            return
+        reason = enablement.get("reason") or "record is present but not safe/readable"
+        self.warn(
+            "capture_enablement_record_invalid",
+            f"ops/capture-enablement.yml is present but does not validly enable capture: {reason}; "
+            "objet capture stays blocked; inspect with objet-capture-enable --dry-run.",
+            record_path,
+        )
+
     def _check_local_profile_and_secret_safety(self) -> None:
         self._check_gitignore_secret_patterns()
         for path in sorted(self.archive_root.rglob("*")):
@@ -2588,6 +2632,43 @@ def command_operator_feedback_record(args: argparse.Namespace) -> int:
             for blocker in result["blockers"]:
                 print(f"- {blocker}")
     return 0 if result.get("ok", True) else 1
+
+
+def command_objet_capture_enable(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.objet_capture_enable(
+            Path(args.archive_root),
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+            revoke=args.revoke,
+            acknowledge_never_touch_name=args.acknowledge_never_touch_name,
+            reenable=args.reenable,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        print("Objet capture enablement.")
+        print(f"State: {result.get('state') or '-'}")
+        print(f"Action: {result.get('action') or '-'}")
+        print(f"Never-touch name match: {result.get('never_touch_name_match')}")
+        if result.get("reason"):
+            print(f"Reason: {result['reason']}")
+        if result.get("dry_run"):
+            for path in result.get("planned_writes") or []:
+                print(f"Planned write: {path}")
+            print("Writes: none")
+        else:
+            for path in result.get("files_written") or []:
+                print(f"Wrote: {path}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+    return 0 if result.get("ok") else 1
 
 
 def command_approval_handoff_plan(args: argparse.Namespace) -> int:
@@ -11990,6 +12071,25 @@ def build_parser() -> argparse.ArgumentParser:
     operator_feedback_record.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     operator_feedback_record.set_defaults(func=command_operator_feedback_record)
 
+    objet_capture_enable = subcommands.add_parser(
+        "objet-capture-enable",
+        aliases=["capture-enable"],
+        help="Inspect, approve, or revoke the owner capture-enablement record that lets a real (non-sandbox) archive run objet-capture.",
+    )
+    objet_capture_enable.add_argument("archive_root", help="Archive root to inspect, enable, or revoke.")
+    objet_capture_enable.add_argument("--dry-run", action="store_true", help="Read-only eligibility report; writes nothing.")
+    objet_capture_enable.add_argument("--approve", action="store_true", help="Write ops/capture-enablement.yml plus a receipt after owner review.")
+    objet_capture_enable.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
+    objet_capture_enable.add_argument("--revoke", action="store_true", help="Revoke the existing enablement record (with --approve; --dry-run previews the revoke).")
+    objet_capture_enable.add_argument(
+        "--acknowledge-never-touch-name",
+        action="store_true",
+        help="Required at approve time when the root or a parent name matches the never-touch pattern (zettel-kasten-* / *-objets).",
+    )
+    objet_capture_enable.add_argument("--reenable", action="store_true", help="Required to approve enablement over a previously revoked record.")
+    objet_capture_enable.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    objet_capture_enable.set_defaults(func=command_objet_capture_enable)
+
     approval_handoff_plan = subcommands.add_parser(
         "approval-handoff-plan",
         aliases=["handoff-plan", "human-approval-handoff-plan"],
@@ -14624,7 +14724,7 @@ def build_parser() -> argparse.ArgumentParser:
         "objet-capture",
         help="Dry-run or approve capturing selected staged files into the local content-addressed objet store.",
     )
-    objet_capture.add_argument("archive_root", help="Sandbox archive root (requires a .wom-sandbox marker).")
+    objet_capture.add_argument("archive_root", help="Archive root (sandbox-marked, or enabled via objet-capture-enable).")
     objet_capture.add_argument("--selection", required=True, help="B4 selection manifest JSON path.")
     objet_capture.add_argument("--dry-run", action="store_true", help="Preview the capture plan without writing files.")
     objet_capture.add_argument("--approve", action="store_true", help="Capture bytes, append manifest records, write a receipt.")

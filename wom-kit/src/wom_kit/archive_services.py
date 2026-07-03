@@ -54190,7 +54190,7 @@ def source_intake_next_safe_actions(result: dict[str, Any]) -> list[str]:
         return [
             "register or scan the source in metadata-only mode if needed",
             "stage the file inside the archive root, then prepare an approved selection with objet-capture-selection",
-            "run objet-capture --selection <selection-path> --dry-run first; capture requires a sandbox-marked archive in this version",
+            "run objet-capture --selection <selection-path> --dry-run first; capture requires a sandbox-marked archive or an owner-approved capture-enablement record (inspect with `archive objet-capture-enable <archive-root> --dry-run`)",
             "for bytes already stored externally, register evidence with prehashed-objet-ledger and object-storage-upload-evidence",
             *actions,
         ]
@@ -59759,6 +59759,15 @@ OBJET_CAPTURE_RECEIPTS_DIR = "receipts/objet-capture"
 OBJET_CAPTURE_SELECTION_MANIFESTS_DIR = "receipts/objet-capture-selections"
 OBJET_CAPTURE_SELECTION_ACTION = "local_objet_capture_approved"
 OBJET_CAPTURE_RECEIPT_SCHEMA = "wom-kit/objet-capture-receipt/v0.2"
+CAPTURE_ENABLEMENT_SCHEMA = "wom-kit/capture-enablement/v0.1"
+CAPTURE_ENABLEMENT_RECEIPT_SCHEMA = "wom-kit/capture-enablement-receipt/v0.1"
+CAPTURE_ENABLEMENT_RELATIVE_PATH = "ops/capture-enablement.yml"
+CAPTURE_ENABLEMENT_RECEIPTS_DIR = "receipts/capture-enablement"
+CAPTURE_ENABLEMENT_SCOPE = "objet-capture"
+# The gate requires exact equality with this statement; any deviation fails closed.
+CAPTURE_ENABLEMENT_STATEMENT = (
+    "I am the owner of this archive and I approve objet-capture writing into it outside sandbox mode."
+)
 OBJET_CAPTURE_REQUIRED_PRIVACY_GUARDS = (
     "no_full_content_capture",
     "no_automatic_minting",
@@ -59823,7 +59832,116 @@ def target_looks_external_live_never_touch(target: Path) -> bool:
     return False
 
 
-def objet_capture_sandbox_blockers(root: Path) -> list[str]:
+def read_capture_enablement(root: Path) -> dict[str, Any]:
+    """Read and classify the owner capture-enablement record for one archive root.
+
+    Single shared implementation for the objet-capture gate, the per-item capture
+    call sites, the objet-capture-enable dry-run reporter, and doctor, so those
+    surfaces can never drift. Read footprint: when ops/capture-enablement.yml is
+    absent this is a single is_file() stat and reads nothing; when present it
+    reads at most the two control files (ops/capture-enablement.yml and
+    archive.yml). ANY exception while reading or validating fails closed to a
+    non-enabling state; this function never raises.
+    """
+    result: dict[str, Any] = {
+        "present": False,
+        "valid": False,
+        "state": "absent",
+        "record": None,
+        "reason": None,
+    }
+    try:
+        record_path = root / "ops" / "capture-enablement.yml"
+        if not record_path.is_file():
+            return result
+        result["present"] = True
+        result["state"] = "invalid"
+        data = load_yaml(record_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            result["reason"] = "record is present but not a readable YAML mapping"
+            return result
+        result["record"] = data
+        if data.get("schema") != CAPTURE_ENABLEMENT_SCHEMA:
+            result["reason"] = f"schema must be exactly {CAPTURE_ENABLEMENT_SCHEMA}"
+            return result
+        if data.get("scope") != CAPTURE_ENABLEMENT_SCOPE:
+            result["reason"] = f"scope must be exactly {CAPTURE_ENABLEMENT_SCOPE}"
+            return result
+        if data.get("statement") != CAPTURE_ENABLEMENT_STATEMENT:
+            result["reason"] = "statement does not exactly match the required owner consent statement"
+            return result
+        # read_archive_id raises ArchiveServiceError on missing/broken archive.yml;
+        # the enclosing except turns that into a clean invalid state (never a traceback).
+        if data.get("archive_id") != read_archive_id(root):
+            result["reason"] = "archive_id does not match archive.yml"
+            return result
+        enabled = data.get("enabled")
+        if enabled is not True:
+            # Identity check on purpose: YAML 1.1 truthy strings ("yes", "on", "true"
+            # quoted) and integers must not enable capture.
+            if enabled is False:
+                if isinstance(data.get("revoked_by"), str) and data.get("revoked_by"):
+                    result["state"] = "revoked"
+                    result["reason"] = "enablement was revoked by the owner"
+                else:
+                    result["state"] = "disabled"
+                    result["reason"] = "enabled is false without revocation metadata"
+            else:
+                result["reason"] = "enabled must be the YAML boolean true"
+            return result
+        if target_looks_external_live_never_touch(root) and data.get("never_touch_acknowledged") is not True:
+            result["reason"] = (
+                "this root matches the external live-store protection name pattern; "
+                "the record must carry never_touch_acknowledged: true"
+            )
+            return result
+        result["valid"] = True
+        result["state"] = "enabled"
+        result["reason"] = None
+        return result
+    except Exception:
+        result["present"] = True
+        result["valid"] = False
+        result["state"] = "invalid"
+        result["reason"] = "record or archive.yml is present but not safe/readable"
+        return result
+
+
+def objet_capture_relative_parts_never_touch(parts: tuple[str, ...] | list[str]) -> bool:
+    # Same two name rules as target_looks_external_live_never_touch, applied to
+    # already-rooted archive-relative components only. Used by the per-item capture
+    # call sites when the run's root carries a VALID enablement record: the root's
+    # own (owner-enabled) name is excluded, while any matching component BELOW the
+    # root still blocks. target_looks_external_live_never_touch itself is not
+    # modified and keeps absolute semantics for non-enabled roots.
+    lowered = [str(part).lower() for part in parts]
+    if any(part.startswith("zettel-kasten-") for part in lowered):
+        return True
+    return any(part.endswith("-objets") for part in lowered)
+
+
+def objet_capture_sandbox_marked(root: Path) -> bool:
+    if (root / ".wom-sandbox").is_file():
+        return True
+    archive_yml = root / "archive.yml"
+    if archive_yml.is_file():
+        try:
+            data = load_yaml(archive_yml.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        return isinstance(data, dict) and data.get("environment") == "sandbox"
+    return False
+
+
+def objet_capture_sandbox_blockers(root: Path, enablement: dict[str, Any] | None = None) -> list[str]:
+    # Gate order: a valid owner enablement record allows capture BEFORE the
+    # never-touch name check runs, so a real archive root whose name matches the
+    # pattern can graduate after explicit acknowledgment. When the record file is
+    # absent, read_capture_enablement adds a single stat and reads nothing.
+    if enablement is None:
+        enablement = read_capture_enablement(root)
+    if enablement.get("valid") is True:
+        return []
     if target_looks_external_live_never_touch(root):
         return ["external_live_never_touch"]
     if (root / ".wom-sandbox").is_file():
@@ -59844,24 +59962,30 @@ def objet_capture_sandbox_blockers(root: Path) -> list[str]:
 
 OBJET_CAPTURE_REFUSAL_HINTS = {
     "sandbox_marker_required": (
-        "objet-capture currently runs only on sandbox-marked archives (a .wom-sandbox marker file "
-        "or top-level environment: sandbox in archive.yml); real-archive capture enablement is a "
-        "separate planned flow"
+        "objet-capture runs on sandbox-marked archives (a .wom-sandbox marker file or top-level "
+        "environment: sandbox in archive.yml), or on a real archive with a valid owner "
+        "capture-enablement record; the owner can inspect eligibility with "
+        "'archive objet-capture-enable <archive-root> --dry-run' (read-only)"
     ),
     "external_live_never_touch": (
-        "this path matches the external live-store protection pattern; capture refuses it by design"
+        "this path matches the external live-store protection pattern; capture refuses it by design; "
+        "if this is your own archive root, the owner can inspect enablement eligibility with "
+        "'archive objet-capture-enable <archive-root> --dry-run' (read-only)"
     ),
 }
 
 
-def objet_capture_refusal(blocked_by: str, *, dry_run: bool) -> dict[str, Any]:
+def objet_capture_refusal(blocked_by: str, *, dry_run: bool, enablement_state: str = "absent") -> dict[str, Any]:
     # Blocker-only on refusal: no item provenance, filenames, or receipt paths may be echoed.
     # Static, blocker-keyed hint strings are allowed because they never vary with the selection.
+    # enablement_state is a root-level classification (absent|invalid|revoked|disabled) and
+    # carries no item provenance either.
     return {
         "ok": False,
         "dry_run": dry_run,
         "lifecycle_action": "objet_capture_plan" if dry_run else "objet_capture",
         "blocked_by": blocked_by,
+        "enablement_state": enablement_state,
         "hint": OBJET_CAPTURE_REFUSAL_HINTS.get(blocked_by),
         "items": [],
         "blockers": [blocked_by],
@@ -60116,6 +60240,7 @@ def objet_capture_selection_manifest(
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
+    capture_enabled = read_capture_enablement(root).get("valid") is True
     blockers: list[str] = []
     warnings: list[str] = []
     if dry_run is approve:
@@ -60154,7 +60279,12 @@ def objet_capture_selection_manifest(
     if src is not None:
         if not is_path_within_root(src, root):
             blockers.append("unsafe_staged_path")
-        if target_looks_external_live_never_touch(src):
+        if capture_enabled:
+            # Enabled roots: evaluate the never-touch name pattern on the
+            # archive-relative components only, mirroring _objet_capture_process_item.
+            if objet_capture_relative_parts_never_touch(PurePosixPath(normalized_staged).parts):
+                blockers.append("resolved_path_never_touch")
+        elif target_looks_external_live_never_touch(src):
             blockers.append("resolved_path_never_touch")
 
     normalized_receipt = ""
@@ -60351,6 +60481,7 @@ def _objet_capture_process_item(
     selection: dict[str, Any],
     selection_sha256: str,
     manifest_appender: Any,
+    capture_enabled: bool = False,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "item_id": str(item.get("item_id") or ""),
@@ -60398,7 +60529,14 @@ def _objet_capture_process_item(
             return block("reserved_device_name")
     if not is_path_within_root(src, root):
         return block("unsafe_staged_path")
-    if target_looks_external_live_never_touch(src):
+    if capture_enabled:
+        # For a validly-enabled root the never-touch name pattern applies to the
+        # archive-relative components only (safe: is_path_within_root is enforced
+        # immediately above); the root's own owner-enabled name no longer re-blocks
+        # every item, while a matching component BELOW the root still blocks.
+        if objet_capture_relative_parts_never_touch(PurePosixPath(normalized).parts):
+            return block("resolved_path_never_touch")
+    elif target_looks_external_live_never_touch(src):
         return block("resolved_path_never_touch")
     chain_blockers = objet_capture_path_chain_blockers(root, normalized)
     if chain_blockers:
@@ -60469,7 +60607,12 @@ def _objet_capture_process_item(
             return block("dest_equals_source")
         dest = archive_internal_path(root, logical_key)
         result["logical_key"] = logical_key
-        if target_looks_external_live_never_touch(dest):
+        if capture_enabled:
+            # Enabled roots: never-touch applies to the logical_key parts only
+            # (the dest components below the root), mirroring the src call site.
+            if objet_capture_relative_parts_never_touch(PurePosixPath(logical_key).parts):
+                return block("resolved_path_never_touch")
+        elif target_looks_external_live_never_touch(dest):
             return block("resolved_path_never_touch")
         dest_chain_blockers = objet_capture_path_chain_blockers(root, logical_key)
         if dest_chain_blockers:
@@ -60593,9 +60736,13 @@ def _objet_capture_run(
     project_intake_receipt: str | None = None,
 ) -> dict[str, Any]:
     root = Path(archive_root).resolve()
-    sandbox_blockers = objet_capture_sandbox_blockers(root)
+    enablement = read_capture_enablement(root)
+    sandbox_blockers = objet_capture_sandbox_blockers(root, enablement)
     if sandbox_blockers:
-        return objet_capture_refusal(sandbox_blockers[0], dry_run=not approve)
+        return objet_capture_refusal(
+            sandbox_blockers[0], dry_run=not approve, enablement_state=str(enablement.get("state"))
+        )
+    capture_enabled = enablement.get("valid") is True
     root = require_existing_archive_root(root)
     archive_id = read_archive_id(root)
     captured_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -60686,6 +60833,7 @@ def _objet_capture_run(
                                 selection=selection,
                                 selection_sha256=selection_sha256,
                                 manifest_appender=manifest_appender,
+                                capture_enabled=capture_enabled,
                             )
                         )
                     except Exception:
@@ -60750,6 +60898,7 @@ def _objet_capture_run(
                 selection=selection,
                 selection_sha256=selection_sha256,
                 manifest_appender=lambda record: None,
+                capture_enabled=capture_enabled,
             )
         )
     run_blockers = unique_preserve_order([code for entry in item_results for code in entry["blockers"]])
@@ -61006,3 +61155,212 @@ def objet_capture_apply(
         reviewed_by=reviewed_by,
         project_intake_receipt=project_intake_receipt,
     )
+
+
+def capture_enablement_receipt_relative_path(timestamp: str) -> str:
+    # Fixed basename: the record is a singleton per archive, and archive ids contain
+    # colons which would become an NTFS alternate data stream on Windows. The compact
+    # timestamp mirrors operator_feedback_receipt_relative_path.
+    compact = re.sub(r"[^0-9TZ]", "", timestamp)
+    return f"{CAPTURE_ENABLEMENT_RECEIPTS_DIR}/capture-enablement.{compact}.json"
+
+
+def objet_capture_enable(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    revoke: bool = False,
+    acknowledge_never_touch_name: bool = False,
+    reenable: bool = False,
+) -> dict[str, Any]:
+    """Inspect, approve, or revoke the owner capture-enablement record.
+
+    The record gates ONLY objet-capture (its sole gate consumer is
+    _objet_capture_run); derive-text capture and tiro-lossless-recovery-capture
+    keep their own rules. --dry-run is a read-only eligibility report and writes
+    nothing; --approve evaluates every blocker BEFORE any write, then writes the
+    receipt first and the record second (so a valid record implies at least one
+    receipt even across a crash). Revocation is advisory and forward-only.
+    """
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if dry_run is approve:
+        blockers.append("Choose exactly one mode: --dry-run or --approve.")
+    reviewer = safe_project_intake_actor_id(reviewed_by)
+    if approve and reviewer is None:
+        blockers.append("objet-capture-enable approval requires --reviewed-by with a safe actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    enablement = read_capture_enablement(root)
+    raw_record = enablement.get("record") if isinstance(enablement.get("record"), dict) else None
+    never_touch_match = target_looks_external_live_never_touch(root)
+    try:
+        archive_id: str | None = read_archive_id(root)
+    except Exception:
+        archive_id = None
+
+    # Eligibility state, by locked precedence:
+    # enabled > revoked > invalid_record > sandbox_marked > not_an_archive > not_enabled.
+    # never_touch_name_match is orthogonal and never a blocking state for ENABLEMENT.
+    if enablement["state"] == "enabled":
+        state = "enabled"
+    elif enablement["state"] == "revoked":
+        state = "revoked"
+    elif enablement["state"] in ("invalid", "disabled"):
+        state = "invalid_record"
+    elif objet_capture_sandbox_marked(root):
+        state = "sandbox_marked"
+    elif archive_id is None:
+        state = "not_an_archive"
+    else:
+        state = "not_enabled"
+
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    record_relative = CAPTURE_ENABLEMENT_RELATIVE_PATH
+    receipt_relative = capture_enablement_receipt_relative_path(now)
+    action = "revoke" if revoke else "enable"
+
+    record_has_revocation = bool(
+        raw_record is not None
+        and raw_record.get("enabled") is False
+        and isinstance(raw_record.get("revoked_by"), str)
+        and raw_record.get("revoked_by")
+    )
+
+    if approve:
+        if revoke:
+            if not enablement["present"]:
+                blockers.append("nothing_to_revoke")
+            elif raw_record is None:
+                blockers.append("invalid_record_present")
+        else:
+            if archive_id is None:
+                blockers.append("not_an_archive")
+            if never_touch_match and not acknowledge_never_touch_name:
+                blockers.append("never_touch_acknowledgement_required")
+            if record_has_revocation and not reenable:
+                blockers.append("revoked_record_present_use_reenable")
+
+    record_path: Path | None = None
+    receipt_path: Path | None = None
+    if approve:
+        # Resolve write targets and reject unsafe chains BEFORE any write: the
+        # enablement paths sit inside a root class the never-touch pattern normally
+        # protects, and write_text_atomic does not protect against a symlinked parent.
+        try:
+            record_path = archive_internal_path(root, record_relative)
+            receipt_path = archive_internal_path(root, receipt_relative)
+        except ArchiveServiceError:
+            blockers.append("unsafe_record_path")
+        if record_path is not None and receipt_path is not None:
+            if not is_path_within_root(record_path, root) or not is_path_within_root(receipt_path, root):
+                blockers.append("unsafe_record_path")
+            elif objet_capture_path_chain_blockers(root, record_relative) or objet_capture_path_chain_blockers(
+                root, receipt_relative
+            ):
+                blockers.append("unsafe_record_path")
+
+    if revoke:
+        record: dict[str, Any] = dict(raw_record) if raw_record is not None else {}
+        record["enabled"] = False
+        record["revoked_by"] = reviewer
+        record["revoked_at"] = now
+    else:
+        record = {
+            "schema": CAPTURE_ENABLEMENT_SCHEMA,
+            "scope": CAPTURE_ENABLEMENT_SCOPE,
+            "archive_id": archive_id,
+            "enabled": True,
+            "statement": CAPTURE_ENABLEMENT_STATEMENT,
+            "reviewed_by": reviewer,
+            "enabled_at": now,
+            "never_touch_acknowledged": bool(acknowledge_never_touch_name),
+            "revoked_by": None,
+            "revoked_at": None,
+        }
+
+    if revoke:
+        planned = bool(raw_record is not None and state != "revoked")
+    else:
+        planned = state in ("not_enabled", "sandbox_marked", "invalid_record", "revoked")
+    planned_writes = [receipt_relative, record_relative] if planned else []
+
+    receipt = {
+        "schema": CAPTURE_ENABLEMENT_RECEIPT_SCHEMA,
+        "dry_run": dry_run,
+        "approved": approve and not blockers,
+        "action": action,
+        "archive_id": record.get("archive_id") if revoke else archive_id,
+        "record_path": record_relative,
+        "reviewed_by": reviewer,
+        "never_touch_acknowledged": record.get("never_touch_acknowledged") is True,
+        "reenable": bool(reenable),
+        "record_sha256": sha256_text(dump_yaml(json_safe(record))),
+        "created_at": now,
+    }
+
+    written = False
+    if approve and not blockers and record_path is not None and receipt_path is not None:
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        # Receipt FIRST, then record: the gate never requires a receipt, but this
+        # ordering makes "a valid record implies a receipt" hold across a crash.
+        write_text_atomic(receipt_path, json.dumps(json_safe(receipt), indent=2, ensure_ascii=False) + "\n")
+        write_text_atomic(record_path, dump_yaml(json_safe(record)))
+        written = True
+
+    if written:
+        result_state = "revoked" if revoke else "enabled"
+    elif approve and blockers:
+        result_state = "blocked"
+    else:
+        result_state = state
+
+    next_safe_actions = [
+        "Review this eligibility report with the archive owner before approving.",
+        "Approve with: archive objet-capture-enable <archive-root> --approve --reviewed-by <actor>"
+        + (" --acknowledge-never-touch-name" if never_touch_match else ""),
+        "Revoke later with: archive objet-capture-enable <archive-root> --revoke --approve --reviewed-by <actor>",
+        "Revocation is advisory and forward-only: already-captured bytes, manifest records, and capture receipts remain.",
+    ]
+
+    result: dict[str, Any] = {
+        "ok": not blockers,
+        "state": result_state,
+        "dry_run": dry_run or not approve,
+        "approved": written,
+        "lifecycle_action": "objet_capture_enable_plan" if not approve else "objet_capture_enable",
+        "action": action,
+        "archive_id": archive_id,
+        "never_touch_name_match": never_touch_match,
+        "enablement_state": enablement["state"],
+        "planned_writes": planned_writes if not written else [],
+        "record_path": record_relative if written else None,
+        "receipt_path": receipt_relative if written else None,
+        "files_written": [receipt_relative, record_relative] if written else [],
+        "would_change": planned_writes if (dry_run and not blockers) else [],
+        "data": {
+            "record_schema": CAPTURE_ENABLEMENT_SCHEMA,
+            "receipt_schema": CAPTURE_ENABLEMENT_RECEIPT_SCHEMA,
+            "scope": CAPTURE_ENABLEMENT_SCOPE,
+            "gate_scope": "objet-capture only; derive-text capture and tiro-lossless-recovery-capture keep their own rules",
+        },
+        "next_safe_actions": next_safe_actions,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+        "privacy_guards": {
+            "provider_calls": False,
+            "network_checked": False,
+            "file_bodies_read": False,
+            "local_absolute_paths_echoed": False,
+            "tokens_or_secrets_echoed": False,
+            "writes": written,
+        },
+    }
+    if result_state == "invalid_record":
+        result["reason"] = enablement.get("reason")
+    return result
