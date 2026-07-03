@@ -32970,6 +32970,962 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(code, 1, output)
             self.assertIn("capture_enablement_record_invalid", output)
 
+    # ---- v0.3.159 paired transcript intake + BOM-aware derive-text encoding ----
+
+    SAMSUNG_TRANSCRIPT_TEXT = "안녕하세요 first line.\r\nSecond line keeps CRLF.\r\n"
+
+    def _paired_item(
+        self,
+        staged_path: str,
+        digest: str,
+        plan_path: str,
+        plan_sha: str,
+        *,
+        staged_text_path: str,
+        text_digest: str,
+        item_id: str = "item",
+        derived_overrides: dict[str, Any] | None = None,
+        **overrides: Any,
+    ) -> dict[str, Any]:
+        item = self._item(staged_path, digest, plan_path, plan_sha, item_id=item_id, **overrides)
+        derived: dict[str, Any] = {
+            "staged_text_path": staged_text_path,
+            "approved_text_sha256": f"sha256:{text_digest}",
+            "derivation_kind": "asr",
+            "tool_name": "samsung-voice-recorder",
+            "tool_version": "1.2.3",
+            "review_status": "unreviewed",
+        }
+        if derived_overrides:
+            derived.update(derived_overrides)
+        item["derived_text"] = derived
+        return item
+
+    def _paired_selection(
+        self,
+        tmp: str,
+        archive_id: str,
+        items: list[dict[str, Any]],
+        name: str = "paired-selection.json",
+        **overrides: Any,
+    ) -> Path:
+        selection: dict[str, Any] = {
+            "manifest_id": "approved:paired-objet-capture:test",
+            "schema": archive_services.OBJET_CAPTURE_SELECTION_SCHEMA_WITH_DERIVED_TEXT,
+            "action": archive_services.OBJET_CAPTURE_SELECTION_ACTION_WITH_DERIVED_TEXT,
+            "archive_id": archive_id,
+            "items": items,
+            "privacy_guards": {key: True for key in archive_services.OBJET_CAPTURE_REQUIRED_PRIVACY_GUARDS},
+        }
+        selection.update(overrides)
+        selection = {key: value for key, value in selection.items() if value is not None}
+        path = Path(tmp) / name
+        path.write_text(json.dumps(selection), encoding="utf-8")
+        return path
+
+    def _paired_capture_setup(
+        self,
+        tmp: str,
+        *,
+        audio: bytes = b"fake m4a audio bytes",
+        transcript: bytes | None = None,
+        name: str = "call",
+    ) -> tuple[Path, Path, str, str, bytes]:
+        archive_root = self._sandbox(tmp)
+        transcript_bytes = (
+            transcript if transcript is not None else self.SAMSUNG_TRANSCRIPT_TEXT.encode("utf-16")
+        )
+        staged_path, digest = self._stage(archive_root, f"{name}.m4a", audio)
+        text_path, text_digest = self._stage(archive_root, f"{name}.txt", transcript_bytes)
+        plan_path, plan_sha = self._plan(archive_root, f"{name}-plan")
+        selection = self._paired_selection(
+            tmp,
+            "archive:personal:capture",
+            [
+                self._paired_item(
+                    staged_path,
+                    digest,
+                    plan_path,
+                    plan_sha,
+                    staged_text_path=text_path,
+                    text_digest=text_digest,
+                    item_id=f"{name}-item",
+                )
+            ],
+        )
+        return archive_root, selection, digest, text_digest, transcript_bytes
+
+    def test_paired_dry_run_previews_both_halves_and_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, digest, text_digest, _transcript = self._paired_capture_setup(tmp)
+            stored_hash = hashlib.sha256(self.SAMSUNG_TRANSCRIPT_TEXT.encode("utf-8")).hexdigest()
+            before = self._inventory(archive_root)
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["status_class"], "preview")
+            item = result["items"][0]
+            self.assertEqual(item["planned_action"], "capture")
+            self.assertEqual(item["status_class"], "preview")
+            sub = item["derived_text"]
+            self.assertEqual(sub["planned_action"], "capture")
+            self.assertEqual(sub["item_status"], "ready")
+            self.assertEqual(sub["staged_text_path"], "staging/incoming/call.txt")
+            self.assertEqual(sub["source_text_encoding"], "utf-16-le")
+            self.assertEqual(sub["source_text_sha256"], text_digest)
+            self.assertEqual(sub["text_sha256"], stored_hash)
+            planned = result["planned_writes"]
+            self.assertIn(f"objects/sha256/{digest[:2]}/{digest}", planned)
+            self.assertIn("objects/manifests/files.jsonl (+1 line)", planned)
+            self.assertIn(f"objects/derived-text/sha256/{stored_hash[:2]}/{stored_hash}.txt", planned)
+            self.assertIn("objects/manifests/derived-text.jsonl (+1 line)", planned)
+            self.assertEqual(result["summary"]["would_register_derived_text"], 1)
+            self.assertEqual(result["summary"]["derived_text_blocked"], 0)
+            self.assertEqual(self._inventory(archive_root), before, "paired dry-run must not write anything")
+            self.assertFalse(list(archive_root.rglob("*.part-*")))
+
+    def test_paired_approve_e2e_on_enabled_real_archive_matches_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._real_archive(tmp)
+            self._enable_cli(archive_root, "--approve", "--reviewed-by", "person:owner")
+            transcript = self.SAMSUNG_TRANSCRIPT_TEXT.encode("utf-16")
+            staged_path, digest = self._stage(archive_root, "call.m4a", b"real archive paired audio")
+            text_path, text_digest = self._stage(archive_root, "call.txt", transcript)
+            plan_path, _plan_sha = self._plan(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "objet-capture-selection",
+                    str(archive_root),
+                    "--staged-path",
+                    staged_path,
+                    "--source-intake-receipt",
+                    plan_path,
+                    "--item-id",
+                    "call-1",
+                    "--derived-text-staged-path",
+                    text_path,
+                    "--derivation-kind",
+                    "asr",
+                    "--tool-name",
+                    "samsung-voice-recorder",
+                    "--tool-version",
+                    "1.2.3",
+                    "--review-status",
+                    "unreviewed",
+                    "--language",
+                    "ko",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            generated = json.loads(output)
+            self.assertEqual(generated["item"]["derived_text"]["staged_text_path"], text_path)
+            self.assertEqual(
+                generated["item"]["derived_text"]["approved_text_sha256"], f"sha256:{text_digest}"
+            )
+            self.assertFalse(generated["privacy_guards"]["absolute_local_paths_echoed"])
+            selection_path = archive_root / generated["selection_path"]
+            manifest = json.loads(selection_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["action"], "local_objet_capture_with_derived_text_approved")
+            self.assertEqual(manifest["schema"], "wom-kit/b4-selection/v0.3")
+            self.assertEqual(
+                manifest["items"][0]["derived_text"]["approved_text_sha256"], f"sha256:{text_digest}"
+            )
+
+            dry = archive_services.objet_capture_dry_run(archive_root, selection_path)
+            self.assertTrue(dry["ok"], dry)
+            dry_sub = dry["items"][0]["derived_text"]
+
+            result = archive_services.objet_capture_apply(archive_root, selection_path, reviewed_by="person:test")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["status_class"], "written")
+            item = result["items"][0]
+            self.assertEqual(item["action"], "captured")
+            self.assertEqual(item["status_class"], "written")
+            sub = item["derived_text"]
+            self.assertEqual(sub["action"], "captured")
+            self.assertEqual(sub["item_status"], "written")
+            self.assertTrue(sub["manifest_record_appended"])
+            self.assertTrue(sub["stored_sha256_verified"])
+            # dry-run == approve parity for the derived half (buffered-manifest regression guard)
+            self.assertEqual(dry_sub["planned_action"], "capture")
+            self.assertEqual(dry_sub["derived_text_id"], sub["derived_text_id"])
+            self.assertEqual(dry_sub["text_logical_key"], sub["text_logical_key"])
+            self.assertEqual(dry_sub["blockers"], [])
+            # stored bytes: transcoded UTF-8, no BOM, CRLF preserved
+            stored = (archive_root / Path(sub["text_logical_key"])).read_bytes()
+            self.assertEqual(stored, self.SAMSUNG_TRANSCRIPT_TEXT.encode("utf-8"))
+            # derived record bound to the object_id minted in the SAME run
+            records = [
+                json.loads(line)
+                for line in (archive_root / archive_services.DERIVED_TEXT_MANIFEST_RELATIVE_PATH)
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+            record = next(entry for entry in records if entry["derived_text_id"] == sub["derived_text_id"])
+            self.assertEqual(record["source_object_id"], f"sha256:{digest}")
+            self.assertEqual(record["provenance"]["source_text_encoding"], "utf-16-le")
+            self.assertEqual(record["provenance"]["source_text_sha256"], text_digest)
+            # objet receipt (schema v0.3) links the derived receipt; derived receipt links back
+            receipt_text = (archive_root / Path(result["receipt_path"])).read_text(encoding="utf-8")
+            receipt = json.loads(receipt_text)
+            self.assertEqual(receipt["schema"], "wom-kit/objet-capture-receipt/v0.3")
+            self.assertEqual(receipt["status_class"], "written")
+            self.assertEqual(receipt["items"][0]["derived_text"]["receipt_path"], sub["receipt_path"])
+            self.assertEqual(receipt["summary"]["derived_text_written"], 1)
+            self.assertNotIn(str(tmp), receipt_text, "receipts must echo archive-relative paths only")
+            self.assertNotIn(str(tmp).replace("\\", "/"), receipt_text.replace("\\\\", "\\"))
+            derived_receipt = json.loads(
+                (archive_root / Path(sub["receipt_path"])).read_text(encoding="utf-8")
+            )
+            self.assertEqual(derived_receipt["schema"], "wom-kit/derived-text-capture-receipt/v0.2")
+            self.assertEqual(
+                derived_receipt["paired_with"],
+                {
+                    "selection_manifest_id": manifest["manifest_id"],
+                    "selection_manifest_sha256": result["selection_manifest_sha256"],
+                    "item_id": "call-1",
+                },
+            )
+            self.assertEqual(derived_receipt["source_text_encoding"], "utf-16-le")
+            self.assertEqual(derived_receipt["source_text_sha256"], text_digest)
+
+    def test_paired_partial_then_rerun_repairs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, _digest, _text_digest, transcript = self._paired_capture_setup(tmp)
+            staged_text = archive_root / "staging" / "incoming" / "call.txt"
+            staged_text.write_bytes(b"swapped after selection approval\n")
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status_class"], "partial")
+            item = result["items"][0]
+            self.assertEqual(item["action"], "captured")
+            self.assertEqual(item["status_class"], "partial")
+            self.assertIn("approved_text_content_mismatch", item["derived_text"]["blockers"])
+            self.assertIn("next_safe_actions", result)
+            self.assertTrue(any("SAME selection" in action for action in result["next_safe_actions"]))
+            receipt = json.loads((archive_root / Path(result["receipt_path"])).read_text(encoding="utf-8"))
+            self.assertFalse(receipt["ok"])
+            self.assertEqual(receipt["status_class"], "partial")
+            self.assertEqual(receipt["summary"]["captured"], 1)
+            self.assertEqual(receipt["summary"]["derived_text_blocked"], 1)
+            self.assertIn(
+                "approved_text_content_mismatch", receipt["items"][0]["derived_text"]["blockers"]
+            )
+            # clear the blocker, re-run the SAME selection: original skips, derived captures
+            staged_text.write_bytes(transcript)
+            repaired = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertTrue(repaired["ok"], repaired)
+            self.assertEqual(repaired["status_class"], "written")
+            self.assertEqual(repaired["items"][0]["action"], "skip_already_present")
+            self.assertEqual(repaired["items"][0]["derived_text"]["action"], "captured")
+            self.assertEqual(repaired["summary"]["skipped"], 1)
+            self.assertEqual(repaired["summary"]["derived_text_written"], 1)
+
+    def test_paired_original_blocked_never_reads_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            staged_path, _digest = self._stage(archive_root, "call.m4a", b"audio bytes")
+            text_path, text_digest = self._stage(archive_root, "call.txt", b"transcript body\n")
+            plan_path, plan_sha = self._plan(archive_root)
+            wrong_digest = hashlib.sha256(b"different original").hexdigest()
+            selection = self._paired_selection(
+                tmp,
+                "archive:personal:capture",
+                [
+                    self._paired_item(
+                        staged_path,
+                        wrong_digest,
+                        plan_path,
+                        plan_sha,
+                        staged_text_path=text_path,
+                        text_digest=text_digest,
+                    )
+                ],
+            )
+            original_read = archive_services._objet_capture_read_staged_text_bytes
+            read_calls: list[str] = []
+
+            def intercept(root: Path, normalized: str) -> Any:
+                read_calls.append(normalized)
+                return original_read(root, normalized)
+
+            with patch.object(archive_services, "_objet_capture_read_staged_text_bytes", intercept):
+                result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status_class"], "blocked")
+            item = result["items"][0]
+            self.assertIn("approved_content_mismatch", item["blockers"])
+            self.assertEqual(item["status_class"], "blocked")
+            self.assertEqual(item["derived_text"]["blockers"], ["blocked_by_original"])
+            self.assertIsNone(item["derived_text"]["derived_text_id"])
+            self.assertEqual(read_calls, [], "a blocked original must never read its transcript")
+            self.assertEqual(result["summary"]["derived_text_blocked"], 1)
+
+    def test_paired_selection_metadata_blocks_at_creation_and_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            staged_path, digest = self._stage(archive_root, "call.m4a", b"audio")
+            text_path, text_digest = self._stage(archive_root, "call.txt", b"text body\n")
+            plan_path, plan_sha = self._plan(archive_root)
+            # invalid derivation_kind blocks at selection creation
+            created = archive_services.objet_capture_selection_manifest(
+                archive_root,
+                staged_path=staged_path,
+                source_intake_receipt=plan_path,
+                dry_run=True,
+                derived_text_staged_path=text_path,
+                derivation_kind="bogus",
+                tool_name="tool",
+                tool_version="1.0",
+                review_status="unreviewed",
+            )
+            self.assertFalse(created["ok"])
+            self.assertIn("derivation_kind_invalid", created["blockers"])
+            # missing required metadata flags block at selection creation
+            missing = archive_services.objet_capture_selection_manifest(
+                archive_root,
+                staged_path=staged_path,
+                source_intake_receipt=plan_path,
+                dry_run=True,
+                derived_text_staged_path=text_path,
+            )
+            self.assertFalse(missing["ok"])
+            self.assertTrue(any("--derivation-kind" in blocker for blocker in missing["blockers"]))
+            # CLI usage gates
+            base = [
+                "objet-capture-selection",
+                str(archive_root),
+                "--staged-path",
+                staged_path,
+                "--source-intake-receipt",
+                plan_path,
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+            code, output = self.run_cli(base + ["--derived-text-staged-path", text_path])
+            self.assertEqual(code, 1, output)
+            self.assertIn("--derivation-kind", output)
+            code, output = self.run_cli(base + ["--tool-name", "orphan-flag"])
+            self.assertEqual(code, 1, output)
+            self.assertIn("--derived-text-staged-path", output)
+            # envelope check blocks early at dry-run (missing tool_version / review_status)
+            for label, overrides in [
+                ("tool_version", {"tool_version": None}),
+                ("review_status", {"review_status": None}),
+            ]:
+                with self.subTest(label):
+                    selection = self._paired_selection(
+                        tmp,
+                        "archive:personal:capture",
+                        [
+                            self._paired_item(
+                                staged_path,
+                                digest,
+                                plan_path,
+                                plan_sha,
+                                staged_text_path=text_path,
+                                text_digest=text_digest,
+                                derived_overrides=overrides,
+                            )
+                        ],
+                        name=f"envelope-{label}.selection.json",
+                    )
+                    result = archive_services.objet_capture_dry_run(archive_root, selection)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["items"], [], "envelope validation must block early")
+                    self.assertIn(f"{label}_invalid", result["blockers"])
+
+    def test_paired_registration_exception_contained_per_item(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            plan_path, plan_sha = self._plan(archive_root)
+            a_path, a_digest = self._stage(archive_root, "a.m4a", b"audio a")
+            a_text, a_text_digest = self._stage(archive_root, "a.txt", b"text a\n")
+            b_path, b_digest = self._stage(archive_root, "b.m4a", b"audio b")
+            b_text, b_text_digest = self._stage(archive_root, "b.txt", b"text b\n")
+            selection = self._paired_selection(
+                tmp,
+                "archive:personal:capture",
+                [
+                    self._paired_item(
+                        a_path,
+                        a_digest,
+                        plan_path,
+                        plan_sha,
+                        staged_text_path=a_text,
+                        text_digest=a_text_digest,
+                        item_id="item-a",
+                    ),
+                    self._paired_item(
+                        b_path,
+                        b_digest,
+                        plan_path,
+                        plan_sha,
+                        staged_text_path=b_text,
+                        text_digest=b_text_digest,
+                        item_id="item-b",
+                    ),
+                ],
+            )
+            original_core = archive_services._derived_text_capture_core
+
+            def exploding_core(root: Path, archive_id: str, **kwargs: Any) -> Any:
+                paired_with = kwargs.get("paired_with") or {}
+                if paired_with.get("item_id") == "item-a":
+                    raise RuntimeError("injected registration failure")
+                return original_core(root, archive_id, **kwargs)
+
+            with patch.object(archive_services, "_derived_text_capture_core", exploding_core):
+                result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
+            self.assertFalse(result["ok"])
+            self.assertFalse(result["aborted"], "a phase-2 failure must not abort the run")
+            self.assertEqual(result["status_class"], "partial")
+            by_id = {entry["item_id"]: entry for entry in result["items"]}
+            self.assertEqual(by_id["item-a"]["action"], "captured")
+            self.assertEqual(by_id["item-a"]["status_class"], "partial")
+            self.assertEqual(
+                by_id["item-a"]["derived_text"]["blockers"], ["derived_text_registration_failed"]
+            )
+            self.assertEqual(by_id["item-b"]["status_class"], "written")
+            self.assertEqual(by_id["item-b"]["derived_text"]["action"], "captured")
+            receipt = json.loads((archive_root / Path(result["receipt_path"])).read_text(encoding="utf-8"))
+            self.assertFalse(receipt["ok"])
+            self.assertFalse(receipt["aborted"])
+            self.assertEqual(receipt["summary"]["captured"], 2)
+            self.assertEqual(receipt["summary"]["derived_text_written"], 1)
+            self.assertEqual(receipt["summary"]["derived_text_blocked"], 1)
+
+    def test_paired_staged_text_path_confinement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            plan_path, plan_sha = self._plan(archive_root)
+            audio_path, audio_digest = self._stage(archive_root, "call.m4a", b"audio")
+            text_digest = hashlib.sha256(b"whatever transcript").hexdigest()
+            cases = {
+                "traversal": ("../evil.txt", "unsafe_staged_text_path"),
+                "absolute": ("C:/evil.txt", "unsafe_staged_text_path"),
+                "receipts": ("receipts/objet-capture-selections/evil.txt", "unsafe_staged_text_path"),
+                "derived-store": (
+                    f"objects/derived-text/sha256/{text_digest[:2]}/{text_digest}.txt",
+                    "unsafe_staged_text_path",
+                ),
+                "device": ("staging/incoming/NUL.txt", "reserved_device_name"),
+            }
+            for label, (path_value, expected) in cases.items():
+                with self.subTest(label):
+                    selection = self._paired_selection(
+                        tmp,
+                        "archive:personal:capture",
+                        [
+                            self._paired_item(
+                                audio_path,
+                                audio_digest,
+                                plan_path,
+                                plan_sha,
+                                staged_text_path=path_value,
+                                text_digest=text_digest,
+                            )
+                        ],
+                        name=f"confinement-{label}.selection.json",
+                    )
+                    result = archive_services.objet_capture_dry_run(archive_root, selection)
+                    self.assertFalse(result["ok"], result)
+                    self.assertIn(expected, result["blockers"])
+
+    def test_paired_staged_text_symlink_component_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, digest, text_digest, _transcript = self._paired_capture_setup(tmp)
+            link = archive_root / "staging" / "incoming" / "link.txt"
+            try:
+                link.symlink_to(archive_root / "staging" / "incoming" / "call.txt")
+            except OSError:
+                self.skipTest("symlink creation not permitted in this environment")
+            plan_path, plan_sha = self._plan(archive_root, "symlink-plan")
+            selection = self._paired_selection(
+                tmp,
+                "archive:personal:capture",
+                [
+                    self._paired_item(
+                        "staging/incoming/call.m4a",
+                        digest,
+                        plan_path,
+                        plan_sha,
+                        staged_text_path="staging/incoming/link.txt",
+                        text_digest=text_digest,
+                    )
+                ],
+                name="symlink.selection.json",
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(result["ok"])
+            self.assertIn("symlink_not_allowed", result["blockers"])
+
+    def test_paired_staged_text_junction_parent_rejected(self) -> None:
+        if sys.platform != "win32":
+            self.skipTest("Windows junction semantics only")
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, _selection, digest, text_digest, _transcript = self._paired_capture_setup(tmp)
+            real_dir = archive_root / "staging" / "real-dir"
+            real_dir.mkdir()
+            (real_dir / "call.txt").write_bytes(b"junction transcript\n")
+            junction = archive_root / "staging" / "junction"
+            proc = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(junction), str(real_dir)],
+                capture_output=True,
+            )
+            if proc.returncode != 0:
+                # Junction creation unavailable here; the reparse-point check itself is
+                # the guard for the documented Windows O_NOFOLLOW residual.
+                self.skipTest("junction creation unavailable in this environment")
+            plan_path, plan_sha = self._plan(archive_root, "junction-plan")
+            selection = self._paired_selection(
+                tmp,
+                "archive:personal:capture",
+                [
+                    self._paired_item(
+                        "staging/incoming/call.m4a",
+                        digest,
+                        plan_path,
+                        plan_sha,
+                        staged_text_path="staging/junction/call.txt",
+                        text_digest=text_digest,
+                    )
+                ],
+                name="junction.selection.json",
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(result["ok"])
+            self.assertIn("symlink_not_allowed", result["blockers"])
+
+    def test_paired_staged_text_never_touch_component_blocked_on_enabled_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._real_archive(tmp)
+            self._enable_cli(archive_root, "--approve", "--reviewed-by", "person:owner")
+            staged_path, digest = self._stage(archive_root, "call.m4a", b"enabled audio")
+            never_touch_dir = archive_root / "staging" / "incoming" / "evil-objets"
+            never_touch_dir.mkdir(parents=True)
+            transcript = b"never touch transcript\n"
+            (never_touch_dir / "call.txt").write_bytes(transcript)
+            text_digest = hashlib.sha256(transcript).hexdigest()
+            plan_path, plan_sha = self._plan(archive_root)
+            selection = self._paired_selection(
+                tmp,
+                "archive:personal:capture",
+                [
+                    self._paired_item(
+                        staged_path,
+                        digest,
+                        plan_path,
+                        plan_sha,
+                        staged_text_path="staging/incoming/evil-objets/call.txt",
+                        text_digest=text_digest,
+                    )
+                ],
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(result["ok"])
+            self.assertIn("resolved_path_never_touch", result["blockers"])
+
+    def test_paired_duplicate_selection_targets_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            plan_path, plan_sha = self._plan(archive_root)
+            staged_path, digest = self._stage(archive_root, "call.m4a", b"audio")
+            text_path, text_digest = self._stage(archive_root, "call.txt", b"transcript\n")
+            # one file must not be both original and transcript source
+            selection = self._paired_selection(
+                tmp,
+                "archive:personal:capture",
+                [
+                    self._paired_item(
+                        staged_path,
+                        digest,
+                        plan_path,
+                        plan_sha,
+                        staged_text_path=staged_path,
+                        text_digest=digest,
+                    )
+                ],
+                name="dup-same.selection.json",
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(result["ok"])
+            self.assertIn("duplicate_selection_target", result["blockers"])
+            # duplicate staged_text_path across items
+            other_path, other_digest = self._stage(archive_root, "other.m4a", b"other audio")
+            selection = self._paired_selection(
+                tmp,
+                "archive:personal:capture",
+                [
+                    self._paired_item(
+                        staged_path,
+                        digest,
+                        plan_path,
+                        plan_sha,
+                        staged_text_path=text_path,
+                        text_digest=text_digest,
+                        item_id="first",
+                    ),
+                    self._paired_item(
+                        other_path,
+                        other_digest,
+                        plan_path,
+                        plan_sha,
+                        staged_text_path=text_path,
+                        text_digest=text_digest,
+                        item_id="second",
+                    ),
+                ],
+                name="dup-across.selection.json",
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(result["ok"])
+            self.assertIn("duplicate_selection_target", result["blockers"])
+            # the same-hash generator-level guard blocks too
+            generated = archive_services.objet_capture_selection_manifest(
+                archive_root,
+                staged_path=staged_path,
+                source_intake_receipt=plan_path,
+                dry_run=True,
+                derived_text_staged_path=staged_path,
+                derivation_kind="asr",
+                tool_name="tool",
+                tool_version="1.0",
+                review_status="unreviewed",
+            )
+            self.assertFalse(generated["ok"])
+            self.assertIn("duplicate_selection_target", generated["blockers"])
+
+    def test_paired_action_and_schema_cross_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp)
+            plan_path, plan_sha = self._plan(archive_root)
+            staged_path, digest = self._stage(archive_root, "call.m4a", b"audio")
+            text_path, text_digest = self._stage(archive_root, "call.txt", b"transcript\n")
+            paired_item = self._paired_item(
+                staged_path, digest, plan_path, plan_sha, staged_text_path=text_path, text_digest=text_digest
+            )
+            plain_item = self._item(staged_path, digest, plan_path, plan_sha)
+            cases = {
+                "derived-under-plain-action": (
+                    dict(
+                        action=archive_services.OBJET_CAPTURE_SELECTION_ACTION,
+                        schema=archive_services.OBJET_CAPTURE_SELECTION_SCHEMA,
+                    ),
+                    [paired_item],
+                    "selection_action_invalid",
+                ),
+                "paired-action-with-v02-schema": (
+                    dict(schema=archive_services.OBJET_CAPTURE_SELECTION_SCHEMA),
+                    [paired_item],
+                    "selection_schema_invalid",
+                ),
+                "paired-action-missing-schema": (
+                    dict(schema=None),
+                    [paired_item],
+                    "selection_schema_invalid",
+                ),
+                "paired-action-without-derived-items": (
+                    {},
+                    [plain_item],
+                    "selection_action_invalid",
+                ),
+                "unknown-action": (
+                    dict(action="local_objet_capture_with_derived_text_approved_v2"),
+                    [paired_item],
+                    "selection_action_invalid",
+                ),
+            }
+            for label, (overrides, items, expected) in cases.items():
+                with self.subTest(label):
+                    selection = self._paired_selection(
+                        tmp,
+                        "archive:personal:capture",
+                        items,
+                        name=f"cross-{label}.selection.json",
+                        **overrides,
+                    )
+                    result = archive_services.objet_capture_dry_run(archive_root, selection)
+                    self.assertFalse(result["ok"], result)
+                    self.assertIn(expected, result["blockers"])
+                    self.assertEqual(result["items"], [])
+
+    def test_plain_selection_manifests_stay_byte_identical(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, digest, _text_digest, _transcript = self._paired_capture_setup(tmp)
+            plan_path, plan_sha = self._plan(archive_root, "plain-plan")
+            plain_selection = self._selection(
+                tmp,
+                "archive:personal:capture",
+                [self._item("staging/incoming/call.m4a", digest, plan_path, plan_sha)],
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, plain_selection)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(
+                result["summary"],
+                {
+                    "would_capture": 1,
+                    "would_repair_append": 0,
+                    "would_re_materialize": 0,
+                    "would_skip": 0,
+                    "blocked": 0,
+                },
+                "plain runs must not grow derived counters",
+            )
+            self.assertNotIn("derived_text", result["items"][0])
+            generated = archive_services.objet_capture_selection_manifest(
+                archive_root,
+                staged_path="staging/incoming/call.m4a",
+                source_intake_receipt=plan_path,
+                dry_run=True,
+            )
+            self.assertTrue(generated["ok"], generated)
+            self.assertEqual(generated["selection_manifest"]["action"], "local_objet_capture_approved")
+            self.assertEqual(generated["selection_manifest"]["schema"], "wom-kit/b4-selection/v0.2")
+            self.assertNotIn("derived_text", generated["selection_manifest"]["items"][0])
+
+    def test_derive_text_capture_encoding_ladder_accepts_bom_marked_input(self) -> None:
+        text = "Encoding ladder 한글 텍스트.\r\nSecond line keeps CRLF.\r\n"
+        cases = [
+            ("utf-16-le", ("utf-16-le-" + text).encode("utf-16"), "utf-16-le"),
+            ("utf-16-be", b"\xfe\xff" + ("utf-16-be-" + text).encode("utf-16-be"), "utf-16-be"),
+            ("utf-8-sig", b"\xef\xbb\xbf" + ("utf-8-sig-" + text).encode("utf-8"), "utf-8-sig"),
+            ("utf-8", ("utf-8-" + text).encode("utf-8"), "utf-8"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-encoding")
+            source_object_id = self._derived_text_source_object(archive_root)
+            for label, raw, expected_encoding in cases:
+                with self.subTest(label):
+                    text_file = Path(tmp) / f"{label}.txt"
+                    text_file.write_bytes(raw)
+                    result = archive_services.derived_text_capture_apply(
+                        archive_root,
+                        text_file=text_file,
+                        source_object_id=source_object_id,
+                        derivation_kind="asr",
+                        tool_name="fake-asr",
+                        tool_version="1.0.0",
+                        review_status="unreviewed",
+                        reviewed_by="person:test",
+                    )
+                    self.assertTrue(result["ok"], result)
+                    self.assertEqual(result["action"], "captured")
+                    self.assertEqual(result["source_text_encoding"], expected_encoding)
+                    self.assertEqual(
+                        result["source_text_sha256"], hashlib.sha256(raw).hexdigest()
+                    )
+                    expected_stored = (f"{label}-" + text).encode("utf-8")
+                    self.assertEqual(
+                        result["text_sha256"], hashlib.sha256(expected_stored).hexdigest()
+                    )
+                    stored = (archive_root / Path(result["text_logical_key"])).read_bytes()
+                    self.assertEqual(stored, expected_stored, "stored text must be BOM-less UTF-8 with CRLF preserved")
+                    self.assertFalse(stored.startswith(b"\xef\xbb\xbf"))
+                    if label == "utf-8":
+                        self.assertEqual(
+                            result["source_text_sha256"],
+                            result["text_sha256"],
+                            "BOM-less UTF-8 must store raw bytes unchanged",
+                        )
+                    else:
+                        self.assertNotEqual(result["source_text_sha256"], result["text_sha256"])
+                    record = [
+                        json.loads(line)
+                        for line in (archive_root / archive_services.DERIVED_TEXT_MANIFEST_RELATIVE_PATH)
+                        .read_text(encoding="utf-8")
+                        .splitlines()
+                        if line.strip()
+                    ][-1]
+                    self.assertEqual(record["provenance"]["source_text_encoding"], expected_encoding)
+                    self.assertEqual(
+                        record["provenance"]["source_text_sha256"], hashlib.sha256(raw).hexdigest()
+                    )
+
+    def test_derive_text_capture_encoding_ladder_blocks_deterministically(self) -> None:
+        cases = [
+            ("cp949", "안녕하세요 인코딩".encode("cp949"), "text_file_not_utf8", None),
+            (
+                "utf-32-le",
+                b"\xff\xfe\x00\x00" + "abc".encode("utf-32-le"),
+                "text_file_bom_encoding_unsupported",
+                "utf-32-le",
+            ),
+            (
+                "utf-32-be",
+                b"\x00\x00\xfe\xff" + "abc".encode("utf-32-be"),
+                "text_file_bom_encoding_unsupported",
+                "utf-32-be",
+            ),
+            ("odd-utf16", "abc".encode("utf-16")[:-1], "text_file_bom_encoding_undecodable", "utf-16-le"),
+            (
+                "bom-then-invalid-utf8",
+                b"\xef\xbb\xbf" + b"\xff\xfe\xfa",
+                "text_file_bom_encoding_undecodable",
+                "utf-8-sig",
+            ),
+            ("nul-bearing-utf8", b"a\x00b\x00", "text_file_contains_nul", None),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-blocked")
+            source_object_id = self._derived_text_source_object(archive_root)
+            for label, raw, expected_blocker, expected_bom in cases:
+                with self.subTest(label):
+                    text_file = Path(tmp) / f"{label}.bin"
+                    text_file.write_bytes(raw)
+                    result = archive_services.derived_text_capture_dry_run(
+                        archive_root,
+                        text_file=text_file,
+                        source_object_id=source_object_id,
+                        derivation_kind="parser",
+                        tool_name="fake-parser",
+                        tool_version="1.0.0",
+                        review_status="unreviewed",
+                    )
+                    self.assertFalse(result["ok"])
+                    self.assertIn(expected_blocker, result["blockers"])
+                    if expected_bom is None:
+                        self.assertNotIn("detected_bom", result)
+                    else:
+                        self.assertEqual(result["detected_bom"], expected_bom)
+                    self.assertIn(expected_blocker, result["blocker_hints"])
+            # the extended text_file_not_utf8 hint names the auto-handled encodings
+            text_file = Path(tmp) / "hint.bin"
+            text_file.write_bytes("안녕하세요 인코딩".encode("cp949"))
+            result = archive_services.derived_text_capture_dry_run(
+                archive_root,
+                text_file=text_file,
+                source_object_id=source_object_id,
+                derivation_kind="parser",
+                tool_name="fake-parser",
+                tool_version="1.0.0",
+                review_status="unreviewed",
+            )
+            hint = result["blocker_hints"]["text_file_not_utf8"]
+            self.assertIn("UTF-16", hint)
+            self.assertIn("transcode", hint)
+
+    def test_derive_text_capture_bom_only_file_and_size_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-bom-cap")
+            source_object_id = self._derived_text_source_object(archive_root)
+            bom_only = Path(tmp) / "bom-only.txt"
+            bom_only.write_bytes(b"\xef\xbb\xbf")
+            result = archive_services.derived_text_capture_apply(
+                archive_root,
+                text_file=bom_only,
+                source_object_id=source_object_id,
+                derivation_kind="parser",
+                tool_name="fake-parser",
+                tool_version="1.0.0",
+                review_status="unreviewed",
+                reviewed_by="person:test",
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertIn("zero_byte_text", result["warnings"])
+            self.assertEqual(result["size_bytes"], 0)
+            self.assertEqual(
+                (archive_root / Path(result["text_logical_key"])).read_bytes(), b""
+            )
+            over_cap = Path(tmp) / "over-cap.txt"
+            over_cap.write_bytes(b"x" * 32)
+            with patch.object(archive_services, "DERIVED_TEXT_MAX_SOURCE_BYTES", 16):
+                blocked = archive_services.derived_text_capture_dry_run(
+                    archive_root,
+                    text_file=over_cap,
+                    source_object_id=source_object_id,
+                    derivation_kind="parser",
+                    tool_name="fake-parser",
+                    tool_version="1.0.0",
+                    review_status="unreviewed",
+                )
+            self.assertFalse(blocked["ok"])
+            self.assertIn("text_file_too_large", blocked["blockers"])
+
+    def test_derive_text_encoding_collapse_dedupe_keeps_first_record(self) -> None:
+        text = "Identical text across encodings.\r\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._sandbox(tmp, "archive:personal:derived-collapse")
+            source_object_id = self._derived_text_source_object(archive_root)
+            utf8_file = Path(tmp) / "first-utf8.txt"
+            utf8_file.write_bytes(text.encode("utf-8"))
+            utf16_file = Path(tmp) / "second-utf16.txt"
+            utf16_file.write_bytes(text.encode("utf-16"))
+            kwargs = dict(
+                source_object_id=source_object_id,
+                derivation_kind="parser",
+                tool_name="fake-parser",
+                tool_version="1.0.0",
+                review_status="unreviewed",
+                reviewed_by="person:test",
+            )
+            first = archive_services.derived_text_capture_apply(
+                archive_root, text_file=utf8_file, **kwargs
+            )
+            self.assertTrue(first["ok"], first)
+            self.assertEqual(first["action"], "captured")
+            second = archive_services.derived_text_capture_apply(
+                archive_root, text_file=utf16_file, **kwargs
+            )
+            self.assertTrue(second["ok"], second)
+            self.assertEqual(second["action"], "skip_already_present")
+            self.assertEqual(second["derived_text_id"], first["derived_text_id"])
+            records = [
+                json.loads(line)
+                for line in (archive_root / archive_services.DERIVED_TEXT_MANIFEST_RELATIVE_PATH)
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+            matching = [r for r in records if r["derived_text_id"] == first["derived_text_id"]]
+            self.assertEqual(len(matching), 1, "the collapse must keep exactly one record")
+            self.assertEqual(matching[0]["provenance"]["source_text_encoding"], "utf-8")
+            second_receipt = json.loads(
+                (archive_root / Path(second["receipt_path"])).read_text(encoding="utf-8")
+            )
+            self.assertEqual(second_receipt["source_text_encoding"], "utf-16-le")
+            self.assertEqual(
+                second_receipt["source_text_sha256"],
+                hashlib.sha256(text.encode("utf-16")).hexdigest(),
+            )
+
+    def test_paired_encoding_blockers_apply_on_paired_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = b"\xff\xfe\x00\x00" + "utf32 transcript".encode("utf-32-le")
+            archive_root, selection, _digest, _text_digest, _transcript = self._paired_capture_setup(
+                tmp, transcript=transcript
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(result["ok"])
+            sub = result["items"][0]["derived_text"]
+            self.assertIn("text_file_bom_encoding_unsupported", sub["blockers"])
+            self.assertEqual(sub["detected_bom"], "utf-32-le")
+            self.assertEqual(result["items"][0]["status_class"], "partial")
+            self.assertIn("text_file_bom_encoding_unsupported", result["blockers"])
+
+    def test_paired_size_cap_applies_on_paired_path(self) -> None:
+        # The 64 MiB source cap has an independent check in the paired reader
+        # (_objet_capture_read_staged_text_bytes); regression-guard it directly.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, selection, _digest, _text_digest, _transcript = self._paired_capture_setup(
+                tmp, transcript=b"x" * 32
+            )
+            with patch.object(archive_services, "DERIVED_TEXT_MAX_SOURCE_BYTES", 16):
+                result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(result["ok"])
+            sub = result["items"][0]["derived_text"]
+            self.assertIn("text_file_too_large", sub["blockers"])
+            self.assertIn("text_file_too_large", sub.get("blocker_hints", {}))
+            self.assertEqual(result["items"][0]["status_class"], "partial")
+            self.assertIn("text_file_too_large", result["blockers"])
+
     def test_objet_capture_never_touch_helper_copies_stay_identical(self) -> None:
         def normalized_function_body(path: Path) -> list[str]:
             text = path.read_text(encoding="utf-8")

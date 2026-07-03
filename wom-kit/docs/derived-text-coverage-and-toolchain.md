@@ -130,7 +130,7 @@ Initial recommendations:
 
 | Family | Route |
 |---|---|
-| `.txt`, `.md`, `.csv`, `.json`, `.xml`, `.html` | UTF-8/parser extraction |
+| `.txt`, `.md`, `.csv`, `.json`, `.xml`, `.html` | UTF-8/parser extraction (built-in handling auto-decodes BOM-marked UTF-8 and UTF-16 LE/BE to stored UTF-8 since v0.3.159; UTF-32 BOMs and BOM-less non-UTF-8 block deterministically and must be transcoded) |
 | `.docx` | `python-docx` |
 | `.xlsx` | `openpyxl` |
 | `.pptx` | `python-pptx` |
@@ -220,3 +220,22 @@ These commands do not:
 
 They are coverage, manifest-quality, and routing gates. Actual extracted UTF-8
 text is still registered through [Derived Text Capture](derived-text.md).
+
+## Encoding And Size Limits (v0.3.159)
+
+The former "Built-in text handling still needs encoding review before capture"
+note is resolved: capture auto-decodes BOM-marked UTF-8 (`utf-8-sig`) and
+UTF-16 LE/BE to stored BOM-less UTF-8 (line endings preserved), and blocks
+UTF-32 BOMs (`text_file_bom_encoding_unsupported`), BOM-marked-but-corrupt
+input (`text_file_bom_encoding_undecodable`), NUL-bearing decodes
+(`text_file_contains_nul`), and BOM-less non-UTF-8 (`text_file_not_utf8`)
+deterministically — no encoding guessing. See the Encoding section in
+[Derived Text Capture](derived-text.md).
+
+Capture also enforces a deterministic source size cap,
+`DERIVED_TEXT_MAX_SOURCE_BYTES` (64 MiB), checked on the file's fstat size
+BEFORE any bytes are read; larger files block with `text_file_too_large`.
+The cap applies to standalone `--text-file`, batch `--from-manifest`, and
+paired `staged_text_path` sources alike (decode + re-encode peaks at roughly
+3-4x the input size for UTF-16 input, which is why the bound is a cap rather
+than a documented risk).
