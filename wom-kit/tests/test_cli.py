@@ -24889,7 +24889,7 @@ state:
             self.assertEqual(dry_code, 0, dry_output)
             self.assertTrue(dry_result["ok"])
             self.assertTrue(
-                any("newline normalization" in warning for warning in dry_result["warnings"]),
+                any("newline/BOM normalization" in warning for warning in dry_result["warnings"]),
                 dry_result["warnings"],
             )
 
@@ -24987,6 +24987,449 @@ state:
             self.assertNotIn("mint_retired_draft_sha_mismatch", codes)
             self.assertIn("mint_receipt_target_sha_evolved_by_edge_receipts", codes)
             self.assertIn("mint_retired_draft_target_sha_evolved_by_edge_receipts", codes)
+
+    # ------------------------------------------------------------------
+    # remint-reconcile (v0.3.162 honest mint-receipt reconcile)
+    # ------------------------------------------------------------------
+
+    def _mint_lunch_for_reconcile(self, archive_root: Path, title: str = "Promotion-ready lunch note") -> dict:
+        self.make_fake_lunch_draft_promotion_ready(archive_root, title=title)
+        mint_code, mint_output = self.run_cli(
+            [
+                "mint-zet",
+                str(archive_root),
+                "--path",
+                "inbox/zet_20260519_draft_ai_lunch_note.md",
+                "--approve",
+                "--reviewed-by",
+                "person:test",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(mint_code, 0, mint_output)
+        return json.loads(mint_output)
+
+    def test_remint_reconcile_dry_run_writes_nothing_and_reports_class(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            reconcile_dir = archive_root / "receipts" / "mint" / "reconciles"
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["writes"], "none")
+            self.assertIn(result["drift_class"], {"format_drift", "content_change", "unclassified"})
+            self.assertFalse(reconcile_dir.exists() and list(reconcile_dir.glob("*")))
+
+    def test_remint_reconcile_format_drift_approve_recomputes_and_doctor_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            canonical.write_bytes(canonical.read_bytes().replace(b"\n", b"\r\n"))
+
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            self.assertEqual(json.loads(output)["drift_class"], "format_drift")
+
+            code, output = self.run_cli(
+                [
+                    "remint-reconcile",
+                    str(archive_root),
+                    "--zettel-id",
+                    zid,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["drift_class"], "format_drift")
+            reconcile_receipt = archive_root / result["reconcile_receipt_path"]
+            self.assertTrue(reconcile_receipt.is_file())
+            audit = json.loads(reconcile_receipt.read_text(encoding="utf-8"))
+            self.assertEqual(archive_cli.validate_schema(audit, "mint-reconcile-receipt.schema.json"), [])
+            self.assertEqual(audit["action"], "reconcile_mint_receipt")
+            mint_receipt = json.loads((archive_root / mint["mint_receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(archive_cli.validate_schema(mint_receipt, "mint-receipt.schema.json"), [])
+            self.assertIn("reconcile", mint_receipt)
+            self.assertEqual(len(mint_receipt["reconcile"]["history"]), 1)
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_remint_reconcile_format_then_lf_recheckout_is_recognized_by_doctor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            canonical.write_bytes(canonical.read_bytes().replace(b"\n", b"\r\n"))
+            code, _ = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve", "--reviewed-by", "person:test", "--format", "json"]
+            )
+            self.assertEqual(code, 0)
+            # simulate an LF re-checkout: current bytes != receipt (CRLF) sha, but
+            # normalized digest matches -> doctor format-drift branch, still ERROR.
+            canonical.write_bytes(canonical.read_bytes().replace(b"\r\n", b"\n"))
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            codes = {item["code"] for item in json.loads(doctor_output)}
+            self.assertIn("mint_receipt_target_byte_drift_suspected_format", codes)
+            self.assertNotEqual(doctor_code, 0)
+
+    def test_doctor_content_plus_newline_drift_is_not_softened_to_format(self) -> None:
+        # T-doctor-content+newline: doctor must NEVER assert "format only" when a real
+        # content change hides under newline noise. After a legitimate format-drift
+        # reconcile (which records reconcile.normalized_content_digest), we apply BOTH a
+        # real content edit AND CRLF newline drift. The content edit changes the
+        # normalized digest so it no longer matches the recorded digest -> doctor MUST
+        # fall through to the plain mint_receipt_sha_mismatch ERROR, not the softened
+        # mint_receipt_target_byte_drift_suspected_format branch.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            # 1) newline-only drift, then reconcile -> records normalized_content_digest.
+            canonical.write_bytes(canonical.read_bytes().replace(b"\n", b"\r\n"))
+            code, _ = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve", "--reviewed-by", "person:test", "--format", "json"]
+            )
+            self.assertEqual(code, 0)
+            # 2) now BOTH a real body content edit AND newline (CRLF) drift.
+            edited = canonical.read_bytes().replace(b"\r\n", b"\n") + b"\nHUMAN CONTENT EDIT hiding under newline drift.\n"
+            canonical.write_bytes(edited.replace(b"\n", b"\r\n"))
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            codes = {item["code"] for item in json.loads(doctor_output)}
+            # Not softened: the content edit broke the normalized-digest match.
+            self.assertNotIn("mint_receipt_target_byte_drift_suspected_format", codes)
+            self.assertIn("mint_receipt_sha_mismatch", codes)
+            self.assertNotEqual(doctor_code, 0)
+
+    def test_remint_reconcile_title_edit_is_content_change_and_needs_ack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root, title="Original title")
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            text = canonical.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            body = text[match.end():]
+            frontmatter["title"] = "Corrected title"
+            canonical.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body.lstrip(), encoding="utf-8")
+
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["drift_class"], "content_change")
+            self.assertTrue(result["content_change_ack_required"])
+            self.assertTrue(any(change["field"] == "title" for change in result["frontmatter_field_changes"]))
+            # Invariant: the class is driven by the frontmatter title edit, NOT a body
+            # diff. Body must be byte-identical (only the title changed). Asserting this
+            # pins the classifier to the frontmatter comparison and guards against any
+            # regression that would flip the class via body detection.
+            self.assertFalse(result["body_changed"])
+
+            # approve WITHOUT ack -> blocked
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve", "--reviewed-by", "person:test", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+
+            # approve WITH ack -> success, reviewer recorded in both receipts
+            code, output = self.run_cli(
+                [
+                    "remint-reconcile",
+                    str(archive_root),
+                    "--zettel-id",
+                    zid,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--content-changed-ack",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["content_change_ack"])
+            mint_receipt = json.loads((archive_root / mint["mint_receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(mint_receipt["reconcile"]["drift_class"], "content_change")
+            self.assertTrue(mint_receipt["reconcile"]["content_change_ack"])
+            self.assertEqual(mint_receipt["reconcile"]["history"][0]["reconciled_by"], "person:test")
+            audit = json.loads((archive_root / result["reconcile_receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(audit["reviewed_by"], "person:test")
+            self.assertTrue(audit["content_change_ack"])
+
+    def test_remint_reconcile_body_change_without_ack_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            text = canonical.read_text(encoding="utf-8")
+            canonical.write_text(text + "\nAn extra human-added paragraph.\n", encoding="utf-8")
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            result = json.loads(output)
+            self.assertEqual(result["drift_class"], "content_change")
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve", "--reviewed-by", "person:test", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+
+    def test_remint_reconcile_non_allowlist_frontmatter_edits_are_content_change(self) -> None:
+        # R0 cardinal-sin guard: an edit to ANY content-bearing canonical frontmatter
+        # field (not just title/id/status/source_refs) with the body byte-identical and
+        # a CLEAN snapshot must classify content_change and REQUIRE --content-changed-ack.
+        # A body-only comparison / a 4-field allowlist would misclassify these as
+        # format_drift and let `--approve --reviewed-by X` (no ack) launder a real
+        # content/policy change into a fresh mint-receipt integrity sha. Cover several
+        # distinct fields: a changed existing key (kind), an appended edge (edges), an
+        # altered timestamp (created_at), and brand-new content keys mint never wrote
+        # (visibility, facets).
+        cases = {
+            "kind": lambda fm: fm.__setitem__("kind", "fleeting_note"),
+            "edges": lambda fm: fm.__setitem__("edges", (fm.get("edges") or []) + [{"kind": "supports", "target": "zet_injected_evil"}]),
+            "created_at": lambda fm: fm.__setitem__("created_at", "1999-01-01"),
+            "new_visibility": lambda fm: fm.__setitem__("visibility", "public"),
+            "new_facets": lambda fm: fm.__setitem__("facets", {"domain": "work"}),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(field=name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                    mint = self._mint_lunch_for_reconcile(archive_root)
+                    zid = mint["zettel_id"]
+                    canonical = archive_root / mint["canonical_path"]
+                    text = canonical.read_text(encoding="utf-8")
+                    match = archive_cli.FRONTMATTER_RE.match(text)
+                    frontmatter = archive_cli.load_yaml(match.group(1))
+                    body = text[match.end():]
+                    mutate(frontmatter)
+                    canonical.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body.lstrip(), encoding="utf-8")
+
+                    code, output = self.run_cli(
+                        ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+                    )
+                    self.assertEqual(code, 0, output)
+                    result = json.loads(output)
+                    self.assertEqual(result["drift_class"], "content_change", (name, result))
+                    self.assertTrue(result["content_change_ack_required"], (name, result))
+                    # the body is untouched: class is driven by the frontmatter edit only.
+                    self.assertFalse(result["body_changed"], (name, result))
+                    self.assertTrue(result["frontmatter_field_changes"], (name, result))
+
+                    # --approve WITHOUT --content-changed-ack must BLOCK (zero writes).
+                    reconcile_dir = archive_root / "receipts" / "mint" / "reconciles"
+                    code, output = self.run_cli(
+                        ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve", "--reviewed-by", "person:test", "--format", "json"]
+                    )
+                    self.assertEqual(code, 1, (name, output))
+                    self.assertFalse(reconcile_dir.exists() and list(reconcile_dir.glob("*")), name)
+
+                    # doctor must be RED (non-clean) until the human reconciles with ack.
+                    doctor_code, _ = self.run_cli(["doctor", str(archive_root)])
+                    self.assertNotEqual(doctor_code, 0, name)
+
+    def test_remint_reconcile_refuses_id_mismatch_with_zero_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            canonical = archive_root / mint["canonical_path"]
+            text = canonical.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            body = text[match.end():]
+            frontmatter["id"] = "zet_swapped_evil"
+            canonical.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body.lstrip(), encoding="utf-8")
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--path", mint["canonical_path"], "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["drift_class"], "unclassified")
+            self.assertTrue(result["blockers"])
+            # apply must also refuse, zero writes
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--path", mint["canonical_path"], "--approve", "--reviewed-by", "person:test", "--content-changed-ack", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            reconcile_dir = archive_root / "receipts" / "mint" / "reconciles"
+            self.assertFalse(reconcile_dir.exists() and list(reconcile_dir.glob("*")))
+
+    def test_remint_reconcile_refuses_status_not_canonical(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            canonical = archive_root / mint["canonical_path"]
+            text = canonical.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            body = text[match.end():]
+            frontmatter["status"] = "draft"
+            canonical.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body.lstrip(), encoding="utf-8")
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--path", mint["canonical_path"], "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertFalse(json.loads(output)["ok"])
+
+    def test_remint_reconcile_refuses_unparseable_frontmatter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            canonical.write_text("id: broken\nno frontmatter fence here\n", encoding="utf-8")
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--path", mint["canonical_path"], "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertFalse(json.loads(output)["ok"])
+
+    def test_remint_reconcile_refuses_non_mint_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            receipt_path = archive_root / mint["mint_receipt_path"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt["action"] = "not_mint_zettel"
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertFalse(json.loads(output)["ok"])
+
+    def test_remint_reconcile_drifted_snapshot_falls_back_to_content_change(self) -> None:
+        for scenario in ("missing", "crlf_plus_content", "bom_plus_content"):
+            with self.subTest(scenario=scenario):
+                with tempfile.TemporaryDirectory() as tmp:
+                    archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                    mint = self._mint_lunch_for_reconcile(archive_root)
+                    zid = mint["zettel_id"]
+                    canonical = archive_root / mint["canonical_path"]
+                    snapshot = archive_root / mint["draft_snapshot_path"]
+                    # drift the canonical by newline only (would be format_drift if snapshot clean)
+                    canonical.write_bytes(canonical.read_bytes().replace(b"\n", b"\r\n"))
+                    if scenario == "missing":
+                        snapshot.unlink()
+                    elif scenario == "crlf_plus_content":
+                        snapshot.write_bytes(snapshot.read_bytes().replace(b"\n", b"\r\n") + b"HUMAN EDIT\n")
+                    else:  # bom_plus_content
+                        snapshot.write_bytes(b"\xef\xbb\xbf" + snapshot.read_bytes() + b"HUMAN EDIT\n")
+                    code, output = self.run_cli(
+                        ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+                    )
+                    self.assertEqual(code, 0, output)
+                    result = json.loads(output)
+                    self.assertEqual(result["drift_class"], "content_change", (scenario, result))
+                    self.assertTrue(result["content_change_ack_required"])
+
+    def test_retire_draft_sha_block_routes_to_reconcile_but_id_missing_does_not(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            # a real content edit to the canonical drifts the mint target sha
+            canonical.write_text(canonical.read_text(encoding="utf-8") + "\nHuman edit\n", encoding="utf-8")
+            code, output = self.run_cli(
+                ["retire-draft", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            result = json.loads(output)
+            self.assertIn("Mint receipt target sha256 does not match the referenced file.", result["blockers"])
+            self.assertTrue(
+                any("remint-reconcile" in action for action in result.get("next_safe_actions", [])),
+                result,
+            )
+
+    def test_retire_draft_id_missing_block_does_not_route_to_reconcile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            draft_path = archive_root / "inbox" / "zet_20260519_draft_ai_lunch_note.md"
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            text = draft_path.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            body = text[match.end():]
+            frontmatter.pop("id", None)
+            draft_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body.lstrip(), encoding="utf-8")
+            code, output = self.run_cli(
+                ["retire-draft", str(archive_root), "--path", "inbox/zet_20260519_draft_ai_lunch_note.md", "--dry-run", "--format", "json"]
+            )
+            result = json.loads(output)
+            self.assertFalse(any("remint-reconcile" in action for action in result.get("next_safe_actions", [])), result)
+
+    def test_remint_reconcile_bom_parses_and_bom_receipt_loads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            canonical = archive_root / mint["canonical_path"]
+            receipt_path = archive_root / mint["mint_receipt_path"]
+            canonical.write_bytes(b"\xef\xbb\xbf" + canonical.read_bytes())
+            receipt_path.write_bytes(b"\xef\xbb\xbf" + receipt_path.read_bytes())
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            codes = {item["code"] for item in json.loads(doctor_output)}
+            self.assertNotIn("mint_receipt_target_frontmatter_missing", codes)
+            self.assertNotIn("json_parse_error", codes)
+
+    def test_remint_reconcile_bom_canonical_emits_advisory_and_stays_detectable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            canonical.write_bytes(b"\xef\xbb\xbf" + canonical.read_bytes())
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            codes = {item["code"] for item in json.loads(doctor_output)}
+            self.assertIn("zettel_has_bom", codes)
+            # BOM tolerance did NOT hide the byte drift: reconcile still sees drift.
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            result = json.loads(output)
+            self.assertEqual(result["drift_class"], "format_drift")
+
+    def test_mint_still_refuses_re_mint_after_reconcile_feature(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self._mint_lunch_for_reconcile(archive_root)
+            # the inbox draft still exists; a second mint must refuse (receipt exists)
+            code, output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1, output)
 
     def test_mint_zettel_dry_run_accepts_short_cjk_title(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

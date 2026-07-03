@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit mint reconcile receipt",
+  "type": "object",
+  "required": [
+    "receipt_id",
+    "receipt_path",
+    "action",
+    "dry_run",
+    "archive_id",
+    "authority_mode",
+    "zettel",
+    "mint_receipt",
+    "drift_class",
+    "result"
+  ],
+  "properties": {
+    "receipt_id": {"type": "string"},
+    "receipt_path": {"type": "string"},
+    "action": {"type": "string", "enum": ["reconcile_mint_receipt"]},
+    "dry_run": {"type": "boolean"},
+    "timestamp": {"type": "string"},
+    "archive_id": {"type": "string"},
+    "authority_mode": {"type": "string", "enum": ["basic"]},
+    "reviewed_by": {"type": "string"},
+    "zettel": {"type": "object"},
+    "mint_receipt": {"type": "object"},
+    "drift_class": {"type": "string", "enum": ["format_drift", "content_change"]},
+    "content_change_ack": {"type": "boolean"},
+    "prior_target_sha256": {"type": "string"},
+    "new_target_sha256": {"type": "string"},
+    "prior_source_sha256": {"type": "string"},
+    "new_source_sha256": {"type": "string"},
+    "prior_snapshot_sha256": {"type": "string"},
+    "new_snapshot_sha256": {"type": "string"},
+    "normalized_content_digest": {"type": "string"},
+    "source_note": {"type": "string"},
+    "result": {"type": "object"}
+  }
+}

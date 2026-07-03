@@ -6,6 +6,52 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.162 - 2026-07-03
+
+- Added `archive remint-reconcile`, an honest mint-receipt reconcile that
+  re-issues a mint receipt's recorded sha256 values after a canonical zettel
+  drifts (for example a CRLF/BOM re-checkout, or a human content edit). The
+  command classifies the drift as `format_drift` (newline/BOM only) or
+  `content_change` and always shows the current on-disk content. Governing
+  doctrine (recorded in the v0.3.162 decision log): reconcile never masks
+  corruption and classification never waives human review. Every `--approve`
+  requires `--reviewed-by`; a `content_change` also requires an explicit
+  `--content-changed-ack`; hard refusals (id mismatch, non-mint receipt,
+  unparseable/ non-canonical target, missing receipt) run before any
+  classification, so a corrupt state is refused, never "fixed."
+- `format_drift` is granted only on positive, byte-level, re-derivable proof:
+  the current canonical body must be identical to a clean draft snapshot AND the
+  FULL content frontmatter re-derived from that snapshot must match the current
+  canonical field-by-field (every draft key, with `source_refs` mint-transformed,
+  excluding only the mint-injected `status`/`updated_at`/`mint`/`promotion` keys;
+  `status` is separately required to equal `canonical`). Because every content
+  field is compared and not a hand-picked subset, an edit to ANY field (title, id,
+  kind, visibility, facets, provenance, edges, created_at, …) is caught. A
+  drifted, missing, or BOM'd snapshot is never treated as a clean anchor and falls
+  back to the stricter `content_change` path. A canonical-only title or field edit
+  is therefore correctly classified as `content_change`.
+- Reconcile writes BOTH an in-place mint-receipt update (recomputed shas plus an
+  append-only `reconcile.history` provenance block, including a
+  `normalized_content_digest`) AND a separate immutable audit receipt under
+  `receipts/mint/reconciles/`. Both writes are atomic (temp file + os.replace).
+- `archive doctor` now routes a canonical byte-drift to reconcile: a
+  previously-reconciled receipt that re-drifted by newline/BOM only emits the new
+  `mint_receipt_target_byte_drift_suspected_format` ERROR; an un-reconciled
+  sha mismatch keeps the plain `mint_receipt_sha_mismatch` ERROR with a
+  suggested `remint-reconcile --dry-run` command. Both stay non-clean (fail
+  `doctor` and `--strict`); the edge-receipt evolution path is unchanged. A
+  UTF-8 BOM on a canonical zettel now surfaces a `zettel_has_bom` WARN advisory.
+- `archive retire-draft` now surfaces a `remint-reconcile --dry-run` next-safe
+  action when — and only when — retirement is blocked by the mint-target
+  sha-mismatch blocker. No retire gate was relaxed.
+- Additive parse tolerance (no hash changes, no archive migration): frontmatter
+  parsing and receipt/JSON reads now tolerate a leading UTF-8 BOM
+  (`utf-8-sig` / one-BOM strip). sha256 hashing still reads raw bytes, so BOM and
+  newline drift stay visible. New mints pin the canonical write to LF newlines to
+  prevent immediate re-drift. Added the `mint-reconcile-receipt` schema and a
+  `reconcile` property on the mint-receipt schema (not required; legacy receipts
+  are unaffected).
+
 ## v0.3.161 - 2026-07-03
 
 - Restructured README.md and README.ko.md (docs-only, no behavior change).
