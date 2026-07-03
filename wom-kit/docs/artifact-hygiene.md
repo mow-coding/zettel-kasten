@@ -1,7 +1,7 @@
 # WOM Artifact Hygiene
 
-Status: active baseline with web/app boundary guard
-Date: 2026-06-25
+Status: active baseline with web/app boundary guard and intake layout ruling (D2)
+Date: 2026-07-03
 
 This document explains which WOM files are durable, which are generated, which
 are local-only, and which must never be cleaned automatically.
@@ -20,8 +20,24 @@ For a first personal WOM setup, the recommended local paths are:
 ```text
 local archive root:       C:\Users\<user>\zettel-kasten-<profile_slug>
 local objet store:        C:\Users\<user>\zettel-kasten-<profile_slug>-objets
-project intake staging:   C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug>
+capture intake staging:   <archive-root>\staging\incoming\<YYYY-MM-DD>\<project_slug>  [canonical, in-archive]
+bulk external staging:    C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug>
 ```
+
+The intake layout ruling (D2, 2026-07-03) is one consistent statement:
+
+- **Canonical capture intake stages INSIDE the archive root**, recommended
+  under `staging/incoming/<YYYY-MM-DD>/` (the date layer is recommended, not
+  required). Capture requires archive-relative staged paths, and the v0.3.158
+  enablement record makes this the real-archive path.
+- **The sibling `-objets` store is for bulk external originals** that must
+  never enter git: it stays under the never-touch protection and is
+  represented in the archive through `prehashed-objet-ledger` plus
+  `object-storage-upload-evidence` evidence, not by copying bytes in.
+- **A raw in-root `objets/` folder is NON-canonical** for long-term originals:
+  originals belong in the content-addressed `objects/sha256/` store via
+  capture. Doctor reports `archive_objets_layout_noncanonical` for it; see the
+  migration guide in section 5.
 
 The local archive root is the Git-friendly control plane. It holds zets,
 metadata, manifests, source maps, receipts, views, and generated local indexes.
@@ -119,6 +135,9 @@ node_modules/
 **/db/archive-index.sqlite-wal
 **/db/archive-index.sqlite-shm
 **/db/archive-index.sqlite-journal
+objects/sha256/
+objects/derived-text/sha256/
+/objets/
 ```
 
 The checker validates these patterns on throwaway or explicitly approved archive
@@ -140,14 +159,89 @@ workspace-root guardrails. They keep local collaboration mailboxes, prompts,
 runtime state, and possible secret-bearing coordination files out of version
 control even when an archive is operated from a larger workspace.
 
-## 5. Future Cleanup Guidance
+`/objets/` (v0.3.160) is anchored on purpose: it excludes only a raw IN-ROOT
+`objets/` folder, not nested folders such as `staging/incoming/<date>/objets/`
+that appear when a client tree is copied into staging. Two honest caveats:
 
-AI scratch files belong in `.wom-scratch/` or `workbench/ai-scratch/`, not in
-`objets/`. `objets/` is for human-selected original material such as meeting
-audio, transcripts, photos, exports, or other source files that should remain
-recoverable. AI research notes, intermediate reports, prompt drafts, and
-temporary composition files are scratch unless a human explicitly preserves them
-as an objet.
+- gitignore does not untrack files that were already committed; use
+  `git rm --cached` after human review when that has happened,
+- once `/objets/` is ignored, NEW files dropped there silently stop being
+  versioned. That is why the doctor layout warning
+  `archive_objets_layout_noncanonical` stays active even when the folder is
+  gitignored: unmigrated originals in an ignored folder are excluded from the
+  git-push backup path until the migration in section 5 completes.
+
+For the workspace-root risk above an archive (a `git init` at a folder that
+contains the archive and/or a sibling `-objets` store), doctor additionally
+reports `workspace_objet_store_git_exposure` when an objet byte store may be
+tracked by an enclosing git working tree. The fix message names the store's
+actual directory name, because the `objets/` pattern does not match a sibling
+`<root-name>-objets` store: when the store is a direct child of the git root
+the hint is the anchored `/<root-name>-objets/` line in that root
+`.gitignore`; when the store sits deeper, the hint is the unanchored
+`<root-name>-objets/` form there (or the anchored form in the store's own
+parent directory `.gitignore`) — an anchored repo-root line would not match a
+nested store in git. A store whose own `.git` marker is broken (empty `.git`
+dir, dangling `gitdir:` pointer) still warns: real git ignores the invalid
+marker and the enclosing repository tracks the raw originals anyway.
+
+## 5. In-Root `objets/` Migration And Future Cleanup Guidance
+
+AI scratch files belong in `.wom-scratch/` or `workbench/ai-scratch/`, never in
+an objet location. Human-selected original material such as meeting audio,
+transcripts, photos, exports, or other source files that should remain
+recoverable belongs in the content-addressed `objects/sha256/` store through
+the reviewed capture chain (or, for bulk external stores, in the sibling
+`-objets` store under never-touch protection with `prehashed-objet-ledger`
+evidence). A raw in-root `objets/` folder is a non-canonical layout: it is
+neither hashed, nor manifested, nor protected, and once gitignored its contents
+silently drop out of the git-push backup path. AI research notes, intermediate
+reports, prompt drafts, and temporary composition files are scratch unless a
+human explicitly preserves them as an objet through capture.
+
+### Migrating an existing in-root `objets/` folder
+
+Archives that already hold originals in an in-root `objets/` folder (doctor
+warning `archive_objets_layout_noncanonical`) migrate with the normal reviewed
+spine. In-root `objets/` files are ALREADY archive-relative, so selections can
+run in place; no preparatory move into `staging/incoming/` is needed.
+
+Prerequisite (BEFORE step 2, not just before capture): real (non-sandbox)
+archives must approve capture enablement once —
+`archive objet-capture-enable <archive-root> --approve --reviewed-by person:me`.
+Without the enablement record, `objet-capture-selection` in step 2 already
+blocks with `resolved_path_never_touch` on a real archive following the
+recommended naming; it is not only step 3 that refuses. When the archive root
+or a parent folder matches the never-touch naming pattern (`zettel-kasten-*` /
+`*-objets` — true for every archive following the recommended naming), the
+approval additionally requires `--acknowledge-never-touch-name`, otherwise the
+enablement refuses.
+
+```powershell
+# 1. Classify one file (metadata-only, no copy):
+archive source-intake <archive-root> --dry-run --local-path <archive-root>\objets\<file> --format json
+archive source-intake-record <archive-root> --source-intake-plan <plan.json> --approve --reviewed-by person:me --format json
+
+# 2. Prepare ONE reviewed selection per file (archive-relative staged path):
+archive objet-capture-selection <archive-root> --staged-path objets/<file> --source-intake-receipt <receipt> --approve --reviewed-by person:me --format json
+
+# 3. Capture through the enablement-gated write path (--selection is a normal
+#    file path resolved from your CURRENT directory, not archive-relative —
+#    from outside the archive root, pass the full path to the manifest):
+archive objet-capture <archive-root> --selection <selection.json> --dry-run --format json
+archive objet-capture <archive-root> --selection <selection.json> --approve --reviewed-by person:me --format json
+
+# 4. Verify preservation evidence BEFORE any manual deletion:
+archive staged-cleanup-check <archive-root> --staged objets --dry-run --format json
+```
+
+For bulk stores (hundreds of GB, thousands of files), do not run per-file
+capture: register the external content-addressed store with
+`archive prehashed-objet-ledger` and record storage evidence with
+`archive object-storage-upload-evidence` instead, then promote only the small
+human-selected subset through the capture spine above. Only
+`staged-cleanup-check` evidence — never this document — can say a migrated
+folder is safe to remove, and WOM-kit still never deletes it for you.
 
 The current local cleanup flow is:
 

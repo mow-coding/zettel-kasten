@@ -969,6 +969,7 @@ RUNTIME_CONTEXT_ARCHIVE_TYPES = {"personal", "company", "family", "project", "re
 RUNTIME_CONTEXT_SAFE_ACTIONS = [
     "run ai-response-concept-guide dry-run",
     "run operational-context dry-run",
+    "run operator-feedback-plan dry-run",
     "create draft in inbox",
     "run mint dry-run",
     "run check-safe-html dry-run",
@@ -11276,6 +11277,243 @@ def archive_git_marker_warnings(archive_root: Path) -> list[dict[str, Any]]:
             }
         ]
     return []
+
+
+def _git_working_tree_marker_state(candidate: Path) -> str:
+    """Classify a candidate directory's `.git` marker as `"valid"`,
+    `"broken"`, or `"absent"`.
+
+    Only a VALID marker makes real git treat the directory as a nested
+    repository whose contents an enclosing repository does not track:
+
+    - a `.git` DIRECTORY is valid only when it contains a `HEAD` file (the
+      same cheap validity test `git_marker_incomplete` uses); an empty or
+      HEAD-less `.git` directory is invisible to an enclosing repo, which
+      tracks the directory's contents anyway;
+    - a `.git` POINTER FILE (linked worktrees and submodules use
+      `gitdir: ...` files) is valid only when the referenced git dir exists
+      and carries a `HEAD` file; a dangling pointer is likewise ignored by
+      git and the contents are tracked by an enclosing repo.
+
+    Anything unreadable counts as `"broken"` (ambiguous), never as valid:
+    the guard's mandate is "ambiguous -> still warn". Bare repositories have
+    no `.git` child at all and report `"absent"`, which is correct: a bare
+    repo has no working tree that could track files."""
+    marker = candidate / ".git"
+    try:
+        if marker.is_dir():
+            return "valid" if (marker / "HEAD").is_file() else "broken"
+        if marker.is_file():
+            first_line = ""
+            for line in marker.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.strip():
+                    first_line = line.strip()
+                    break
+            if first_line.startswith("gitdir:"):
+                target = Path(first_line[len("gitdir:") :].strip())
+                if not target.is_absolute():
+                    target = candidate / target
+                if (target / "HEAD").is_file():
+                    return "valid"
+            return "broken"
+        return "absent"
+    except OSError:
+        return "broken"
+
+
+def _has_git_working_tree_marker(candidate: Path) -> bool:
+    """Any `.git` marker — valid OR broken — makes a directory a CANDIDATE
+    enclosing working-tree root for the walk-up: a broken marker is ambiguous
+    (someone may `git init` right there), and ambiguity counts toward the
+    warning, never toward silence."""
+    return _git_working_tree_marker_state(candidate) != "absent"
+
+
+def enclosing_git_working_tree_root(start: Path, *, max_levels: int = 16) -> Path | None:
+    """Walk up from `start` (inclusive) looking for the nearest git working-tree
+    root. Bounded and fail-quiet: any OSError or hitting the filesystem root
+    returns None. This is a filesystem heuristic, not full git discovery."""
+    current = start
+    for _ in range(max_levels):
+        if _has_git_working_tree_marker(current):
+            return current
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+    return None
+
+
+def gitignore_lines_exclude_directory(
+    gitignore_path: Path, directory_name: str, *, anchored_matches: bool = True
+) -> bool:
+    """Cheap, fail-quiet heuristic: does this .gitignore contain a plain line
+    excluding `directory_name` (with or without the trailing slash)? Anchored
+    forms (`/name`, `/name/`) only match a DIRECT child of the .gitignore's
+    own directory in real git, so callers must pass
+    `anchored_matches=False` when the store is nested deeper than the
+    .gitignore being checked. Matching is case-sensitive like default git on
+    case-sensitive filesystems (`core.ignorecase=false`); a wrong-case line
+    therefore warns rather than silently suppressing. Real git ignore
+    resolution also involves nested .gitignore files, `.git/info/exclude`,
+    `core.excludesFile`, negations, and `core.ignorecase`; callers must
+    therefore word their diagnostics as "may be tracked" rather than as a
+    proven-tracking claim."""
+    try:
+        if not gitignore_path.is_file():
+            return False
+        text = gitignore_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    accepted = {
+        directory_name,
+        f"{directory_name}/",
+    }
+    if anchored_matches:
+        accepted.add(f"/{directory_name}")
+        accepted.add(f"/{directory_name}/")
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped in accepted:
+            return True
+    return False
+
+
+def _objet_store_git_exposure_warning(
+    archive_root: Path,
+    store_name: str,
+    store_path: Path,
+    *,
+    inside_archive: bool,
+) -> dict[str, Any] | None:
+    # A store that is itself a VALID git working-tree root is governed by its
+    # own repository; an enclosing repository treats it as a nested repo and
+    # does not track its contents. A BROKEN `.git` marker (empty dir, dangling
+    # `gitdir:` pointer) is ignored by real git — an enclosing repository
+    # tracks the store's contents anyway — so broken counts as ambiguous and
+    # the check keeps going (ambiguous -> still warn).
+    if _git_working_tree_marker_state(store_path) == "valid":
+        return None
+    try:
+        git_root = enclosing_git_working_tree_root(store_path.parent)
+    except OSError:
+        return None
+    if git_root is None:
+        return None
+    if inside_archive:
+        if git_root == archive_root and _git_working_tree_marker_state(archive_root) == "valid":
+            # The supported archive-is-its-own-repo case: the archive's own
+            # .gitignore governs, and local_profile_gitignore_incomplete
+            # already reports a missing `/objets/` pattern there. A BROKEN
+            # archive-root marker (git_marker_incomplete territory) does NOT
+            # take this exit: real git skips the invalid marker, so a repo
+            # above may track the store — fall through to the checks below.
+            return None
+        # A workspace repo above the archive: the archive's own .gitignore is
+        # a nested .gitignore that still protects the store when present. The
+        # store is a direct child of the archive root, so anchored `/objets/`
+        # forms count here...
+        if gitignore_lines_exclude_directory(archive_root / ".gitignore", store_name):
+            return None
+        # ...but at a git root ABOVE the archive an anchored form does not
+        # match the nested store, so only unanchored lines count there.
+        if gitignore_lines_exclude_directory(
+            git_root / ".gitignore", store_name, anchored_matches=(git_root == store_path.parent)
+        ):
+            return None
+        fix_hint = (
+            "run `archive repair-gitignore <archive-root> --approve --reviewed-by <actor-id>` "
+            f"so the archive .gitignore excludes `/{store_name}/`"
+        )
+    else:
+        if gitignore_lines_exclude_directory(
+            git_root / ".gitignore", store_name, anchored_matches=(git_root == store_path.parent)
+        ):
+            return None
+        if store_path.parent != git_root and gitignore_lines_exclude_directory(
+            store_path.parent / ".gitignore", store_name
+        ):
+            return None
+        if store_path.parent == git_root:
+            fix_hint = f"add `/{store_name}/` to that repository root .gitignore"
+        else:
+            # Anchored forms at the repo root do not match a nested store, so
+            # the hint must not recommend a line that silences the warning
+            # without actually excluding the store.
+            fix_hint = (
+                f"add an unanchored `{store_name}/` line to that repository root .gitignore "
+                f"(or an anchored `/{store_name}/` line to the store's parent directory .gitignore)"
+            )
+    return {
+        "code": "workspace_objet_store_git_exposure",
+        # Basename-only on purpose: doctor must not echo local absolute paths
+        # for stores outside the archive root.
+        "path": store_name,
+        "message": (
+            f"Objet byte store `{store_name}/` sits inside a git working tree whose ignore rules "
+            f"do not plainly exclude it, so raw originals may be tracked by git; {fix_hint} "
+            "before any `git init`/`git add` above the store."
+        ),
+    }
+
+
+def archive_objet_store_layout_and_git_exposure_warnings(archive_root: Path) -> list[dict[str, Any]]:
+    """Two additive read-only guards (v0.3.160):
+
+    - `archive_objets_layout_noncanonical`: a raw in-root `objets/` folder
+      exists at all. This is the D2 intake-layout signal and is deliberately
+      NOT silenced by gitignoring the folder: once `/objets/` is ignored, new
+      files dropped there silently stop being versioned, so the migration
+      reminder must stay loud until the folder is emptied via the documented
+      register-or-capture path (see wom-kit/docs/artifact-hygiene.md).
+    - `workspace_objet_store_git_exposure`: an objet BYTE store (in-root
+      `objets/` or the sibling `<root-name>-objets` store) is inside a git
+      working tree that may track it.
+
+    Detection is intentionally cheap and fail-quiet: one stat for each of the
+    two candidate store paths, a bounded parent walk-up, and at most a few
+    small .gitignore reads. The sibling store's contents are never enumerated.
+    """
+    warnings: list[dict[str, Any]] = []
+    in_root_store = archive_root / "objets"
+    try:
+        in_root_exists = in_root_store.is_dir()
+    except OSError:
+        in_root_exists = False
+    if in_root_exists:
+        warnings.append(
+            {
+                "code": "archive_objets_layout_noncanonical",
+                "path": "objets",
+                "message": (
+                    "Archive root contains a raw objets/ folder; the canonical home for originals is the "
+                    "content-addressed objects/sha256/ store via objet-capture-selection -> objet-capture "
+                    "(or the sibling *-objets store with prehashed-objet-ledger evidence for bulk external "
+                    "bytes). Stage new intake under staging/incoming/ and migrate existing files with the "
+                    "migration guide in wom-kit/docs/artifact-hygiene.md, then verify with "
+                    "staged-cleanup-check."
+                ),
+            }
+        )
+        exposure = _objet_store_git_exposure_warning(
+            archive_root, "objets", in_root_store, inside_archive=True
+        )
+        if exposure:
+            warnings.append(exposure)
+    sibling_store = archive_root.parent / f"{archive_root.name}-objets"
+    try:
+        sibling_exists = sibling_store.is_dir()
+    except OSError:
+        sibling_exists = False
+    if sibling_exists:
+        exposure = _objet_store_git_exposure_warning(
+            archive_root, sibling_store.name, sibling_store, inside_archive=False
+        )
+        if exposure:
+            warnings.append(exposure)
+    return warnings
 
 
 def normalize_text_for_block_hash(text: str) -> str:
@@ -48422,8 +48660,9 @@ def project_intake_plan(archive_root: Path | str, staged_folder: Path | str) -> 
     warnings: list[str] = []
     if not staging_convention["follows_staging_convention"]:
         warnings.append(
-            "Staged folder is outside the recommended local objet intake shape: "
-            r"C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug>."
+            "Staged folder is outside the recommended intake staging shapes: "
+            "<archive-root>/staging/incoming/<YYYY-MM-DD>/<project_slug> (in-archive capture staging) or "
+            r"C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug> (bulk external originals)."
         )
 
     return {
@@ -48517,8 +48756,9 @@ def project_intake_unpack_queue(
     blockers: list[str] = []
     if not staging_convention["follows_staging_convention"]:
         warnings.append(
-            "Staged folder is outside the recommended local objet intake shape: "
-            r"C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug>."
+            "Staged folder is outside the recommended intake staging shapes: "
+            "<archive-root>/staging/incoming/<YYYY-MM-DD>/<project_slug> (in-archive capture staging) or "
+            r"C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug> (bulk external originals)."
         )
 
     receipt_status: dict[str, Any] | None = None
@@ -49047,11 +49287,33 @@ def project_intake_unpack_choice(
 
 def project_intake_staging_convention(archive_root: Path, staged_folder: Path) -> dict[str, Any]:
     expected_intake_root = (archive_root.parent / f"{archive_root.name}-objets" / "intake").resolve()
-    follows = staged_folder.parent == expected_intake_root and staged_folder.name != "intake"
+    in_archive_staging_root = (archive_root / "staging" / "incoming").resolve()
+    follows_sibling = staged_folder.parent == expected_intake_root and staged_folder.name != "intake"
+    try:
+        resolved_staged = staged_folder.resolve()
+        follows_in_archive = (
+            resolved_staged == in_archive_staging_root or in_archive_staging_root in resolved_staged.parents
+        )
+    except OSError:
+        follows_in_archive = False
+    follows = follows_sibling or follows_in_archive
+    if follows_in_archive:
+        matched_shape = "in_archive_capture_staging"
+    elif follows_sibling:
+        matched_shape = "sibling_objet_store_intake"
+    else:
+        matched_shape = None
     status = "matches_recommended_shape" if follows else "outside_recommended_shape"
     return {
         "follows_staging_convention": follows,
         "status": status,
+        "matched_shape": matched_shape,
+        # Canonical capture intake stages INSIDE the archive root (D2, v0.3.160):
+        # objet-capture-selection requires archive-relative staged paths, so only
+        # in-archive staging can feed capture. The date layer is recommended, not
+        # required. The sibling store remains the bulk external-originals home.
+        "recommended_in_archive_shape": "<archive-root>/staging/incoming/<YYYY-MM-DD>/<project_slug>",
+        "in_archive_staging_supports_capture": True,
         "recommended_shape": r"C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug>",
         "recommended_objet_store_suffix": "-objets",
         "recommended_intake_folder_name": "intake",
@@ -49089,6 +49351,10 @@ def project_intake_staging_guide(
             "objet_store_root": str(objet_store),
             "intake_root": str(intake_root),
             "staged_project_folder": str(staged_folder),
+            # Canonical capture intake (D2, v0.3.160) stages INSIDE the archive
+            # root; these two are archive-relative on purpose.
+            "in_archive_staging_root": "staging/incoming",
+            "in_archive_staged_project_folder": "staging/incoming/<YYYY-MM-DD>/" + (normalized_slug or "<project-slug>"),
         },
         "path_policy": {
             "one_project_per_staged_folder": True,
@@ -49104,13 +49370,16 @@ def project_intake_staging_guide(
             "writes": False,
         },
         "staging_convention": {
+            "recommended_in_archive_shape": "<archive-root>/staging/incoming/<YYYY-MM-DD>/<project_slug>",
+            "in_archive_staging_supports_capture": True,
             "recommended_shape": r"C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug>",
             "recommended_objet_store_suffix": "-objets",
             "recommended_intake_folder_name": "intake",
             "follows_expected_parent": follows_expected_parent,
         },
         "next_safe_actions": [
-            "Create the recommended staged_project_folder manually if it does not exist.",
+            "For capture intake, stage INSIDE the archive root: create the in_archive_staged_project_folder manually (objet-capture-selection requires archive-relative staged paths; the date layer is recommended, not required).",
+            "For bulk external originals that must stay outside git, create the sibling staged_project_folder manually if it does not exist.",
             "Place exactly one project folder's temporary intake materials there before running project-intake-plan.",
             "Run project-intake-next-question --staged-folder <folder> --dry-run to start the human review loop.",
             "Do not upload, capture, draft, mint, or clean staged files from this guide.",
@@ -49534,7 +49803,8 @@ def project_intake_next_safe_actions(staging_convention: dict[str, Any]) -> list
     if not staging_convention["follows_staging_convention"]:
         actions.insert(
             1,
-            r"Restage the folder under C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug> before capture if you want the recommended path.",
+            "Restage the folder under <archive-root>/staging/incoming/<YYYY-MM-DD>/<project_slug> (capture intake) or "
+            r"C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug> (bulk external originals) before capture if you want a recommended path.",
         )
     return actions
 
@@ -53362,6 +53632,10 @@ def runtime_context_recommended_first_commands() -> list[dict[str, str]]:
             "command": "archive ai-response-concept-guide <archive-root> --topic all --dry-run --format json",
             "purpose": "load beginner-facing WOM concepts, safe routing hints, and overclaim guardrails",
         },
+        {
+            "command": "archive operator-feedback-plan <archive-root> --dry-run --format json",
+            "purpose": "discover where operator tool-feedback records live (ops/feedback/) and which feedback is still open before starting new work",
+        },
     ]
 
 
@@ -53403,6 +53677,13 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
             "action": "choose_material_link_route",
             "field": "canonical_entrypoints.material_link_routes",
             "reason": "use omitted-locator, source-map, or body-locator routes without inventing provider calls",
+        },
+        {
+            "step": 7,
+            "action": "plan_operator_feedback",
+            "command": "archive operator-feedback-plan <archive-root> --dry-run --format json",
+            "when": "the human reports tool friction, a workflow gap, or asks where feedback records live",
+            "reason": "surface the operator feedback lifecycle (ops/feedback/) so frictions become durable records; recording still needs a separate operator-feedback-record approval",
         },
     ]
 

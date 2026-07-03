@@ -153,6 +153,12 @@ name is `zettel-kasten-<profile_slug>`. Use `local objet store (raw source/origi
 For a tiny first local test, GitHub, Neon/Postgres, and R2/B2/S3 can stay as
 dry-run plans or deferred manual steps.
 
+When source files should become captured objets, stage them INSIDE the archive
+root under `staging/incoming/<YYYY-MM-DD>/` (canonical capture intake, D2); the
+sibling local objet store is for bulk external originals that never enter git,
+and a raw in-root `objets/` folder is discouraged — see
+[artifact-hygiene.md](artifact-hygiene.md).
+
 ## Flow 2: Onboard A New Archive
 
 Start with an onboarding dry-run. Think of it as letting the AI and CLI show the setup plan before anything is created. For a first Windows personal archive, the recommended local root is `C:\Users\<user>\zettel-kasten-<profile_slug>`, and the matching local objet store for raw source/original files is `C:\Users\<user>\zettel-kasten-<profile_slug>-objets`.

@@ -73,7 +73,8 @@ For a first personal WOM setup:
 ```text
 local archive root:       C:\Users\<user>\zettel-kasten-<profile_slug>
 local objet store:        C:\Users\<user>\zettel-kasten-<profile_slug>-objets
-project intake staging:   C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug>
+capture intake staging:   <archive-root>\staging\incoming\<YYYY-MM-DD>\<project_slug>  [canonical, in-archive]
+bulk external staging:    C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug>
 ```
 
 To ask WOM-kit for the recommended path before creating folders:
@@ -88,10 +89,21 @@ one project before we review it?" answer.
 
 The local archive root is the Git-friendly control plane.
 
-The local objet store is the raw source/original file store.
+The intake layout ruling (D2, 2026-07-03) splits the two staging shapes by
+destination:
 
-The project intake staging folder is temporary. It is the place where one project
-folder is reviewed before its durable records are created.
+- Capture intake stages INSIDE the archive root under `staging/incoming/`
+  (date layer recommended, not required), because `objet-capture-selection`
+  requires archive-relative staged paths. Originals end up in the
+  content-addressed `objects/sha256/` store.
+- The sibling local objet store holds bulk external originals that must never
+  enter git. It stays under never-touch protection and is represented through
+  `prehashed-objet-ledger` plus `object-storage-upload-evidence` evidence.
+- A raw in-root `objets/` folder is discouraged; the migration guide lives in
+  [artifact-hygiene.md](artifact-hygiene.md) section 5.
+
+The intake staging folder is temporary in both shapes. It is the place where
+one project folder is reviewed before its durable records are created.
 
 Use the artifact hygiene baseline when deciding what can be kept, rebuilt,
 deferred, or cleaned:
@@ -135,7 +147,7 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Upgrade safety | `archive upgrade-check --dry-run` | Reports upgrade-readiness signals; writes nothing and is not a migration engine. |
 | Source registration | `archive add-source` | Can write source binding metadata only after approval. |
 | Source scan | `archive scan-source` | Metadata-first; approved mode writes source maps and receipts. |
-| Staging guide | `archive project-intake-staging-guide --dry-run` / MCP `project_intake_staging_guide` | Shows the recommended local objet-store staging path for one project slug. It creates no folders and moves no files. |
+| Staging guide | `archive project-intake-staging-guide --dry-run` / MCP `project_intake_staging_guide` | Shows the recommended intake staging paths for one project slug: the canonical in-archive capture staging shape `staging/incoming/<YYYY-MM-DD>/<project_slug>` plus the sibling objet-store shape for bulk external originals. It creates no folders and moves no files. |
 | Session guide | `archive project-intake-session-guide --dry-run` / MCP `project_intake_session_guide` | Shows the next safe human-guided step from a project slug, staged folder, or existing decisions receipt. It writes nothing, echoes no decision values, reads no bodies, and authorizes no automatic execution. |
 | Session planning | `archive project-intake-plan --dry-run` / MCP `project_intake_plan` | Plans one staged project folder session with top-level counts, human review checklist, suggested classification labels, and no writes. |
 | Unpack queue | `archive project-intake-unpack-queue --dry-run` / MCP `project_intake_unpack_queue` | Queues top-level staged items as opaque `item-0001` refs with coarse kind/extension/size hints so the AI can ask which box to unpack next. It exposes no entry names or local paths, reads no bodies, hashes nothing, classifies nothing automatically, and writes nothing. |

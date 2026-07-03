@@ -23,9 +23,10 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.3.159 pre-release
+v0.3.160 pre-release
 ```
 
+이전 공개 기준: v0.3.159 pre-release.
 이전 공개 기준: v0.3.158 pre-release.
 이전 공개 기준: v0.3.157 pre-release.
 이전 공개 기준: v0.3.156 pre-release.
@@ -72,6 +73,7 @@ v0.3.159 pre-release
 - runtime context, profile, source/objet intake, block header, prompt boundary, foreign block review, projection, shared update review/index, shared update route preview, ZET would-transport planning을 위한 read-only preview layer,
 - derived-text coverage/toolchain/doctor/agent-contract read-only gate, PATH에 없는 로컬 추출 도구를 위한 비공개 tool-hint path, 그리고 사람 승인 뒤에만 동작하는 일부 local write path,
 - read-only objet reference resolution 및 zettel objet link preview,
+- 모든 runtime-visible surface(AGENTS.md template, runtime SKILL.md, skill/plugin layer 문서)에 적용되는 규범적 AI intake protocol: 어떤 로컬 파일이든 archive나 objet 저장소로 물리적으로 복사하기 전에 source-intake dry-run을 먼저 실행하고, in-archive `staging/incoming/` capture staging을 canonical intake 위치(D2)로 삼으며, 검토된 selection -> 승인된 capture만이 capture 권한이고, 대량 외부 저장소는 prehashed-ledger 증거로 처리합니다. 여기에 추가 read-only doctor 가드 2종(raw in-root `objets/` 폴더에 대한 `archive_objets_layout_noncanonical`과 migration 가이드, objet 바이트 저장소가 상위 git working tree에 tracking될 수 있을 때의 `workspace_objet_store_git_exposure`)과 앵커된 `/objets/` `.gitignore` 안전 기본값이 포함됩니다.
 - `archive objet-capture-selection --derived-text-staged-path`로 여는 짝지은(paired) transcript intake: 하나의 검토된 selection manifest가 staged 원본과 이미 추출된 transcript를 함께 승인하고(원시 바이트 `approved_text_sha256` 커밋, staged-path와 동일한 confinement 검사), 한 번의 `archive objet-capture` 실행이 원본을 발행한 뒤 발급된 object_id에 묶인 derived text를 등록합니다. item/run 단위의 추가 `status_class` (`partial` = 원본은 durable, derived는 재시도 가능)와 BOM 인식 derive-text 디코딩(BOM 표기 UTF-8/UTF-16은 BOM 없는 UTF-8로 저장하고 원시 바이트 provenance 기록, UTF-32와 BOM 없는 비 UTF-8은 결정적으로 차단)을 포함합니다.
 - `archive objet-capture-enable`로 여는 실제(비 sandbox) archive의 local objet capture 소유자 승인 흐름: read-only dry-run 자격 보고, 승인형 `ops/capture-enablement.yml` 동의 record와 영수증(receipt), never-touch 이름 패턴 명시적 확인, forward-only revoke와 `--reenable` 보호, doctor 진단까지 포함합니다. 이 record는 같은 write-trust domain 안의 동의 표시이지 보안 경계가 아닙니다.
 - Notion child page/database/view 구조를 `contains` edge type으로 다루는 read-only connection planning, 중첩 child page leaf를 세대 root에 귀속하고 `node_kind` 기반 content class를 보수적으로 도출하며, 큰 fixture가 부분 성공으로 위장하지 않도록 차단하고, 추적불능 parent chain과 조상 crawl 요청 큐를 버리지 않고 보고하며, broad workspace 큐를 generation/ref scope filter로 좁힌 뒤 adapter 입력으로 넘길 수 있게 하고, recursive fetch adapter execution contract를 고정하며, credential approval 뒤에만 동작하는 첫 local Notion ancestor structure fetch adapter로 sanitized ancestor fixture와 non-secret receipt만 쓰고, media byte fetch와 page body capture는 별도 future gate로 남겨두며, 세대가 아직 모르는 untraceable leaf는 generation-id보다 leaf/root/ancestor ref로 좁히라고 안내하고, reviewed block mirror에서 tree fixture preview를 만들고 sanitized ancestor result를 merge/replan하고 sanitized local fixture bundle로 클라이언트 nested-tree issue를 검증하며 클라이언트 follow-up용 최소 sanitized fixture request contract를 패키징하는 read-only nested tree recovery planning, 그리고 맞는 edge type이 없을 때 AI가 억지 매핑하지 않고 model gap으로 올리는 안전 가드,
@@ -272,6 +274,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.3.160
 v0.3.159
 v0.3.158
 v0.3.157

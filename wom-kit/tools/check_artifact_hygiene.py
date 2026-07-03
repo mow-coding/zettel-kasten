@@ -50,6 +50,7 @@ REQUIRED_ARCHIVE_GITIGNORE_PATTERNS: tuple[str, ...] = (
     "**/db/archive-index.sqlite-journal",
     "objects/sha256/",
     "objects/derived-text/sha256/",
+    "/objets/",
 )
 
 SKIP_DIR_NAMES = {

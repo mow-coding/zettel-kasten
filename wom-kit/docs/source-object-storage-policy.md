@@ -79,19 +79,31 @@ For a first personal WOM setup, show the local folders explicitly:
 ```text
 local archive root: C:\Users\<user>\zettel-kasten-<profile_slug>
 local objet store:  C:\Users\<user>\zettel-kasten-<profile_slug>-objets
-project intake staging:
+capture intake staging (canonical, in-archive):
+                    <archive-root>\staging\incoming\<YYYY-MM-DD>\<project_slug>
+bulk external staging:
                     C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug>
 ```
 
 The local archive root is the Git-friendly control plane. The local objet store
-is the raw source/original file store. Remote object storage such as R2, B2, or
-S3 is a deferred manual external step unless the user explicitly chooses it.
+is the raw source/original file store for bulk external originals. Remote
+object storage such as R2, B2, or S3 is a deferred manual external step unless
+the user explicitly chooses it.
 
 The local objet store is real user data. Treat it as
 `EXTERNAL_LIVE_NEVER_TOUCH` in the [artifact hygiene baseline](artifact-hygiene.md):
 tools must not read, clean, sweep, or prune it by default.
 
-The project intake staging folder is temporary. Use it for one
+The intake layout ruling (D2, 2026-07-03): capture intake stages INSIDE the
+archive root under `staging/incoming/` (date layer recommended, not required),
+because capture requires archive-relative staged paths and originals land in
+the content-addressed `objects/sha256/` store; the sibling store holds bulk
+external originals represented through `prehashed-objet-ledger` plus
+`object-storage-upload-evidence` evidence; a raw in-root `objets/` folder is
+discouraged, with the migration guide in
+[artifact-hygiene.md](artifact-hygiene.md) section 5.
+
+The intake staging folder is temporary in both shapes. Use it for one
 [project intake session](project-intake-session.md) at a time. It is not the
 archive of record.
 

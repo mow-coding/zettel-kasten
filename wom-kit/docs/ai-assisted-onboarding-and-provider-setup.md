@@ -179,7 +179,9 @@ profile_slug:        username
 GitHub repo:         zettel-kasten-<profile_slug>              [enforced prefix/default]
 local archive root:  C:\Users\<user>\zettel-kasten-<profile_slug> [recommended default]
 local objet store:   C:\Users\<user>\zettel-kasten-<profile_slug>-objets [recommended default]
-project intake staging:
+capture intake staging:
+                    <archive-root>\staging\incoming\<YYYY-MM-DD>\<project_slug> [canonical in-archive capture staging]
+bulk external staging:
                     C:\Users\<user>\zettel-kasten-<profile_slug>-objets\intake\<project_slug> [temporary per project session]
 object bucket:       zettel-kasten-<profile_slug>-objets      [deferred manual external step]
 SQLite:              local generated search/index DB          [generated local]
@@ -196,10 +198,15 @@ stores zets, source maps, manifests, specs, and receipts. It should not be
 presented as the default place for private raw documents, videos, photos, or
 large binary originals.
 
-`project intake staging` means a temporary one-project-folder working area for a
-future [project intake session](project-intake-session.md). It is not the
-archive of record. The durable records are objets, manifests, source maps,
-drafts, minted zets, and receipts.
+`capture intake staging` means a temporary one-project-folder working area
+INSIDE the archive root for a [project intake session](project-intake-session.md)
+that feeds objet capture (capture requires archive-relative staged paths; the
+date layer is recommended, not required). `bulk external staging` under the
+sibling objet store is for originals that must never enter git and are
+represented through `prehashed-objet-ledger` evidence. Neither is the archive
+of record. The durable records are objets, manifests, source maps, drafts,
+minted zets, and receipts. A raw in-root `objets/` folder is discouraged — see
+the migration guide in [artifact-hygiene.md](artifact-hygiene.md).
 
 Do now:
 

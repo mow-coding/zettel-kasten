@@ -38,6 +38,13 @@ anything:
    `notion-objet-source-map-link-plan` when source maps or ledgers can recover
    a candidate, or `notion-objet-link-index` / `notion-objet-link-plan` when
    body locators still exist.
+6. Run `archive operator-feedback-plan <archive-root> --dry-run` (read-only)
+   when the human reports tool friction, a workflow gap, or asks where
+   feedback records live; recording still needs a separate
+   `archive operator-feedback-record --approve` review gate. From v0.3.160 the
+   record/receipt shapes ship as
+   `wom-kit/schemas/operator-feedback.schema.json` and
+   `wom-kit/schemas/operator-feedback-receipt.schema.json`.
 
 This order keeps archive identity, operational mission/state, local
 instructions, beginner-facing wording, and material-link safety gates aligned
