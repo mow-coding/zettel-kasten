@@ -61,6 +61,7 @@
       "type": "array",
       "items": {"type": "string"}
     },
-    "result": {"type": "object"}
+    "result": {"type": "object"},
+    "reconcile": {"type": "object"}
   }
 }

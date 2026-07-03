@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.161 pre-release
+v0.3.162 pre-release
 ```
 
-이전 공개 기준: v0.3.160 pre-release.
+이전 공개 기준: v0.3.161 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -55,6 +55,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 - WOM / zet / ZET 설계 기준, specs, schemas, fake archive, release notes, work logs,
 - `wom-kit/` 안의 local CLI와 MCP tooling,
 - doctor, draft, mint, delegate, receipt, search, metadata review 같은 private archive lifecycle 도구,
+- 정직한 `archive remint-reconcile`: canonical zet의 바이트가 디스크에서 드리프트한 뒤(CRLF/BOM 재체크아웃 또는 사람의 내용 수정) mint receipt에 기록된 sha256을 재발급합니다. 드리프트를 개행/BOM만인 `format_drift`나 `content_change`로 분류하고, 항상 디스크의 현재 내용을 보여주며, 승인하려면 reviewer가 필요하고, 손상을 절대 가리지 않으며, in-place receipt 갱신과 별도의 불변 audit receipt를 함께 씁니다.
 - read-only `archive zet-quality-check --dry-run`으로 mint 전 entity-term, document-type, OCR/parse metadata, table-structure, correction-event, source-rights, audience, derived-artifact dependency 위험을 점검합니다. 선택적 `zet-quality-rules.yml` 프로젝트 규칙은 matched term을 출력하지 않으면서 금지 entity alias를 mint blocker로 만들 수 있습니다.
 - read-only `archive status-board --dry-run`으로 canonical zet, active draft, retire 대기 minted draft, document/audience metadata gap, source metadata gap, derived-artifact sync gap, 선택적 quality count를 한 번에 요약합니다. title/body/source value/provider URL/local path는 출력하지 않습니다.
 - read-only `archive derived-artifact-staleness --dry-run`으로 `derived_artifacts`가 마지막 검토 sync 이후 더 최신 source zet을 놓치고 있는지 확인합니다. 외부 보고서 본문은 열지 않고, artifact ref/title/body/provider URL/local path는 출력하지 않습니다.
@@ -333,7 +334,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.161 (현재 checkpoint)
+v0.3.162 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

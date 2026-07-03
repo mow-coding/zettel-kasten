@@ -1103,6 +1103,15 @@ MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
 MINT_RETIRED_DRAFT_RECEIPTS_DIR = "receipts/mint/retired-drafts"
 MINT_BATCH_RECEIPTS_DIR = "receipts/mint/batches"
 MINT_RETIRED_DRAFT_BATCH_RECEIPTS_DIR = "receipts/mint/retired-drafts/batches"
+MINT_RECONCILE_RECEIPTS_DIR = "receipts/mint/reconciles"
+# Reserved for the deferred remint-reconcile-batch tier (do not implement now):
+MINT_RECONCILE_BATCH_RECEIPTS_DIR = "receipts/mint/reconciles/batches"
+# Frontmatter keys mint injects/manages on the canonical (see mint_zettel where it
+# builds canonical_frontmatter). These are EXCLUDED from reconcile's content-identity
+# comparison because they are mint-managed, not content. source_refs is TRANSFORMED
+# (canonicalized) at mint and is compared against receipt.source_refs, NOT excluded.
+# If this injection set drifts, update remint_reconcile_plan's field comparison too.
+MINT_INJECTED_FRONTMATTER_KEYS = ("status", "updated_at", "mint", "promotion")
 ZETTEL_EDGE_RECEIPTS_DIR = "receipts/edges"
 ZETTEL_EDGE_BATCH_RECEIPTS_DIR = "receipts/edges/batches"
 ZETTEL_EDGE_REVERT_RECEIPTS_DIR = "receipts/edges/reverts"
@@ -2470,6 +2479,8 @@ def dump_yaml(data: Any) -> str:
 
 
 def parse_frontmatter(text: str) -> str | None:
+    if text.startswith("\ufeff"):
+        text = text[1:]
     match = FRONTMATTER_RE.match(text)
     if not match:
         return None
@@ -2477,6 +2488,8 @@ def parse_frontmatter(text: str) -> str | None:
 
 
 def split_zettel_text(text: str) -> tuple[dict[str, Any], str]:
+    if text.startswith("\ufeff"):
+        text = text[1:]
     frontmatter_text = parse_frontmatter(text)
     frontmatter = load_yaml(frontmatter_text) if frontmatter_text else {}
     if not isinstance(frontmatter, dict):
@@ -5413,7 +5426,7 @@ def notion_source_map_zettel_ref_from_record(root: Path, record: dict[str, Any])
 
 def read_zettel_frontmatter_only(path: Path) -> dict[str, Any]:
     try:
-        with path.open("r", encoding="utf-8") as handle:
+        with path.open("r", encoding="utf-8-sig") as handle:
             first = handle.readline()
             if first.strip() != "---":
                 return {}
@@ -8365,7 +8378,7 @@ def mint_zettel(
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     created_files: list[Path] = []
     try:
-        with canonical_path.open("x", encoding="utf-8") as handle:
+        with canonical_path.open("x", encoding="utf-8", newline="\n") as handle:
             created_files.append(canonical_path)
             handle.write(canonical_text)
         with snapshot_path.open("xb") as handle:
@@ -8504,7 +8517,7 @@ def resolve_inbox_draft_path(archive_root: Path, zettel_id: str | None, relative
 
 def read_json_object(path: Path, label: str) -> dict[str, Any]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as exc:
         raise ArchiveServiceError(f"{label} is not valid JSON: {path}") from exc
     if not isinstance(data, dict):
@@ -8798,7 +8811,7 @@ def minted_draft_retirement_plan(
     snapshot_sha = verify_sha256_reference(snapshot_path, snapshot.get("sha256"), blockers, "Mint receipt snapshot") if snapshot_path else None
     if source_sha and snapshot_sha and source_sha != snapshot_sha:
         if snapshot_path is not None and files_match_after_newline_normalization(draft_path, snapshot_path):
-            warnings.append("Draft snapshot sha256 differs only by newline normalization; retire-draft can continue.")
+            warnings.append("Draft snapshot sha256 differs only by newline/BOM normalization; retire-draft can continue.")
         else:
             blockers.append("Draft snapshot sha256 does not match the inbox draft sha256.")
 
@@ -8849,6 +8862,14 @@ def minted_draft_retirement_plan(
             "created_paths": [retire_receipt_relative],
         },
     }
+    # D4: route a canonical-drift retire block to reconcile's dry-run. Gate strictly
+    # on the mint-target sha-mismatch blocker only (never on id-missing / status /
+    # other blockers), and never relax any retire gate.
+    next_safe_actions: list[str] = []
+    if "Mint receipt target sha256 does not match the referenced file." in blockers and zettel_id_value:
+        next_safe_actions.append(
+            f"archive remint-reconcile <archive-root> --zettel-id {zettel_id_value} --dry-run"
+        )
     return {
         "ok": not blockers,
         "dry_run": True,
@@ -8860,6 +8881,7 @@ def minted_draft_retirement_plan(
         "retire_receipt_path": retire_receipt_relative,
         "blockers": blockers,
         "warnings": warnings,
+        "next_safe_actions": next_safe_actions,
         "would_change": [
             f"remove {draft_relative}",
             f"write {retire_receipt_relative}",
@@ -8977,6 +8999,546 @@ def write_retired_draft_from_plan(
             "receipt": json_safe(receipt),
         }
     )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Honest mint-receipt reconcile (v0.3.162)
+#
+# Governing doctrine R0: reconcile NEVER masks corruption and classification
+# NEVER waives human review. The draft snapshot holds the raw draft bytes
+# (body + draft frontmatter), while the client's real mutation (e.g. a title
+# correction) lives in the mint-transformed canonical frontmatter. A body-only
+# comparison against the snapshot is therefore blind to frontmatter edits, so:
+#   * classification only DECORATES the human decision (names changed fields);
+#   * the default class is the stricter content_change;
+#   * format_drift is granted only on positive, byte-level, re-derivable proof
+#     of content-identity (body identity via a clean snapshot AND canonical
+#     frontmatter content fields matching what the receipt recorded);
+#   * hard refusals run BEFORE classification (never launder corruption).
+# ---------------------------------------------------------------------------
+
+
+# Sentinel meaning "mint would not have written this key at all" (distinct from a
+# real value of None), so an absent key vs an added/present key is a detectable
+# content change rather than silently compared equal.
+_RECONCILE_ABSENT = object()
+
+
+def _reconcile_expected_canonical_frontmatter(snapshot_frontmatter: dict[str, Any]) -> dict[str, Any]:
+    """Re-derive the FULL content frontmatter mint would have written, from the draft.
+
+    Mint builds the canonical frontmatter as dict(source_frontmatter) plus the
+    injected/managed keys (MINT_INJECTED_FRONTMATTER_KEYS), then TRANSFORMS
+    source_refs via zettel_source_refs_without_ai_scratch (see mint_zettel:
+    canonical_frontmatter construction). This reconstructs exactly that content
+    expectation from a CLEAN draft snapshot, EXCLUDING the injected keys (which are
+    mint-managed, not content). Comparing this full reconstruction against the
+    current canonical detects an edit to ANY content-bearing frontmatter field
+    (title, id, kind, visibility, facets, provenance, edges, created_at, ...), not
+    only a hand-picked subset. That is the R0 guarantee: no content field is
+    invisible to the classifier.
+    """
+    expected: dict[str, Any] = {
+        key: value
+        for key, value in snapshot_frontmatter.items()
+        if key not in MINT_INJECTED_FRONTMATTER_KEYS and key != "source_refs"
+    }
+    # source_refs is transformed exactly as mint does: drop AI-scratch refs; if the
+    # result is empty/None mint pops the key, so canonical should have no source_refs.
+    canonical_source_refs = zettel_source_refs_without_ai_scratch(snapshot_frontmatter)
+    if canonical_source_refs:
+        expected["source_refs"] = canonical_source_refs
+    # else: intentionally absent -> current canonical should also lack source_refs.
+    return expected
+
+
+def _reconcile_content_field_changes(
+    expected: dict[str, Any],
+    canonical_frontmatter: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Compare EVERY content frontmatter field against the mint-derived expectation.
+
+    Mint-injected/managed keys (MINT_INJECTED_FRONTMATTER_KEYS: status, updated_at,
+    mint, promotion) are excluded from the current canonical too, since `expected`
+    never carries them. source_refs is compared against the mint-transformed
+    expectation. `status` is not in `expected` (it is injected), so it is checked
+    separately: it must equal "canonical". Returns a decoration list of
+    {field, receipt_value, current_value} for every differing content field, sorted
+    by field name for deterministic output. An EMPTY list is the necessary (with a
+    clean snapshot + identical body) condition for format_drift.
+    """
+    changes: list[dict[str, Any]] = []
+
+    # Compare the union of expected content keys and current content keys, so an
+    # added key (present in canonical, absent from expected) or a removed key is
+    # caught, not just a changed value.
+    current_content = {
+        key: value
+        for key, value in canonical_frontmatter.items()
+        if key not in MINT_INJECTED_FRONTMATTER_KEYS
+    }
+    for field in sorted(set(expected) | set(current_content)):
+        expected_value = expected.get(field, _RECONCILE_ABSENT)
+        current_value = current_content.get(field, _RECONCILE_ABSENT)
+        norm_expected = json_safe(expected_value) if expected_value is not _RECONCILE_ABSENT else _RECONCILE_ABSENT
+        norm_current = json_safe(current_value) if current_value is not _RECONCILE_ABSENT else _RECONCILE_ABSENT
+        if norm_expected != norm_current:
+            changes.append(
+                {
+                    "field": field,
+                    "receipt_value": None if norm_expected is _RECONCILE_ABSENT else norm_expected,
+                    "current_value": None if norm_current is _RECONCILE_ABSENT else norm_current,
+                }
+            )
+
+    # status is mint-injected (excluded above); it must still be "canonical".
+    current_status = canonical_frontmatter.get("status")
+    if current_status != "canonical":
+        changes.append({"field": "status", "receipt_value": "canonical", "current_value": current_status})
+    return changes
+
+
+def _reconcile_recorded_field_changes(
+    receipt_zettel: dict[str, Any],
+    canonical_frontmatter: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Best-effort decoration when the snapshot is NOT a clean anchor.
+
+    Without a clean draft snapshot we cannot reconstruct the full frontmatter mint
+    wrote, so we do NOT emit a full-field diff (it would be noisy and unfounded).
+    We surface only the fields the mint receipt itself recorded (zettel.title/id) plus
+    the status invariant. This is purely informational: the classifier has already
+    fallen back to content_change (the stricter path) in this branch.
+    """
+    changes: list[dict[str, Any]] = []
+    for field in ("id", "title"):
+        expected_value = receipt_zettel.get(field)
+        current_value = canonical_frontmatter.get(field)
+        if json_safe(expected_value) != json_safe(current_value):
+            changes.append(
+                {
+                    "field": field,
+                    "receipt_value": json_safe(expected_value),
+                    "current_value": json_safe(current_value),
+                }
+            )
+    current_status = canonical_frontmatter.get("status")
+    if current_status != "canonical":
+        changes.append({"field": "status", "receipt_value": "canonical", "current_value": current_status})
+    return changes
+
+
+def remint_reconcile_plan(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+) -> dict[str, Any]:
+    """Read/classify/preview an honest mint-receipt reconcile. ZERO writes.
+
+    Refuses (blockers) before any classification when the file cannot be honestly
+    reconciled (R1). Classifies as format_drift only on positive proof (R2/R5),
+    else content_change (the stricter path). Never writes.
+    """
+    root = require_existing_archive_root(archive_root)
+    canonical_path = resolve_zettel_path(root, zettel_id, relative_path)
+    canonical_relative = archive_relative_path(canonical_path, root)
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    canonical_text = canonical_path.read_text(encoding="utf-8-sig")
+    canonical_frontmatter, canonical_body = split_zettel_text(canonical_text)
+    canonical_frontmatter = json_safe(canonical_frontmatter)
+    canonical_parsed = bool(canonical_frontmatter)
+
+    resolved_id = str(canonical_frontmatter.get("id") or "").strip()
+    receipt_id = resolved_id or (zettel_id or "").strip()
+    receipt_relative = f"{MINT_RECEIPTS_DIR}/{receipt_id}.mint.json" if receipt_id else None
+    receipt_path = resolve_archive_relative_path(root, receipt_relative) if receipt_relative else None
+
+    receipt: dict[str, Any] = {}
+    if not receipt_relative or receipt_path is None or not receipt_path.is_file():
+        blockers.append(f"Reconcile refused: mint receipt is missing: {receipt_relative or '<unknown>'}.")
+    else:
+        try:
+            receipt = read_json_object(receipt_path, "Mint receipt")
+        except ArchiveServiceError as exc:
+            blockers.append(f"Reconcile refused: {exc}")
+
+    receipt_source = receipt.get("source") if isinstance(receipt.get("source"), dict) else {}
+    receipt_target = receipt.get("target") if isinstance(receipt.get("target"), dict) else {}
+    receipt_snapshot = receipt.get("snapshot") if isinstance(receipt.get("snapshot"), dict) else {}
+    receipt_zettel = receipt.get("zettel") if isinstance(receipt.get("zettel"), dict) else {}
+
+    # R1 hard refusals (before classification). Reuse retire's canonical checks.
+    if receipt:
+        if receipt.get("action") != "mint_zettel":
+            blockers.append("Reconcile refused: mint receipt action must be mint_zettel.")
+        if receipt.get("dry_run") is not False:
+            blockers.append("Reconcile refused: only an applied mint receipt can be reconciled.")
+        if str(receipt_zettel.get("id") or "").strip() != resolved_id:
+            blockers.append("Reconcile refused: canonical zettel id does not match the mint receipt zettel id.")
+        if receipt_target.get("status") != "canonical":
+            blockers.append("Reconcile refused: mint receipt target.status must be canonical.")
+        target_relative = receipt_target.get("path")
+        if not isinstance(target_relative, str) or not target_relative or target_relative != canonical_relative:
+            blockers.append("Reconcile refused: mint receipt target.path does not resolve to this canonical zettel.")
+
+    if not canonical_parsed:
+        blockers.append("Reconcile refused: canonical zettel has no parseable frontmatter.")
+    else:
+        if not resolved_id:
+            blockers.append("Reconcile refused: canonical zettel frontmatter has no id.")
+        if canonical_frontmatter.get("status") != "canonical":
+            blockers.append("Reconcile refused: canonical zettel status must be canonical.")
+        canonical_mint = canonical_frontmatter.get("mint") if isinstance(canonical_frontmatter.get("mint"), dict) else {}
+        if receipt_relative and canonical_mint.get("receipt_path") != receipt_relative:
+            blockers.append("Reconcile refused: canonical zettel mint.receipt_path does not match this mint receipt.")
+
+    snapshot_relative = receipt_snapshot.get("path") if isinstance(receipt_snapshot.get("path"), str) else None
+    snapshot_path = None
+    if snapshot_relative:
+        try:
+            snapshot_path = resolve_archive_relative_path(root, snapshot_relative)
+        except ArchivePathError:
+            snapshot_path = None
+
+    # If a hard refusal fired, do not classify. Return unclassified, no writes.
+    if blockers:
+        return {
+            "ok": False,
+            "dry_run": True,
+            "action": "reconcile_mint_receipt",
+            "zettel_id": receipt_id or resolved_id,
+            "canonical_path": canonical_relative,
+            "mint_receipt_path": receipt_relative,
+            "draft_snapshot_path": snapshot_relative,
+            "drift_class": "unclassified",
+            "content_change_ack_required": False,
+            "current_canonical_text": canonical_text,
+            "frontmatter_field_changes": [],
+            "body_changed": None,
+            "blockers": blockers,
+            "warnings": warnings,
+            "next_safe_actions": [],
+            "writes": "none",
+        }
+
+    # R5: is the snapshot a clean body anchor? The snapshot holds the raw draft
+    # bytes (frontmatter + body). It can be trusted as a BODY anchor only when its
+    # raw sha still matches the recorded sha (byte-identical to mint time). If it
+    # differs at all we cannot re-derive the original bytes to prove the drift is
+    # newline/BOM-only, so we FAIL SAFE: not a clean anchor -> content_change.
+    # (This also covers missing / BOM'd / otherwise-mutated snapshots.)
+    fell_back = "Draft snapshot is not a clean anchor; classification fell back to content_change."
+    snapshot_body: str | None = None
+    snapshot_frontmatter: dict[str, Any] = {}
+    snapshot_is_clean_anchor = False
+    if snapshot_path is None or not snapshot_path.is_file():
+        warnings.append(fell_back)
+    else:
+        expected_snapshot_sha = receipt_snapshot.get("sha256")
+        actual_snapshot_sha = sha256_path(snapshot_path)
+        sha_ok = (
+            isinstance(expected_snapshot_sha, str)
+            and bool(SHA256_RE.match(expected_snapshot_sha or ""))
+            and actual_snapshot_sha == expected_snapshot_sha
+        )
+        try:
+            snapshot_text = snapshot_path.read_text(encoding="utf-8-sig")
+            snapshot_frontmatter, snapshot_body = split_zettel_text(snapshot_text)
+            snapshot_frontmatter = json_safe(snapshot_frontmatter)
+        except (OSError, UnicodeError, ArchiveServiceError):
+            snapshot_body = None
+        if snapshot_body is None:
+            warnings.append(fell_back)
+        elif sha_ok:
+            snapshot_is_clean_anchor = True
+        else:
+            warnings.append("Draft snapshot differs from its recorded sha256.")
+            warnings.append(fell_back)
+
+    # Body identity (R2a): current canonical body vs clean snapshot body.
+    body_changed: bool | None = None
+    body_identical = False
+    if snapshot_is_clean_anchor and snapshot_body is not None:
+        body_identical = bytes_match_after_normalization(
+            canonical_body.encode("utf-8"), snapshot_body.encode("utf-8")
+        )
+        body_changed = not body_identical
+
+    # Content-field decoration (R2b). When the snapshot is a clean anchor we re-derive
+    # the FULL canonical content frontmatter mint would have produced (from the draft)
+    # and compare EVERY content field against the current canonical. This closes the
+    # title-edit hole AND every sibling hole (kind/visibility/facets/provenance/edges/
+    # created_at/...): any canonical-only content edit is detected here.
+    # When the snapshot is NOT clean we cannot reconstruct the full frontmatter, so we
+    # surface only a best-effort decoration from the receipt's recorded zettel.title/id
+    # (informational only; class is already forced to content_change below).
+    if snapshot_is_clean_anchor:
+        expected = _reconcile_expected_canonical_frontmatter(snapshot_frontmatter)
+        frontmatter_field_changes = _reconcile_content_field_changes(expected, canonical_frontmatter)
+    else:
+        frontmatter_field_changes = _reconcile_recorded_field_changes(receipt_zettel, canonical_frontmatter)
+
+    # R2: format_drift only when body is identical via a CLEAN snapshot AND no
+    # content frontmatter field changed. Any doubt -> content_change.
+    if snapshot_is_clean_anchor and body_identical and not frontmatter_field_changes:
+        drift_class = "format_drift"
+    else:
+        drift_class = "content_change"
+
+    content_change_ack_required = drift_class == "content_change"
+
+    return {
+        "ok": True,
+        "dry_run": True,
+        "action": "reconcile_mint_receipt",
+        "zettel_id": resolved_id,
+        "canonical_path": canonical_relative,
+        "mint_receipt_path": receipt_relative,
+        "draft_snapshot_path": snapshot_relative,
+        "drift_class": drift_class,
+        "content_change_ack_required": content_change_ack_required,
+        "current_canonical_text": canonical_text,
+        "frontmatter_field_changes": frontmatter_field_changes,
+        "body_changed": body_changed,
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": [],
+        "writes": "none",
+    }
+
+
+def _reconcile_provenance_block(
+    *,
+    now: str,
+    reviewed_by: str,
+    drift_class: str,
+    content_change_ack: bool,
+    prior_target_sha: Any,
+    prior_source_sha: Any,
+    prior_snapshot_sha: Any,
+    new_target_sha: Any,
+    new_source_sha: Any,
+    new_snapshot_sha: Any,
+    normalized_content_digest: str,
+    reconcile_receipt_relative: str,
+) -> dict[str, Any]:
+    return {
+        "reconciled_at": now,
+        "reconciled_by": reviewed_by,
+        "drift_class": drift_class,
+        "content_change_ack": content_change_ack,
+        "prior_target_sha256": prior_target_sha,
+        "prior_source_sha256": prior_source_sha,
+        "prior_snapshot_sha256": prior_snapshot_sha,
+        "new_target_sha256": new_target_sha,
+        "new_source_sha256": new_source_sha,
+        "new_snapshot_sha256": new_snapshot_sha,
+        "normalized_content_digest": normalized_content_digest,
+        "reconcile_receipt_path": reconcile_receipt_relative,
+    }
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / (path.name + ".part-" + secrets.token_hex(8))
+    try:
+        with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(json_safe(payload), indent=2, ensure_ascii=False, default=str) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def remint_reconcile_apply(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    reviewed_by: str,
+    content_changed_ack: bool = False,
+) -> dict[str, Any]:
+    """Re-issue an honest mint receipt after human review. Writes both receipts.
+
+    Refuses to write unless the plan is ok and the content_change ack gate (R3) is
+    satisfied. Recomputes shas from CURRENT on-disk bytes; never edits content.
+    """
+    reviewer = (reviewed_by or "").strip()
+    if not reviewer:
+        raise ArchiveServiceError("Reconcile requires --reviewed-by.")
+
+    root = require_existing_archive_root(archive_root)
+    plan = remint_reconcile_plan(root, zettel_id=zettel_id, relative_path=relative_path)
+    if not plan.get("ok"):
+        raise ArchiveServiceError("Reconcile blocked: " + "; ".join(str(b) for b in plan.get("blockers", [])))
+
+    drift_class = plan["drift_class"]
+    if drift_class == "content_change" and not content_changed_ack:
+        raise ArchiveServiceError(
+            "Reconcile blocked: drift classified as content_change; rerun with --content-changed-ack to approve."
+        )
+
+    receipt_relative = plan["mint_receipt_path"]
+    canonical_relative = plan["canonical_path"]
+    snapshot_relative = plan["draft_snapshot_path"]
+    zettel_id_value = plan["zettel_id"]
+
+    receipt_path = resolve_archive_relative_path(root, receipt_relative)
+    canonical_path = resolve_archive_relative_path(root, canonical_relative)
+    receipt = read_json_object(receipt_path, "Mint receipt")
+
+    source_block = receipt.get("source") if isinstance(receipt.get("source"), dict) else {}
+    target_block = receipt.get("target") if isinstance(receipt.get("target"), dict) else {}
+    snapshot_block = receipt.get("snapshot") if isinstance(receipt.get("snapshot"), dict) else {}
+
+    prior_target_sha = target_block.get("sha256")
+    prior_source_sha = source_block.get("sha256")
+    prior_snapshot_sha = snapshot_block.get("sha256")
+
+    # Recompute from CURRENT on-disk bytes.
+    new_target_sha = sha256_path(canonical_path)
+    source_relative = source_block.get("path")
+    new_source_sha = prior_source_sha
+    source_note = None
+    if isinstance(source_relative, str) and source_relative:
+        try:
+            source_path = resolve_archive_relative_path(root, source_relative)
+        except ArchivePathError:
+            source_path = None
+        if source_path is not None and source_path.is_file():
+            new_source_sha = sha256_path(source_path)
+        else:
+            source_note = "source draft no longer exists; preserved prior source.sha256"
+
+    new_snapshot_sha = prior_snapshot_sha
+    snapshot_path = None
+    if isinstance(snapshot_relative, str) and snapshot_relative:
+        try:
+            snapshot_path = resolve_archive_relative_path(root, snapshot_relative)
+        except ArchivePathError:
+            snapshot_path = None
+        if snapshot_path is not None and snapshot_path.is_file():
+            new_snapshot_sha = sha256_path(snapshot_path)
+
+    normalized_content_digest = hashlib.sha256(
+        bytes_normalized_for_content_compare(canonical_path.read_bytes())
+    ).hexdigest()
+
+    now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    reconcile_receipt_relative = f"{MINT_RECONCILE_RECEIPTS_DIR}/{zettel_id_value}.reconcile.json"
+    reconcile_dir = resolve_archive_relative_path(root, MINT_RECONCILE_RECEIPTS_DIR)
+    # Monotonic suffix for 2nd+ audit receipt so each event is immutable.
+    reconcile_receipt_path = resolve_archive_relative_path(root, reconcile_receipt_relative)
+    if reconcile_receipt_path.exists():
+        suffix = 2
+        while True:
+            candidate_relative = f"{MINT_RECONCILE_RECEIPTS_DIR}/{zettel_id_value}.reconcile.{suffix}.json"
+            candidate_path = resolve_archive_relative_path(root, candidate_relative)
+            if not candidate_path.exists():
+                reconcile_receipt_relative = candidate_relative
+                reconcile_receipt_path = candidate_path
+                break
+            suffix += 1
+
+    provenance = _reconcile_provenance_block(
+        now=now,
+        reviewed_by=reviewer,
+        drift_class=drift_class,
+        content_change_ack=bool(content_changed_ack) if drift_class == "content_change" else False,
+        prior_target_sha=prior_target_sha,
+        prior_source_sha=prior_source_sha,
+        prior_snapshot_sha=prior_snapshot_sha,
+        new_target_sha=new_target_sha,
+        new_source_sha=new_source_sha,
+        new_snapshot_sha=new_snapshot_sha,
+        normalized_content_digest=normalized_content_digest,
+        reconcile_receipt_relative=reconcile_receipt_relative,
+    )
+
+    # In-place mint-receipt update: preserve ALL fields; only recompute the three
+    # shas and append/extend the reconcile provenance history (append-only).
+    prior_mint_receipt_sha = sha256_path(receipt_path)
+    updated_receipt = dict(receipt)
+    updated_source = dict(source_block)
+    updated_target = dict(target_block)
+    updated_snapshot = dict(snapshot_block)
+    updated_target["sha256"] = new_target_sha
+    updated_source["sha256"] = new_source_sha
+    updated_snapshot["sha256"] = new_snapshot_sha
+    updated_receipt["source"] = updated_source
+    updated_receipt["target"] = updated_target
+    updated_receipt["snapshot"] = updated_snapshot
+
+    existing_reconcile = updated_receipt.get("reconcile")
+    history: list[dict[str, Any]] = []
+    if isinstance(existing_reconcile, dict) and isinstance(existing_reconcile.get("history"), list):
+        history = list(existing_reconcile["history"])
+    history.append(provenance)
+    # Store reconcile as an object whose history is append-only, latest mirrored top-level.
+    reconcile_field = {"history": history}
+    reconcile_field.update(provenance)
+    updated_receipt["reconcile"] = reconcile_field
+
+    _atomic_write_json(receipt_path, updated_receipt)
+    new_mint_receipt_sha = sha256_path(receipt_path)
+
+    # Separate immutable audit receipt.
+    audit_receipt = {
+        "receipt_id": f"receipt:mint-reconcile:{zettel_id_value}",
+        "receipt_path": reconcile_receipt_relative,
+        "action": "reconcile_mint_receipt",
+        "dry_run": False,
+        "timestamp": now,
+        "archive_id": read_archive_id(root),
+        "authority_mode": MINT_AUTHORITY_MODE,
+        "reviewed_by": reviewer,
+        "zettel": {"id": zettel_id_value},
+        "mint_receipt": {
+            "path": receipt_relative,
+            "prior_sha256": prior_mint_receipt_sha,
+            "new_sha256": new_mint_receipt_sha,
+        },
+        "drift_class": drift_class,
+        "content_change_ack": bool(content_changed_ack) if drift_class == "content_change" else False,
+        "prior_target_sha256": prior_target_sha,
+        "new_target_sha256": new_target_sha,
+        "prior_source_sha256": prior_source_sha,
+        "new_source_sha256": new_source_sha,
+        "prior_snapshot_sha256": prior_snapshot_sha,
+        "new_snapshot_sha256": new_snapshot_sha,
+        "normalized_content_digest": normalized_content_digest,
+        "result": {
+            "updated_paths": [receipt_relative],
+            "created_paths": [reconcile_receipt_relative],
+        },
+    }
+    if source_note:
+        audit_receipt["source_note"] = source_note
+    _atomic_write_json(reconcile_receipt_path, audit_receipt)
+
+    result = dict(plan)
+    result.update(
+        {
+            "ok": True,
+            "dry_run": False,
+            "reviewed_by": reviewer,
+            "drift_class": drift_class,
+            "content_change_ack": bool(content_changed_ack) if drift_class == "content_change" else False,
+            "reconcile_receipt_path": reconcile_receipt_relative,
+            "updated_paths": [receipt_relative],
+            "created_paths": [reconcile_receipt_relative],
+            "normalized_content_digest": normalized_content_digest,
+            "writes": "applied",
+        }
+    )
+    if source_note:
+        result["source_note"] = source_note
     return result
 
 
@@ -58291,8 +58853,26 @@ def sha256_path(path: Path) -> str:
     return digest.hexdigest()
 
 
+def bytes_normalized_for_content_compare(data: bytes) -> bytes:
+    """Normalize raw bytes for content-identity comparison.
+
+    Strips a single leading UTF-8 BOM and folds CRLF/CR newlines to LF. This is
+    the ONE deterministic normalized-equality definition reused by reconcile,
+    the doctor format-drift branch, and retire's snapshot tolerance. It never
+    touches sha256_path/sha256_file (which hash raw bytes), so BOM/newline drift
+    stays visible as a sha mismatch.
+    """
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def newline_normalized_bytes(path: Path) -> bytes:
-    return path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return bytes_normalized_for_content_compare(path.read_bytes())
+
+
+def bytes_match_after_normalization(left: bytes, right: bytes) -> bool:
+    return bytes_normalized_for_content_compare(left) == bytes_normalized_for_content_compare(right)
 
 
 def files_match_after_newline_normalization(left: Path, right: Path) -> bool:

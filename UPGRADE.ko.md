@@ -152,6 +152,39 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.161` To `v0.3.162`
+
+이 release는 `archive remint-reconcile`를 추가합니다. canonical zet의 바이트가
+디스크에서 드리프트한 뒤(CRLF/BOM 재체크아웃 또는 사람이 내용을 수정한 경우)
+mint receipt에 기록된 sha256 값을 정직하게 재발급하는 명령입니다. 또한 추가적인
+BOM/개행 파싱 관용과 doctor/retire의 reconcile 경로 안내가 들어갑니다.
+
+운영자에게 보이는 변경:
+
+- 새 명령뿐이며 자동으로 실행되는 것은 없습니다. `archive remint-reconcile
+  <archive-root> (--zettel-id <id> | --path <rel>) [--dry-run | --approve]
+  [--reviewed-by <actor>] [--content-changed-ack]`는 canonical zet의 드리프트를
+  `format_drift`(개행/BOM만) 또는 `content_change`로 분류하고, 항상 디스크의
+  현재 내용을 보여주며, 승인하려면 `--reviewed-by`가 필요합니다(`content_change`는
+  `--content-changed-ack`도 필요). `wom-kit/docs/mint-receipt-reconcile.md` 참고.
+- archive migration도 없고 해시 변경도 없습니다. BOM/개행 관용은 파싱/읽기
+  헬퍼에만 적용되고, sha256은 여전히 원시 바이트를 읽으므로 BOM과 개행 드리프트는
+  sha 불일치로 그대로 보입니다. 기존 receipt와 canonical 파일은
+  `remint-reconcile`를 직접 실행하기 전까지 영향을 받지 않습니다.
+- STRICT 게이트 참고(새로운 실패가 아니라 표면화): mint receipt로부터 이미
+  개행/BOM으로 드리프트한 canonical zet는 이전에도 `mint_receipt_sha_mismatch`로
+  `doctor`/`--strict`를 실패시켰습니다. v0.3.162부터 그 경우는
+  `remint-reconcile --dry-run` 제안 명령을 함께 안내하고, canonical zet의 UTF-8
+  BOM은 `zettel_has_bom` WARN을 추가하며, 이미 한 번 reconcile한 receipt가 다시
+  개행/BOM으로만 드리프트하면 별도 코드
+  `mint_receipt_target_byte_drift_suspected_format` ERROR로 보고합니다. 모두
+  ERROR로 유지되며, edge-receipt 진화 경로는 변경되지 않고 어떤 게이트도
+  완화되지 않았습니다.
+- 새 mint는 canonical 쓰기를 LF 개행으로 고정해 즉각적인 재드리프트를 막습니다.
+  `wom-kit/schemas/mint-reconcile-receipt.schema.json`와 `mint-receipt.schema.json`의
+  `reconcile` 객체 property를 추가했습니다(required 아님, 기존 receipt는 그대로
+  검증 통과). `wom-kit/docs/releases/v0.3.162.md` 참고.
+
 ## From `v0.3.159` To `v0.3.160`
 
 이 release는 AI intake protocol(파일을 물리적으로 복사하기 전의

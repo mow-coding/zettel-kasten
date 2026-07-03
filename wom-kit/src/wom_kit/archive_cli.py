@@ -882,6 +882,7 @@ class Doctor:
             ("lineage-receipts", self._check_lineage_receipts),
             ("mint-receipts", self._check_mint_receipts),
             ("retired-draft-receipts", self._check_retired_draft_receipts),
+            ("reconcile-receipts", self._check_reconcile_receipts),
             ("delegate-receipts", self._check_delegate_receipts),
             ("capture-enablement", self._check_capture_enablement),
             ("zettel-kasten-layer", self._check_zettel_kasten_layer),
@@ -901,6 +902,7 @@ class Doctor:
             ("zettels", self._check_zettels),
             ("mint-receipts", self._check_mint_receipts),
             ("retired-draft-receipts", self._check_retired_draft_receipts),
+            ("reconcile-receipts", self._check_reconcile_receipts),
             ("scoped-edge-receipts", self._check_scoped_edge_receipts),
             ("zettel-kasten-layer", self._check_zettel_kasten_layer),
         ]
@@ -1808,10 +1810,22 @@ class Doctor:
             self._check_mint_receipt_file_ref(data, path, "snapshot")
 
             if target_path is not None:
-                frontmatter = parse_frontmatter(target_path.read_text(encoding="utf-8"))
+                frontmatter = parse_frontmatter(target_path.read_text(encoding="utf-8-sig"))
                 if frontmatter is None:
                     self.error("mint_receipt_target_frontmatter_missing", "Mint receipt target has no zettel frontmatter.", path)
                     continue
+                # R7: BOM stays visible. A UTF-8 BOM is real byte drift that also
+                # drifts the mint-receipt sha, so name the cause as a WARN advisory
+                # (not info, which doctor filters out of --strict).
+                try:
+                    if target_path.read_bytes().startswith(b"\xef\xbb\xbf"):
+                        self.warn(
+                            "zettel_has_bom",
+                            "File has a UTF-8 BOM; WOM does not write BOMs. Run archive remint-reconcile after confirming content.",
+                            target_path,
+                        )
+                except OSError:
+                    pass
                 target_data = self._load_yaml_text(frontmatter, target_path)
                 if not isinstance(target_data, dict):
                     continue
@@ -1884,6 +1898,37 @@ class Doctor:
             self._check_retired_draft_existing_ref(data, path, "target")
             self._check_retired_draft_existing_ref(data, path, "mint_receipt")
             self._check_retired_draft_existing_ref(data, path, "snapshot")
+
+    def _check_reconcile_receipts(self) -> None:
+        root = self.archive_root / archive_services.MINT_RECONCILE_RECEIPTS_DIR
+        if not root.is_dir():
+            return
+        paths = []
+        for path in sorted(root.glob("*.reconcile*.json")):
+            if not self._path_stays_inside_archive(path):
+                continue
+            paths.append(path)
+        total = len(paths)
+        for index, path in enumerate(paths, start=1):
+            if index == 1 or index == total or index % 250 == 0:
+                self._progress("reconcile-receipts", self._display_path(path) or "reconcile receipt", index, total)
+            data = self._load_json_file(path)
+            if not isinstance(data, dict):
+                continue
+            self._check_schema(data, "mint-reconcile-receipt.schema.json", path)
+            if data.get("action") != "reconcile_mint_receipt":
+                self.error("mint_reconcile_action_invalid", "Reconcile receipt action must be reconcile_mint_receipt.", path)
+            if data.get("authority_mode") != archive_services.MINT_AUTHORITY_MODE:
+                self.error("mint_reconcile_authority_mode_invalid", "Reconcile receipt authority_mode must be basic.", path)
+            if data.get("dry_run") is not False:
+                self.error("mint_reconcile_dry_run_invalid", "Applied reconcile receipt must have dry_run false.", path)
+            if not data.get("reviewed_by"):
+                self.error("mint_reconcile_reviewer_missing", "Applied reconcile receipt must include reviewed_by.", path)
+            if data.get("receipt_path") != self._display_path(path):
+                self.error("mint_reconcile_path_mismatch", "Reconcile receipt receipt_path must match its archive-relative path.", path)
+            for field in ["zettel", "mint_receipt", "result"]:
+                if not isinstance(data.get(field), dict):
+                    self.error("mint_reconcile_field_missing", f"Reconcile receipt must contain object field: {field}.", path)
 
     def _check_scoped_edge_receipts(self) -> None:
         if not self.validate_scope.active() or not self.validate_scope.edge_receipt_paths:
@@ -2004,6 +2049,43 @@ class Doctor:
                     "mint_receipt_target_sha_evolved_by_edge_receipts",
                     "Mint receipt target.sha256 is historical; current target differs only by approved zettel-edge receipts.",
                     path,
+                )
+                return resolved
+            # Format-drift route (v0.3.162): a PREVIOUSLY-reconciled receipt that
+            # re-drifted by newline/BOM only. Fires ONLY when the receipt carries a
+            # reconcile.normalized_content_digest that matches the current canonical's
+            # newline+BOM-normalized bytes. Doctor cannot re-derive the original bytes,
+            # so with no prior reconcile it must NOT assert format-only — it emits the
+            # plain sha-mismatch error with a hint routing to remint-reconcile. This
+            # stays an ERROR (non-clean) either way — it never softens to info/warn.
+            if section == "target":
+                reconcile = data.get("reconcile") if isinstance(data.get("reconcile"), dict) else {}
+                recorded_digest = reconcile.get("normalized_content_digest")
+                if isinstance(recorded_digest, str) and SHA256_RE.match(recorded_digest):
+                    try:
+                        current_digest = hashlib.sha256(
+                            archive_services.bytes_normalized_for_content_compare(resolved.read_bytes())
+                        ).hexdigest()
+                    except OSError:
+                        current_digest = None
+                    if current_digest == recorded_digest:
+                        zettel = data.get("zettel") if isinstance(data.get("zettel"), dict) else {}
+                        zettel_id = zettel.get("id") if isinstance(zettel.get("id"), str) else "<id>"
+                        self.error(
+                            "mint_receipt_target_byte_drift_suspected_format",
+                            "Mint receipt target.sha256 does not match, but bytes differ only by newline/BOM "
+                            "(suspected format drift, UNVERIFIED). Run remint-reconcile to classify and clear.",
+                            path,
+                            suggested_command=f"archive remint-reconcile <archive-root> --zettel-id {zettel_id} --dry-run",
+                        )
+                        return resolved
+                zettel = data.get("zettel") if isinstance(data.get("zettel"), dict) else {}
+                zettel_id = zettel.get("id") if isinstance(zettel.get("id"), str) else "<id>"
+                self.error(
+                    "mint_receipt_sha_mismatch",
+                    f"Mint receipt {section}.sha256 does not match the referenced file.",
+                    path,
+                    suggested_command=f"archive remint-reconcile <archive-root> --zettel-id {zettel_id} --dry-run",
                 )
                 return resolved
             self.error("mint_receipt_sha_mismatch", f"Mint receipt {section}.sha256 does not match the referenced file.", path)
@@ -2335,7 +2417,7 @@ class Doctor:
         if self._path_lexically_inside_archive(path) and not self._path_stays_inside_archive(path):
             return None
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8-sig"))
         except json.JSONDecodeError as exc:
             self.error("json_parse_error", f"JSON failed to parse: {exc}", path)
             return None
@@ -2366,6 +2448,8 @@ def dump_yaml(data: Any) -> str:
 
 
 def parse_frontmatter(text: str) -> str | None:
+    if text.startswith("\ufeff"):
+        text = text[1:]
     match = FRONTMATTER_RE.match(text)
     if not match:
         return None
@@ -8372,10 +8456,92 @@ def command_retire_draft(args: argparse.Namespace) -> int:
             print("Warnings:")
             for warning in result["warnings"]:
                 print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
         if result.get("dry_run"):
             print("Writes: none")
         else:
             print("Retired inbox draft.")
+    return 0 if result.get("ok") else 1
+
+
+def command_remint_reconcile(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    approve = bool(args.approve)
+    if approve and not (args.reviewed_by or "").strip():
+        print("remint-reconcile requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+
+    try:
+        if approve:
+            result = archive_services.remint_reconcile_apply(
+                Path(args.archive_root),
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+                reviewed_by=args.reviewed_by,
+                content_changed_ack=bool(args.content_changed_ack),
+            )
+        else:
+            result = archive_services.remint_reconcile_plan(
+                Path(args.archive_root),
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+            )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        print(f"Reconcile {state} for {result.get('zettel_id') or result.get('canonical_path')}.")
+        print(f"Canonical path: {result.get('canonical_path') or '-'}")
+        print(f"Mint receipt path: {result.get('mint_receipt_path') or '-'}")
+        print(f"Draft snapshot path: {result.get('draft_snapshot_path') or '-'}")
+        print(f"Drift class: {result.get('drift_class') or 'unclassified'}")
+        drift_class = result.get("drift_class")
+        show_content = drift_class == "content_change" or approve
+        if show_content:
+            print("Current on-disk content:")
+            field_changes = result.get("frontmatter_field_changes") or []
+            if field_changes:
+                for change in field_changes:
+                    print(
+                        f"- {change.get('field')}: receipt={change.get('receipt_value')!r} "
+                        f"current={change.get('current_value')!r}"
+                    )
+            else:
+                print("- no content change detected (newline/BOM only)")
+            print(f"- body_changed: {result.get('body_changed')}")
+            text = result.get("current_canonical_text")
+            if isinstance(text, str):
+                print("--- canonical text (begin) ---")
+                print(text.rstrip("\n"))
+                print("--- canonical text (end) ---")
+        if result.get("content_change_ack_required"):
+            print("Content change acknowledgment required: rerun --approve with --content-changed-ack.")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
+        if result.get("dry_run"):
+            print("Writes: none")
+        else:
+            print(f"Reconciled mint receipt: {result.get('mint_receipt_path')}")
+            print(f"Wrote reconcile receipt: {result.get('reconcile_receipt_path')}")
     return 0 if result.get("ok") else 1
 
 
@@ -8429,6 +8595,10 @@ def command_retire_draft_batch(args: argparse.Namespace) -> int:
         print(f"Would/write count: {result['summary']['would_write_count'] or result['summary']['written_item_count']}")
         print(f"Skipped existing: {result['summary']['skipped_existing_item_count']}")
         print(f"Failed: {result['summary']['failed_item_count']}")
+        if result.get("next_safe_actions"):
+            print("Next safe actions:")
+            for action in result["next_safe_actions"]:
+                print(f"- {action}")
     return 0 if result.get("ok") else 1
 
 
@@ -14640,6 +14810,26 @@ def build_parser() -> argparse.ArgumentParser:
     retire_draft_batch.add_argument("--max-items", type=int, default=500, help="Maximum item count accepted from the plan.")
     retire_draft_batch.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     retire_draft_batch.set_defaults(func=command_retire_draft_batch)
+
+    remint_reconcile = subcommands.add_parser(
+        "remint-reconcile",
+        help="Honestly reconcile a canonical zettel with its mint receipt after newline/BOM or content drift.",
+    )
+    remint_reconcile.add_argument("archive_root", help="Archive root to inspect.")
+    reconcile_target = remint_reconcile.add_mutually_exclusive_group(required=True)
+    reconcile_target.add_argument("--zettel-id", help="Canonical zettel id to reconcile.")
+    reconcile_target.add_argument("--path", help="Archive-relative canonical zettel path to reconcile.")
+    reconcile_mode = remint_reconcile.add_mutually_exclusive_group()
+    reconcile_mode.add_argument("--dry-run", action="store_true", help="Classify and preview without writing (default).")
+    reconcile_mode.add_argument("--approve", action="store_true", help="Re-issue the mint receipt after human review; requires --reviewed-by.")
+    remint_reconcile.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
+    remint_reconcile.add_argument(
+        "--content-changed-ack",
+        action="store_true",
+        help="Human acknowledgment required to approve a content_change reconcile.",
+    )
+    remint_reconcile.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    remint_reconcile.set_defaults(func=command_remint_reconcile)
 
     index = subcommands.add_parser("index", help="Build a generated local SQLite search index.")
     index.add_argument("archive_root", help="Archive root to index.")

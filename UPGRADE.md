@@ -163,6 +163,40 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.161` To `v0.3.162`
+
+This release adds `archive remint-reconcile`, an honest way to re-issue a mint
+receipt's recorded sha256 values after a canonical zet drifts on disk. It also
+adds additive BOM/newline parse tolerance and a doctor/retire route to the new
+command.
+
+Operator-visible notes:
+
+- New command only; nothing runs automatically. `archive remint-reconcile
+  <archive-root> (--zettel-id <id> | --path <rel>) [--dry-run | --approve]
+  [--reviewed-by <actor>] [--content-changed-ack]` classifies a canonical zet's
+  drift as `format_drift` (newline/BOM only) or `content_change`, always shows
+  the on-disk content, and requires `--reviewed-by` to approve (a
+  `content_change` also requires `--content-changed-ack`). See
+  `wom-kit/docs/mint-receipt-reconcile.md`.
+- No archive migration and no hash change. BOM/newline tolerance affects
+  parse/read helpers only; sha256 still reads raw bytes, so BOM and newline
+  drift stay visible as a sha mismatch. Existing receipts and canonical files
+  are unaffected until you choose to run `remint-reconcile`.
+- STRICT-GATE NOTE (surfacing, not new failures): a canonical zet whose bytes
+  already drifted by newline/BOM from its mint receipt was already failing
+  `doctor`/`--strict` with `mint_receipt_sha_mismatch`. From v0.3.162 that same
+  case carries a suggested `remint-reconcile --dry-run` command, a UTF-8 BOM on
+  a canonical zet adds a `zettel_has_bom` WARN, and a previously-reconciled
+  receipt that re-drifted by newline/BOM only reports the distinct
+  `mint_receipt_target_byte_drift_suspected_format` ERROR. All stay ERRORs; the
+  edge-receipt evolution path is unchanged and no gate was relaxed.
+- New mints pin the canonical write to LF newlines to prevent immediate
+  re-drift. Added `wom-kit/schemas/mint-reconcile-receipt.schema.json` and a
+  `reconcile` object property on `mint-receipt.schema.json` (not required;
+  legacy receipts validate unchanged). See
+  `wom-kit/docs/releases/v0.3.162.md`.
+
 ## From `v0.3.159` To `v0.3.160`
 
 This release adds the AI intake protocol (source-intake before any physical
