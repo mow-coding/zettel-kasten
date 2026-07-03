@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import json
 import copy
+import base64
 import hashlib
+import hmac
 import fnmatch
 import importlib.util
 import imaplib
 import mimetypes
 import os
+import random
 import re
 import secrets
 import shutil
 import sqlite3
 import stat
 import subprocess
+import time
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -1731,6 +1735,27 @@ OBJECT_STORAGE_UPLOAD_KEY_STRATEGY = "sha256_content_addressed"
 OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES = 5 * 1024 * 1024 * 1024  # 5 GiB; >= this => multipart
 OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES = 64 * 1024 * 1024  # 64 MiB parts
 OBJECT_STORAGE_CHECKSUM_ALGORITHM = "sha256"
+# Live upload adapter (WOM #11) Stage 2 constants (locked spec Part II).
+# Hard cumulative provider-PUT cap per run (SA-2): a misclassified status or a
+# large --max-objects must never drive unbounded R2 Class-A billing.
+OBJECT_STORAGE_TOTAL_PUT_CEILING = 64
+# Hard per-object attempt ceiling for the bounded retry loop (SA-3).
+OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT = 4
+OBJECT_STORAGE_BACKOFF_BASE_MS = 200
+# SigV4 named constants (CA-2/CA-6). EMPTY_SHA256_HEX is sha256(b"").
+SIGV4_EMPTY_SHA256_HEX = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+SIGV4_UNSIGNED_PAYLOAD = "UNSIGNED-PAYLOAD"
+# Region 'auto' for Cloudflare R2, threaded into BOTH the credential scope and
+# the kRegion HMAC (CA-1/CA-5). generic-s3 must pass region explicitly.
+R2_DEFAULT_REGION = "auto"
+# Tier-state gate (SA-6): the highest live-acceptance tier proven for one
+# (archive_id, provider_kind, store_ref). A first-live run may not exceed the
+# tier its prior durable receipts already proved.
+OBJECT_STORAGE_TIER_MAX = 5
+# Distinct successful objects that constitute the tier-3 batch proof (SA-6 T3:
+# "small batch"). Derived from the count of successful one-per-object receipts,
+# since receipts carry no per-run object_count.
+OBJECT_STORAGE_TIER3_BATCH_MIN = 3
 OBJECT_STORAGE_EXECUTIONS_DIR = "receipts/providers/object-storage-executions"
 OBJECT_STORAGE_UPLOAD_RECEIPT_SCHEMA = "object-storage-upload-receipt.schema.json"
 OBJECT_STORAGE_UPLOAD_RESULT_STATUSES = {
@@ -55203,6 +55228,162 @@ class ObjectStorageSecretLeak(ArchiveServiceError):
     """
 
 
+# ---------------------------------------------------------------------------
+# AWS SigV4 signing core (Stage 2, locked spec Part I §A / Part II).
+#
+# These are pure functions: no I/O, no socket, no secret persisted. They build
+# the byte-exact canonical request, string-to-sign, 4-stage signing key, and
+# signature so a hand-rolled S3-compatible PUT/HEAD is byte-correct against a
+# real R2/S3 authorizer. Every one is fully KAT-testable offline (CB-Q1). Only
+# LIVE signature ACCEPTANCE by the provider is residual (unproven_against_live).
+# ---------------------------------------------------------------------------
+
+_SIGV4_UNRESERVED = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+)
+
+
+def _sigv4_uri_encode(value: str, *, is_key: bool = False) -> str:
+    """RFC 3986 percent-encode (CA-3).
+
+    Unreserved set A-Za-z0-9-._~ passes through; everything else becomes
+    UPPERCASE %XX over the UTF-8 bytes. For an object key path (is_key=True) the
+    '/' separator is preserved (the S3 canonical-URI exception); otherwise '/'
+    is itself encoded. Does NOT rely on urllib default quoting, which mishandles
+    '~' and space.
+    """
+    out: list[str] = []
+    for byte in str(value).encode("utf-8"):
+        char = chr(byte)
+        if char in _SIGV4_UNRESERVED:
+            out.append(char)
+        elif char == "/" and is_key:
+            out.append("/")
+        else:
+            out.append("%%%02X" % byte)
+    return "".join(out)
+
+
+def _sigv4_canonical_uri(key: str) -> str:
+    """Canonical URI for a content-addressed key. Encoded ONCE (S3 exception);
+    the sha256/<first2>/<hex> '/' separators are preserved.
+    """
+    clean = str(key or "").lstrip("/")
+    return "/" + _sigv4_uri_encode(clean, is_key=True)
+
+
+def _sigv4_query_encode(params: dict[str, str] | None) -> str:
+    """Canonical query string (CA-3): each key and value RFC-3986 encoded (no
+    is_key exception), sorted by ENCODED key, '=' present even for empty values,
+    '&'-joined. An empty/None param dict yields ''.
+    """
+    if not params:
+        return ""
+    encoded: list[tuple[str, str]] = []
+    for raw_key, raw_value in params.items():
+        encoded.append(
+            (_sigv4_uri_encode(str(raw_key)), _sigv4_uri_encode(str(raw_value if raw_value is not None else "")))
+        )
+    encoded.sort(key=lambda pair: pair[0])
+    return "&".join(f"{k}={v}" for k, v in encoded)
+
+
+def _sigv4_canonical_headers(headers: dict[str, str]) -> tuple[str, str]:
+    """Return (canonical_headers_block, signed_headers) (CA-4).
+
+    Names lowercased; values trimmed and inner-whitespace collapsed to a single
+    space; sorted by lowercased name; each rendered 'name:value\\n'. SignedHeaders
+    is the same sorted names ';'-joined.
+    """
+    normalized: list[tuple[str, str]] = []
+    for name, value in headers.items():
+        lname = str(name).strip().lower()
+        collapsed = " ".join(str(value).strip().split())
+        normalized.append((lname, collapsed))
+    normalized.sort(key=lambda pair: pair[0])
+    block = "".join(f"{name}:{value}\n" for name, value in normalized)
+    signed = ";".join(name for name, _ in normalized)
+    return block, signed
+
+
+def _sigv4_canonical_request(
+    method: str,
+    canonical_uri: str,
+    canonical_query: str,
+    canonical_headers_block: str,
+    signed_headers: str,
+    payload_hash: str,
+) -> str:
+    """The canonical request (CA-3/CA-4). Ends with the payload-hash line, NO
+    trailing newline.
+    """
+    return "\n".join(
+        [
+            str(method).upper(),
+            canonical_uri,
+            canonical_query,
+            canonical_headers_block,
+            signed_headers,
+            payload_hash,
+        ]
+    )
+
+
+def _sigv4_scope(amz_date: str, region: str, service: str = "s3") -> str:
+    """Credential scope '<YYYYMMDD>/<region>/<service>/aws4_request' (CA-1)."""
+    return f"{amz_date[:8]}/{region}/{service}/aws4_request"
+
+
+def _sigv4_string_to_sign(amz_date: str, scope: str, canonical_request: str) -> str:
+    """StringToSign: 4 lines '\\n'-joined, NO trailing newline (CA-5)."""
+    hashed = hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
+    return "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, hashed])
+
+
+def _sigv4_hmac(key: bytes, message: str) -> bytes:
+    return hmac.new(key, message.encode("utf-8"), digestmod=hashlib.sha256).digest()
+
+
+def _sigv4_signing_key(secret_access_key: str, date_stamp: str, region: str, service: str = "s3") -> bytes:
+    """4-stage signing key (CA-5). Intermediates are RAW bytes (.digest())."""
+    k_date = _sigv4_hmac(("AWS4" + str(secret_access_key)).encode("utf-8"), date_stamp)
+    k_region = _sigv4_hmac(k_date, region)
+    k_service = _sigv4_hmac(k_region, service)
+    return _sigv4_hmac(k_service, "aws4_request")
+
+
+def _sigv4_signature(signing_key: bytes, string_to_sign: str) -> str:
+    """Final signature = hex(HMAC(kSigning, STS)) (CA-5)."""
+    return hmac.new(signing_key, string_to_sign.encode("utf-8"), digestmod=hashlib.sha256).hexdigest()
+
+
+def _sigv4_authorization_header(
+    access_key_id: str, scope: str, signed_headers: str, signature: str
+) -> str:
+    return (
+        "AWS4-HMAC-SHA256 "
+        f"Credential={access_key_id}/{scope}, "
+        f"SignedHeaders={signed_headers}, "
+        f"Signature={signature}"
+    )
+
+
+def _sha256_hex_to_checksum_b64(hex_digest: str) -> str:
+    """Convert a lowercase-hex sha256 to the base64(raw 32-byte digest) form R2
+    expects for x-amz-checksum-sha256 (CA-7).
+    """
+    raw = bytes.fromhex(str(hex_digest))
+    return base64.b64encode(raw).decode("ascii")
+
+
+def _checksum_b64_to_sha256_hex(b64_value: str) -> str:
+    """Convert R2's base64 x-amz-checksum-sha256 back to lowercase hex (CA-7) so
+    the executor's hex comparison passes for a genuine upload.
+    """
+    raw = base64.b64decode(str(b64_value))
+    return raw.hex()
+
+
 class ObjectStorageTransport(Protocol):
     """Abstract S3-compatible transport. No live implementation ships in Stage 1.
 
@@ -55233,6 +55414,11 @@ class ObjectStorageTransport(Protocol):
         ...
 
     def abort_multipart(self, *, key: str, upload_id: str) -> None:
+        ...
+
+    def delete_object(self, *, key: str) -> None:
+        # SA-5: cleanup of a completed-but-wrong remote object after a
+        # multipart HEAD-after mismatch, so no orphan accrues storage cost.
         ...
 
 
@@ -55271,11 +55457,437 @@ class NullTransport:
             "object-storage-upload has no live transport in this release (Stage 1)."
         )
 
+    def delete_object(self, *, key: str) -> None:
+        raise ObjectStorageTransportNotImplemented(
+            "object-storage-upload has no live transport in this release (Stage 1)."
+        )
 
-def object_storage_resolve_transport(provider_kind: str) -> ObjectStorageTransport | None:
-    # Stage 1: no live transport is wired. A Stage-2 change adds the real
-    # R2/S3 client here; that wire does not exist in this release.
-    return None
+
+# ---------------------------------------------------------------------------
+# Stage-2 live transport: real Cloudflare R2 / S3-compatible SigV4 PUT/HEAD.
+#
+# STRUCTURAL SINGLE-EGRESS (CA-10 / SA-7): every transport method builds a
+# fully-signed request dict and hands it to self._send. NO urllib/socket/ssl/
+# http.client import is reachable from any method here except the module-level
+# _default_urllib_sender() factory below. Tests inject a fake send; the default
+# sender is never constructed in tests. This makes "no test opens a real socket"
+# provable via the one seam, not hoped via a source grep.
+#
+# Every provider error reduces to a scalar status_class; NO response body,
+# header, Authorization, StringToSign, or CanonicalRequest is ever returned or
+# logged (CA-9 / RC5).
+# ---------------------------------------------------------------------------
+
+
+class _ObjectStorageProviderError(ArchiveServiceError):
+    """Internal-only carrier of a SCALAR status_class. Never carries a body."""
+
+    def __init__(self, status_class: str) -> None:
+        super().__init__(status_class)
+        self.status_class = status_class
+
+
+_SIGV4_AUTH_ERROR_CODES = frozenset(
+    {
+        "SignatureDoesNotMatch",
+        "RequestTimeTooSkewed",
+        "InvalidAccessKeyId",
+        "AccessDenied",
+    }
+)
+_SIGV4_RATE_LIMITED_CODES = frozenset({"SlowDown", "InternalError", "ServiceUnavailable"})
+
+
+def _object_storage_classify_http_status(status: int, error_code: str | None) -> str:
+    """Reduce an HTTP status + optional S3 error CODE to a scalar status_class
+    (CA-9). Fail-closed on auth: retrying a bad signature burns Class-A ops and
+    can never succeed. Keyed on code (not just status) because 400 is ambiguous.
+    """
+    code = str(error_code or "")
+    if 200 <= int(status) < 300:
+        return "ok"
+    if code in _SIGV4_AUTH_ERROR_CODES:
+        return "auth"
+    if code in _SIGV4_RATE_LIMITED_CODES:
+        return "rate_limited"
+    if int(status) in (403, 400):
+        return "auth"
+    if int(status) in (429, 503, 500):
+        return "rate_limited"
+    return "failed"
+
+
+def _default_urllib_sender() -> Callable[..., dict[str, Any]]:
+    """Return the ONLY thin wrapper over stdlib networking (SA-7).
+
+    This factory is the sole place a transport method may reach urllib. It is
+    never constructed in tests; tests inject a fake `send`. The returned callable
+    accepts a signed request dict and returns a scalar response dict, never a
+    body destined for a durable surface.
+    """
+
+    def _send(*, method: str, url: str, headers: dict[str, str], data_path=None, data_bytes=None) -> dict[str, Any]:
+        body = None
+        if data_path is not None:
+            with open(data_path, "rb") as handle:
+                body = handle.read()
+        elif data_bytes is not None:
+            body = data_bytes
+        request = urllib.request.Request(url=url, method=str(method).upper(), headers=headers, data=body)
+        try:
+            with urllib.request.urlopen(request) as response:  # noqa: S310 - signed request, fixed host
+                raw = response.read()
+                resp_headers = {str(k).lower(): str(v) for k, v in response.headers.items()}
+                return {"status": int(response.status), "headers": resp_headers, "body": raw}
+        except urllib.error.HTTPError as exc:  # provider returned a non-2xx
+            try:
+                raw = exc.read()
+            except OSError:
+                raw = b""
+            resp_headers = {str(k).lower(): str(v) for k, v in (exc.headers or {}).items()}
+            return {"status": int(exc.code), "headers": resp_headers, "body": raw}
+        except (urllib.error.URLError, OSError):
+            # Socket reset / timeout / DNS: a retryable transport condition. No
+            # body, no message text — only a scalar signal for classification.
+            return {"status": 0, "headers": {}, "body": b"", "transport_error": True}
+
+    return _send
+
+
+def _sigv4_extract_error_code(body: bytes | str | None) -> str | None:
+    """Pull the S3 <Code>...</Code> from an error body for classification ONLY.
+
+    The extracted code is a fixed enum-like token used to pick a status_class; it
+    is NEVER returned to the caller or written anywhere. The body itself is
+    dropped immediately after this call.
+    """
+    if not body:
+        return None
+    text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else str(body)
+    match = re.search(r"<Code>([A-Za-z]+)</Code>", text)
+    return match.group(1) if match else None
+
+
+class S3CompatibleTransport:
+    """Real R2 / S3-compatible SigV4 transport (Stage 2).
+
+    send is the SOLE egress (CA-10). sleep is unused here (the bounded retry loop
+    owns backoff); it is accepted for signature symmetry with the executor.
+    """
+
+    def __init__(
+        self,
+        *,
+        endpoint_host: str,
+        bucket: str,
+        access_key_id: str,
+        secret_access_key: str,
+        region: str,
+        send: Callable[..., dict[str, Any]],
+        service: str = "s3",
+    ) -> None:
+        self._endpoint_host = str(endpoint_host)
+        self._bucket = str(bucket)
+        self._access_key_id = str(access_key_id)
+        self._secret_access_key = str(secret_access_key)
+        self._region = str(region)
+        self._send = send
+        self._service = service
+
+    # -- signing / dispatch ------------------------------------------------
+
+    def _now(self) -> tuple[str, str]:
+        # One datetime per request; x-amz-date and scope date derive from it (CA-4/CB-Q4).
+        now = datetime.now(timezone.utc)
+        amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+        return amz_date, amz_date[:8]
+
+    def _url(self, key: str, query: dict[str, str] | None) -> str:
+        canonical_uri = _sigv4_canonical_uri(f"{self._bucket}/{key}")
+        canonical_query = _sigv4_query_encode(query)
+        scheme_host = f"https://{self._endpoint_host}"
+        return f"{scheme_host}{canonical_uri}" + (f"?{canonical_query}" if canonical_query else "")
+
+    def _signed_request(
+        self,
+        *,
+        method: str,
+        key: str,
+        payload_hash: str,
+        query: dict[str, str] | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        amz_date, date_stamp = self._now()
+        headers: dict[str, str] = {
+            "host": self._endpoint_host,
+            "x-amz-content-sha256": payload_hash,
+            "x-amz-date": amz_date,
+        }
+        if extra_headers:
+            for name, value in extra_headers.items():
+                headers[str(name).strip().lower()] = str(value)
+        canonical_uri = _sigv4_canonical_uri(f"{self._bucket}/{key}")
+        canonical_query = _sigv4_query_encode(query)
+        block, signed_headers = _sigv4_canonical_headers(headers)
+        canonical_request = _sigv4_canonical_request(
+            method, canonical_uri, canonical_query, block, signed_headers, payload_hash
+        )
+        scope = _sigv4_scope(amz_date, self._region, self._service)
+        string_to_sign = _sigv4_string_to_sign(amz_date, scope, canonical_request)
+        signing_key = _sigv4_signing_key(self._secret_access_key, date_stamp, self._region, self._service)
+        signature = _sigv4_signature(signing_key, string_to_sign)
+        headers["authorization"] = _sigv4_authorization_header(
+            self._access_key_id, scope, signed_headers, signature
+        )
+        # signing_key/string_to_sign/canonical_request are LOCALS only; they are
+        # dropped here and never reach a receipt/ledger/return payload (SA-4).
+        return headers
+
+    def _dispatch(
+        self,
+        *,
+        method: str,
+        key: str,
+        payload_hash: str,
+        query: dict[str, str] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        data_path=None,
+        data_bytes=None,
+    ) -> dict[str, Any]:
+        headers = self._signed_request(
+            method=method, key=key, payload_hash=payload_hash, query=query, extra_headers=extra_headers
+        )
+        url = self._url(key, query)
+        response = self._send(
+            method=method, url=url, headers=headers, data_path=data_path, data_bytes=data_bytes
+        )
+        return response if isinstance(response, dict) else {"status": 0, "headers": {}, "body": b""}
+
+    # -- transport methods -------------------------------------------------
+
+    def head_object(self, *, key: str) -> dict[str, Any]:
+        # Whole-object sha256 verification is done by re-download-and-hash (CB-Q2
+        # fallback), NOT by a stored server-side checksum. R2 does not implement
+        # GetObjectAttributes and marks x-amz-checksum-sha256 "Feature Not
+        # Implemented", and a SHA-256 multipart object can only carry a COMPOSITE
+        # (checksum-of-checksums) value that never equals the whole-object hash.
+        # So: HeadObject for presence + size, then GetObject the bytes and hash
+        # them here to the lowercase hex the executor compares. This works
+        # identically for single-part and multipart objects and depends on no
+        # provider checksum surface. Both HEAD and GET sign UNSIGNED-PAYLOAD.
+        head = self._dispatch(method="HEAD", key=key, payload_hash=SIGV4_UNSIGNED_PAYLOAD)
+        head_status = int(head.get("status") or 0)
+        if head_status == 404:
+            return {"present": False, "size": None, "checksum_sha256": None}
+        if not (200 <= head_status < 300):
+            return {"present": False, "size": None, "checksum_sha256": None}
+        head_headers = head.get("headers") or {}
+        size = None
+        if isinstance(head_headers, dict):
+            raw_len = head_headers.get("content-length")
+            if raw_len is not None:
+                try:
+                    size = int(raw_len)
+                except (ValueError, TypeError):
+                    size = None
+        # GetObject and hash the streamed bytes to the whole-object sha256 hex.
+        checksum_hex = self._get_object_sha256_hex(key)
+        return {"present": True, "size": size, "checksum_sha256": checksum_hex}
+
+    def _get_object_sha256_hex(self, key: str) -> str | None:
+        # GET the object body and return its lowercase-hex sha256, or None if the
+        # object could not be read. The body is consumed ONLY to compute the
+        # scalar digest; it is never returned or logged (RC5).
+        response = self._dispatch(method="GET", key=key, payload_hash=SIGV4_UNSIGNED_PAYLOAD)
+        status = int(response.get("status") or 0)
+        if not (200 <= status < 300):
+            return None
+        body = response.get("body")
+        if isinstance(body, (bytes, bytearray)):
+            return hashlib.sha256(bytes(body)).hexdigest()
+        if isinstance(body, str):
+            return hashlib.sha256(body.encode("utf-8")).hexdigest()
+        return None
+
+    def put_object(self, *, key: str, data_path: Path, size: int, content_sha256: str) -> dict[str, Any]:
+        # Single-part PUT signs the REAL lowercase-hex payload hash (CA-2), giving
+        # R2 free SigV4 wire-integrity on the body. We do NOT send
+        # x-amz-checksum-sha256: R2 marks that header "Feature Not Implemented",
+        # and whole-object verification is done by HEAD+GET-rehash in head_object
+        # (CB-Q2), not by a stored server-side checksum. An explicit octet-stream
+        # Content-Type keeps the stored object's metadata correct and stops the
+        # default sender from defaulting to application/x-www-form-urlencoded.
+        response = self._dispatch(
+            method="PUT",
+            key=key,
+            payload_hash=str(content_sha256),
+            extra_headers={
+                "content-length": str(size),
+                "content-type": "application/octet-stream",
+            },
+            data_path=data_path,
+        )
+        return self._put_result(response, size, content_sha256)
+
+    def _put_result(self, response: dict[str, Any], size: int, content_sha256: str) -> dict[str, Any]:
+        status = int(response.get("status") or 0)
+        if response.get("transport_error"):
+            return {"status_class": "rate_limited", "size": 0, "checksum_sha256": None, "etag_opaque": None}
+        error_code = _sigv4_extract_error_code(response.get("body")) if not (200 <= status < 300) else None
+        status_class = _object_storage_classify_http_status(status, error_code)
+        if status_class != "ok":
+            return {"status_class": status_class, "size": 0, "checksum_sha256": None, "etag_opaque": None}
+        return {
+            "status_class": "ok",
+            "size": int(size),
+            "checksum_sha256": str(content_sha256),
+            "etag_opaque": "etag-opaque",
+        }
+
+    def create_multipart(self, *, key: str) -> str:
+        # No x-amz-checksum-algorithm / x-amz-checksum-type: SHA-256 multipart is
+        # COMPOSITE-only on both AWS S3 and R2 (FULL_OBJECT is CRC-only), so no
+        # stored SHA-256 whole-object checksum can ever equal content_sha256. R2
+        # additionally marks the checksum headers "Feature Not Implemented".
+        # Whole-object integrity is instead verified by HEAD+GET-rehash in
+        # head_object (CB-Q2). This is a plain multipart initiation.
+        response = self._dispatch(
+            method="POST",
+            key=key,
+            payload_hash=SIGV4_EMPTY_SHA256_HEX,
+            query={"uploads": ""},
+        )
+        status = int(response.get("status") or 0)
+        if not (200 <= status < 300):
+            error_code = _sigv4_extract_error_code(response.get("body"))
+            raise _ObjectStorageProviderError(_object_storage_classify_http_status(status, error_code))
+        body = response.get("body")
+        text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else str(body or "")
+        match = re.search(r"<UploadId>([^<]+)</UploadId>", text)
+        if not match:
+            raise _ObjectStorageProviderError("failed")
+        return match.group(1)
+
+    def put_part(self, *, key: str, upload_id: str, part_number: int, data: bytes) -> dict[str, Any]:
+        # Sign the REAL part payload hash (SigV4 wire-integrity per part). No
+        # x-amz-checksum-sha256 header: whole-object verification is HEAD+GET-rehash
+        # (CB-Q2), and R2 marks the per-part checksum header "Feature Not
+        # Implemented". Explicit octet-stream Content-Type avoids the sender default.
+        part_hash = hashlib.sha256(data).hexdigest()
+        response = self._dispatch(
+            method="PUT",
+            key=key,
+            payload_hash=part_hash,
+            query={"partNumber": str(part_number), "uploadId": str(upload_id)},
+            extra_headers={
+                "content-length": str(len(data)),
+                "content-type": "application/octet-stream",
+            },
+            data_bytes=data,
+        )
+        status = int(response.get("status") or 0)
+        if not (200 <= status < 300):
+            error_code = _sigv4_extract_error_code(response.get("body"))
+            raise _ObjectStorageProviderError(_object_storage_classify_http_status(status, error_code))
+        etag_match = None
+        headers = response.get("headers") or {}
+        if isinstance(headers, dict):
+            etag_match = headers.get("etag")
+        return {"etag_opaque": etag_match or f"part-{part_number}", "part_number": part_number}
+
+    def complete_multipart(
+        self, *, key: str, upload_id: str, parts: list[dict[str, Any]], content_sha256: str
+    ) -> dict[str, Any]:
+        # CompleteMultipartUpload carries ONLY the part list (PartNumber + ETag).
+        # No top-level <ChecksumSHA256>: for SHA-256 that would be a COMPOSITE
+        # checksum-of-checksums, never the whole-object hash, and AWS requires the
+        # object checksum to be a request header matching the CreateMultipartUpload
+        # checksum type (which we deliberately did not set). Whole-object integrity
+        # is verified by HEAD+GET-rehash in head_object (CB-Q2). content_sha256 is
+        # accepted for interface symmetry but not sent. An explicit text/xml
+        # Content-Type is REQUIRED: AWS rejects CompleteMultipartUpload sent as
+        # application/x-www-form-urlencoded (the default sender's fallback for a
+        # body-carrying request when no Content-Type is set).
+        _ = content_sha256
+        parts_xml = "".join(
+            f"<Part><PartNumber>{p['part_number']}</PartNumber><ETag>{p.get('etag_opaque','')}</ETag></Part>"
+            for p in parts
+        )
+        payload = (
+            "<CompleteMultipartUpload>"
+            f"{parts_xml}"
+            "</CompleteMultipartUpload>"
+        ).encode("utf-8")
+        payload_hash = hashlib.sha256(payload).hexdigest()
+        response = self._dispatch(
+            method="POST",
+            key=key,
+            payload_hash=payload_hash,
+            query={"uploadId": str(upload_id)},
+            extra_headers={"content-length": str(len(payload)), "content-type": "text/xml"},
+            data_bytes=payload,
+        )
+        status = int(response.get("status") or 0)
+        if response.get("transport_error"):
+            return {"status_class": "rate_limited"}
+        if not (200 <= status < 300):
+            error_code = _sigv4_extract_error_code(response.get("body"))
+            return {"status_class": _object_storage_classify_http_status(status, error_code)}
+        return {"status_class": "ok"}
+
+    def abort_multipart(self, *, key: str, upload_id: str) -> None:
+        self._dispatch(
+            method="DELETE",
+            key=key,
+            payload_hash=SIGV4_EMPTY_SHA256_HEX,
+            query={"uploadId": str(upload_id)},
+        )
+
+    def delete_object(self, *, key: str) -> None:
+        # SA-5: remove a completed-but-wrong object so no orphan accrues cost.
+        self._dispatch(method="DELETE", key=key, payload_hash=SIGV4_EMPTY_SHA256_HEX)
+
+
+def object_storage_resolve_transport(
+    provider_kind: str,
+    *,
+    send: Callable[..., dict[str, Any]] | None = None,
+    credential: dict[str, Any] | None = None,
+) -> ObjectStorageTransport | None:
+    """Resolve a live transport (Stage 2).
+
+    Returns a real S3CompatibleTransport for cloudflare-r2/generic-s3 ONLY when
+    both an http `send` seam and a resolved credential bundle (endpoint_host,
+    bucket, access_key_id, secret_access_key, region) are available. Returns None
+    otherwise — so an --approve run with no send/credential still fails closed.
+    The credential is resolved at real-execution time and never persisted.
+    """
+    normalized = str(provider_kind or "").strip().lower()
+    if normalized not in {"cloudflare-r2", "generic-s3"}:
+        return None
+    if send is None or not isinstance(credential, dict):
+        return None
+    endpoint_host = str(credential.get("endpoint_host") or "").strip()
+    bucket = str(credential.get("bucket") or "").strip()
+    access_key_id = str(credential.get("access_key_id") or "")
+    secret_access_key = str(credential.get("secret_access_key") or "")
+    region = str(credential.get("region") or "").strip()
+    if not region:
+        # region 'auto' default for R2; generic-s3 requires explicit region (CA-1).
+        if normalized == "cloudflare-r2":
+            region = R2_DEFAULT_REGION
+        else:
+            return None
+    if not (endpoint_host and bucket and access_key_id and secret_access_key):
+        return None
+    return S3CompatibleTransport(
+        endpoint_host=endpoint_host,
+        bucket=bucket,
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        region=region,
+        send=send,
+    )
 
 
 def object_storage_content_addressed_key_hint(digest: str) -> str:
@@ -55503,6 +56115,84 @@ def object_storage_resume_ledger_path(
     )
 
 
+def _object_storage_execution_receipts_for_store(
+    root: Path, *, provider_kind: str, store_ref: str
+) -> list[dict[str, Any]]:
+    """Read every prior execution receipt for one (provider_kind, store_ref).
+
+    Tier advancement (SA-6) is DERIVED from these durable receipt facts
+    (result_status, bytes_uploaded, and the count of distinct successful
+    objects), never from a bare flag a caller sets. Receipts are written
+    one-per-object, so a batch is proved by the NUMBER of successful receipts,
+    not by a per-receipt object_count field.
+    """
+    receipts_dir = archive_internal_path(root, OBJECT_STORAGE_EXECUTIONS_DIR)
+    if not receipts_dir.is_dir():
+        return []
+    out: list[dict[str, Any]] = []
+    for path in sorted(receipts_dir.glob("*.object-storage-upload.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if str(data.get("provider_kind") or "") != provider_kind:
+            continue
+        if str(data.get("store_ref") or "") != store_ref:
+            continue
+        out.append(data)
+    return out
+
+
+def object_storage_proven_tier(root: Path, *, provider_kind: str, store_ref: str) -> int:
+    """Highest live-acceptance tier PROVEN for this store, derived from receipts.
+
+    Receipts are written one-per-object, so tier facts come from the SET of
+    successful receipts, not a per-receipt object_count:
+    - tier 0: no prior successful live object for this store.
+    - tier >= 1: at least one prior `uploaded`/`skipped_remote_same` receipt (a
+      single tiny-first object has landed).
+    - tier >= 2: a prior success whose bytes_uploaded reached the multipart
+      threshold (a genuine large-object / multipart proof).
+    - tier >= 3: at least OBJECT_STORAGE_TIER3_BATCH_MIN distinct objects have
+      landed AND a tier-2 large-object proof exists (a batch proof: the store has
+      demonstrably absorbed both a big object and a batch).
+    Tiers 4/5 are operational milestones layered above tier 3; this derivation
+    caps at 3 from receipt facts alone and never fabricates a higher tier.
+    """
+    receipts = _object_storage_execution_receipts_for_store(
+        root, provider_kind=provider_kind, store_ref=store_ref
+    )
+    tier = 0
+    successful_object_ids: set[str] = set()
+    saw_multipart_proof = False
+    for data in receipts:
+        status = str(data.get("result_status") or "")
+        if status not in {"uploaded", "skipped_remote_same"}:
+            continue
+        tier = max(tier, 1)
+        successful_object_ids.add(str(data.get("object_id") or ""))
+        if int(data.get("bytes_uploaded") or 0) >= OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES:
+            saw_multipart_proof = True
+            tier = max(tier, 2)
+    if saw_multipart_proof and len(successful_object_ids) >= OBJECT_STORAGE_TIER3_BATCH_MIN:
+        tier = max(tier, 3)
+    return tier
+
+
+def object_storage_requested_tier(*, object_count: int) -> int:
+    """The tier a requested run corresponds to (SA-6).
+
+    One object is a tier-1 request; a multi-object batch is a tier-3 request.
+    A run may proceed only when the store's PROVEN tier is >= (requested - 1):
+    you must have proved the immediately-lower tier before advancing. This makes
+    a bulk first-live run (no prior receipts) REFUSE, while a single tiny-first
+    object is always permitted (its predecessor tier 0 is the empty store).
+    """
+    return 3 if int(object_count) > 1 else 1
+
+
 def object_storage_write_execution_receipt(root: Path, case_id: str, receipt: dict[str, Any]) -> str:
     """Write a monotonic-suffixed immutable execution receipt via _atomic_write_json."""
     receipts_dir = archive_internal_path(root, OBJECT_STORAGE_EXECUTIONS_DIR)
@@ -55519,6 +56209,15 @@ def object_storage_write_execution_receipt(root: Path, case_id: str, receipt: di
         suffix += 1
 
 
+def _object_storage_backoff_ms(attempt_index: int, rng: Callable[[], float]) -> int:
+    """Exponential backoff with jitter (SA-3). attempt_index is 0-based over the
+    number of retries already performed. Deterministic when rng is injected.
+    """
+    base = OBJECT_STORAGE_BACKOFF_BASE_MS * (2 ** max(0, attempt_index))
+    jitter = 1.0 + rng()  # rng()->[0,1) => [base, 2*base)
+    return int(base * jitter)
+
+
 def object_storage_execute_one_upload(
     *,
     transport: ObjectStorageTransport,
@@ -55529,20 +56228,29 @@ def object_storage_execute_one_upload(
     multipart_threshold_bytes: int,
     skip_uploaded: bool,
     ledger: ResumeLedger,
+    max_attempts: int = OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT,
+    sleep: Callable[[float], None] = time.sleep,
+    rng: Callable[[], float] = random.random,
 ) -> dict[str, Any]:
     """Per-object upload spine (§2.3). Ledger read -> HEAD-before -> PUT/multipart
 
     -> HEAD-after -> ledger append. All provider exceptions reduce to a
     status_class; NO error body is ever surfaced (RC5).
 
+    The PUT/multipart step is wrapped in a BOUNDED retry loop (SA-3): a
+    rate_limited status (429/503/SlowDown/InternalError/conn-reset) triggers
+    exponential backoff with jitter up to max_attempts, then fails closed as
+    failed_rate_limited; an auth status (403/400/SignatureDoesNotMatch) fails
+    closed immediately with ZERO retries. Backoff sleeps via the injectable
+    `sleep` seam so tests never wall-clock-block, and the accumulated backoff is
+    returned as backoff_ms_total for the real retry_summary.
+
     skip_uploaded is part of the spec §2.3 signature but does NOT gate the
     HEAD-before here: the Layer-A manifest cost-skip is decided UPSTREAM in
-    object_storage_upload_run (a plan row with idempotency_verdict
-    "already_uploaded" short-circuits before this executor is called). Inside the
-    executor the only unconditional cost-skip is ledger authority (§3.3): a
-    terminal-success ledger row means the object is already done. When the
-    HEAD-before does run it is authoritative (Layer B), so a deleted-remote is
-    correctly re-uploaded on a full-HEAD sweep (skip_uploaded=False).
+    object_storage_upload_run. Inside the executor the only unconditional
+    cost-skip is ledger authority (§3.3): a terminal-success ledger row means the
+    object is already done. When the HEAD-before does run it is authoritative
+    (Layer B), so a deleted-remote is correctly re-uploaded on a full-HEAD sweep.
     """
     _ = skip_uploaded  # Layer-A cost-skip is enforced upstream; see docstring.
     object_id = f"sha256:{content_sha256}"
@@ -55556,10 +56264,13 @@ def object_storage_execute_one_upload(
             "bytes": 0,
             "part_count": 0,
             "attempts": 0,
+            "backoff_ms_total": 0,
+            "put_calls": 0,
             "provider_api_called": False,
         }
 
     attempts = 0
+    backoff_ms_total = 0
     try:
         # HEAD-before (Layer B correctness). Only suppressed by Layer A upstream.
         head_before = transport.head_object(key=key)
@@ -55575,6 +56286,8 @@ def object_storage_execute_one_upload(
                     "bytes": 0,
                     "part_count": 0,
                     "attempts": attempts,
+                    "backoff_ms_total": 0,
+                    "put_calls": 0,
                     "provider_api_called": True,
                 }
                 ledger.append(ResumeLedger.build_row({**result, "completed_at": _object_storage_now_iso()}))
@@ -55587,35 +56300,75 @@ def object_storage_execute_one_upload(
                 "bytes": 0,
                 "part_count": 0,
                 "attempts": attempts,
+                "backoff_ms_total": 0,
+                "put_calls": 0,
                 "provider_api_called": True,
             }
 
-        # remote_absent -> upload.
-        if size >= multipart_threshold_bytes:
-            put_result, part_count = _object_storage_multipart_put(
-                transport=transport, key=key, data_path=data_path, content_sha256=content_sha256
+        # remote_absent -> BOUNDED-RETRY upload loop (SA-3).
+        is_multipart = size >= multipart_threshold_bytes
+        put_calls = 0
+        part_count = 1
+        status_class = "failed"
+        retries = 0
+        while True:
+            if is_multipart:
+                put_result, part_count = _object_storage_multipart_put(
+                    transport=transport, key=key, data_path=data_path, content_sha256=content_sha256
+                )
+                # Each multipart run issues create + N put_part + complete; count
+                # the mutating provider calls for the cumulative PUT ceiling (SA-2).
+                put_calls += 1 + max(1, part_count) + 1
+            else:
+                put_result = transport.put_object(
+                    key=key, data_path=data_path, size=size, content_sha256=content_sha256
+                )
+                part_count = 1
+                put_calls += 1
+            attempts += 1
+            status_class = str(put_result.get("status_class") or "failed")
+            if status_class == "ok":
+                break
+            if status_class == "auth":
+                return _object_storage_failed_result(
+                    object_id, key_hint, "failed_auth", attempts, backoff_ms_total, put_calls
+                )
+            if status_class == "rate_limited" and retries + 1 < max_attempts:
+                sleep_ms = _object_storage_backoff_ms(retries, rng)
+                backoff_ms_total += sleep_ms
+                sleep(sleep_ms / 1000.0)
+                retries += 1
+                continue
+            if status_class == "rate_limited":
+                return _object_storage_failed_result(
+                    object_id, key_hint, "failed_rate_limited", attempts, backoff_ms_total, put_calls
+                )
+            return _object_storage_failed_result(
+                object_id, key_hint, "failed_upload", attempts, backoff_ms_total, put_calls
             )
-        else:
-            put_result = transport.put_object(
-                key=key, data_path=data_path, size=size, content_sha256=content_sha256
-            )
-            part_count = 1
-        attempts += 1
-        status_class = str(put_result.get("status_class") or "failed")
-        if status_class == "auth":
-            return _object_storage_failed_result(object_id, key_hint, "failed_auth", attempts)
-        if status_class == "rate_limited":
-            return _object_storage_failed_result(object_id, key_hint, "failed_rate_limited", attempts)
-        if status_class != "ok":
-            return _object_storage_failed_result(object_id, key_hint, "failed_upload", attempts)
 
         # HEAD-after: verify non-secret size + full-object sha256. Never pass on size alone.
         head_after = transport.head_object(key=key)
         attempts += 1
-        if not head_after.get("present"):
-            return _object_storage_failed_result(object_id, key_hint, "failed_upload", attempts)
-        if head_after.get("size") != size or head_after.get("checksum_sha256") != content_sha256:
-            return _object_storage_failed_result(object_id, key_hint, "failed_upload", attempts)
+        head_after_ok = (
+            head_after.get("present")
+            and head_after.get("size") == size
+            and head_after.get("checksum_sha256") == content_sha256
+        )
+        if not head_after_ok:
+            # SA-5: a completed-but-wrong remote object is an orphan that accrues
+            # storage cost. For a multipart-COMPLETED upload the parts are gone
+            # (composed into the object), so delete the object; a single PUT is
+            # atomic but a mismatch still means a wrong object may be present.
+            try:
+                transport.delete_object(key=key)
+            except ArchiveServiceError:
+                pass
+            attempts += 1
+            put_calls += 1
+            return _object_storage_failed_result(
+                object_id, key_hint, "failed_upload", attempts, backoff_ms_total, put_calls
+            )
 
         result = {
             "object_id": object_id,
@@ -55624,6 +56377,8 @@ def object_storage_execute_one_upload(
             "bytes": size,
             "part_count": part_count,
             "attempts": attempts,
+            "backoff_ms_total": backoff_ms_total,
+            "put_calls": put_calls,
             "provider_api_called": True,
         }
         ledger.append(ResumeLedger.build_row({**result, "completed_at": _object_storage_now_iso()}))
@@ -55632,10 +56387,19 @@ def object_storage_execute_one_upload(
         raise
     except ArchiveServiceError:
         # Any provider-adjacent error is reduced to a status class; no body surfaced.
-        return _object_storage_failed_result(object_id, key_hint, "failed_upload", attempts)
+        return _object_storage_failed_result(
+            object_id, key_hint, "failed_upload", attempts, backoff_ms_total, 0
+        )
 
 
-def _object_storage_failed_result(object_id: str, key_hint: str, status: str, attempts: int) -> dict[str, Any]:
+def _object_storage_failed_result(
+    object_id: str,
+    key_hint: str,
+    status: str,
+    attempts: int,
+    backoff_ms_total: int = 0,
+    put_calls: int = 0,
+) -> dict[str, Any]:
     return {
         "object_id": object_id,
         "key_hint": key_hint,
@@ -55643,6 +56407,8 @@ def _object_storage_failed_result(object_id: str, key_hint: str, status: str, at
         "bytes": 0,
         "part_count": 0,
         "attempts": attempts,
+        "backoff_ms_total": int(backoff_ms_total),
+        "put_calls": int(put_calls),
         "provider_api_called": True,
     }
 
@@ -55650,10 +56416,18 @@ def _object_storage_failed_result(object_id: str, key_hint: str, status: str, at
 def _object_storage_multipart_put(
     *, transport: ObjectStorageTransport, key: str, data_path: Path, content_sha256: str
 ) -> tuple[dict[str, Any], int]:
-    upload_id = transport.create_multipart(key=key)
-    parts: list[dict[str, Any]] = []
+    # A provider error at ANY multipart step (create / put_part / complete) must
+    # surface its REAL status_class so the executor's bounded retry loop can retry
+    # a rate_limited failure to the attempt ceiling (SA-3). Collapsing every
+    # failure to "failed" here would defeat the retry loop exactly where real R2
+    # throttling most often occurs — mid-multipart on the large uploads the tiered
+    # gate exists to protect. On failure the in-flight upload is aborted so no
+    # parts are orphaned.
     part_number = 0
+    upload_id = None
     try:
+        upload_id = transport.create_multipart(key=key)
+        parts: list[dict[str, Any]] = []
         with data_path.open("rb") as handle:
             while True:
                 chunk = handle.read(OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES)
@@ -55668,11 +56442,19 @@ def _object_storage_multipart_put(
             key=key, upload_id=upload_id, parts=parts, content_sha256=content_sha256
         )
         return completed, part_number
+    except _ObjectStorageProviderError as exc:
+        if upload_id is not None:
+            try:
+                transport.abort_multipart(key=key, upload_id=upload_id)
+            except ArchiveServiceError:
+                pass
+        return {"status_class": str(exc.status_class or "failed")}, part_number
     except ArchiveServiceError:
-        try:
-            transport.abort_multipart(key=key, upload_id=upload_id)
-        except ArchiveServiceError:
-            pass
+        if upload_id is not None:
+            try:
+                transport.abort_multipart(key=key, upload_id=upload_id)
+            except ArchiveServiceError:
+                pass
         return {"status_class": "failed"}, part_number
 
 
@@ -55740,8 +56522,11 @@ def _object_storage_upload_base_result(
         "provider_kind": provider_kind,
         "store_ref": store_ref,
         "current_capability": {
-            "live_object_upload_adapter_implemented": False,
-            "provider_api_call_implemented": False,
+            # Stage 2 (SA-1): the live SigV4 transport now ships. A run still
+            # REFUSES without a credential / --approve / met tiered-gate —
+            # capable != will upload on its own.
+            "live_object_upload_adapter_implemented": True,
+            "provider_api_call_implemented": True,
             "upload_plan_implemented": True,
             "local_byte_verification_implemented": True,
         },
@@ -55995,11 +56780,28 @@ def object_storage_upload_run(
     approve: bool = False,
     dry_run: bool = False,
     transport: ObjectStorageTransport | None = None,
+    send: Callable[..., dict[str, Any]] | None = None,
+    endpoint_host: str | None = None,
+    bucket: str | None = None,
+    region: str | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    rng: Callable[[], float] = random.random,
 ) -> dict[str, Any]:
-    """Mutating upload command (§1.3). Stage 1 fails closed on --approve with no
+    """Mutating upload command (§1.3, Stage 2).
 
-    injected transport (live_transport_not_implemented). Service layer re-enforces
-    every gate so a direct service/MCP call cannot bypass the CLI gate.
+    Live transport reachability: an injected `transport` (tests) OR a production
+    `send` seam plus resolvable credential yields a real S3CompatibleTransport;
+    otherwise --approve fails closed (live_transport_not_implemented). The
+    credential VALUES are read only under `if approve and not blockers`, so the
+    real transport is resolved inside the approve branch after all gates. The
+    service layer re-enforces every gate so a direct service/MCP call cannot
+    bypass the CLI gate.
+
+    SA-2: a HARD cumulative provider-PUT ceiling (OBJECT_STORAGE_TOTAL_PUT_CEILING)
+    across the whole run fails closed independent of --max-objects. SA-3: bounded
+    retry with real retry_summary. SA-4: derived kSigning/Authorization added to
+    the leak-gate key_values. SA-6: a tiered-gate refuse when the requested batch
+    exceeds the tier the store's prior durable receipts have proved.
     """
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -56032,8 +56834,13 @@ def object_storage_upload_run(
         root, only=only, max_objects=max_objects, blockers=blockers
     )
 
-    # Resolve/inject transport. Stage 1: resolver returns None for every provider.
-    resolved_transport = transport if transport is not None else object_storage_resolve_transport(normalized_provider)
+    # An injected transport (tests) is used directly. A production `send` seam
+    # means a real transport IS reachable — it is resolved inside the approve
+    # branch after credentials are read (RC7: read secrets only under approve).
+    injected_transport = transport
+    live_transport_reachable = injected_transport is not None or (
+        send is not None and normalized_provider in {"cloudflare-r2", "generic-s3"}
+    )
 
     # Approve-path structural gates evaluated BEFORE any credential read / byte read.
     if approve:
@@ -56044,10 +56851,23 @@ def object_storage_upload_run(
             blockers.append(
                 "env_only_first_live: --approve requires both credential refs to be env: refs in this release."
             )
-        if resolved_transport is None:
+        if not live_transport_reachable:
             blockers.append(
-                "live_transport_not_implemented: object-storage-upload has no live transport in this "
-                "release (Stage 1). --approve cannot reach a provider. Inject a transport in tests."
+                "live_transport_not_implemented: object-storage-upload has no live transport reachable "
+                "(no injected transport and no production send seam)."
+            )
+        # SA-6 tiered gate: a run may not exceed the tier the store's prior
+        # durable receipts have proved. A bulk first-live run (no prior tier)
+        # REFUSES; a single tiny-first object is always permitted.
+        requested_tier = object_storage_requested_tier(object_count=len(object_ids))
+        proven_tier = object_storage_proven_tier(
+            root, provider_kind=normalized_provider, store_ref=normalized_store_ref
+        )
+        if requested_tier - 1 > proven_tier:
+            blockers.append(
+                "tiered_gate_unmet: this run requests a higher live tier than prior receipts have "
+                f"proved for this store (requested tier {requested_tier}, proven tier {proven_tier}); "
+                "run the tiny-first single-object tier before a batch."
             )
 
     result = _object_storage_upload_base_result(
@@ -56082,9 +56902,11 @@ def object_storage_upload_run(
     final_gate_key_values: list[str] = []
     manifest_updates = 0
 
-    if approve and not blockers and resolved_transport is not None:
-        # This branch is unreachable in Stage 1 (resolver returns None); it is the
-        # tested-with-injected-fake path. Credentials read ONLY here.
+    total_put_calls = 0
+    backoff_ms_run_total = 0
+    if approve and not blockers and live_transport_reachable:
+        # Credentials read ONLY here (RC7), after every gate. The real transport
+        # is resolved here too (an injected transport wins for tests).
         access_ref = str(access_key_id_ref or "").strip()
         secret_ref = str(secret_access_key_ref or "").strip()
         access_value = None
@@ -56095,8 +56917,50 @@ def object_storage_upload_run(
             if not access_value or not secret_value:
                 blockers.append("credential_value_unresolved: a credential ref did not resolve to a value.")
             else:
-                key_values_for_guard = [access_value, secret_value]
-                final_gate_key_values = [access_value, secret_value]
+                resolved_region = str(region or "").strip() or (
+                    R2_DEFAULT_REGION if normalized_provider == "cloudflare-r2" else ""
+                )
+                if injected_transport is not None:
+                    resolved_transport = injected_transport
+                else:
+                    resolved_transport = object_storage_resolve_transport(
+                        normalized_provider,
+                        send=send,
+                        credential={
+                            "endpoint_host": endpoint_host,
+                            "bucket": bucket,
+                            "access_key_id": access_value,
+                            "secret_access_key": secret_value,
+                            "region": resolved_region,
+                        },
+                    )
+                if resolved_transport is None:
+                    blockers.append(
+                        "live_transport_not_implemented: could not build a live transport "
+                        "(endpoint_host/bucket/region required for a production send)."
+                    )
+                # SA-4: also feed the DERIVED SigV4 material to the leak gate as
+                # belt-and-suspenders. Structural exclusion (the transport never
+                # materializes signing material into a durable surface) is primary;
+                # this catches a SignatureDoesNotMatch body echoing the derived key.
+                # The per-request Signature and full Authorization header are NOT
+                # precomputable here (they depend on the exact canonical request of
+                # each call) and are covered structurally: _signed_request keeps
+                # them in transport locals and no transport method returns them.
+                # We add today's AND yesterday's kSigning so a run that crosses the
+                # UTC-midnight date boundary is still covered on both scopes.
+                derived_material: list[str] = []
+                try:
+                    now_utc = datetime.now(timezone.utc)
+                    region_for_key = resolved_region or "auto"
+                    for offset_days in (0, 1):
+                        stamp = (now_utc - timedelta(days=offset_days)).strftime("%Y%m%d")
+                        k_signing = _sigv4_signing_key(secret_value, stamp, region_for_key)
+                        derived_material.append(k_signing.hex())
+                except (ValueError, TypeError):
+                    pass
+                key_values_for_guard = [access_value, secret_value] + derived_material
+                final_gate_key_values = [access_value, secret_value] + derived_material
                 result["closed_actions"]["credential_value_read"] = True
 
                 def _leak_guard(serialized_delta: str) -> list[str]:
@@ -56107,6 +56971,8 @@ def object_storage_upload_run(
                 created_paths: list[Path] = []
                 try:
                     for row in plan_rows:
+                        if blockers:
+                            break
                         object_id = row["object_id"]
                         digest = str(object_id).removeprefix("sha256:").lower()
                         if row["idempotency_verdict"] == "already_uploaded":
@@ -56148,6 +57014,17 @@ def object_storage_upload_run(
                                 store_ref=normalized_store_ref,
                             )
                         )
+                        # SA-2: HARD cumulative provider-PUT ceiling across the
+                        # whole run, independent of --max-objects. Refuse BEFORE
+                        # the next object's PUTs so a misclassified status or a
+                        # large plan cannot drive unbounded R2 Class-A billing.
+                        if total_put_calls >= OBJECT_STORAGE_TOTAL_PUT_CEILING:
+                            blockers.append(
+                                "total_put_ceiling_exceeded: the cumulative provider-PUT count reached "
+                                f"OBJECT_STORAGE_TOTAL_PUT_CEILING ({OBJECT_STORAGE_TOTAL_PUT_CEILING}); "
+                                "run aborted to bound cost."
+                            )
+                            break
                         one = object_storage_execute_one_upload(
                             transport=resolved_transport,
                             key=row["key_hint"],
@@ -56157,7 +57034,11 @@ def object_storage_upload_run(
                             multipart_threshold_bytes=OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
                             skip_uploaded=skip_uploaded,
                             ledger=ledger,
+                            sleep=sleep,
+                            rng=rng,
                         )
+                        total_put_calls += int(one.get("put_calls") or 0)
+                        backoff_ms_run_total += int(one.get("backoff_ms_total") or 0)
                         result["closed_actions"]["provider_api_called"] = True
                         uploaded_at = _object_storage_now_iso()
                         # Build execution receipt (scalar allowlist only, RC5).
@@ -56231,6 +57112,11 @@ def object_storage_upload_run(
             "execution_results": execution_results,
             "receipts_written": receipts_written,
             "manifest_updates": manifest_updates,
+            "retry_summary": {
+                "total_put_calls": total_put_calls,
+                "total_put_ceiling": OBJECT_STORAGE_TOTAL_PUT_CEILING,
+                "backoff_ms_total": backoff_ms_run_total,
+            },
             "live_execution_allowed_now": False,
             "blockers": unique_preserve_order(blockers),
             "warnings": unique_preserve_order(warnings),
@@ -56304,7 +57190,7 @@ def _object_storage_build_execution_receipt(
         "retry_summary": {
             "attempts": int(result.get("attempts") or 0),
             "last_status_class": str(result.get("result_status") or "failed_upload"),
-            "backoff_ms_total": 0,
+            "backoff_ms_total": int(result.get("backoff_ms_total") or 0),
         },
         "object_count": 1,
         "reviewed_by": reviewed_by,

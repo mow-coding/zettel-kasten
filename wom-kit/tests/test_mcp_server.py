@@ -1930,8 +1930,8 @@ class McpServerTests(unittest.TestCase):
                 plan_structured = plan_result["structuredContent"]
                 self.assertTrue(plan_structured["ok"], plan_structured)
                 self.assertEqual(plan_structured["lifecycle_action"], "object_storage_upload_plan")
-                self.assertFalse(plan_structured["current_capability"]["live_object_upload_adapter_implemented"])
-                self.assertFalse(plan_structured["current_capability"]["provider_api_call_implemented"])
+                self.assertTrue(plan_structured["current_capability"]["live_object_upload_adapter_implemented"])
+                self.assertTrue(plan_structured["current_capability"]["provider_api_call_implemented"])
                 self.assertFalse(plan_structured["closed_actions"]["credential_value_read"])
 
                 verify_response = self.send(

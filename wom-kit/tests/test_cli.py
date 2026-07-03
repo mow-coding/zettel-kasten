@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import base64
 import hashlib
 import json
 import re
@@ -44,16 +45,26 @@ class _FakeObjectStorageTransport:
     network and no new dependency.
     """
 
-    def __init__(self, *, present=None, present_size=None, present_checksum=None, put_status="ok", truncate_multipart=False):
+    def __init__(self, *, present=None, present_size=None, present_checksum=None, put_status="ok", truncate_multipart=False, put_status_sequence=None, part_status_sequence=None):
         self.store = {}
         self.creds_seen = []
         self.put_calls = 0
         self.multipart_calls = 0
+        self.part_calls = 0
+        self.abort_calls = 0
+        self.delete_calls = 0
+        self.deleted_keys = []
         self._part_bytes = {}
         self._present = present  # None | "same" | "different"
         self._present_size = present_size
         self._present_checksum = present_checksum
         self._put_status = put_status
+        # Optional per-call status sequence for retry tests; falls back to put_status.
+        self._put_status_sequence = list(put_status_sequence) if put_status_sequence else None
+        # Optional per-put_part status sequence: a non-"ok" value raises the real
+        # provider error carrier so the executor's bounded retry loop sees the
+        # true status_class for a MULTIPART failure (SA-3 multipart path).
+        self._part_status_sequence = list(part_status_sequence) if part_status_sequence else None
         self._truncate_multipart = truncate_multipart
 
     def head_object(self, *, key):
@@ -68,8 +79,12 @@ class _FakeObjectStorageTransport:
 
     def put_object(self, *, key, data_path, size, content_sha256):
         self.put_calls += 1
-        if self._put_status != "ok":
-            return {"status_class": self._put_status, "size": 0, "checksum_sha256": None, "etag_opaque": None}
+        if self._put_status_sequence is not None:
+            status = self._put_status_sequence.pop(0) if self._put_status_sequence else "ok"
+        else:
+            status = self._put_status
+        if status != "ok":
+            return {"status_class": status, "size": 0, "checksum_sha256": None, "etag_opaque": None}
         self.store[key] = {"size": size, "sha": content_sha256}
         return {"status_class": "ok", "size": size, "checksum_sha256": content_sha256, "etag_opaque": "etag-opaque"}
 
@@ -78,6 +93,11 @@ class _FakeObjectStorageTransport:
         return "upload-1"
 
     def put_part(self, *, key, upload_id, part_number, data):
+        self.part_calls += 1
+        if self._part_status_sequence is not None:
+            status = self._part_status_sequence.pop(0) if self._part_status_sequence else "ok"
+            if status != "ok":
+                raise archive_services._ObjectStorageProviderError(status)
         self._part_bytes[key] = self._part_bytes.get(key, 0) + len(data)
         return {"etag_opaque": f"part-{part_number}", "part_number": part_number}
 
@@ -92,9 +112,16 @@ class _FakeObjectStorageTransport:
         return {"status_class": "ok"}
 
     def abort_multipart(self, *, key, upload_id):
-        pass
+        self.abort_calls += 1
+
+    def delete_object(self, *, key):
+        self.delete_calls += 1
+        self.deleted_keys.append(key)
+        self.store.pop(key, None)
 
 
+_NOOP_SLEEP = lambda _seconds: None  # noqa: E731 - test helper: no wall-clock block
+_ZERO_RNG = lambda: 0.0  # noqa: E731 - deterministic backoff jitter for tests
 _R2_ACCESS_KEY_ID = "AKIAFAKEEXAMPLEID1234"
 # TRUE secret shapes (RC2): a 64-char lowercase-hex R2 secret and a 40-char AWS secret.
 _R2_SECRET_HEX64 = "3f786850e387550fdab836ed7e6dc881de23001b3f786850e387550fdab836ed"
@@ -11844,6 +11871,8 @@ state:
             store_ref="r2-upload-20260704",
             access_key_id_ref="env:WOM_R2_ACCESS_KEY_ID",
             secret_access_key_ref="env:WOM_R2_SECRET_ACCESS_KEY",
+            sleep=_NOOP_SLEEP,
+            rng=_ZERO_RNG,
         )
         defaults.update(kwargs)
         return archive_services.object_storage_upload_run(root, **defaults)
@@ -11895,28 +11924,58 @@ state:
             self.assertFalse(result["closed_actions"]["object_file_bytes_read"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
-    def test_object_storage_upload_import_audit_has_no_live_transport(self) -> None:  # T-NN3
+    def test_object_storage_upload_no_dependency_added(self) -> None:  # T-NN3a
+        # The dep-light guarantee survives Stage 2: no heavy HTTP client is imported.
         import inspect
 
         source = inspect.getsource(archive_services)
         self.assertNotIn("import boto3", source)
         self.assertNotIn("import httpx", source)
         self.assertNotIn("import requests", source)
-        # The upload symbols must not reference a network client on their path.
-        for symbol in (
-            archive_services.object_storage_upload_run,
-            archive_services.object_storage_execute_one_upload,
-            archive_services.object_storage_resolve_transport,
-            archive_services._object_storage_multipart_put,
-        ):
-            src = inspect.getsource(symbol)
-            for needle in ("urllib.request", "socket.", "ssl.", "http.client"):
-                self.assertNotIn(needle, src, f"{symbol.__name__} references {needle}")
-        # The resolver returns None for every allowed provider.
-        for provider in sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS):
-            self.assertIsNone(archive_services.object_storage_resolve_transport(provider))
 
-    def test_object_storage_upload_capability_flags_are_false(self) -> None:  # T-NN4
+    def test_object_storage_upload_single_egress_seam(self) -> None:  # T-NN3b (SA-7)
+        # STRUCTURAL no-socket proof: only _default_urllib_sender may reference a
+        # stdlib network module; every transport METHOD routes through self._send.
+        import inspect
+
+        transport_method_names = (
+            "head_object", "_get_object_sha256_hex", "put_object", "create_multipart",
+            "put_part", "complete_multipart", "abort_multipart", "delete_object",
+            "_signed_request", "_dispatch", "_url", "_put_result", "_now",
+        )
+        for name in transport_method_names:
+            method = getattr(archive_services.S3CompatibleTransport, name)
+            src = inspect.getsource(method)
+            for needle in ("urllib", "socket", "ssl", "http.client", "urlopen"):
+                self.assertNotIn(needle, src, f"S3CompatibleTransport.{name} references {needle}")
+        # The sole allowed reference lives in the default sender factory.
+        factory_src = inspect.getsource(archive_services._default_urllib_sender)
+        self.assertIn("urllib", factory_src)
+
+    def test_object_storage_upload_default_sender_never_reached_in_tests(self) -> None:  # T-NN3c (SA-7)
+        # Patch the default sender factory to raise on ANY call; every Stage-2
+        # path still passes because tests inject a fake transport/send and the
+        # real sender is never constructed or called.
+        def _raise():
+            raise AssertionError("the real urllib sender must never be reached in tests")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.object(archive_services, "_default_urllib_sender", side_effect=_raise):
+                with patch.dict(
+                    archive_services.os.environ,
+                    {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                    clear=False,
+                ):
+                    transport = _FakeObjectStorageTransport()
+                    result = self._upload_run(
+                        archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                        reviewed_by="kim", approve=True, transport=transport,
+                    )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["execution_results"][0]["result_status"], "uploaded")
+
+    def test_object_storage_upload_capability_flags_are_true(self) -> None:  # T-NN4 (SA-1)
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             plan = archive_services.object_storage_upload_plan(
@@ -11927,10 +11986,11 @@ state:
                 secret_access_key_ref="env:WOM_R2_SECRET_ACCESS_KEY",
                 dry_run=True,
             )
-            self.assertIs(plan["current_capability"]["live_object_upload_adapter_implemented"], False)
-            self.assertIs(plan["current_capability"]["provider_api_call_implemented"], False)
+            # Stage 2: the live adapter now ships; capable != automatic.
+            self.assertIs(plan["current_capability"]["live_object_upload_adapter_implemented"], True)
+            self.assertIs(plan["current_capability"]["provider_api_call_implemented"], True)
         matrix = (KIT_ROOT / "docs" / "capability-matrix.md").read_text(encoding="utf-8")
-        self.assertIn("`live_object_upload_adapter_implemented` and `provider_api_call_implemented` are false", matrix)
+        self.assertIn("`live_object_upload_adapter_implemented` and `provider_api_call_implemented` are true", matrix)
 
     # --- Fake-transport spine ---
 
@@ -12058,7 +12118,8 @@ state:
             )
             self.assertEqual(ok["result_status"], "uploaded")
             self.assertEqual(transport.multipart_calls, 1)
-            # Truncated multipart (wrong whole-object sha) must FAIL, never pass on size alone.
+            # Truncated multipart (wrong whole-object sha) must FAIL, never pass on
+            # size alone, AND clean up the completed-but-wrong object (SA-5).
             ledger2 = archive_services.ResumeLedger(Path(tmp) / "l2.jsonl")
             trunc = _FakeObjectStorageTransport(truncate_multipart=True)
             failed = archive_services.object_storage_execute_one_upload(
@@ -12066,6 +12127,66 @@ state:
                 content_sha256=digest, multipart_threshold_bytes=1, skip_uploaded=False, ledger=ledger2,
             )
             self.assertEqual(failed["result_status"], "failed_upload")
+            self.assertEqual(trunc.delete_calls, 1, "completed-then-mismatch must delete the orphan (SA-5)")
+            self.assertEqual(trunc.deleted_keys, [key_hint])
+
+    def test_object_storage_multipart_rate_limited_retries_to_ceiling(self) -> None:  # SA-3 multipart
+        # A rate_limited failure DURING a multipart part upload must be retried by
+        # the executor's bounded loop up to the attempt ceiling, exactly like the
+        # single-PUT path. This is the case real R2 throttling hits most often —
+        # mid-multipart on the large uploads the tiered gate exists to protect.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            local_path = archive_root / "objects" / "sample" / "fake-school-record.txt"
+            digest = archive_services.sha256_path(local_path)
+            size = local_path.stat().st_size
+            key_hint = f"sha256/{digest[:2]}/{digest}"
+            ceiling = archive_services.OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT
+
+            # Persistent mid-part rate_limited: every attempt's first part fails.
+            ledger = archive_services.ResumeLedger(Path(tmp) / "l-persist.jsonl")
+            persist = _FakeObjectStorageTransport(part_status_sequence=["rate_limited"] * (ceiling + 2))
+            failed = archive_services.object_storage_execute_one_upload(
+                transport=persist, key=key_hint, data_path=local_path, size=size,
+                content_sha256=digest, multipart_threshold_bytes=1, skip_uploaded=False, ledger=ledger,
+                sleep=_NOOP_SLEEP, rng=_ZERO_RNG,
+            )
+            self.assertEqual(failed["result_status"], "failed_rate_limited")
+            # One create + one abort per attempt, ceiling attempts total.
+            self.assertEqual(persist.multipart_calls, ceiling, "each retry re-initiates the multipart")
+            self.assertEqual(persist.abort_calls, ceiling, "each failed multipart attempt aborts its upload")
+            self.assertGreater(failed["backoff_ms_total"], 0)
+
+            # Rate_limited on the first attempt, then success: recovers within ceiling.
+            ledger2 = archive_services.ResumeLedger(Path(tmp) / "l-recover.jsonl")
+            recover = _FakeObjectStorageTransport(part_status_sequence=["rate_limited", "ok", "ok", "ok"])
+            ok = archive_services.object_storage_execute_one_upload(
+                transport=recover, key=key_hint, data_path=local_path, size=size,
+                content_sha256=digest, multipart_threshold_bytes=1, skip_uploaded=False, ledger=ledger2,
+                sleep=_NOOP_SLEEP, rng=_ZERO_RNG,
+            )
+            self.assertEqual(ok["result_status"], "uploaded")
+            self.assertEqual(recover.multipart_calls, 2, "one failed attempt, then a successful re-initiation")
+
+    def test_object_storage_multipart_auth_fails_closed_zero_retries(self) -> None:  # SA-3 multipart
+        # An auth failure mid-multipart fails closed immediately with no retry
+        # (retrying a bad signature burns Class-A ops and can never succeed).
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            local_path = archive_root / "objects" / "sample" / "fake-school-record.txt"
+            digest = archive_services.sha256_path(local_path)
+            size = local_path.stat().st_size
+            key_hint = f"sha256/{digest[:2]}/{digest}"
+            ledger = archive_services.ResumeLedger(Path(tmp) / "l.jsonl")
+            transport = _FakeObjectStorageTransport(part_status_sequence=["auth"])
+            result = archive_services.object_storage_execute_one_upload(
+                transport=transport, key=key_hint, data_path=local_path, size=size,
+                content_sha256=digest, multipart_threshold_bytes=1, skip_uploaded=False, ledger=ledger,
+                sleep=_NOOP_SLEEP, rng=_ZERO_RNG,
+            )
+            self.assertEqual(result["result_status"], "failed_auth")
+            self.assertEqual(transport.multipart_calls, 1, "auth fails closed with zero retries")
+            self.assertEqual(result["backoff_ms_total"], 0)
 
     def test_object_storage_upload_deleted_remote_forces_reupload(self) -> None:  # T-fake6
         with tempfile.TemporaryDirectory() as tmp:
@@ -12114,7 +12235,7 @@ state:
                 result = archive_services.object_storage_execute_one_upload(
                     transport=transport, key=key_hint, data_path=local_path, size=size,
                     content_sha256=digest, multipart_threshold_bytes=archive_services.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
-                    skip_uploaded=False, ledger=ledger,
+                    skip_uploaded=False, ledger=ledger, sleep=_NOOP_SLEEP, rng=_ZERO_RNG,
                 )
                 self.assertEqual(result["result_status"], expected)
                 # No provider body / error text reaches a durable field.
@@ -12227,6 +12348,539 @@ state:
             self.assertFalse(result["ok"])
             self.assertTrue(any("env_only_first_live" in b for b in result["blockers"]), result["blockers"])
             self.assertEqual(transport.put_calls, 0)
+
+    # --- Stage 2: SigV4 signing KATs (byte-exact, offline) ---
+
+    def test_sigv4_kat_v1_aws_documented_get(self) -> None:  # V1
+        # AWS SigV4 documented example: GET examplebucket.s3.amazonaws.com/test.txt.
+        # Asserts canonical-request, string-to-sign, AND signature byte-exact
+        # against the published third-party values.
+        s = archive_services
+        secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        access = "AKIAIOSFODNN7EXAMPLE"
+        region = "us-east-1"
+        amz = "20130524T000000Z"
+        empty = s.SIGV4_EMPTY_SHA256_HEX
+        headers = {
+            "host": "examplebucket.s3.amazonaws.com",
+            "range": "bytes=0-9",
+            "x-amz-content-sha256": empty,
+            "x-amz-date": amz,
+        }
+        cu = s._sigv4_canonical_uri("test.txt")
+        cq = s._sigv4_query_encode({})
+        block, signed = s._sigv4_canonical_headers(headers)
+        cr = s._sigv4_canonical_request("GET", cu, cq, block, signed, empty)
+        self.assertEqual(signed, "host;range;x-amz-content-sha256;x-amz-date")
+        expected_cr = (
+            "GET\n/test.txt\n\n"
+            "host:examplebucket.s3.amazonaws.com\nrange:bytes=0-9\n"
+            f"x-amz-content-sha256:{empty}\nx-amz-date:{amz}\n\n"
+            "host;range;x-amz-content-sha256;x-amz-date\n"
+            f"{empty}"
+        )
+        self.assertEqual(cr, expected_cr)
+        scope = s._sigv4_scope(amz, region)
+        sts = s._sigv4_string_to_sign(amz, scope, cr)
+        self.assertEqual(
+            sts,
+            "AWS4-HMAC-SHA256\n20130524T000000Z\n20130524/us-east-1/s3/aws4_request\n"
+            "7344ae5b7ee6c3e7e6b0fe0640412a37625d1fbfff95c48bbb2dc43964946972",
+        )
+        key = s._sigv4_signing_key(secret, amz[:8], region)
+        sig = s._sigv4_signature(key, sts)
+        self.assertEqual(sig, "f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41")
+        auth = s._sigv4_authorization_header(access, scope, signed, sig)
+        self.assertIn("Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request", auth)
+
+    def test_sigv4_kat_v2_put_real_payload_hash(self) -> None:  # V2
+        # AWS documented PUT example: PUT examplebucket/test$file.text with a real
+        # body hash. Pins the PUT + real-payload-hash path: '$' is percent-encoded,
+        # the path is single-encoded, and the canonical request ends with the real
+        # payload-hash line. The third-party byte-exact anchor is V1 (GET); this
+        # vector proves the PUT method + real-hash payload drive the same pipeline.
+        s = archive_services
+        secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        region = "us-east-1"
+        amz = "20130524T000000Z"
+        body_hash = hashlib.sha256(b"Welcome to Amazon S3.").hexdigest()
+        headers = {
+            "date": "Fri, 24 May 2013 00:00:00 GMT",
+            "host": "examplebucket.s3.amazonaws.com",
+            "x-amz-content-sha256": body_hash,
+            "x-amz-date": amz,
+            "x-amz-storage-class": "REDUCED_REDUNDANCY",
+        }
+        cu = s._sigv4_canonical_uri("test$file.text")
+        self.assertEqual(cu, "/test%24file.text")  # '$' encoded, path single-encoded
+        block, signed = s._sigv4_canonical_headers(headers)
+        cr = s._sigv4_canonical_request("PUT", cu, "", block, signed, body_hash)
+        self.assertTrue(cr.startswith("PUT\n/test%24file.text\n\n"))
+        self.assertTrue(cr.endswith("\n" + body_hash))
+        scope = s._sigv4_scope(amz, region)
+        sts = s._sigv4_string_to_sign(amz, scope, cr)
+        key = s._sigv4_signing_key(secret, amz[:8], region)
+        sig = s._sigv4_signature(key, sts)
+        # Byte-exact anchor: this is the signature published in the AWS SigV4
+        # documented PUT example (Authorization header, api-detail example). It
+        # is an INDEPENDENT third-party constant, not a re-invocation of our own
+        # signer, so a regression in the PUT/real-payload-hash path fails here.
+        self.assertEqual(sig, "98ad721746da40c64f1a55b78f14c238d841ea1380cd77a1b5971af0ece108bd")
+
+    def test_sigv4_kat_v3_r2_region_auto_and_slash_key(self) -> None:  # V3
+        # R2-flavored vector: region 'auto', host <acct>.r2.cloudflarestorage.com,
+        # a content-addressed key containing '/', real payload hash. Frozen once.
+        s = archive_services
+        secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        region = "auto"
+        amz = "20260704T000000Z"
+        digest = "3f78" + "a" * 60
+        key = f"sha256/3f/{digest}"
+        payload_hash = digest  # the object's real content sha256 (hex)
+        cu = s._sigv4_canonical_uri(f"mybucket/{key}")
+        # The '/' separators of the content-addressed key are preserved.
+        self.assertEqual(cu, f"/mybucket/sha256/3f/{digest}")
+        headers = {
+            "host": "acct.r2.cloudflarestorage.com",
+            "x-amz-content-sha256": payload_hash,
+            "x-amz-date": amz,
+        }
+        block, signed = s._sigv4_canonical_headers(headers)
+        cr = s._sigv4_canonical_request("PUT", cu, "", block, signed, payload_hash)
+        scope = s._sigv4_scope(amz, region)
+        self.assertEqual(scope, "20260704/auto/s3/aws4_request")  # region 'auto' in scope
+        sts = s._sigv4_string_to_sign(amz, scope, cr)
+        # region 'auto' also drives kRegion.
+        key_bytes = s._sigv4_signing_key(secret, amz[:8], region)
+        sig = s._sigv4_signature(key_bytes, sts)
+        # FROZEN expected signature: computed once from these fixed R2 inputs with
+        # an independent reference implementation and pinned as a literal. If the
+        # signing pipeline legitimately changes, recompute the reference and update
+        # this constant deliberately — it is NOT a re-invocation of the signer.
+        self.assertEqual(sig, "47de6b43728c21b0dd03137ff8313a6da86d706baf1d75ecf878c8cf09708374")
+        # A different region yields a different signature (kRegion is load-bearing).
+        other = s._sigv4_signature(s._sigv4_signing_key(secret, "20260704", "us-east-1"), sts)
+        self.assertNotEqual(sig, other)
+
+    def test_sigv4_kat_v4_content_hash_selection(self) -> None:  # V4
+        s = archive_services
+        self.assertEqual(
+            s.SIGV4_EMPTY_SHA256_HEX,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        )
+        self.assertEqual(s.SIGV4_UNSIGNED_PAYLOAD, "UNSIGNED-PAYLOAD")
+        # HEAD signs UNSIGNED-PAYLOAD; PUT signs the real hash.
+        captured = []
+
+        def fake_send(*, method, url, headers, data_path=None, data_bytes=None):
+            captured.append((method, headers.get("x-amz-content-sha256")))
+            if method == "GET":
+                return {"status": 404, "headers": {}, "body": b""}
+            return {"status": 200, "headers": {}, "body": b""}
+
+        cred = {
+            "endpoint_host": "acct.r2.cloudflarestorage.com", "bucket": "b",
+            "access_key_id": "AKIAEX", "secret_access_key": "s" * 40, "region": "auto",
+        }
+        t = s.object_storage_resolve_transport("cloudflare-r2", send=fake_send, credential=cred)
+        t.head_object(key="sha256/aa/" + "a" * 64)
+        t.put_object(key="sha256/aa/" + "a" * 64, data_path=None, size=3, content_sha256="a" * 64)
+        head_hash = next(h for m, h in captured if m == "GET")
+        put_hash = next(h for m, h in captured if m == "PUT")
+        self.assertEqual(head_hash, s.SIGV4_UNSIGNED_PAYLOAD)
+        self.assertEqual(put_hash, "a" * 64)
+
+    def test_sigv4_uri_query_encoding_edge_cases(self) -> None:
+        s = archive_services
+        # '/' preserved as separator in key mode, encoded otherwise; '~' literal;
+        # space -> %20; '+' -> %2B.
+        self.assertEqual(s._sigv4_uri_encode("a/b~c d+e", is_key=True), "a/b~c%20d%2Be")
+        self.assertEqual(s._sigv4_uri_encode("a/b", is_key=False), "a%2Fb")
+        # Query sorted by encoded key, '=' present for empty value.
+        self.assertEqual(s._sigv4_query_encode({"uploadId": "x y", "attributes": ""}), "attributes=&uploadId=x%20y")
+
+    def test_sigv4_checksum_base64_hex_bridge(self) -> None:  # CA-7
+        s = archive_services
+        hex_digest = hashlib.sha256(b"hello").hexdigest()
+        b64 = s._sha256_hex_to_checksum_b64(hex_digest)
+        self.assertEqual(b64, base64.b64encode(bytes.fromhex(hex_digest)).decode("ascii"))
+        self.assertEqual(s._checksum_b64_to_sha256_hex(b64), hex_digest)
+
+    # --- Stage 2: real transport via injected fake sender ---
+
+    def test_s3_transport_put_head_roundtrip_via_fake_sender(self) -> None:
+        s = archive_services
+        # head_object verifies the whole-object sha256 by HeadObject (presence +
+        # Content-Length) followed by GetObject-and-rehash (CB-Q2), NOT by any
+        # stored server-side checksum. R2 does not implement GetObjectAttributes
+        # and marks x-amz-checksum-sha256 "Feature Not Implemented".
+        object_body = b"abc"
+        digest = hashlib.sha256(object_body).hexdigest()
+        calls = []
+
+        def fake_send(*, method, url, headers, data_path=None, data_bytes=None):
+            calls.append((method, dict(headers), url))
+            if method == "PUT":
+                return {"status": 200, "headers": {"etag": '"e"'}, "body": b""}
+            if method == "HEAD":  # HeadObject: presence + size only
+                return {"status": 200, "headers": {"content-length": str(len(object_body))}, "body": b""}
+            if method == "GET":  # GetObject: real bytes, hashed to the whole-object sha256
+                return {"status": 200, "headers": {}, "body": object_body}
+            return {"status": 200, "headers": {}, "body": b""}
+
+        cred = {
+            "endpoint_host": "acct.r2.cloudflarestorage.com", "bucket": "mybucket",
+            "access_key_id": "AKIAEX", "secret_access_key": "s" * 40, "region": "auto",
+        }
+        t = s.object_storage_resolve_transport("cloudflare-r2", send=fake_send, credential=cred)
+        put = t.put_object(key="sha256/bb/" + digest, data_path=None, size=len(object_body), content_sha256=digest)
+        self.assertEqual(put["status_class"], "ok")
+        head = t.head_object(key="sha256/bb/" + digest)
+        self.assertTrue(head["present"])
+        self.assertEqual(head["size"], len(object_body))
+        self.assertEqual(head["checksum_sha256"], digest)  # GET-rehash -> whole-object hex
+        put_headers = next(h for m, h, _ in calls if m == "PUT")
+        self.assertIn("authorization", put_headers)
+        # PUT signs the real payload hash but sends no x-amz-checksum-* header
+        # (R2 "Feature Not Implemented") and an explicit octet-stream Content-Type.
+        self.assertNotIn("x-amz-checksum-sha256", put_headers)
+        self.assertNotIn("x-amz-checksum-algorithm", put_headers)
+        self.assertEqual(put_headers["content-type"], "application/octet-stream")
+        self.assertEqual(put_headers["x-amz-content-sha256"], digest)
+        # HEAD and GET both occur, in that order, for the after-verification.
+        methods = [m for m, _, _ in calls]
+        self.assertIn("HEAD", methods)
+        self.assertIn("GET", methods)
+        self.assertLess(methods.index("HEAD"), methods.index("GET"))
+
+    def test_s3_transport_multipart_content_types_and_shape_via_fake_sender(self) -> None:
+        # CreateMultipartUpload/UploadPart/CompleteMultipartUpload must carry the
+        # correct Content-Type and body. CompleteMultipartUpload MUST NOT be
+        # application/x-www-form-urlencoded (AWS forbids it); it is text/xml with a
+        # <CompleteMultipartUpload> body of <Part><PartNumber><ETag> only (no
+        # top-level <ChecksumSHA256>). CreateMultipartUpload sends no checksum
+        # headers (SHA256 multipart is COMPOSITE-only; R2 marks the headers
+        # unimplemented).
+        s = archive_services
+        calls = []
+
+        def fake_send(*, method, url, headers, data_path=None, data_bytes=None):
+            calls.append((method, dict(headers), url, data_bytes))
+            if method == "POST" and "uploads" in url:
+                return {"status": 200, "headers": {},
+                        "body": b"<r><UploadId>up-9</UploadId></r>"}
+            return {"status": 200, "headers": {"etag": '"e1"'}, "body": b""}
+
+        cred = {
+            "endpoint_host": "acct.r2.cloudflarestorage.com", "bucket": "b",
+            "access_key_id": "AKIAEX", "secret_access_key": "s" * 40, "region": "auto",
+        }
+        t = s.object_storage_resolve_transport("cloudflare-r2", send=fake_send, credential=cred)
+        upload_id = t.create_multipart(key="sha256/mp/x")
+        self.assertEqual(upload_id, "up-9")
+        part = t.put_part(key="sha256/mp/x", upload_id=upload_id, part_number=1, data=b"partbytes")
+        completed = t.complete_multipart(
+            key="sha256/mp/x", upload_id=upload_id, parts=[part], content_sha256="c" * 64
+        )
+        self.assertEqual(completed["status_class"], "ok")
+
+        create_headers = next(h for m, h, u, _ in calls if m == "POST" and "uploads" in u)
+        self.assertNotIn("x-amz-checksum-algorithm", create_headers)
+        self.assertNotIn("x-amz-checksum-type", create_headers)
+        part_headers = next(h for m, h, u, _ in calls if m == "PUT")
+        self.assertEqual(part_headers["content-type"], "application/octet-stream")
+        self.assertNotIn("x-amz-checksum-sha256", part_headers)
+        complete_call = next((m, h, u, b) for m, h, u, b in calls if m == "POST" and "uploads" not in u)
+        _, complete_headers, _, complete_body = complete_call
+        self.assertEqual(complete_headers["content-type"], "text/xml")
+        self.assertNotEqual(
+            complete_headers["content-type"], "application/x-www-form-urlencoded"
+        )
+        body_text = complete_body.decode("utf-8")
+        self.assertIn("<CompleteMultipartUpload>", body_text)
+        self.assertIn("<Part><PartNumber>1</PartNumber><ETag>", body_text)
+        self.assertNotIn("<ChecksumSHA256>", body_text)  # no top-level object checksum
+
+    def test_default_sender_preserves_explicit_content_type_no_socket(self) -> None:
+        # Prove (without opening a socket) that the default sender does NOT let the
+        # stdlib default a body-carrying request to application/x-www-form-urlencoded
+        # when we set an explicit Content-Type. Intercepts urlopen to capture the
+        # built Request; never touches the network.
+        s = archive_services
+        sender = s._default_urllib_sender()
+        captured = {}
+
+        class _FakeResp:
+            status = 200
+            headers = {}
+            def read(self): return b""
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def fake_urlopen(req):
+            captured["content_type"] = req.get_header("Content-type")
+            captured["method"] = req.get_method()
+            return _FakeResp()
+
+        with patch.object(s.urllib.request, "urlopen", side_effect=fake_urlopen):
+            sender(
+                method="POST", url="https://acct.example/b/k?uploadId=1",
+                headers={"content-type": "text/xml", "content-length": "3"},
+                data_bytes=b"<x>",
+            )
+        self.assertEqual(captured["content_type"], "text/xml")
+        self.assertNotEqual(captured["content_type"], "application/x-www-form-urlencoded")
+
+    def test_s3_transport_error_classification_and_no_body(self) -> None:  # CA-9
+        s = archive_services
+        cred = {
+            "endpoint_host": "acct.r2.cloudflarestorage.com", "bucket": "b",
+            "access_key_id": "AKIAEX", "secret_access_key": "s" * 40, "region": "auto",
+        }
+        cases = [
+            (403, "<Error><Code>SignatureDoesNotMatch</Code></Error>", "auth"),
+            (400, "<Error><Code>InvalidAccessKeyId</Code></Error>", "auth"),
+            (429, "<Error><Code>SlowDown</Code></Error>", "rate_limited"),
+            (503, "<Error><Code>SlowDown</Code></Error>", "rate_limited"),
+            (500, "<Error><Code>InternalError</Code></Error>", "rate_limited"),
+        ]
+        for status, body, expected in cases:
+            def fake_send(*, method, url, headers, data_path=None, data_bytes=None, _s=status, _b=body):
+                return {"status": _s, "headers": {}, "body": _b.encode()}
+            t = s.object_storage_resolve_transport("cloudflare-r2", send=fake_send, credential=cred)
+            r = t.put_object(key="sha256/aa/" + "a" * 64, data_path=None, size=1, content_sha256="a" * 64)
+            self.assertEqual(r["status_class"], expected, (status, body))
+            # No provider body / signing material ever reaches the returned dict.
+            serialized = json.dumps(r)
+            self.assertNotIn("SignatureDoesNotMatch", serialized)
+            self.assertNotIn("Error", serialized)
+
+    def test_s3_transport_resolve_none_without_send_or_credential(self) -> None:  # resolve_transport
+        s = archive_services
+        cred = {
+            "endpoint_host": "h", "bucket": "b", "access_key_id": "a",
+            "secret_access_key": "x" * 40, "region": "auto",
+        }
+        def fake_send(**kwargs):
+            return {"status": 200, "headers": {}, "body": b""}
+        self.assertIsInstance(
+            s.object_storage_resolve_transport("cloudflare-r2", send=fake_send, credential=cred),
+            s.S3CompatibleTransport,
+        )
+        self.assertIsNone(s.object_storage_resolve_transport("cloudflare-r2", credential=cred))
+        self.assertIsNone(s.object_storage_resolve_transport("cloudflare-r2", send=fake_send))
+        self.assertIsNone(s.object_storage_resolve_transport("backblaze-b2", send=fake_send, credential=cred))
+        # generic-s3 with no region fails closed (no silent default).
+        no_region = {k: v for k, v in cred.items() if k != "region"}
+        self.assertIsNone(s.object_storage_resolve_transport("generic-s3", send=fake_send, credential=no_region))
+
+    # --- Stage 2: bounded retry + ceilings (SA-2 / SA-3) ---
+
+    def test_object_storage_retry_bounded_then_fails_closed(self) -> None:  # SA-3
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            local_path = archive_root / "objects" / "sample" / "fake-school-record.txt"
+            digest = archive_services.sha256_path(local_path)
+            size = local_path.stat().st_size
+            key_hint = f"sha256/{digest[:2]}/{digest}"
+            ledger = archive_services.ResumeLedger(Path(tmp) / "l.jsonl")
+            # Persistent rate_limited: loop retries to the ceiling then fails closed.
+            transport = _FakeObjectStorageTransport(put_status="rate_limited")
+            result = archive_services.object_storage_execute_one_upload(
+                transport=transport, key=key_hint, data_path=local_path, size=size,
+                content_sha256=digest, multipart_threshold_bytes=archive_services.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
+                skip_uploaded=False, ledger=ledger, sleep=_NOOP_SLEEP, rng=_ZERO_RNG,
+            )
+            self.assertEqual(result["result_status"], "failed_rate_limited")
+            self.assertEqual(transport.put_calls, archive_services.OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT)
+            self.assertGreater(result["backoff_ms_total"], 0)
+
+    def test_object_storage_retry_auth_is_immediate_zero_retries(self) -> None:  # SA-3
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            local_path = archive_root / "objects" / "sample" / "fake-school-record.txt"
+            digest = archive_services.sha256_path(local_path)
+            size = local_path.stat().st_size
+            key_hint = f"sha256/{digest[:2]}/{digest}"
+            ledger = archive_services.ResumeLedger(Path(tmp) / "l.jsonl")
+            transport = _FakeObjectStorageTransport(put_status="auth")
+            result = archive_services.object_storage_execute_one_upload(
+                transport=transport, key=key_hint, data_path=local_path, size=size,
+                content_sha256=digest, multipart_threshold_bytes=archive_services.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
+                skip_uploaded=False, ledger=ledger, sleep=_NOOP_SLEEP, rng=_ZERO_RNG,
+            )
+            self.assertEqual(result["result_status"], "failed_auth")
+            self.assertEqual(transport.put_calls, 1)  # zero retries
+            self.assertEqual(result["backoff_ms_total"], 0)
+
+    def test_object_storage_retry_recovers_within_ceiling(self) -> None:  # SA-3
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            local_path = archive_root / "objects" / "sample" / "fake-school-record.txt"
+            digest = archive_services.sha256_path(local_path)
+            size = local_path.stat().st_size
+            key_hint = f"sha256/{digest[:2]}/{digest}"
+            ledger = archive_services.ResumeLedger(Path(tmp) / "l.jsonl")
+            # Rate-limited twice, then ok: succeeds within the ceiling.
+            transport = _FakeObjectStorageTransport(put_status_sequence=["rate_limited", "rate_limited", "ok"])
+            result = archive_services.object_storage_execute_one_upload(
+                transport=transport, key=key_hint, data_path=local_path, size=size,
+                content_sha256=digest, multipart_threshold_bytes=archive_services.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
+                skip_uploaded=False, ledger=ledger, sleep=_NOOP_SLEEP, rng=_ZERO_RNG,
+            )
+            self.assertEqual(result["result_status"], "uploaded")
+            self.assertEqual(transport.put_calls, 3)
+            self.assertGreater(result["backoff_ms_total"], 0)
+
+    def test_object_storage_total_put_ceiling_aborts_run(self) -> None:  # SA-2
+        # With the cumulative provider-PUT ceiling at 0, even a tiered-gate-permitted
+        # single tiny-first object aborts before its first PUT. Proves the ceiling is
+        # an independent cost backstop, not coupled to --max-objects or the tier gate.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                with patch.object(archive_services, "OBJECT_STORAGE_TOTAL_PUT_CEILING", 0):
+                    result = self._upload_run(
+                        archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                        reviewed_by="kim", approve=True, transport=transport,
+                    )
+            self.assertFalse(result["ok"])
+            self.assertTrue(
+                any("total_put_ceiling_exceeded" in b for b in result["blockers"]), result["blockers"]
+            )
+            self.assertEqual(transport.put_calls, 0, "the PUT ceiling must abort BEFORE any PUT")
+
+    # --- Stage 2: tiered gate (SA-6) ---
+
+    def test_object_storage_tiered_gate_refuses_bulk_first_live(self) -> None:  # SA-6
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                # A bulk first-live run (all objects, no prior tier receipts) REFUSES.
+                result = self._upload_run(
+                    archive_root, reviewed_by="kim", approve=True, transport=transport,
+                )
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("tiered_gate_unmet" in b for b in result["blockers"]), result["blockers"])
+            self.assertEqual(transport.put_calls, 0)
+
+    def test_object_storage_tiered_gate_single_lands_but_batch_still_refuses(self) -> None:  # SA-6
+        # A single tiny-first object lands (tier 1), but a batch still REFUSES: a
+        # batch requests tier 3, which needs a proven tier >= 2 (a multipart /
+        # large-object proof). One small object does not lift the store to tier 2,
+        # so the batch is correctly blocked. This is the core SA-6 guarantee — a
+        # multipart proof must precede any batch.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [json.loads(l) for l in manifest_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            object_ids = [r["object_id"] for r in records]
+            self.assertGreaterEqual(len(object_ids), 2)
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                # Tier 1: one small object proves the store.
+                first = self._upload_run(
+                    archive_root, only=object_ids[0], max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport,
+                )
+                self.assertTrue(first["ok"], first)
+                self.assertEqual(
+                    archive_services.object_storage_proven_tier(
+                        archive_root, provider_kind="cloudflare-r2", store_ref="r2-upload-20260704"
+                    ),
+                    1,
+                )
+                # A batch requests tier 3, which needs a proven tier >= 2; one small
+                # object only reaches tier 1, so the batch still refuses.
+                batch = self._upload_run(
+                    archive_root, reviewed_by="kim", approve=True, transport=transport,
+                )
+                self.assertFalse(batch["ok"])
+                self.assertTrue(any("tiered_gate_unmet" in b for b in batch["blockers"]), batch["blockers"])
+
+    def test_object_storage_proven_tier_derives_from_receipt_set(self) -> None:  # SA-6 tier model
+        # The tier is derived from the SET of one-per-object success receipts, not
+        # a per-receipt object_count. tier 3 (batch proof) requires a multipart /
+        # large-object proof AND at least OBJECT_STORAGE_TIER3_BATCH_MIN distinct
+        # successful objects; anything less caps below 3.
+        s = archive_services
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.copy_fake_archive(Path(tmp) / "archive")
+            provider, store = "cloudflare-r2", "r2-tier-test"
+
+            def write_receipt(case, *, object_id, bytes_uploaded, status="uploaded"):
+                receipt = {
+                    "schema": s.OBJECT_STORAGE_UPLOAD_RECEIPT_SCHEMA,
+                    "provider_kind": provider, "store_ref": store,
+                    "object_id": object_id, "result_status": status,
+                    "bytes_uploaded": bytes_uploaded, "object_count": 1,
+                }
+                s.object_storage_write_execution_receipt(root, case, receipt)
+
+            def tier():
+                return s.object_storage_proven_tier(root, provider_kind=provider, store_ref=store)
+
+            self.assertEqual(tier(), 0)  # empty store
+            write_receipt("c1", object_id="sha256:" + "a" * 64, bytes_uploaded=10)
+            self.assertEqual(tier(), 1)  # one small object
+            # A genuine large-object (multipart) proof lifts to tier 2.
+            write_receipt("c2", object_id="sha256:" + "b" * 64,
+                          bytes_uploaded=s.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES)
+            self.assertEqual(tier(), 2)
+            # Add distinct small objects until the batch minimum is met -> tier 3.
+            needed = s.OBJECT_STORAGE_TIER3_BATCH_MIN
+            for i in range(needed):
+                write_receipt(f"cx{i}", object_id="sha256:" + f"{i:064d}", bytes_uploaded=5)
+            self.assertEqual(tier(), 3, "multipart proof + enough distinct objects reaches the batch tier")
+            # A batch is now permitted (requested tier 3 needs proven >= 2).
+            self.assertLessEqual(s.object_storage_requested_tier(object_count=5) - 1, tier())
+
+    # --- Stage 2: SA-4 derived signing-material leak gate ---
+
+    def test_object_storage_derived_signing_material_gated(self) -> None:  # SA-4
+        # If the derived kSigning hex ever reaches a durable surface, the final
+        # leak gate must fire and fail the run closed.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            real_builder = archive_services._object_storage_build_execution_receipt
+
+            def leaky_receipt(**kwargs):
+                receipt = real_builder(**kwargs)
+                # Adversarial: echo the derived signing key into the receipt.
+                date_stamp = archive_services.datetime.now(archive_services.timezone.utc).strftime("%Y%m%d")
+                k = archive_services._sigv4_signing_key(_R2_SECRET_HEX64, date_stamp, "auto")
+                receipt["debug_signing_key"] = k.hex()
+                return receipt
+
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                with patch.object(archive_services, "_object_storage_build_execution_receipt", side_effect=leaky_receipt):
+                    transport = _FakeObjectStorageTransport()
+                    result = self._upload_run(
+                        archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                        reviewed_by="kim", approve=True, transport=transport,
+                    )
+            # The per-receipt gate fires (derived material is in key_values), so the
+            # object is failed_secret_guard and no receipt is written.
+            self.assertEqual(result["execution_results"][0]["result_status"], "failed_secret_guard")
+            self.assertEqual(result["receipts_written"], [])
 
     # --- R4 crash-safety ---
 

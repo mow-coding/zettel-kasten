@@ -163,6 +163,30 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.163` To `v0.3.164`
+
+This release adds Stage 2 of the object-storage upload adapter (WOM #11): a real
+AWS SigV4 R2/S3-compatible upload transport. WOM is now network-CAPABLE for an
+approved object-storage upload, but capable is not automatic.
+
+Operator-visible notes:
+
+- No archive migration and no hash change. Existing receipts and manifests are
+  unaffected until you choose to run an upload command.
+- Still no dependency added. The transport is hand-rolled `hashlib`/`hmac`/`base64`
+  over the existing `urllib` seam; `wom-kit/pyproject.toml` stays PyYAML-only.
+- A live `--approve` upload requires ALL of: env-only credential refs
+  (`--access-key-id-ref env:...` and `--secret-access-key-ref env:...`), a safe
+  `--reviewed-by`, a resolvable non-secret `--endpoint-host` and `--bucket`
+  (region defaults to `auto` for cloudflare-r2), and a met tiered tiny-first gate.
+  A bulk first-live run REFUSES with `tiered_gate_unmet` until the single small
+  object is proved first. A hard cumulative PUT ceiling bounds cost across the run.
+- Validate live tiny-first. Upload ONE small object end-to-end, verify the
+  execution receipt + manifest `wom_uploaded` transition + remote after-HEAD by
+  hand, then advance tiers. The release note ships the exact runbook. Receipts and
+  the release note carry `unproven_against_live_provider: true` until the first
+  live object is confirmed. See `wom-kit/docs/releases/v0.3.164.md`.
+
 ## From `v0.3.162` To `v0.3.163`
 
 This release adds Stage 1 of the object-storage upload adapter (WOM #11) as three

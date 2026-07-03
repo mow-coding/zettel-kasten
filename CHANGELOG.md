@@ -6,6 +6,47 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.164 - 2026-07-04
+
+- Added Stage 2 of the live object-storage upload adapter (WOM #11): a real,
+  hand-rolled AWS SigV4 R2/S3-compatible transport (`S3CompatibleTransport`).
+  It signs the real lowercase-hex payload hash on PUT/UploadPart and
+  `UNSIGNED-PAYLOAD` on HEAD/GET, giving each upload SigV4 on-wire body integrity.
+  Whole-object integrity is verified by re-download-and-hash — `HeadObject`
+  (presence + size) then `GetObject`, re-hashing the returned bytes to the
+  lowercase hex the shipped executor compares (the executor comparison itself is
+  unchanged). This depends on no provider checksum surface: R2 does not implement
+  GetObjectAttributes and marks the `x-amz-checksum-*` headers unimplemented, and
+  a SHA-256 multipart checksum can only be COMPOSITE, never the whole-object hash.
+  The SigV4 core is pinned byte-exact against the published AWS documented example
+  (canonical request, string-to-sign, and signature all match). No dependency was
+  added (still PyYAML only); all networking is reachable through one
+  `_default_urllib_sender()` seam, and every transport method routes through an
+  injected `send`.
+- Reliability + cost hardening: a bounded per-object retry loop with exponential
+  backoff and jitter to a hard attempt ceiling (`OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT`),
+  applied to the multipart path as well as single PUTs; auth errors failing closed
+  with zero retries; a real `retry_summary.backoff_ms_total`; a hard cumulative
+  provider-PUT ceiling (`OBJECT_STORAGE_TOTAL_PUT_CEILING`) that bounds cost across
+  the whole run independent of `--max-objects`; plain multipart with an explicit
+  Content-Type per request; and orphan cleanup (`delete_object`) on a
+  completed-then-mismatch upload. Backoff sleeps through an injectable seam so tests
+  never wall-clock-block.
+- Safety: a tiered tiny-first gate (`tiered_gate_unmet`) derived from durable
+  execution-receipt facts (successful-receipt count + large-object proof) refuses a
+  bulk first-live run until the single-object tier is proved; the direct-value
+  secret-containment guard is extended to the derived SigV4 signing key; no request
+  headers, `Authorization`, `StringToSign`, `CanonicalRequest`, or provider error
+  body is ever recorded.
+- Flipped `live_object_upload_adapter_implemented` and
+  `provider_api_call_implemented` to true on the upload-adapter surface (the live
+  adapter now ships) while keeping capable != automatic: a live `--approve` still
+  requires env-only credentials, a safe `--reviewed-by`, a resolvable
+  endpoint/bucket, and a met tiered gate. Live signature acceptance by R2 and
+  read-after-write consistency of the HEAD+GET verification remain
+  `unproven_against_live_provider` until the tiny-first human runbook confirms the
+  first live object.
+
 ## v0.3.163 - 2026-07-04
 
 - Added the Stage 1 live object-storage upload adapter (WOM #11) as three

@@ -149,7 +149,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Object storage adapter execution contract",
             "Object storage upload evidence",
             "Object storage upload evidence audit",
-            "Object storage upload adapter (Stage 1)",
+            "Object storage upload adapter (Stage 2)",
             "Credential plaintext migration plan",
             "Credential access broker plan",
             "Credential access approval plan",
