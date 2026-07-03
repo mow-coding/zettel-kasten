@@ -23,9 +23,10 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.3.157 pre-release
+v0.3.158 pre-release
 ```
 
+이전 공개 기준: v0.3.157 pre-release.
 이전 공개 기준: v0.3.156 pre-release.
 이전 공개 기준: v0.3.155 pre-release.
 이전 공개 기준: v0.3.154 pre-release.
@@ -70,6 +71,7 @@ v0.3.157 pre-release
 - runtime context, profile, source/objet intake, block header, prompt boundary, foreign block review, projection, shared update review/index, shared update route preview, ZET would-transport planning을 위한 read-only preview layer,
 - derived-text coverage/toolchain/doctor/agent-contract read-only gate, PATH에 없는 로컬 추출 도구를 위한 비공개 tool-hint path, 그리고 사람 승인 뒤에만 동작하는 일부 local write path,
 - read-only objet reference resolution 및 zettel objet link preview,
+- `archive objet-capture-enable`로 여는 실제(비 sandbox) archive의 local objet capture 소유자 승인 흐름: read-only dry-run 자격 보고, 승인형 `ops/capture-enablement.yml` 동의 record와 영수증(receipt), never-touch 이름 패턴 명시적 확인, forward-only revoke와 `--reenable` 보호, doctor 진단까지 포함합니다. 이 record는 같은 write-trust domain 안의 동의 표시이지 보안 경계가 아닙니다.
 - Notion child page/database/view 구조를 `contains` edge type으로 다루는 read-only connection planning, 중첩 child page leaf를 세대 root에 귀속하고 `node_kind` 기반 content class를 보수적으로 도출하며, 큰 fixture가 부분 성공으로 위장하지 않도록 차단하고, 추적불능 parent chain과 조상 crawl 요청 큐를 버리지 않고 보고하며, broad workspace 큐를 generation/ref scope filter로 좁힌 뒤 adapter 입력으로 넘길 수 있게 하고, recursive fetch adapter execution contract를 고정하며, credential approval 뒤에만 동작하는 첫 local Notion ancestor structure fetch adapter로 sanitized ancestor fixture와 non-secret receipt만 쓰고, media byte fetch와 page body capture는 별도 future gate로 남겨두며, 세대가 아직 모르는 untraceable leaf는 generation-id보다 leaf/root/ancestor ref로 좁히라고 안내하고, reviewed block mirror에서 tree fixture preview를 만들고 sanitized ancestor result를 merge/replan하고 sanitized local fixture bundle로 클라이언트 nested-tree issue를 검증하며 클라이언트 follow-up용 최소 sanitized fixture request contract를 패키징하는 read-only nested tree recovery planning, 그리고 맞는 edge type이 없을 때 AI가 억지 매핑하지 않고 model gap으로 올리는 안전 가드,
 - mail, OpenAI API, OCR API 등을 위한 read-only beginner setup manual, Notion nested recovery 인간 단계 가이드, `archive notion-recover`의 local `file:<path>` 토큰 파일 fallback(파일 경로와 토큰 값은 출력하지 않음), `archive notion-connection-plan --dry-run`의 one-click Notion connection product contract, `archive notion-oauth-connection-preflight --dry-run`의 secret-blind local OAuth runtime contract preflight, Notion provider failure의 safe action category 분류, live browser OAuth/callback/token exchange/keyring token storage는 아직 future adapter boundary라는 명확한 표시, connected accounts bridge, credential reference planning, inventory, external store recommendation, vault onboarding planning, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, CLI-only KeePassXC write execution with non-secret execution receipts, adapter readiness planning, adapter manifest preview, adapter audit receipt preview,
 - public link, Korean product language, privacy, release readiness, branch-protection planning을 위한 local hygiene tool.
@@ -125,6 +127,7 @@ v0.3.157 pre-release
 - [Secret Signal Taxonomy](wom-kit/docs/secret-signal-taxonomy.md)
 - [AI Response Contract](wom-kit/docs/ai-response-contract.md)
 - [Operator Envelope Classes](wom-kit/docs/operator-envelope-classes.md)
+- [Objet Capture Enablement](wom-kit/docs/capture-enablement.md)
 - [Archive Status Board](wom-kit/docs/archive-status-board.md)
 - [Derived Artifact Staleness](wom-kit/docs/derived-artifact-staleness.md)
 - [zet Quality Check](wom-kit/docs/zet-quality-check.md)
@@ -267,6 +270,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.3.158
 v0.3.157
 v0.3.156
 v0.3.155

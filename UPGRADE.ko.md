@@ -152,6 +152,32 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.157` To `v0.3.158`
+
+이 release는 실제(비 sandbox) archive의 local objet capture를 소유자 승인으로 여는 기능을 추가합니다.
+
+운영자에게 보이는 변경:
+
+- 새 CLI 명령 `archive objet-capture-enable <archive-root>` (alias
+  `archive capture-enable`): `--dry-run`은 read-only 자격 보고이고,
+  `--approve --reviewed-by <actor>`는 `receipts/capture-enablement/` 아래
+  영수증(receipt)을 먼저 쓰고 단일 `ops/capture-enablement.yml` 동의 record를
+  나중에 씁니다. `--revoke --approve`는 철회하고, never-touch 이름 패턴에
+  걸리는 root는 `--acknowledge-never-touch-name`이 필요하며, 철회된 record
+  위에 다시 승인하려면 `--reenable`이 필요합니다. 이 명령은 CLI 전용이고
+  MCP로는 노출되지 않습니다.
+- JSON 필드 이름은 바뀌지 않습니다. `objet-capture` refusal에
+  `enablement_state` 필드 하나가 추가되고, `blocked_by` id는 그대로입니다.
+- `objet-capture` refusal hint 두 개의 문구가 바뀌었습니다. hint는 정적
+  문자열이지 파싱 계약이 아닙니다. `"separate planned flow"` 부분 문자열을
+  검사하던 downstream 사본은 같은 갱신이 필요합니다.
+- per-item never-touch 판정은 유효하게 enable된 root에서만 바뀝니다:
+  패턴을 enable된 root 아래 archive-relative 구성요소에만 적용합니다.
+  enable되지 않은 root(모든 sandbox-marked archive 포함)는 이전과 완전히
+  같게 동작합니다.
+- archive migration은 필요 없습니다. `wom-kit/docs/capture-enablement.md`와
+  `wom-kit/docs/releases/v0.3.158.md`를 보세요.
+
 ## From `v0.3.3` To `v0.3.4`
 
 This release adds the first derived text capture layer.

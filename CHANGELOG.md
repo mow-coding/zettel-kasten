@@ -6,6 +6,48 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.158 - 2026-07-03
+
+- Added `archive objet-capture-enable` (alias `archive capture-enable`): an
+  explicit, receipted, revocable owner consent flow that lets a real
+  (non-sandbox) archive run local objet capture. `--dry-run` returns a
+  read-only eligibility report (`state`, orthogonal `never_touch_name_match`,
+  `planned_writes`, `reason` for invalid records) and writes nothing;
+  `--approve --reviewed-by <actor>` evaluates every blocker before any write,
+  then writes the receipt first and the singleton
+  `ops/capture-enablement.yml` record second; `--revoke --approve` flips the
+  record to `enabled: false` with `revoked_by`/`revoked_at`. Pattern-matched
+  root names require `--acknowledge-never-touch-name`; re-approving over a
+  revoked record requires `--reenable`. CLI-only; not exposed via MCP.
+- Reworked the objet-capture gate order so a valid enablement record allows
+  capture before the never-touch name check, with strict validity (exact
+  schema/scope/statement match, `archive_id` binding, `enabled is True`
+  boolean identity, acknowledgment on pattern-matched roots) and fail-closed
+  behavior on any read or validation exception.
+- Made the per-item never-touch checks enablement-aware: validly-enabled roots
+  evaluate the name pattern on archive-relative components only, so the
+  enabled root's own name no longer re-blocks every item while matching
+  components below the root still block with `resolved_path_never_touch`.
+  Non-enabled roots are unchanged, and the shared
+  `target_looks_external_live_never_touch` check is identical in both copies.
+- Added the additive refusal field `enablement_state`
+  (`absent`/`invalid`/`revoked`/`disabled`) to `objet-capture` refusals; the
+  `blocked_by` ids are unchanged and refusals stay blocker-only.
+- Updated both objet-capture refusal hints to route owners to
+  `archive objet-capture-enable <archive-root> --dry-run` (read-only) instead
+  of calling real-archive enablement a separate planned flow.
+- Added doctor diagnostics for the enablement record: INFO
+  `capture_enablement_enabled` / `capture_enablement_revoked`, WARN
+  `capture_enablement_record_invalid` (with the reason) and
+  `capture_enablement_receipts_missing`; the WARNs fail strict validation.
+- Documented the consent model, record/receipt schemas, forward-only
+  revocation, and the no-overclaim Safety Boundary in
+  `wom-kit/docs/capture-enablement.md`, and swept stale sandbox-only wording
+  from source-intake guidance, CLI help, the capability matrix, the
+  project-intake session doc, and the artifact-hygiene gaps list.
+- Updated README status, capability matrix checkpoint, upgrade guides, release
+  notes, and CLI tests.
+
 ## v0.3.157 - 2026-07-03
 
 - Fixed stale `source-intake` guidance that predated local objet capture

@@ -25,10 +25,11 @@ Inside WOM:
 Current public baseline:
 
 ```text
-v0.3.157 pre-release
+v0.3.158 pre-release
 ```
 
-Previous public baseline: v0.3.156 pre-release.
+Previous public baseline: v0.3.157 pre-release.
+Earlier public baseline: v0.3.156 pre-release.
 Earlier public baseline: v0.3.155 pre-release.
 Earlier public baseline: v0.3.154 pre-release.
 Earlier public baseline: v0.3.153 pre-release.
@@ -116,6 +117,7 @@ What exists today:
 - read-only `archive ai-response-concept-guide --dry-run` for beginner-facing AI explanation cards about sha256 object identity vs location, manifests vs zets, the objet -> derived text -> zet layer split, operational term translations for edge types, lifecycle states, and connection kinds including `contains` for structural child page/database containment, plus safe routing to Notion import material-clue audits, source-map material-link planning, connection import planning, nested tree recovery planning, and ancestor crawl request planning when provider locators were omitted from imported zettel bodies or structural relations need model review, without overclaiming upload, availability, stronger tie meaning, or forced edge-type mappings,
 - approval-gated `.gitignore` repair for missing WOM-kit safe defaults,
 - human-guided project intake planning, decision receipts, source-intake context, and objet-capture receipt gates,
+- owner-approved real-archive objet capture enablement through `archive objet-capture-enable`: a read-only dry-run eligibility report, an approval-gated singleton `ops/capture-enablement.yml` consent record with a receipt trail, explicit never-touch name acknowledgment, forward-only revocation with `--reenable` protection, and doctor visibility, so a real (non-sandbox) archive can run local objet capture only after explicit, receipted, revocable owner consent; the record is a consent marker in the same write-trust domain, not a security boundary,
 - read-only Tiro meeting transcript import planning from archive-internal manifests, preserving meeting metadata, speaker turns, timestamps, confidence, and optional audio objet refs without echoing transcript text, participant names, source URLs, audio filenames, local paths, account ids, emails, tokens, or secrets,
 - read-only Tiro full-data lossless recovery planning, approval-gated live Tiro REST fetch into a private raw bundle from `env:` or Windows Credential Manager-backed `keyring:` / `credential-manager:` refs, and approval-gated raw Tiro recovery bundle capture into WOM objets, preserving private raw bundle bytes while reporting only hashes, counts, archive-relative paths, and gap categories,
 - read-only beginner setup manual with KeePassXC first-vault field walkthroughs, KeePassXC CSV bulk migration import/merge guidance, Cloudflare R2 bucket/API-token field walkthroughs with Korean/English label hints and S3 credential-pair guidance, and Notion nested recovery human-step guidance that translates low-level ancestor/fetch/fixture/merge terms into location-oriented user language before one-time approval and live structure fetch handoff; `archive notion-recover` can now use a local `file:<path>` token-file fallback without echoing the file path or token, `archive notion-connection-plan --dry-run` records the one-click Notion connection product contract, `archive notion-oauth-connection-preflight --dry-run` validates the secret-blind local OAuth runtime contract before any future browser/callback/token exchange flow, and Notion provider failures are classified into action categories such as token, permission/page-share, rate-limit, network, or provider-availability without raw error echo, while live browser OAuth, callback servers, token exchange, and keyring/vault token storage remain future adapter boundaries, connected accounts bridge with separate credential-catalog status, plus read-only credential reference planning, inventory, external store recommendation including account recovery and break-glass redundancy scenarios, vault onboarding planning, credential semantic extraction recipe with recovery-code/break-glass routing hints, plaintext migration planning, future access broker planning, local approval receipt preview/write, credential policy checking, KeePassXC command preflight, CLI-only KeePassXC write execution with non-secret execution receipts, adapter readiness planning, adapter manifest preview, and adapter audit receipt preview for mail, OpenAI API, OCR API, provider, object storage, and backup secrets,
@@ -179,6 +181,7 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Secret Signal Taxonomy](wom-kit/docs/secret-signal-taxonomy.md)
 - [AI Response Contract](wom-kit/docs/ai-response-contract.md)
 - [Operator Envelope Classes](wom-kit/docs/operator-envelope-classes.md)
+- [Objet Capture Enablement](wom-kit/docs/capture-enablement.md)
 - [Archive Status Board](wom-kit/docs/archive-status-board.md)
 - [Derived Artifact Staleness](wom-kit/docs/derived-artifact-staleness.md)
 - [zet Quality Check](wom-kit/docs/zet-quality-check.md)
@@ -386,6 +389,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
+v0.3.158
 v0.3.157
 v0.3.156
 v0.3.155

@@ -184,7 +184,7 @@ These are not solved yet:
 - no systematic `gc` command exists,
 - no broad archive-wide AI scratch sweep exists,
 - no orphan-objet sweep exists,
-- local objet capture exists (v0.3.2+) but only for sandbox-marked archives; a real-archive capture enablement flow does not exist yet,
+- local objet capture runs on sandbox-marked archives, or on real archives after owner approval via `archive objet-capture-enable` (v0.3.158); the enablement record is a consent marker in the same write-trust domain, not a security boundary,
 - no provider upload/sync cleanup exists,
 - no automatic staged-folder deletion verifier exists,
 - no `npx`/`pipx` distribution switch is included here.

@@ -30592,7 +30592,7 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(result["blocked_by"], "sandbox_marker_required")
             self.assertIn("sandbox-marked archives", result["hint"])
             self.assertIn(".wom-sandbox", result["hint"])
-            self.assertIn("separate planned flow", result["hint"])
+            self.assertIn("objet-capture-enable", result["hint"])
             self.assertEqual(result["items"], [], "refusal output must be blocker-only")
             # Leak assertion: the staged filename/path from the selection must not be echoed.
             self.assertNotIn("note.txt", output)
@@ -32428,6 +32428,566 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(code, 1, output)
             self.assertIn("derived_text_derivation_kind_invalid", output)
             self.assertIn("derived_text_review_status_invalid", output)
+
+    # --- objet-capture enablement (v0.3.158) ---
+
+    def _real_archive(
+        self,
+        tmp: str,
+        name: str = "real-archive",
+        archive_id: str = "archive:personal:capture",
+        parent: Path | None = None,
+    ) -> Path:
+        archive_root = (parent or Path(tmp)) / name
+        code, output = self.run_cli(
+            [
+                "init",
+                str(archive_root),
+                "--type",
+                "personal",
+                "--archive-id",
+                archive_id,
+                "--principal-id",
+                "person:test",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        (archive_root / "staging" / "incoming").mkdir(parents=True, exist_ok=True)
+        return archive_root
+
+    def _write_enablement_record(self, archive_root: Path, **overrides: Any) -> Path:
+        record: dict[str, Any] = {
+            "schema": archive_services.CAPTURE_ENABLEMENT_SCHEMA,
+            "scope": archive_services.CAPTURE_ENABLEMENT_SCOPE,
+            "archive_id": "archive:personal:capture",
+            "enabled": True,
+            "statement": archive_services.CAPTURE_ENABLEMENT_STATEMENT,
+            "reviewed_by": "person:test",
+            "enabled_at": "2026-07-03T00:00:00Z",
+            "never_touch_acknowledged": False,
+            "revoked_by": None,
+            "revoked_at": None,
+        }
+        record.update(overrides)
+        path = archive_root / "ops" / "capture-enablement.yml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(archive_cli.dump_yaml(record), encoding="utf-8")
+        return path
+
+    def _enable_cli(self, archive_root: Path, *extra: str, expect_code: int = 0) -> dict[str, Any]:
+        code, output = self.run_cli(
+            ["objet-capture-enable", str(archive_root), *extra, "--format", "json"]
+        )
+        self.assertEqual(code, expect_code, output)
+        return json.loads(output)
+
+    def test_objet_capture_enable_dry_run_writes_nothing_and_reports_eligibility(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._real_archive(tmp)
+            before = self._inventory(archive_root)
+            result = self._enable_cli(archive_root, "--dry-run")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["state"], "not_enabled")
+            self.assertFalse(result["never_touch_name_match"])
+            self.assertEqual(len(result["planned_writes"]), 2)
+            self.assertIn("ops/capture-enablement.yml", result["planned_writes"])
+            self.assertTrue(any(path.startswith("receipts/capture-enablement/") for path in result["planned_writes"]))
+            revoke_preview = self._enable_cli(archive_root, "--dry-run", "--revoke")
+            self.assertTrue(revoke_preview["ok"], revoke_preview)
+            self.assertEqual(revoke_preview["planned_writes"], [])
+            self.assertEqual(self._inventory(archive_root), before, "dry-run must not write anything")
+            self.assertFalse(list(archive_root.rglob("*.part-*")))
+            self.assertFalse((archive_root / "ops" / "capture-enablement.yml").exists())
+
+    def test_objet_capture_enable_approve_writes_receipt_before_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._real_archive(tmp)
+            code, output = self.run_cli(
+                ["objet-capture-enable", str(archive_root), "--approve", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            blocked = json.loads(output)
+            self.assertFalse(blocked["ok"])
+            self.assertFalse((archive_root / "ops" / "capture-enablement.yml").exists())
+
+            order: list[str] = []
+            original_write = archive_services.write_text_atomic
+
+            def intercept(path: Path, text: str) -> None:
+                order.append(Path(path).name)
+                original_write(path, text)
+
+            with patch.object(archive_services, "write_text_atomic", intercept):
+                result = self._enable_cli(archive_root, "--approve", "--reviewed-by", "person:owner")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["state"], "enabled")
+            self.assertEqual(len(order), 2, order)
+            self.assertTrue(order[0].startswith("capture-enablement.") and order[0].endswith(".json"), order)
+            self.assertEqual(order[1], "capture-enablement.yml", "receipt must be written BEFORE the record")
+
+            record_text = (archive_root / "ops" / "capture-enablement.yml").read_text(encoding="utf-8")
+            record = archive_cli.load_yaml(record_text)
+            self.assertEqual(record["schema"], "wom-kit/capture-enablement/v0.1")
+            self.assertEqual(record["scope"], "objet-capture")
+            self.assertEqual(record["archive_id"], "archive:personal:capture")
+            self.assertIs(record["enabled"], True)
+            self.assertEqual(record["statement"], archive_services.CAPTURE_ENABLEMENT_STATEMENT)
+            self.assertEqual(record["reviewed_by"], "person:owner")
+            self.assertIs(record["never_touch_acknowledged"], False)
+            self.assertIsNone(record["revoked_by"])
+            self.assertIsNone(record["revoked_at"])
+
+            receipt_relative = result["receipt_path"]
+            self.assertNotIn(":", Path(receipt_relative).name, "receipt filename must carry no colons on NTFS")
+            receipt = json.loads((archive_root / Path(receipt_relative)).read_text(encoding="utf-8"))
+            self.assertEqual(receipt["schema"], "wom-kit/capture-enablement-receipt/v0.1")
+            self.assertEqual(receipt["action"], "enable")
+            self.assertEqual(receipt["record_path"], "ops/capture-enablement.yml")
+            self.assertEqual(receipt["reviewed_by"], "person:owner")
+            self.assertFalse(receipt["reenable"])
+            self.assertEqual(receipt["record_sha256"], hashlib.sha256(record_text.encode("utf-8")).hexdigest())
+
+            # The enabled real archive (no sandbox marker) now passes the capture gate.
+            staged_path, digest = self._stage(archive_root, "note.txt", b"graduated capture")
+            plan_path, plan_sha = self._plan(archive_root)
+            selection = self._selection(
+                tmp, "archive:personal:capture", [self._item(staged_path, digest, plan_path, plan_sha)]
+            )
+            capture = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertTrue(capture["ok"], capture)
+
+    def test_objet_capture_enable_revoke_lifecycle_and_reenable_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._real_archive(tmp)
+            self._enable_cli(archive_root, "--approve", "--reviewed-by", "person:owner")
+            before = self._inventory(archive_root)
+            revoke_preview = self._enable_cli(archive_root, "--dry-run", "--revoke")
+            self.assertTrue(revoke_preview["ok"], revoke_preview)
+            self.assertEqual(len(revoke_preview["planned_writes"]), 2)
+            self.assertEqual(self._inventory(archive_root), before, "revoke preview must not write")
+            revoked = self._enable_cli(
+                archive_root, "--revoke", "--approve", "--reviewed-by", "person:owner"
+            )
+            self.assertTrue(revoked["ok"], revoked)
+            self.assertEqual(revoked["state"], "revoked")
+            record = archive_cli.load_yaml(
+                (archive_root / "ops" / "capture-enablement.yml").read_text(encoding="utf-8")
+            )
+            self.assertIs(record["enabled"], False)
+            self.assertEqual(record["revoked_by"], "person:owner")
+            self.assertTrue(record["revoked_at"])
+            revoke_receipt = json.loads(
+                (archive_root / Path(revoked["receipt_path"])).read_text(encoding="utf-8")
+            )
+            self.assertEqual(revoke_receipt["action"], "revoke")
+
+            staged_path, digest = self._stage(archive_root, "note.txt", b"after revoke")
+            plan_path, plan_sha = self._plan(archive_root)
+            selection = self._selection(
+                tmp, "archive:personal:capture", [self._item(staged_path, digest, plan_path, plan_sha)]
+            )
+            refusal = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(refusal["ok"])
+            self.assertEqual(refusal["blocked_by"], "sandbox_marker_required")
+            self.assertEqual(refusal["enablement_state"], "revoked")
+
+            blocked = self._enable_cli(
+                archive_root, "--approve", "--reviewed-by", "person:owner", expect_code=1
+            )
+            self.assertIn("revoked_record_present_use_reenable", blocked["blockers"])
+            reenabled = self._enable_cli(
+                archive_root, "--approve", "--reviewed-by", "person:owner", "--reenable"
+            )
+            self.assertTrue(reenabled["ok"], reenabled)
+            self.assertEqual(reenabled["state"], "enabled")
+            self.assertTrue(archive_services.objet_capture_dry_run(archive_root, selection)["ok"])
+
+    def test_objet_capture_enablement_archive_id_mismatch_stays_blocked_as_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._real_archive(tmp)
+            self._write_enablement_record(archive_root, archive_id="archive:other:copied-from-elsewhere")
+            staged_path, digest = self._stage(archive_root, "note.txt", b"id mismatch")
+            plan_path, plan_sha = self._plan(archive_root)
+            selection = self._selection(
+                tmp, "archive:personal:capture", [self._item(staged_path, digest, plan_path, plan_sha)]
+            )
+            refusal = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(refusal["ok"])
+            self.assertEqual(refusal["blocked_by"], "sandbox_marker_required")
+            self.assertEqual(refusal["enablement_state"], "invalid")
+
+    def test_objet_capture_enablement_malformed_record_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._real_archive(tmp)
+            record_path = archive_root / "ops" / "capture-enablement.yml"
+            record_path.parent.mkdir(parents=True, exist_ok=True)
+            record_path.write_text("enabled: [true\nschema: {broken", encoding="utf-8")
+            staged_path, digest = self._stage(archive_root, "note.txt", b"malformed record")
+            plan_path, plan_sha = self._plan(archive_root)
+            selection = self._selection(
+                tmp, "archive:personal:capture", [self._item(staged_path, digest, plan_path, plan_sha)]
+            )
+            refusal = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(refusal["ok"])
+            self.assertEqual(refusal["blocked_by"], "sandbox_marker_required")
+            self.assertEqual(refusal["enablement_state"], "invalid")
+            report = self._enable_cli(archive_root, "--dry-run")
+            self.assertEqual(report["state"], "invalid_record")
+            self.assertTrue(report["reason"])
+
+    def test_objet_capture_enablement_record_with_broken_archive_yml_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._real_archive(tmp)
+            self._write_enablement_record(archive_root)
+            (archive_root / "archive.yml").write_text("{broken yaml: [", encoding="utf-8")
+            staged_path, digest = self._stage(archive_root, "note.txt", b"broken archive yml")
+            plan_path, plan_sha = self._plan(archive_root)
+            selection = self._selection(
+                tmp, "archive:personal:capture", [self._item(staged_path, digest, plan_path, plan_sha)]
+            )
+            refusal = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(refusal["ok"])
+            self.assertEqual(refusal["blocked_by"], "sandbox_marker_required")
+            self.assertEqual(refusal["enablement_state"], "invalid")
+            (archive_root / "archive.yml").unlink()
+            refusal = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(refusal["ok"])
+            self.assertEqual(refusal["blocked_by"], "sandbox_marker_required")
+            self.assertEqual(refusal["enablement_state"], "invalid")
+
+    def test_objet_capture_enablement_truthy_non_boolean_enabled_is_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for truthy in ("true", 1):
+                with self.subTest(enabled=truthy):
+                    archive_root = self._real_archive(tmp, name=f"archive-{str(truthy)}")
+                    self._write_enablement_record(archive_root, enabled=truthy)
+                    enablement = archive_services.read_capture_enablement(archive_root)
+                    self.assertFalse(enablement["valid"])
+                    self.assertEqual(enablement["state"], "invalid")
+                    self.assertEqual(
+                        archive_services.objet_capture_sandbox_blockers(archive_root),
+                        ["sandbox_marker_required"],
+                    )
+
+    def test_objet_capture_enablement_statement_or_scope_mismatch_is_invalid(self) -> None:
+        # The owner consent statement and the scope are the semantic core of the
+        # record: a record with a tampered statement or a foreign scope must fail
+        # closed exactly like any other invalid record.
+        with tempfile.TemporaryDirectory() as tmp:
+            for label, overrides in (
+                (
+                    "tampered-statement",
+                    {"statement": archive_services.CAPTURE_ENABLEMENT_STATEMENT + " (tampered)"},
+                ),
+                ("wrong-scope", {"scope": "derive-text"}),
+            ):
+                with self.subTest(record=label):
+                    archive_root = self._real_archive(tmp, name=f"archive-{label}")
+                    self._write_enablement_record(archive_root, **overrides)
+                    enablement = archive_services.read_capture_enablement(archive_root)
+                    self.assertFalse(enablement["valid"])
+                    self.assertEqual(enablement["state"], "invalid")
+                    self.assertEqual(
+                        archive_services.objet_capture_sandbox_blockers(archive_root),
+                        ["sandbox_marker_required"],
+                    )
+                    staged_path, digest = self._stage(archive_root, "note.txt", b"consent text must match")
+                    plan_path, plan_sha = self._plan(archive_root)
+                    selection = self._selection(
+                        tmp, "archive:personal:capture", [self._item(staged_path, digest, plan_path, plan_sha)]
+                    )
+                    refusal = archive_services.objet_capture_dry_run(archive_root, selection)
+                    self.assertFalse(refusal["ok"])
+                    self.assertEqual(refusal["blocked_by"], "sandbox_marker_required")
+                    self.assertEqual(refusal["enablement_state"], "invalid")
+
+    def test_objet_capture_enablement_pattern_root_requires_acknowledged_field(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._real_archive(
+                tmp, name="zettel-kasten-acktest", archive_id="archive:personal:acktest"
+            )
+            self._write_enablement_record(
+                archive_root, archive_id="archive:personal:acktest", never_touch_acknowledged=False
+            )
+            staged_path, digest = self._stage(archive_root, "note.txt", b"needs acknowledgment")
+            plan_path, plan_sha = self._plan(archive_root)
+            selection = self._selection(
+                tmp, "archive:personal:acktest", [self._item(staged_path, digest, plan_path, plan_sha)]
+            )
+            refusal = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(refusal["ok"])
+            self.assertEqual(refusal["blocked_by"], "external_live_never_touch")
+            self.assertEqual(refusal["enablement_state"], "invalid")
+            self._write_enablement_record(
+                archive_root, archive_id="archive:personal:acktest", never_touch_acknowledged=True
+            )
+            self.assertEqual(archive_services.objet_capture_sandbox_blockers(archive_root), [])
+
+    def test_objet_capture_enablement_gate_reads_only_control_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._real_archive(tmp)
+            self._write_enablement_record(archive_root, archive_id="archive:other:mismatch")
+            staged_path, digest = self._stage(archive_root, "note.txt", b"read footprint")
+            plan_path, plan_sha = self._plan(archive_root)
+            selection = self._selection(
+                tmp, "archive:personal:capture", [self._item(staged_path, digest, plan_path, plan_sha)]
+            )
+            reads: list[str] = []
+            original_read_text = Path.read_text
+
+            def tracking_read_text(instance: Path, *args: Any, **kwargs: Any) -> str:
+                reads.append(instance.name)
+                return original_read_text(instance, *args, **kwargs)
+
+            with patch.object(Path, "read_text", tracking_read_text), patch.object(
+                archive_services, "_objet_capture_sha256_and_head_fd", side_effect=AssertionError("must not read")
+            ), patch.object(
+                archive_services, "load_manifest_records", side_effect=AssertionError("must not read")
+            ):
+                refusal = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(refusal["ok"])
+            self.assertEqual(refusal["blocked_by"], "sandbox_marker_required")
+            self.assertEqual(refusal["enablement_state"], "invalid")
+            self.assertEqual(
+                set(reads),
+                {"capture-enablement.yml", "archive.yml"},
+                "gate must read only the two control files",
+            )
+
+    def test_objet_capture_enablement_full_e2e_on_never_touch_named_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._real_archive(
+                tmp, name="zettel-kasten-basoontest", archive_id="archive:personal:basoontest"
+            )
+            staged_path, digest = self._stage(archive_root, "field-note.txt", b"basoon archive bytes")
+            plan_path, plan_sha = self._plan(archive_root)
+            selection = self._selection(
+                tmp, "archive:personal:basoontest", [self._item(staged_path, digest, plan_path, plan_sha)]
+            )
+
+            refusal = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(refusal["ok"])
+            self.assertEqual(refusal["blocked_by"], "external_live_never_touch")
+            self.assertEqual(refusal["enablement_state"], "absent")
+            self.assertIn("objet-capture-enable", refusal["hint"])
+
+            report = self._enable_cli(archive_root, "--dry-run")
+            self.assertTrue(report["ok"], report)
+            self.assertEqual(report["state"], "not_enabled")
+            self.assertTrue(report["never_touch_name_match"])
+
+            blocked = self._enable_cli(
+                archive_root, "--approve", "--reviewed-by", "person:owner", expect_code=1
+            )
+            self.assertIn("never_touch_acknowledgement_required", blocked["blockers"])
+            enabled = self._enable_cli(
+                archive_root,
+                "--approve",
+                "--reviewed-by",
+                "person:owner",
+                "--acknowledge-never-touch-name",
+            )
+            self.assertTrue(enabled["ok"], enabled)
+
+            code, output = self.run_cli(
+                [
+                    "objet-capture-selection",
+                    str(archive_root),
+                    "--staged-path",
+                    staged_path,
+                    "--source-intake-receipt",
+                    plan_path,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:owner",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            selection_result = json.loads(output)
+            self.assertTrue(selection_result["ok"], selection_result)
+            selection_path = archive_root / Path(str(selection_result["selection_path"]))
+
+            plan_result = archive_services.objet_capture_dry_run(archive_root, selection_path)
+            self.assertTrue(plan_result["ok"], plan_result)
+            self.assertEqual(plan_result["items"][0]["planned_action"], "capture")
+            apply_result = archive_services.objet_capture_apply(
+                archive_root, selection_path, reviewed_by="person:owner"
+            )
+            self.assertTrue(apply_result["ok"], apply_result)
+            self.assertEqual(apply_result["items"][0]["action"], "captured")
+            stored = archive_root / "objects" / "sha256" / digest[:2] / digest
+            self.assertTrue(stored.is_file())
+            self.assertEqual(stored.read_bytes(), b"basoon archive bytes")
+            manifest = archive_root / "objects" / "manifests" / "files.jsonl"
+            self.assertIn(f"sha256:{digest}", manifest.read_text(encoding="utf-8"))
+
+    def test_objet_capture_enabled_root_still_blocks_matching_relative_component(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._real_archive(tmp)
+            self._enable_cli(archive_root, "--approve", "--reviewed-by", "person:owner")
+            staged_dir = archive_root / "staging" / "incoming" / "evil-objets"
+            staged_dir.mkdir(parents=True)
+            data = b"relative component must still block"
+            (staged_dir / "note.txt").write_bytes(data)
+            staged_path = "staging/incoming/evil-objets/note.txt"
+            digest = hashlib.sha256(data).hexdigest()
+            plan_path, plan_sha = self._plan(archive_root)
+            selection = self._selection(
+                tmp, "archive:personal:capture", [self._item(staged_path, digest, plan_path, plan_sha)]
+            )
+            result = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(result["ok"])
+            self.assertIn("resolved_path_never_touch", result["items"][0]["blockers"])
+
+    def test_objet_capture_enable_objets_store_without_archive_yml(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store_root = Path(tmp) / "media-objets"
+            store_root.mkdir()
+            report = self._enable_cli(store_root, "--dry-run")
+            self.assertTrue(report["ok"], report)
+            self.assertEqual(report["state"], "not_an_archive")
+            self.assertTrue(report["never_touch_name_match"])
+            blocked = self._enable_cli(
+                store_root,
+                "--approve",
+                "--reviewed-by",
+                "person:owner",
+                "--acknowledge-never-touch-name",
+                expect_code=1,
+            )
+            self.assertIn("not_an_archive", blocked["blockers"])
+            self.assertFalse((store_root / "ops").exists(), "approve must fail before writing anything")
+            self.assertFalse((store_root / "receipts").exists(), "approve must fail before writing anything")
+
+    def test_objet_capture_enablement_forged_record_pin_documents_boundary(self) -> None:
+        # Pins the documented Safety Boundary honestly: anyone with archive write
+        # access can forge a minimal archive.yml plus a matching record (with
+        # never_touch_acknowledged on a pattern-matched root) and the gate allows.
+        # The record is a consent marker in the same write-trust domain, not a
+        # security boundary.
+        with tempfile.TemporaryDirectory() as tmp:
+            store_root = Path(tmp) / "media-objets"
+            store_root.mkdir()
+            (store_root / "archive.yml").write_text("archive_id: archive:forged:media\n", encoding="utf-8")
+            self._write_enablement_record(
+                store_root, archive_id="archive:forged:media", never_touch_acknowledged=True
+            )
+            self.assertEqual(archive_services.objet_capture_sandbox_blockers(store_root), [])
+
+    def test_objet_capture_enable_nested_objets_parent_requires_acknowledge_and_captures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            blocklisted_parent = Path(tmp) / "store-objets"
+            blocklisted_parent.mkdir()
+            archive_root = self._real_archive(
+                tmp, name="archive", archive_id="archive:personal:nested", parent=blocklisted_parent
+            )
+            blocked = self._enable_cli(
+                archive_root, "--approve", "--reviewed-by", "person:owner", expect_code=1
+            )
+            self.assertIn("never_touch_acknowledgement_required", blocked["blockers"])
+            enabled = self._enable_cli(
+                archive_root,
+                "--approve",
+                "--reviewed-by",
+                "person:owner",
+                "--acknowledge-never-touch-name",
+            )
+            self.assertTrue(enabled["ok"], enabled)
+            staged_path, digest = self._stage(archive_root, "nested.txt", b"nested parent capture")
+            plan_path, plan_sha = self._plan(archive_root)
+            selection = self._selection(
+                tmp, "archive:personal:nested", [self._item(staged_path, digest, plan_path, plan_sha)]
+            )
+            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:owner")
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["items"][0]["action"], "captured")
+
+    def test_objet_capture_selection_manifest_on_enabled_never_touch_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._real_archive(
+                tmp, name="zettel-kasten-selectiontest", archive_id="archive:personal:selectiontest"
+            )
+            self._enable_cli(
+                archive_root,
+                "--approve",
+                "--reviewed-by",
+                "person:owner",
+                "--acknowledge-never-touch-name",
+            )
+            staged_path, digest = self._stage(archive_root, "select.txt", b"selection on enabled root")
+            plan_path, plan_sha = self._plan(archive_root)
+            result = archive_services.objet_capture_selection_manifest(
+                archive_root,
+                staged_path=staged_path,
+                source_intake_receipt=plan_path,
+                approve=True,
+                reviewed_by="person:owner",
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertNotIn("resolved_path_never_touch", result["blockers"])
+            self.assertTrue((archive_root / Path(str(result["selection_path"]))).is_file())
+
+    def test_doctor_capture_enablement_diagnostics_and_validate_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._real_archive(tmp)
+            code, output = self.run_cli(["validate", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 0, output)
+
+            self._enable_cli(archive_root, "--approve", "--reviewed-by", "person:owner")
+            code, output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 0, output)
+            diagnostics = {item["code"]: item for item in json.loads(output)}
+            self.assertEqual(diagnostics["capture_enablement_enabled"]["severity"], "INFO")
+            self.assertNotIn("capture_enablement_receipts_missing", diagnostics)
+
+            shutil.rmtree(archive_root / "receipts" / "capture-enablement")
+            code, output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 0, output)
+            diagnostics = {item["code"]: item for item in json.loads(output)}
+            self.assertEqual(diagnostics["capture_enablement_receipts_missing"]["severity"], "WARN")
+            code, output = self.run_cli(["validate", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 1, output)
+            self.assertIn("capture_enablement_receipts_missing", output)
+
+            self._enable_cli(archive_root, "--revoke", "--approve", "--reviewed-by", "person:owner")
+            code, output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 0, output)
+            diagnostics = {item["code"]: item for item in json.loads(output)}
+            self.assertEqual(diagnostics["capture_enablement_revoked"]["severity"], "INFO")
+            self.assertNotIn("capture_enablement_record_invalid", diagnostics)
+
+            self._write_enablement_record(archive_root, schema="wom-kit/capture-enablement/v9.9")
+            code, output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 0, output)
+            diagnostics = {item["code"]: item for item in json.loads(output)}
+            self.assertEqual(diagnostics["capture_enablement_record_invalid"]["severity"], "WARN")
+            self.assertIn("schema", diagnostics["capture_enablement_record_invalid"]["message"])
+            code, output = self.run_cli(["doctor", str(archive_root), "--strict", "--format", "json"])
+            self.assertEqual(code, 1, output)
+            code, output = self.run_cli(["validate", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 1, output)
+            self.assertIn("capture_enablement_record_invalid", output)
+
+    def test_objet_capture_never_touch_helper_copies_stay_identical(self) -> None:
+        def normalized_function_body(path: Path) -> list[str]:
+            text = path.read_text(encoding="utf-8")
+            match = re.search(
+                r"^def target_looks_external_live_never_touch\(target: Path\) -> bool:\n(.*?)(?=^\S)",
+                text,
+                re.DOTALL | re.MULTILINE,
+            )
+            self.assertIsNotNone(match, f"function not found in {path.name}")
+            return [
+                line.strip()
+                for line in match.group(1).splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
+
+        services_copy = normalized_function_body(SRC_ROOT / "wom_kit" / "archive_services.py")
+        checker_copy = normalized_function_body(KIT_ROOT / "tools" / "check_artifact_hygiene.py")
+        self.assertEqual(services_copy, checker_copy, "dual copies of the never-touch check must stay identical")
 
 
 if __name__ == "__main__":
