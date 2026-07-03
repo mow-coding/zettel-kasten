@@ -147,7 +147,7 @@ upload_performed: false
 provider_api_called: false
 ```
 
-If object storage is missing, the planner warns the user to run the object storage / objet setup planner before real objet capture.
+If object storage is missing, the planner warns that object storage is not configured in `provider-bindings.yml` and points at `archive object-storage --dry-run` to plan setup before real objet capture.
 
 ## Non-Goals
 

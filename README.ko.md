@@ -23,9 +23,10 @@ WOM 안에서:
 현재 공개 기준:
 
 ```text
-v0.3.156 pre-release
+v0.3.157 pre-release
 ```
 
+이전 공개 기준: v0.3.156 pre-release.
 이전 공개 기준: v0.3.155 pre-release.
 이전 공개 기준: v0.3.154 pre-release.
 이전 공개 기준: v0.3.153 pre-release.
@@ -266,6 +267,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
+v0.3.157
 v0.3.156
 v0.3.155
 v0.3.154
