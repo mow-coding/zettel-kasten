@@ -6,6 +6,48 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.163 - 2026-07-04
+
+- Added the Stage 1 live object-storage upload adapter (WOM #11) as three
+  approval-gated CLI commands. `archive object-storage-upload-plan --dry-run`
+  composes a content-addressed upload plan with a digest-aware
+  `would_upload`/`already_uploaded` verdict; an object is `already_uploaded`
+  only when a provider-confirmed `wom_uploaded` manifest location's `key_hint`
+  digest matches the object id, never on external `declared_uploaded` evidence
+  or a manifest-only hit. `archive object-storage-upload-verify --dry-run`
+  hashes each planned object's local RAW bytes and asserts equality with the
+  object id (it never normalizes BOM/newlines). `archive object-storage-upload`
+  is the mutating command with a three-way gate (reject both modes, reject
+  neither, reject `--approve` without a safe `--reviewed-by`), re-enforced at the
+  service layer so a direct service/MCP call cannot bypass it.
+- NO-NETWORK BOUNDARY: this release ships no transport that performs a socket
+  operation. The upload spine calls a provider only through an injected
+  `ObjectStorageTransport`; Stage 1 ships the abstract interface plus a
+  `NullTransport` whose every method raises, and `object_storage_resolve_transport`
+  returns null for every provider. `object-storage-upload --approve` therefore
+  fails closed with `live_transport_not_implemented` before any credential read
+  or byte read. `live_object_upload_adapter_implemented` and
+  `provider_api_call_implemented` are both false. Making a real PUT requires a
+  Stage-2 code change that adds an import and rewires the resolver — it cannot
+  land silently. No new dependency was added (still PyYAML only).
+- Hardened the shared object-storage manifest writer
+  (`update_manifest_with_object_storage_upload_evidence`, used by the existing
+  upload-evidence command): it now holds the shared manifest lock and writes via
+  a temp+fsync+`os.replace` atomic writer, so a crash mid-write or a concurrent
+  objet-capture can no longer corrupt the manifest. This fix is additive and
+  benefits the existing evidence command too.
+- Secret discipline is a direct-value containment guard: both resolved key
+  values are compared as substrings against the fully-serialized output on every
+  exit path before any write, backed by the existing regex/location scanners.
+  Execution receipts and the crash-safe append-only resume ledger are built from
+  a fixed scalar allowlist, never from provider bodies or caught exception args;
+  no request headers, `Authorization`, `StringToSign`, `CanonicalRequest`, or
+  provider error body is ever recorded.
+- Added a doctor check for object-storage execution receipts, a new
+  `object-storage-upload-receipt.schema.json`, and read-only MCP tools
+  `object_storage_upload_plan` and `object_storage_upload_verify`. This is Stage
+  1 of a staged rollout; the adapter cannot upload to a provider yet.
+
 ## v0.3.162 - 2026-07-03
 
 - Added `archive remint-reconcile`, an honest mint-receipt reconcile that

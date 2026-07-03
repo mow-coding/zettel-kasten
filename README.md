@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.162 pre-release
+v0.3.163 pre-release
 ```
 
-Previous public baseline: v0.3.161 pre-release.
+Previous public baseline: v0.3.162 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -158,6 +158,7 @@ Object storage:
 - manifest-aware object-storage recommendation matching with surfaced bucket names, exact next commands, and Cloudflare R2 setup field guidance,
 - object-storage adapter readiness planning, operation request packaging, upload execution-contract planning, and presigned URL planning,
 - approval-gated external upload evidence registration and read-only upload evidence auditing before live provider adapters,
+- Stage 1 of the live upload adapter as approval-gated `object-storage-upload-plan`/`-verify`/`object-storage-upload` commands with digest-aware idempotency, local RAW-byte verification, and hardened atomic manifest writes, that ships no live transport and fails `--approve` closed until a later human-gated stage,
 
 IMAP:
 
