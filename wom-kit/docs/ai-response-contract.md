@@ -42,6 +42,14 @@ and the `ai-response-concept-guide --topic git_infra_terms` set). This is
 guidance an operator AI applies while writing; the command validates nothing and
 enforces nothing.
 
+The same runtime surfaces carry the AI-Operator Discipline norms an operator AI
+applies while acting — provenance fidelity (record the source the human actually
+encountered, never silently substitute a "more authoritative" one), enumerating
+available tools before declaring a task impossible, and carrying
+already-established/approved state instead of re-asking. Like the plain-language
+convention, these are guidance the AI applies; this contract validates nothing and
+enforces nothing about them.
+
 ## Related Taxonomies
 
 The command ties together:

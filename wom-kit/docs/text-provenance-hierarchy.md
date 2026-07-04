@@ -1,7 +1,7 @@
 # Text Provenance Hierarchy
 
-Status: planning baseline
-Date: 2026-05-23
+Status: planning baseline with encountered-source fidelity (source-substitution axis)
+Date: 2026-07-04
 
 This document clarifies an important rule:
 
@@ -229,6 +229,55 @@ But the `zet` should know whether it is based on:
 - human-reviewed correction.
 
 That distinction belongs in provenance.
+
+## 7. Encountered-Source Fidelity (Source-Substitution Axis)
+
+Sections 1-6 answer one question: given the source object the human encountered,
+which layer is a text artifact, and how much authority does it carry? The L0 rule
+in section 2 is the **derivation-tool axis**: do not overwrite the source object
+just because a better parser, OCR model, or AI model appears later.
+
+There is a second, orthogonal axis: **which source object the human actually
+encountered**. These are different concerns:
+
+```text
+derivation-tool axis   -> do not re-derive/overwrite the object with a "better tool"
+source-substitution axis -> do not replace the encountered source with a "better source"
+```
+
+The rule for the source-substitution axis:
+
+```text
+record the source the human actually encountered,
+not the "more authoritative" one behind it
+```
+
+If a person watched a Korean-subtitled edition of a video, read a specific
+translation of a book, or saw one particular re-upload, THAT is the source object
+of their thought. The archive should not silently "upgrade" it to the
+original-language video, the first edition, or the canonical master — even when
+that other source is objectively more authoritative. Substituting the source
+corrupts the provenance of the user's actual encounter: the note now cites
+something the user never saw.
+
+Concretely:
+
+- The encountered source (the exact video/edition/translation/language) is the L0
+  object that receives the `object_id` and anchors the provenance.
+- A "more authoritative" or "original" source is not a correction. If it is worth
+  recording, add it as a SEPARATE reference (for example a related or `derived_from`
+  source), never as a replacement of the encountered one.
+- When a better source exists, the operator ASKS the human rather than swapping it
+  in. The human may want both, or may care only about what they saw.
+
+This complements the derivation-tool axis: one protects the object from being
+re-derived by a newer tool; the other protects the object from being swapped for a
+different, "more authoritative" source. Both preserve the same thing — the truth of
+what the user's memory is actually based on. The behavioral norm for operator AIs
+is stated as PROVENANCE FIDELITY in the AI-Operator Discipline section of the
+runtime surfaces (the AGENTS.md templates, the runtime skill, and
+`wom-ai-runtime-skill-plugin-layer.md`); it is guidance the AI applies, not a check
+WOM enforces.
 
 See also `notion-page-snapshot-model.md` for the provider page snapshot
 boundary.

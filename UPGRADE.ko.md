@@ -152,6 +152,31 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.169` To `v0.3.170`
+
+이 release는 runtime AI 운영자 규율 규범을 추가합니다. 문서 전용이며
+추가적(additive)입니다. 명령·스키마·receipt·archive 변경이 없고, 새로 WOM이
+강제하는 검사도 없습니다. 마이그레이션은 필요 없습니다.
+
+운영자에게 보이는 변경:
+
+- **runtime 표면에 새 `AI-Operator Discipline` 섹션.** 세 `AGENTS.md`
+  템플릿(personal/company/family), runtime `SKILL.md`,
+  `wom-ai-runtime-skill-plugin-layer.md`에 운영자 AI가 지키는 세 가지 행동 규범을
+  담았습니다. 사용자가 실제로 접한 출처를 기록하고 "더 권위 있는"/원본으로 조용히
+  바꾸지 말 것, 어떤 작업을 불가능하다고 선언하거나 낮춰 처리하기 전에 설치·사용
+  가능한 도구를 먼저 열거할 것, 이미 설정·승인된 상태를 다시 묻지 말고 이어받을 것.
+  옛 `AGENTS.md`를 실제 archive에 복사해 두었다면 새 섹션을 추가해도 되지만, 하지
+  않아도 아무것도 깨지지 않습니다. 명령 동작은 바뀌지 않습니다.
+- **`text-provenance-hierarchy.md`에 새 source-substitution 축.** `## 7.
+  Encountered-Source Fidelity` 하위 절이 두 provenance 축(기존 derivation-tool
+  축과 새 source-substitution 축)을 명시합니다. 문서 전용이며, provenance 모델에
+  새 필수 필드는 없습니다.
+- **강제가 아니라 지침.** WOM은 provenance fidelity, 도구 열거, 상태 이어받기를
+  검증·강제하지 않으며, 이 release는 그런 검사를 추가하지 않습니다.
+  `ai-response-concept-guide`의 topic enum은 그대로입니다.
+  `wom-kit/docs/releases/v0.3.170.md`를 보세요.
+
 ## From `v0.3.168` To `v0.3.169`
 
 이 release는 read-only 운영자 피드백 전달 ledger와 승인형 일괄 mark-delivered

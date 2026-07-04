@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.169 pre-release
+v0.3.170 pre-release
 ```
 
-Previous public baseline: v0.3.168 pre-release.
+Previous public baseline: v0.3.169 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -118,6 +118,7 @@ approval-gated write, or docs-only), see the
 - AI token usage observability through read-only `archive ai-usage-plan --dry-run`, approval-gated `archive ai-usage-record --approve`, and read-only `archive ai-usage-report --dry-run`, so WOM can estimate explicit context packs, record non-secret runtime token counters, and aggregate bottlenecks without storing prompts or responses,
 - read-only `archive ai-response-concept-guide --dry-run` for beginner-facing AI explanation cards about sha256 object identity vs location, manifests vs zets, the objet -> derived text -> zet layer split, operational term translations for edge types, lifecycle states, and connection kinds including `contains` for structural child page/database containment, plus safe routing to Notion import material-clue audits, source-map material-link planning, connection import planning, nested tree recovery planning, and ancestor crawl request planning when provider locators were omitted from imported zettel bodies or structural relations need model review, without overclaiming upload, availability, stronger tie meaning, or forced edge-type mappings,
 - a normative plain-language convention on the operator-facing runtime surfaces (`AGENTS.md` templates, the runtime skill, and the plugin-layer doc) telling an operator AI to translate git/infrastructure/WOM-internal jargon into everyday language for humans while keeping the exact term in parentheses or logs, backed by a read-only `ai-response-concept-guide --topic git_infra_terms` lookup layer; it is guidance the AI applies in human-facing prose only, not a WOM-enforced check,
+- a normative AI-Operator Discipline section on the same runtime surfaces stating three behavioral norms an operator AI applies: record the source the human actually encountered and never silently substitute a "more authoritative" one (with a matching source-substitution axis in the provenance hierarchy), enumerate the installed/available tools before declaring a task impossible or degrading it, and carry forward already-established/approved state instead of re-asking; it is guidance the AI applies, not a check WOM validates or enforces,
 
 ### Provider integrations
 

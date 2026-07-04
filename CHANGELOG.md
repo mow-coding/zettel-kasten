@@ -6,6 +6,37 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.170 - 2026-07-04
+
+Runtime AI-operator discipline. A normative "AI-Operator Discipline" section is
+added to the operator-facing runtime surfaces, plus a complementary
+source-substitution axis in the provenance model. Docs-only and additive; no
+command, schema, receipt, or archive change, and no new WOM-enforced check.
+
+- New normative `## AI-Operator Discipline` section on the runtime-visible
+  surfaces — the three `AGENTS.md` templates (personal/company/family, identical
+  block), the runtime `SKILL.md`, and `wom-ai-runtime-skill-plugin-layer.md` (with
+  matching `Skill Template` mirror bullets) — stating three behavioral norms an
+  operator AI applies: (a) PROVENANCE FIDELITY — record the source the human
+  actually encountered (the exact video/edition/translation/language they saw);
+  never silently substitute a "more authoritative"/original source; if a better
+  source exists, ASK, and keep it as a SEPARATE ref, not a replacement; (b)
+  ENUMERATE TOOLS BEFORE DECLARING IMPOSSIBLE — check installed/available tools
+  (local CLIs, MCP servers, the derive-text tool-readiness surface) before saying a
+  task cannot be done or degrading it, rather than concluding from one or two
+  probes; (c) CARRY ESTABLISHED STATE — carry forward already set-up/approved state
+  (session or `ops/operational-context.yml`) instead of re-asking as if first-time.
+- `text-provenance-hierarchy.md` gains a new `## 7. Encountered-Source Fidelity
+  (Source-Substitution Axis)` subsection that names both axes explicitly: the
+  existing L0 derivation-tool axis (do not overwrite an object because a better
+  parser/OCR/model appears) and the new source-substitution axis (do not replace
+  the source the human actually encountered with a "more authoritative" one). The
+  two are complementary; both preserve the provenance of the user's actual thought.
+- One-line descriptive references from `ai-response-concept-guide.md` and
+  `ai-response-contract.md` point to the discipline norms. These are guidance an
+  operator AI applies; the commands validate nothing and enforce nothing. WOM does
+  not validate provenance fidelity, tool enumeration, or state carry-over.
+
 ## v0.3.169 - 2026-07-04
 
 Operator-feedback delivery ledger and batched mark-delivered. Both commands are

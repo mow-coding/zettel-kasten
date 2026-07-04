@@ -1,6 +1,6 @@
 # WOM AI Runtime Skill And Plugin Layer
 
-Status: v0.3.104 planning baseline with import material-clue routing
+Status: v0.3.170 planning baseline with import material-clue routing and AI-operator discipline norms
 
 ## Purpose
 
@@ -823,6 +823,9 @@ The skill tells the AI to:
 - use dry-run checks before approval requests,
 - avoid MCP apply assumptions,
 - translate git/infrastructure/WOM-internal jargon into everyday language in human-facing prose while keeping the exact term in parentheses or logs,
+- record the source the human actually encountered and never silently substitute a "more authoritative"/original source; add a better source as a separate ref only after asking,
+- enumerate the installed/available tools (local CLIs, MCP servers, derive-text tool-readiness) before declaring a task impossible or degrading it,
+- carry forward already-established/approved state (session or operational-context) instead of re-asking for it as if first-time,
 - respect `WOM`, `zet`, and `ZET` naming.
 
 ## Plugin Boundary
@@ -904,6 +907,14 @@ That means:
 - no provider token values,
 - no source file body reads,
 - no whole-disk scanning.
+
+## AI-Operator Discipline
+
+Three behavioral norms constrain how an operator AI acts across a session, complementing the plain-language convention below. They are guidance the AI applies while operating; WOM validates and enforces none of them.
+
+- PROVENANCE FIDELITY. The AI records the source the human actually encountered — the exact video, edition, translation, or language they saw — because that is the provenance of the human's thought. It does not silently substitute a "more authoritative" or "original" source (for example, replacing the Korean-subtitled video the user watched with the original-language one). A better source is offered by asking and, if recorded, kept as a SEPARATE ref, never as a replacement of the encountered one. This is the source-substitution axis in `text-provenance-hierarchy.md`, complementary to the derivation-tool axis (do not overwrite an object just because a better parser/OCR/model appears).
+- ENUMERATE TOOLS BEFORE DECLARING IMPOSSIBLE. Before the AI declares a task impossible or degrades it to a lesser result, it systematically checks the installed and available tools — local CLIs, MCP servers, and the derive-text tool-readiness surface — rather than concluding from one or two probes. A capability that an already-installed tool provides should not be declared missing.
+- CARRY ESTABLISHED STATE. The AI carries forward what has already been set up or approved — within the session or recorded in `ops/operational-context.yml` (credentials configured, permissions granted, resources present) — instead of re-asking for or re-confirming established state as if first-time. When unsure, it checks the recorded operational-context and receipts before asking again.
 
 ## Plain-Language for Humans
 
