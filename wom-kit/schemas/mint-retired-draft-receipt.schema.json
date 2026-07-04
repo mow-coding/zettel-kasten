@@ -32,6 +32,19 @@
     "snapshot": {"type": "object"},
     "zettel": {"type": "object"},
     "result": {"type": "object"},
+    "reconcile": {
+      "type": "object",
+      "description": "Append-only history of retire-draft-reconcile events (v0.3.167 Item 2). Latest event mirrored at the top level.",
+      "properties": {
+        "history": {"type": "array", "items": {"type": "object"}},
+        "reconciled_at": {"type": "string"},
+        "reconciled_by": {"type": "string"},
+        "drift_class": {"type": "string", "enum": ["clean", "format_drift", "content_change"]},
+        "content_change_ack": {"type": "boolean"},
+        "bom_stripped": {"type": "boolean"},
+        "ref_reports": {"type": "array", "items": {"type": "object"}}
+      }
+    },
     "warnings": {
       "type": "array",
       "items": {"type": "string"}

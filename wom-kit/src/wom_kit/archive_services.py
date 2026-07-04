@@ -1108,6 +1108,8 @@ MINT_RETIRED_DRAFT_RECEIPTS_DIR = "receipts/mint/retired-drafts"
 MINT_BATCH_RECEIPTS_DIR = "receipts/mint/batches"
 MINT_RETIRED_DRAFT_BATCH_RECEIPTS_DIR = "receipts/mint/retired-drafts/batches"
 MINT_RECONCILE_RECEIPTS_DIR = "receipts/mint/reconciles"
+# v0.3.167 Item 2: sibling audit receipts for retire-draft-reconcile.
+MINT_RETIRE_DRAFT_RECONCILE_RECEIPTS_DIR = "receipts/mint/retired-draft-reconciles"
 # Reserved for the deferred remint-reconcile-batch tier (do not implement now):
 MINT_RECONCILE_BATCH_RECEIPTS_DIR = "receipts/mint/reconciles/batches"
 # Frontmatter keys mint injects/manages on the canonical (see mint_zettel where it
@@ -9402,6 +9404,7 @@ def remint_reconcile_plan(
             "mint_receipt_path": receipt_relative,
             "draft_snapshot_path": snapshot_relative,
             "drift_class": "unclassified",
+            "classification_basis": "content_change_fallback",
             "content_change_ack_required": False,
             "current_canonical_text": canonical_text,
             "frontmatter_field_changes": [],
@@ -9412,16 +9415,21 @@ def remint_reconcile_plan(
             "writes": "none",
         }
 
-    # R5: is the snapshot a clean body anchor? The snapshot holds the raw draft
-    # bytes (frontmatter + body). It can be trusted as a BODY anchor only when its
-    # raw sha still matches the recorded sha (byte-identical to mint time). If it
-    # differs at all we cannot re-derive the original bytes to prove the drift is
-    # newline/BOM-only, so we FAIL SAFE: not a clean anchor -> content_change.
-    # (This also covers missing / BOM'd / otherwise-mutated snapshots.)
+    # Three-tier anchor classification (locked spec v0.3.167, Item 1). The snapshot
+    # holds the raw draft bytes (frontmatter + body).
+    #   Tier A  clean_anchor            : raw sha == recorded sha (byte-identical).
+    #   Tier B  normalized_content_match: raw sha DIFFERS but the drift is PROVABLY
+    #                                     newline/BOM-only (Proof 1 body identity +
+    #                                     Proof 2 raw-vs-normalized delta guard) AND
+    #                                     the receipt-sourced frontmatter diff is EMPTY.
+    #   Tier C  content_change (fallback): snapshot missing/unreadable, OR any doubt.
+    # The prime directive is the fail-safe default: ANY uncertainty -> content_change.
     fell_back = "Draft snapshot is not a clean anchor; classification fell back to content_change."
     snapshot_body: str | None = None
     snapshot_frontmatter: dict[str, Any] = {}
-    snapshot_is_clean_anchor = False
+    snapshot_raw: bytes | None = None
+    snapshot_is_clean_anchor = False  # Tier A
+    snapshot_is_normalized_anchor = False  # Tier B
     if snapshot_path is None or not snapshot_path.is_file():
         warnings.append(fell_back)
     else:
@@ -9433,48 +9441,102 @@ def remint_reconcile_plan(
             and actual_snapshot_sha == expected_snapshot_sha
         )
         try:
+            snapshot_raw = snapshot_path.read_bytes()
             snapshot_text = snapshot_path.read_text(encoding="utf-8-sig")
             snapshot_frontmatter, snapshot_body = split_zettel_text(snapshot_text)
             snapshot_frontmatter = json_safe(snapshot_frontmatter)
         except (OSError, UnicodeError, ArchiveServiceError):
             snapshot_body = None
+            snapshot_raw = None
         if snapshot_body is None:
             warnings.append(fell_back)
         elif sha_ok:
-            snapshot_is_clean_anchor = True
+            snapshot_is_clean_anchor = True  # Tier A
+        elif snapshot_raw is not None and raw_bytes_drift_is_newline_or_bom_only(snapshot_raw):
+            # Tier B candidate: the snapshot's OWN raw-vs-normalized delta is provably
+            # newline/BOM-only (Proof 2). The final grant still requires Proof 1 (body
+            # identity) AND an EMPTY receipt-sourced frontmatter diff below. The
+            # snapshot is NOT sha-anchored here, so its frontmatter is NOT trusted:
+            # the expectation is sourced from the mint receipt (Item 1.4), never from
+            # the drifted snapshot's own frontmatter.
+            snapshot_is_normalized_anchor = True
+            warnings.append(
+                "Draft snapshot differs from its recorded sha256 but its drift is "
+                "newline/BOM-only; using it as a normalized content anchor (Tier B)."
+            )
         else:
+            # Raw drift carries a non-newline/BOM byte change (content-tampered) ->
+            # fail safe. This is the case a snapshot carrying `+ HUMAN EDIT` hits when
+            # its raw bytes changed by more than CR/BOM.
             warnings.append("Draft snapshot differs from its recorded sha256.")
             warnings.append(fell_back)
 
-    # Body identity (R2a): current canonical body vs clean snapshot body.
+    # Body identity (Proof 1): current canonical body vs snapshot body, normalized.
+    # Applies under BOTH Tier A (clean) and Tier B (normalized) anchors.
     body_changed: bool | None = None
     body_identical = False
-    if snapshot_is_clean_anchor and snapshot_body is not None:
+    if (snapshot_is_clean_anchor or snapshot_is_normalized_anchor) and snapshot_body is not None:
         body_identical = bytes_match_after_normalization(
             canonical_body.encode("utf-8"), snapshot_body.encode("utf-8")
         )
         body_changed = not body_identical
 
-    # Content-field decoration (R2b). When the snapshot is a clean anchor we re-derive
-    # the FULL canonical content frontmatter mint would have produced (from the draft)
-    # and compare EVERY content field against the current canonical. This closes the
-    # title-edit hole AND every sibling hole (kind/visibility/facets/provenance/edges/
-    # created_at/...): any canonical-only content edit is detected here.
-    # When the snapshot is NOT clean we cannot reconstruct the full frontmatter, so we
-    # surface only a best-effort decoration from the receipt's recorded zettel.title/id
-    # (informational only; class is already forced to content_change below).
+    # Frontmatter field-diff (decoration + gate).
+    #
+    # Tier A trusts the snapshot's own frontmatter (it is sha-anchored) and
+    # reconstructs the FULL mint expectation from it, catching an edit to ANY content
+    # field (visibility, kind, facets, provenance, edges, created_at, ...). That is the
+    # R0 guarantee: no content field is invisible.
+    #
+    # Tier B must NOT sha-trust the drifted snapshot's frontmatter (it is only
+    # newline/BOM-anchored, not sha-anchored). Two independent tamper vectors exist and
+    # BOTH must be closed before granting format_drift, so the Tier B gate is the UNION
+    # of two diffs (any non-empty union member -> content_change):
+    #   (1) FULL-FIELD snapshot-vs-canonical diff (same primitive Tier A uses). This
+    #       catches a canonical-only edit to ANY content field, including the
+    #       non-id/title fields the mint receipt never records (visibility, kind,
+    #       facets, ...). Without this, a canonical `visibility: private->public` edit
+    #       under an untampered snapshot would diff EMPTY and be laundered to
+    #       format_drift -- a prime-directive violation (content_change misclassified).
+    #   (2) RECEIPT cross-check of the fields the mint receipt DID record (id/title).
+    #       This catches the residual case where the attacker tampers the SNAPSHOT's
+    #       frontmatter to match a tampered canonical (so the snapshot-vs-canonical diff
+    #       in (1) would reproduce itself and read empty). The mint receipt's recorded
+    #       zettel is sha-independent of the snapshot, so a tampered title still
+    #       surfaces here.
+    # The union removes the snapshot from the trust path for every recorded field and
+    # forces content_change on any drifted unrecorded field. Tier C (content_change
+    # fallback) uses only the receipt-sourced decoration (it is already the strict path).
     if snapshot_is_clean_anchor:
         expected = _reconcile_expected_canonical_frontmatter(snapshot_frontmatter)
         frontmatter_field_changes = _reconcile_content_field_changes(expected, canonical_frontmatter)
+    elif snapshot_is_normalized_anchor:
+        expected = _reconcile_expected_canonical_frontmatter(snapshot_frontmatter)
+        full_field_changes = _reconcile_content_field_changes(expected, canonical_frontmatter)
+        recorded_changes = _reconcile_recorded_field_changes(receipt_zettel, canonical_frontmatter)
+        # Union by field name (deterministic), preferring the full-field entry so the
+        # decoration carries the reconstructed receipt_value where available.
+        by_field: dict[str, dict[str, Any]] = {}
+        for change in recorded_changes:
+            by_field[change["field"]] = change
+        for change in full_field_changes:
+            by_field[change["field"]] = change
+        frontmatter_field_changes = [by_field[field] for field in sorted(by_field)]
     else:
         frontmatter_field_changes = _reconcile_recorded_field_changes(receipt_zettel, canonical_frontmatter)
 
-    # R2: format_drift only when body is identical via a CLEAN snapshot AND no
-    # content frontmatter field changed. Any doubt -> content_change.
-    if snapshot_is_clean_anchor and body_identical and not frontmatter_field_changes:
+    # Final predicate: format_drift ONLY when an anchor (Tier A or B) grants body
+    # identity AND no frontmatter content field changed. Any doubt -> content_change.
+    if (
+        (snapshot_is_clean_anchor or snapshot_is_normalized_anchor)
+        and body_identical
+        and not frontmatter_field_changes
+    ):
         drift_class = "format_drift"
+        classification_basis = "clean_anchor" if snapshot_is_clean_anchor else "normalized_content_match"
     else:
         drift_class = "content_change"
+        classification_basis = "content_change_fallback"
 
     content_change_ack_required = drift_class == "content_change"
 
@@ -9487,6 +9549,7 @@ def remint_reconcile_plan(
         "mint_receipt_path": receipt_relative,
         "draft_snapshot_path": snapshot_relative,
         "drift_class": drift_class,
+        "classification_basis": classification_basis,
         "content_change_ack_required": content_change_ack_required,
         "current_canonical_text": canonical_text,
         "frontmatter_field_changes": frontmatter_field_changes,
@@ -9512,11 +9575,15 @@ def _reconcile_provenance_block(
     new_snapshot_sha: Any,
     normalized_content_digest: str,
     reconcile_receipt_relative: str,
+    classification_basis: str = "content_change_fallback",
+    bom_stripped: bool = False,
 ) -> dict[str, Any]:
     return {
         "reconciled_at": now,
         "reconciled_by": reviewed_by,
         "drift_class": drift_class,
+        "classification_basis": classification_basis,
+        "bom_stripped": bom_stripped,
         "content_change_ack": content_change_ack,
         "prior_target_sha256": prior_target_sha,
         "prior_source_sha256": prior_source_sha,
@@ -9561,6 +9628,25 @@ def _atomic_write_text(path: Path, text: str) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def _atomic_write(path: Path, data: bytes) -> None:
+    """Durable temp+fsync+os.replace writer for RAW bytes (byte-exact).
+
+    Used by --strip-bom so the rewrite is `original[3:]` byte-for-byte with no
+    text re-encoding or newline translation. A crash before os.replace leaves the
+    original file byte-identical; the temp part-file is always cleaned up.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / (path.name + ".part-" + secrets.token_hex(8))
+    try:
+        with tmp.open("wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def remint_reconcile_apply(
     archive_root: Path | str,
     *,
@@ -9568,11 +9654,19 @@ def remint_reconcile_apply(
     relative_path: str | None = None,
     reviewed_by: str,
     content_changed_ack: bool = False,
+    strip_bom: bool = False,
 ) -> dict[str, Any]:
     """Re-issue an honest mint receipt after human review. Writes both receipts.
 
     Refuses to write unless the plan is ok and the content_change ack gate (R3) is
     satisfied. Recomputes shas from CURRENT on-disk bytes; never edits content.
+
+    strip_bom (Item 3): opt-in removal of a single leading UTF-8 BOM from the
+    canonical file. Stripping a leading BOM is format_drift BY DEFINITION (text
+    content unchanged), but it NEVER launders a content_change: when the class is
+    content_change the normal ack gate above still applies, and the BOM strip
+    proceeds under that already-acked run. Guards: no-op refusal when no leading
+    BOM; a hard normalized-content invariant asserted before the atomic rewrite.
     """
     reviewer = (reviewed_by or "").strip()
     if not reviewer:
@@ -9584,6 +9678,7 @@ def remint_reconcile_apply(
         raise ArchiveServiceError("Reconcile blocked: " + "; ".join(str(b) for b in plan.get("blockers", [])))
 
     drift_class = plan["drift_class"]
+    classification_basis = plan.get("classification_basis") or "content_change_fallback"
     if drift_class == "content_change" and not content_changed_ack:
         raise ArchiveServiceError(
             "Reconcile blocked: drift classified as content_change; rerun with --content-changed-ack to approve."
@@ -9596,6 +9691,29 @@ def remint_reconcile_apply(
 
     receipt_path = resolve_archive_relative_path(root, receipt_relative)
     canonical_path = resolve_archive_relative_path(root, canonical_relative)
+
+    # Item 3: opt-in leading-BOM strip on the canonical file, BEFORE any sha recompute
+    # so the re-issued target.sha256 binds the stripped bytes. Never bypasses the ack
+    # gate above (a content_change is already acked here). Refuses to touch a file with
+    # no leading BOM, and asserts the content-preserving invariant before committing.
+    bom_stripped = False
+    bom_strip_note: str | None = None
+    if strip_bom:
+        before = canonical_path.read_bytes()
+        if not before.startswith(b"\xef\xbb\xbf"):
+            bom_strip_note = "no leading BOM present; nothing stripped"
+        else:
+            after = before[3:]
+            # Belt-and-suspenders (Item 3.1b): the rewrite must be content-preserving
+            # under the ONE normalized-equality definition; else abort, write nothing.
+            if bytes_normalized_for_content_compare(before) != bytes_normalized_for_content_compare(after):
+                raise ArchiveServiceError(
+                    "Reconcile blocked: --strip-bom would change normalized content; aborted without writing."
+                )
+            _atomic_write(canonical_path, after)
+            bom_stripped = True
+            bom_strip_note = "stripped one leading UTF-8 BOM from canonical"
+
     receipt = read_json_object(receipt_path, "Mint receipt")
 
     source_block = receipt.get("source") if isinstance(receipt.get("source"), dict) else {}
@@ -9664,6 +9782,8 @@ def remint_reconcile_apply(
         new_snapshot_sha=new_snapshot_sha,
         normalized_content_digest=normalized_content_digest,
         reconcile_receipt_relative=reconcile_receipt_relative,
+        classification_basis=classification_basis,
+        bom_stripped=bom_stripped,
     )
 
     # In-place mint-receipt update: preserve ALL fields; only recompute the three
@@ -9710,6 +9830,8 @@ def remint_reconcile_apply(
             "new_sha256": new_mint_receipt_sha,
         },
         "drift_class": drift_class,
+        "classification_basis": classification_basis,
+        "bom_stripped": bom_stripped,
         "content_change_ack": bool(content_changed_ack) if drift_class == "content_change" else False,
         "prior_target_sha256": prior_target_sha,
         "new_target_sha256": new_target_sha,
@@ -9734,6 +9856,8 @@ def remint_reconcile_apply(
             "dry_run": False,
             "reviewed_by": reviewer,
             "drift_class": drift_class,
+            "classification_basis": classification_basis,
+            "bom_stripped": bom_stripped,
             "content_change_ack": bool(content_changed_ack) if drift_class == "content_change" else False,
             "reconcile_receipt_path": reconcile_receipt_relative,
             "updated_paths": [receipt_relative],
@@ -9744,6 +9868,431 @@ def remint_reconcile_apply(
     )
     if source_note:
         result["source_note"] = source_note
+    if bom_strip_note:
+        result["bom_strip_note"] = bom_strip_note
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Honest retire-draft reconcile (v0.3.167 Item 2) — SIBLING of remint-reconcile.
+#
+# The retire receipt binds four raw-byte refs (source / target / mint_receipt /
+# snapshot). The `snapshot` and `target` refs drift for the SAME autocrlf/no-eol
+# reason as the mint snapshot, so this sibling INHERITS the Item 1 discipline:
+# Tier A raw-sha; Tier B normalized-content via the Proof-2 delta guard; else
+# content_change. The `mint_receipt` ref is a pure JSON pointer file with no
+# format dimension, so it stays raw-sha (content_change on any mismatch). The
+# `source` draft is removed at retirement, so a missing source is not a drift.
+#
+# The same prime directive holds: classification only DECORATES; every reconcile
+# shows on-disk content and is approval-gated; a content_change on ANY ref
+# requires --content-changed-ack; corruption is never masked.
+# ---------------------------------------------------------------------------
+
+# Refs whose bytes are text zettel-like content (newline/BOM can drift) vs the
+# pure JSON pointer ref that must stay raw-sha.
+_RETIRE_RECONCILE_TEXT_REFS = ("source", "target", "snapshot")
+_RETIRE_RECONCILE_POINTER_REFS = ("mint_receipt",)
+_RETIRE_RECONCILE_ALL_REFS = ("source", "target", "mint_receipt", "snapshot")
+
+
+def _retire_reconcile_normalized_digest(ref_path: Path | None) -> str | None:
+    if ref_path is None or not ref_path.is_file():
+        return None
+    try:
+        return hashlib.sha256(bytes_normalized_for_content_compare(ref_path.read_bytes())).hexdigest()
+    except OSError:
+        return None
+
+
+def _retire_reconcile_classify_ref(
+    *,
+    ref_name: str,
+    ref_path: Path | None,
+    recorded_sha: Any,
+    content_anchor_class: str | None = None,
+) -> dict[str, Any]:
+    """Classify ONE retire-receipt ref's drift. Fail-safe default is content_change.
+
+    Returns a per-ref decoration:
+      {ref, prior_sha256, new_sha256, drift_class, classification_basis,
+       normalized_content_digest, note}
+    drift_class is one of "clean" (no drift), "format_drift", "content_change".
+    - clean: current raw sha == recorded sha (Tier A).
+    - format_drift: granted ONLY on positive content-identity proof, NEVER from a
+      raw sha mismatch alone (a raw sha alone cannot distinguish newline drift from
+      newline-drift-plus-content-append). For the `target`/`snapshot` refs the proof
+      is the SHARED mint-reconcile classifier verdict (`content_anchor_class`):
+      Item 1 proves body identity (snapshot body vs canonical body, normalized) AND
+      frontmatter identity (receipt-sourced), so a format_drift there is genuinely
+      content-identical. The Proof-2 structural guard must also hold on THIS ref's
+      raw bytes (rejects lone-CR / binary corruption).
+    - content_change: any other mismatch, missing/unreadable file, pointer-ref
+      mismatch, or any doubt.
+    A retired `source` that no longer exists is NOT a drift; it is reported clean.
+    """
+    result: dict[str, Any] = {
+        "ref": ref_name,
+        "prior_sha256": recorded_sha,
+        "new_sha256": recorded_sha,
+        "drift_class": "clean",
+        "classification_basis": "clean_anchor",
+        "normalized_content_digest": _retire_reconcile_normalized_digest(ref_path)
+        if ref_name in _RETIRE_RECONCILE_TEXT_REFS
+        else None,
+        "note": None,
+    }
+    recorded_ok = isinstance(recorded_sha, str) and bool(SHA256_RE.match(recorded_sha or ""))
+    if ref_path is None or not ref_path.is_file():
+        if ref_name == "source":
+            result["note"] = "source draft no longer exists (removed at retirement); preserved recorded sha."
+            return result
+        result["drift_class"] = "content_change"
+        result["classification_basis"] = "content_change_fallback"
+        result["note"] = f"{ref_name} file is missing or unreadable; cannot prove format-only drift."
+        return result
+
+    actual_sha = sha256_path(ref_path)
+    result["new_sha256"] = actual_sha
+    if recorded_ok and actual_sha == recorded_sha:
+        return result  # clean (Tier A)
+
+    # Drifted. Pointer refs (JSON) have no format dimension -> content_change.
+    if ref_name in _RETIRE_RECONCILE_POINTER_REFS:
+        result["drift_class"] = "content_change"
+        result["classification_basis"] = "content_change_fallback"
+        result["note"] = f"{ref_name} pointer file sha differs; pointer refs are never format-only."
+        return result
+
+    # Text ref that drifted. format_drift requires BOTH:
+    #   (a) the Proof-2 structural guard on THIS ref's raw bytes (no lone-CR/binary
+    #       corruption), AND
+    #   (b) a POSITIVE content-identity proof. For target/snapshot that proof is the
+    #       shared mint-reconcile classifier verdict == "format_drift" (Item 1). With
+    #       no such anchor (e.g. the `source` draft, which is normally gone), a raw sha
+    #       mismatch alone is NOT proof of content-identity -> content_change.
+    try:
+        raw = ref_path.read_bytes()
+    except OSError:
+        result["drift_class"] = "content_change"
+        result["classification_basis"] = "content_change_fallback"
+        result["note"] = f"{ref_name} bytes unreadable; fell back to content_change."
+        return result
+    structural_ok = raw_bytes_drift_is_newline_or_bom_only(raw)
+    if structural_ok and content_anchor_class == "format_drift":
+        result["drift_class"] = "format_drift"
+        result["classification_basis"] = "normalized_content_match"
+        result["note"] = f"{ref_name} drift is newline/BOM-only and content-identical (format_drift)."
+    else:
+        result["drift_class"] = "content_change"
+        result["classification_basis"] = "content_change_fallback"
+        if not structural_ok:
+            result["note"] = f"{ref_name} carries a non-newline/BOM byte change (content_change)."
+        else:
+            result["note"] = f"{ref_name} sha drifted with no content-identity proof (content_change)."
+    return result
+
+
+def _retire_reconcile_load_receipt(
+    root: Path,
+    *,
+    zettel_id: str,
+    blockers: list[str],
+) -> tuple[str, Path | None, dict[str, Any]]:
+    """Locate and load the retire-draft receipt for a zettel id. Refuses (blocker)
+    when missing or not a retire_minted_draft receipt. Returns
+    (receipt_relative, receipt_path, receipt_dict)."""
+    zid = str(zettel_id or "").strip()
+    if not zid:
+        blockers.append("Retire-draft reconcile refused: a zettel id is required.")
+        return "", None, {}
+    receipt_relative = f"{MINT_RETIRED_DRAFT_RECEIPTS_DIR}/{zid}.retire-draft.json"
+    try:
+        receipt_path = resolve_archive_relative_path(root, receipt_relative)
+    except ArchivePathError:
+        blockers.append("Retire-draft reconcile refused: retire receipt path is unsafe.")
+        return receipt_relative, None, {}
+    if not receipt_path.is_file():
+        blockers.append("Retire-draft reconcile refused: no retire-draft receipt found for this id.")
+        return receipt_relative, receipt_path, {}
+    try:
+        receipt = read_json_object(receipt_path, "Retire-draft receipt")
+    except ArchiveServiceError:
+        blockers.append("Retire-draft reconcile refused: retire receipt is not valid JSON.")
+        return receipt_relative, receipt_path, {}
+    if receipt.get("action") != "retire_minted_draft":
+        blockers.append("Retire-draft reconcile refused: receipt action must be retire_minted_draft.")
+    return receipt_relative, receipt_path, receipt
+
+
+def _retire_reconcile_content_anchor_class(root: Path, zettel_id: str) -> str | None:
+    """Derive the SHARED mint-reconcile content-identity verdict for the canonical +
+    snapshot pair. This is the POSITIVE proof the retire target/snapshot refs need to
+    be allowed to format_drift: remint_reconcile_plan runs the full Item 1 classifier
+    (body identity vs the canonical, receipt-sourced frontmatter, Tier A/B anchors),
+    so its "format_drift" verdict means the canonical and snapshot are content-identical
+    modulo newline/BOM. Returns the drift_class string, or None if it cannot classify.
+    """
+    try:
+        plan = remint_reconcile_plan(root, zettel_id=zettel_id)
+    except (ArchiveServiceError, OSError):
+        return None
+    if not plan.get("ok"):
+        return None
+    dc = plan.get("drift_class")
+    return dc if isinstance(dc, str) else None
+
+
+def _retire_reconcile_build_ref_reports(
+    root: Path, receipt: dict[str, Any], content_anchor_class: str | None
+) -> list[dict[str, Any]]:
+    ref_reports: list[dict[str, Any]] = []
+    for ref_name in _RETIRE_RECONCILE_ALL_REFS:
+        section = receipt.get(ref_name) if isinstance(receipt.get(ref_name), dict) else {}
+        rel = section.get("path") if isinstance(section.get("path"), str) else None
+        ref_path: Path | None = None
+        if rel:
+            try:
+                ref_path = resolve_archive_relative_path(root, rel)
+            except ArchivePathError:
+                ref_path = None
+        # Only the target/snapshot refs may borrow the shared content-identity anchor.
+        anchor = content_anchor_class if ref_name in ("target", "snapshot") else None
+        report = _retire_reconcile_classify_ref(
+            ref_name=ref_name, ref_path=ref_path, recorded_sha=section.get("sha256"),
+            content_anchor_class=anchor,
+        )
+        report["path"] = rel
+        ref_reports.append(report)
+    return ref_reports
+
+
+def retire_draft_reconcile_plan(
+    archive_root: Path | str,
+    *,
+    zettel_id: str,
+) -> dict[str, Any]:
+    """Read/classify/preview an honest retire-draft-receipt reconcile. ZERO writes.
+
+    Recomputes the four raw-byte refs and classifies each drifted ref. A text ref
+    (target/snapshot) may be format_drift ONLY when the SHARED mint-reconcile
+    classifier proves the canonical+snapshot content-identical (Item 1) AND the
+    Proof-2 structural guard holds; otherwise content_change. Overall
+    content_change_ack is required when ANY ref is content_change. Never writes.
+    """
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    receipt_relative, receipt_path, receipt = _retire_reconcile_load_receipt(
+        root, zettel_id=zettel_id, blockers=blockers
+    )
+    zid = str(zettel_id or "").strip()
+
+    ref_reports: list[dict[str, Any]] = []
+    if not blockers:
+        content_anchor_class = _retire_reconcile_content_anchor_class(root, zid)
+        ref_reports = _retire_reconcile_build_ref_reports(root, receipt, content_anchor_class)
+
+    drifted = [r for r in ref_reports if r["drift_class"] != "clean"]
+    any_content_change = any(r["drift_class"] == "content_change" for r in drifted)
+    if not drifted and not blockers:
+        overall = "clean"
+    elif any_content_change:
+        overall = "content_change"
+    else:
+        overall = "format_drift"
+    content_change_ack_required = overall == "content_change"
+
+    if blockers:
+        return {
+            "ok": False,
+            "dry_run": True,
+            "action": "reconcile_retire_draft_receipt",
+            "zettel_id": zid,
+            "retire_receipt_path": receipt_relative,
+            "drift_class": "unclassified",
+            "content_change_ack_required": False,
+            "ref_reports": [],
+            "blockers": blockers,
+            "warnings": warnings,
+            "next_safe_actions": [],
+            "writes": "none",
+        }
+
+    return {
+        "ok": True,
+        "dry_run": True,
+        "action": "reconcile_retire_draft_receipt",
+        "zettel_id": zid,
+        "retire_receipt_path": receipt_relative,
+        "drift_class": overall,
+        "content_change_ack_required": content_change_ack_required,
+        "ref_reports": ref_reports,
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": [],
+        "writes": "none",
+    }
+
+
+def retire_draft_reconcile_apply(
+    archive_root: Path | str,
+    *,
+    zettel_id: str,
+    reviewed_by: str,
+    content_changed_ack: bool = False,
+    strip_bom: bool = False,
+) -> dict[str, Any]:
+    """Re-issue an honest retire-draft receipt after human review. Writes both the
+    updated retire receipt (recomputed ref shas + append-only reconcile history) and
+    a sibling immutable audit receipt. Refuses unless the plan is ok and the
+    content_change ack gate is satisfied. Never edits content (except an opt-in
+    --strip-bom on the canonical target, mirroring remint-reconcile Item 3)."""
+    reviewer = (reviewed_by or "").strip()
+    if not reviewer:
+        raise ArchiveServiceError("Retire-draft reconcile requires --reviewed-by.")
+    root = require_existing_archive_root(archive_root)
+    plan = retire_draft_reconcile_plan(root, zettel_id=zettel_id)
+    if not plan.get("ok"):
+        raise ArchiveServiceError(
+            "Retire-draft reconcile blocked: " + "; ".join(str(b) for b in plan.get("blockers", []))
+        )
+    overall = plan["drift_class"]
+    if overall == "content_change" and not content_changed_ack:
+        raise ArchiveServiceError(
+            "Retire-draft reconcile blocked: drift classified as content_change; rerun with --content-changed-ack to approve."
+        )
+
+    zid = plan["zettel_id"]
+    receipt_relative = plan["retire_receipt_path"]
+    receipt_path = resolve_archive_relative_path(root, receipt_relative)
+
+    # Item 3 parity: opt-in leading-BOM strip on the canonical TARGET ref BEFORE the
+    # ref shas are recomputed. Never bypasses the ack gate (a content_change is
+    # already acked here). No-op refusal when no leading BOM; content-preserving
+    # invariant asserted before the atomic rewrite.
+    bom_stripped = False
+    bom_strip_note: str | None = None
+    receipt = read_json_object(receipt_path, "Retire-draft receipt")
+    if strip_bom:
+        target_section = receipt.get("target") if isinstance(receipt.get("target"), dict) else {}
+        target_rel = target_section.get("path") if isinstance(target_section.get("path"), str) else None
+        target_path = None
+        if target_rel:
+            try:
+                target_path = resolve_archive_relative_path(root, target_rel)
+            except ArchivePathError:
+                target_path = None
+        if target_path is None or not target_path.is_file():
+            bom_strip_note = "target canonical unavailable; nothing stripped"
+        else:
+            before = target_path.read_bytes()
+            if not before.startswith(b"\xef\xbb\xbf"):
+                bom_strip_note = "no leading BOM present; nothing stripped"
+            else:
+                after = before[3:]
+                if bytes_normalized_for_content_compare(before) != bytes_normalized_for_content_compare(after):
+                    raise ArchiveServiceError(
+                        "Retire-draft reconcile blocked: --strip-bom would change normalized content; aborted without writing."
+                    )
+                _atomic_write(target_path, after)
+                bom_stripped = True
+                bom_strip_note = "stripped one leading UTF-8 BOM from target canonical"
+
+    # Recompute all four ref shas from CURRENT on-disk bytes, re-deriving the shared
+    # content-identity anchor AFTER any --strip-bom so the target/snapshot verdict
+    # reflects the post-strip bytes.
+    now = datetime.now().astimezone().replace(microsecond=0).isoformat()
+    prior_retire_receipt_sha = sha256_path(receipt_path)
+    updated_receipt = dict(receipt)
+    content_anchor_class = _retire_reconcile_content_anchor_class(root, zid)
+    ref_provenance = _retire_reconcile_build_ref_reports(root, receipt, content_anchor_class)
+    for report in ref_provenance:
+        ref_name = report["ref"]
+        section = receipt.get(ref_name) if isinstance(receipt.get(ref_name), dict) else {}
+        updated_section = dict(section)
+        # For a present, readable ref, bind the current sha. For a removed source,
+        # preserve the recorded sha (report.new_sha256 == recorded).
+        updated_section["sha256"] = report["new_sha256"]
+        updated_receipt[ref_name] = updated_section
+
+    provenance = {
+        "reconciled_at": now,
+        "reconciled_by": reviewer,
+        "drift_class": overall,
+        "content_change_ack": bool(content_changed_ack) if overall == "content_change" else False,
+        "bom_stripped": bom_stripped,
+        "ref_reports": ref_provenance,
+    }
+    existing = updated_receipt.get("reconcile")
+    history: list[dict[str, Any]] = []
+    if isinstance(existing, dict) and isinstance(existing.get("history"), list):
+        history = list(existing["history"])
+    history.append(provenance)
+    reconcile_field = {"history": history}
+    reconcile_field.update(provenance)
+    updated_receipt["reconcile"] = reconcile_field
+    _atomic_write_json(receipt_path, updated_receipt)
+    new_retire_receipt_sha = sha256_path(receipt_path)
+
+    # Sibling immutable audit receipt with a monotonic suffix.
+    audit_relative = f"{MINT_RETIRE_DRAFT_RECONCILE_RECEIPTS_DIR}/{zid}.retire-draft-reconcile.json"
+    audit_path = resolve_archive_relative_path(root, audit_relative)
+    if audit_path.exists():
+        suffix = 2
+        while True:
+            candidate_relative = f"{MINT_RETIRE_DRAFT_RECONCILE_RECEIPTS_DIR}/{zid}.retire-draft-reconcile.{suffix}.json"
+            candidate_path = resolve_archive_relative_path(root, candidate_relative)
+            if not candidate_path.exists():
+                audit_relative = candidate_relative
+                audit_path = candidate_path
+                break
+            suffix += 1
+
+    audit_receipt = {
+        "receipt_id": f"receipt:retire-draft-reconcile:{zid}",
+        "receipt_path": audit_relative,
+        "action": "reconcile_retire_draft_receipt",
+        "dry_run": False,
+        "timestamp": now,
+        "archive_id": read_archive_id(root),
+        "authority_mode": MINT_AUTHORITY_MODE,
+        "reviewed_by": reviewer,
+        "zettel": {"id": zid},
+        "retire_receipt": {
+            "path": receipt_relative,
+            "prior_sha256": prior_retire_receipt_sha,
+            "new_sha256": new_retire_receipt_sha,
+        },
+        "drift_class": overall,
+        "content_change_ack": bool(content_changed_ack) if overall == "content_change" else False,
+        "bom_stripped": bom_stripped,
+        "ref_reports": ref_provenance,
+        "result": {
+            "updated_paths": [receipt_relative],
+            "created_paths": [audit_relative],
+        },
+    }
+    _atomic_write_json(audit_path, audit_receipt)
+
+    result = dict(plan)
+    result.update(
+        {
+            "ok": True,
+            "dry_run": False,
+            "reviewed_by": reviewer,
+            "drift_class": overall,
+            "content_change_ack": bool(content_changed_ack) if overall == "content_change" else False,
+            "bom_stripped": bom_stripped,
+            "ref_reports": ref_provenance,
+            "reconcile_receipt_path": audit_relative,
+            "updated_paths": [receipt_relative],
+            "created_paths": [audit_relative],
+            "writes": "applied",
+        }
+    )
+    if bom_strip_note:
+        result["bom_strip_note"] = bom_strip_note
     return result
 
 
@@ -57440,6 +57989,7 @@ def object_storage_upload_run(
     key_strategy: str = OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
     key_prefix: str | None = None,
     append_extension: bool = False,
+    multipart_threshold_bytes: int | None = None,
     transport: ObjectStorageTransport | None = None,
     send: Callable[..., dict[str, Any]] | None = None,
     endpoint_host: str | None = None,
@@ -57484,6 +58034,31 @@ def object_storage_upload_run(
     normalized_strategy = _object_storage_validate_key_strategy(
         key_strategy=key_strategy, key_prefix=key_prefix, blockers=blockers
     )
+
+    # Item 5 (v0.3.167): validation/testing aid. Default keeps the 5 GiB threshold.
+    # An override is CODE-BOUNDED to [OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES (64 MiB),
+    # OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES (5 GiB)]: below the part size would
+    # fragment a tiny object into sub-part-size parts (weakening the real part-split
+    # path); above the default is meaningless. Out-of-band -> blocker, run does not
+    # proceed. The override changes ONLY the recorded/used threshold, never the local
+    # sha256==object_id check nor the provider-HEAD-after gate.
+    effective_multipart_threshold_bytes = OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES
+    if multipart_threshold_bytes is not None:
+        if not isinstance(multipart_threshold_bytes, int) or isinstance(multipart_threshold_bytes, bool):
+            blockers.append("multipart_threshold_bytes must be an integer number of bytes.")
+        elif multipart_threshold_bytes < OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES:
+            blockers.append(
+                "multipart_threshold_bytes below the multipart part size floor "
+                f"({OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES} bytes); refuse to fragment "
+                "an object into sub-part-size parts."
+            )
+        elif multipart_threshold_bytes > OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES:
+            blockers.append(
+                "multipart_threshold_bytes above the default ceiling "
+                f"({OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES} bytes)."
+            )
+        else:
+            effective_multipart_threshold_bytes = multipart_threshold_bytes
 
     normalized_reviewer = str(reviewed_by or "").strip()
     if approve and not normalized_reviewer:
@@ -57795,7 +58370,7 @@ def object_storage_upload_run(
                             data_path=local_path,
                             size=size,
                             content_sha256=digest,
-                            multipart_threshold_bytes=OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
+                            multipart_threshold_bytes=effective_multipart_threshold_bytes,
                             skip_uploaded=skip_uploaded,
                             ledger=ledger,
                             sleep=sleep,
@@ -57823,6 +58398,7 @@ def object_storage_upload_run(
                             uploaded_at=uploaded_at,
                             key_strategy=normalized_strategy,
                             remote_key=remote_key,
+                            effective_multipart_threshold_bytes=effective_multipart_threshold_bytes,
                         )
                         # §6 leak gate on the fully-serialized receipt BEFORE write.
                         serialized = json.dumps(json_safe(receipt), ensure_ascii=False, default=str)
@@ -57893,7 +58469,14 @@ def object_storage_upload_run(
                 "total_put_ceiling": OBJECT_STORAGE_TOTAL_PUT_CEILING,
                 "backoff_ms_total": backoff_ms_run_total,
             },
-            "live_execution_allowed_now": False,
+            # RUN-outcome field (v0.3.167 Item 4): reports what THIS run actually did,
+            # not a static capability statement. It is True only on a real executed
+            # upload (not dry_run, no blockers); preview and blocked runs stay False.
+            # This mirrors the fetch-adapter run-outcome pattern ("...allowed_now":
+            # executed) and resolves the self-contradiction where an executed result
+            # carried live_execution_allowed_now:false. The static contract-preview
+            # capability fields elsewhere remain False (they are a different signal).
+            "live_execution_allowed_now": (not dry_run and not blockers),
             "blockers": unique_preserve_order(blockers),
             "warnings": unique_preserve_order(warnings),
         }
@@ -58475,6 +59058,7 @@ def _object_storage_build_execution_receipt(
     uploaded_at: str,
     key_strategy: str = OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
     remote_key: str | None = None,
+    effective_multipart_threshold_bytes: int = OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
 ) -> dict[str, Any]:
     """Assemble the execution receipt from a FIXED scalar allowlist (RC5).
 
@@ -58499,6 +59083,11 @@ def _object_storage_build_execution_receipt(
         "result_status": str(result.get("result_status") or "failed_upload"),
         "bytes_uploaded": int(result.get("bytes") or 0),
         "checksum_algorithm": OBJECT_STORAGE_CHECKSUM_ALGORITHM,
+        # Item 5 (v0.3.167): durable audit of the threshold actually used this run and
+        # how many parts the object was split into. Previously the threshold was
+        # nowhere in the receipt and part_count lived only in memory + the ledger row.
+        "effective_multipart_threshold_bytes": int(effective_multipart_threshold_bytes),
+        "part_count": int(result.get("part_count") or 0),
         "retry_summary": {
             "attempts": int(result.get("attempts") or 0),
             "last_status_class": str(result.get("result_status") or "failed_upload"),
@@ -62393,6 +62982,40 @@ def bytes_normalized_for_content_compare(data: bytes) -> bytes:
 
 def newline_normalized_bytes(path: Path) -> bytes:
     return bytes_normalized_for_content_compare(path.read_bytes())
+
+
+def raw_bytes_drift_is_newline_or_bom_only(raw: bytes) -> bool:
+    """PROOF 2 (locked spec v0.3.167, Item 1.3): raw drifted ONLY by newline/BOM.
+
+    Returns True iff `raw` differs from its own newline/BOM-normalized form ONLY by
+    `\\r` bytes and an optional single leading UTF-8 BOM — i.e. `raw` is exactly a
+    pure newline/BOM re-expansion of `normalized(raw)`, with NO other byte change.
+    This is what distinguishes "re-checked-out under autocrlf" (safe to anchor for
+    the BODY under Tier B) from "content-edited" (an appended/inline byte change,
+    which must fall to content_change). The delta this checks for is:
+      * an optional single leading `EF BB BF` (BOM), and
+      * any number of `\\r` bytes (from CRLF/CR line endings).
+    A content append/edit introduces bytes that are neither of those, so stripping
+    the optional leading BOM and deleting every `\\r` from `raw` cannot reproduce
+    the normalized form, and this returns False (fail-safe -> content_change).
+    """
+    normalized = bytes_normalized_for_content_compare(raw)
+    body = raw[3:] if raw.startswith(b"\xef\xbb\xbf") else raw
+    # Reconstruct raw's body from `normalized` using ONLY the two permitted format
+    # transforms and check it reproduces `body` byte-for-byte:
+    #   * CR/LF drift: every LF in `normalized` may have been a CRLF or a lone CR in
+    #     raw. We reconstruct by re-expanding each LF to CRLF and testing equality
+    #     against `body` after deleting CRs — a bijection that holds IFF every CR in
+    #     raw sits in a CRLF pair (autocrlf checkout) OR raw already had LF-only.
+    #   * BOM drift: stripped above.
+    # Concretely: deleting every CR from `body` must equal `normalized`, AND raw must
+    # contain no lone-CR (old-Mac) bytes that the normalizer would have folded to LF
+    # but our CR-deletion would drop — enforced by requiring `\r` only as `\r\n`.
+    if b"\r" in body.replace(b"\r\n", b""):
+        # A CR not part of a CRLF pair -> lone CR. Refuse (cannot prove format-only
+        # without risking a mid-content CR edit); fail safe to content_change.
+        return False
+    return body.replace(b"\r\n", b"\n") == normalized
 
 
 def bytes_match_after_normalization(left: bytes, right: bytes) -> bool:

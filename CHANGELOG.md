@@ -6,6 +6,50 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.167 - 2026-07-04
+
+- Snapshot-drift-aware `format_drift` classification for `remint-reconcile` (Item 1):
+  a new `normalized_content_match` anchor tier grants `format_drift` even when the
+  draft snapshot itself drifted, but ONLY behind two independent proofs sourced from
+  un-tampered inputs — normalized body identity AND a snapshot raw-vs-normalized
+  delta that is provably newline/BOM-only — plus an EMPTY frontmatter diff. Because
+  the drifted snapshot is not sha-anchored, that frontmatter diff is the union of a
+  full-field reconstruction over EVERY content field (`visibility`, `kind`, `facets`,
+  `provenance`, `edges`, `created_at`, `source_refs`, …) AND an `id`/`title`
+  cross-check against the **mint receipt**. This closes the tampered-snapshot hole in
+  full: a canonical edit to any content field — not just `id`/`title` — falls to
+  `content_change`, and a snapshot whose frontmatter was tampered to match a tampered
+  canonical is caught by the receipt cross-check. A new `classification_basis`
+  field records why a `format_drift` was granted. The prime directive is unchanged:
+  any uncertainty falls to `content_change` and requires `--content-changed-ack`.
+- New `retire-draft-reconcile` sibling command (Item 2): honestly reconciles a
+  retire-draft receipt's four refs (source/target/mint_receipt/snapshot) after
+  newline/BOM or content drift, inheriting the Item 1 discipline (a target/snapshot
+  ref is `format_drift` only when the shared mint-reconcile classifier proves the
+  canonical and snapshot content-identical; the `mint_receipt` pointer ref is
+  raw-sha only). The doctor now attaches a `suggested_command` route to the
+  previously-bare `mint_retired_draft_sha_mismatch` finding. New sibling audit
+  receipts live under `receipts/mint/retired-draft-reconciles/`, and the retire
+  receipt gains an append-only `reconcile` provenance block.
+- New opt-in `--strip-bom` flag on both reconcile commands (Item 3): removes exactly
+  the 3-byte leading UTF-8 BOM (`format_drift` by definition). No-op refusal when no
+  BOM is present, a content-preserving invariant asserted before an atomic rewrite,
+  and — the load-bearing guarantee — it NEVER bypasses the content-change ack gate.
+- `live_execution_allowed_now` honesty (Item 4): the object-storage upload
+  RUN-outcome field now truthfully reports an executed upload (`true` only on a real
+  executed run; `false` on preview/blocked), resolving the self-contradiction with
+  `execution_status: executed`. The static contract-preview capability fields are a
+  separate signal and are unchanged.
+- New `--multipart-threshold` validation/testing aid on `object-storage-upload`
+  (Item 5): the 5 GiB default is unchanged; an override is code-bounded to
+  `[64 MiB, 5 GiB]` (out-of-band is refused with a blocker). The effective threshold
+  and `part_count` are now recorded in the durable upload receipt. The override
+  affects only the recorded/used threshold, never the integrity checks.
+- `test_remint_reconcile_drifted_snapshot_falls_back_to_content_change` was revised
+  (its content subscenarios unchanged; new pure-format subcases added in a sibling
+  test that flip to `format_drift`). Two schema fields (`classification_basis`,
+  `bom_stripped`) and the retire/upload receipt fields are all additive.
+
 ## v0.3.166 - 2026-07-04
 
 - Added a selectable, recorded object-storage upload key strategy plus a safe

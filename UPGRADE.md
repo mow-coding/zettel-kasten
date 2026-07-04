@@ -163,6 +163,43 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.166` To `v0.3.167`
+
+This release extends the honest reconcile family (snapshot-drift-aware
+classification, a `retire-draft-reconcile` sibling, an opt-in `--strip-bom`),
+fixes the object-storage run-outcome `live_execution_allowed_now` field, and adds
+a bounded `--multipart-threshold` testing aid. All changes are additive; no
+migration is required.
+
+Operator-visible notes:
+
+- No archive migration and no hash change. Two new fields on the mint reconcile
+  audit receipt (`classification_basis`, `bom_stripped`), a new `reconcile`
+  provenance block on retire receipts, a new `retire-draft-reconcile-receipt.schema.json`,
+  and two new fields on the object-storage upload receipt
+  (`effective_multipart_threshold_bytes`, `part_count`) are all additive. No schema
+  uses `additionalProperties: false`, so existing receipts, manifests, and zets are
+  accepted as-is.
+- `remint-reconcile` now recognizes a `format_drift` even when the draft snapshot
+  itself drifted, but only behind two independent proofs and a full-field frontmatter
+  check (an all-fields reconstruction over every content field plus an `id`/`title`
+  cross-check against the mint receipt) — so a canonical edit to any content field
+  (`visibility`, `kind`, `facets`, …), or a content-tampered snapshot, can never
+  anchor `format_drift`. Any uncertainty still classifies `content_change` and
+  requires `--content-changed-ack`.
+- The reconcile classification test
+  `test_remint_reconcile_drifted_snapshot_falls_back_to_content_change` was revised:
+  its content subscenarios are unchanged (still `content_change`), and new pure-format
+  subcases were added in a sibling test that flip to `format_drift`.
+- New CLI-only command `archive retire-draft-reconcile --dry-run|--approve` reconciles
+  a retire-draft receipt's four refs; the doctor now routes the
+  `mint_retired_draft_sha_mismatch` finding to it via a `suggested_command`.
+- New opt-in `--strip-bom` on both reconcile commands removes exactly a leading
+  UTF-8 BOM (`format_drift` by definition) and never bypasses the content-change ack
+  gate. New `--multipart-threshold BYTES` on `object-storage-upload` is a
+  validation/testing aid bounded to `[64 MiB, 5 GiB]`. See
+  `wom-kit/docs/releases/v0.3.167.md`.
+
 ## From `v0.3.165` To `v0.3.166`
 
 This release makes the object-storage upload key selectable and recorded, adds a

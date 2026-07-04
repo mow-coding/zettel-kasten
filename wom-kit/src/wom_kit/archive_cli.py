@@ -2136,7 +2136,44 @@ class Doctor:
                     path,
                 )
                 return
-            self.error("mint_retired_draft_sha_mismatch", f"Retired draft receipt {section}.sha256 does not match the referenced file.", path)
+            # v0.3.167 Item 2: discoverability route to the retire-draft-reconcile
+            # sibling. Mirror the mint route: a byte-drift-suspected FORMAT variant
+            # fires ONLY when a prior retire reconcile recorded a normalized_content_digest
+            # for this ref that STILL matches the current file's normalized bytes (the
+            # v0.3.162 honesty precondition — doctor never softens to format without a
+            # prior verified reconcile digest). Otherwise the plain sha-mismatch stays an
+            # ERROR but now carries a suggested_command routing to the reconcile sibling.
+            zettel = data.get("zettel") if isinstance(data.get("zettel"), dict) else {}
+            zettel_id = zettel.get("id") if isinstance(zettel.get("id"), str) else "<id>"
+            reconcile = data.get("reconcile") if isinstance(data.get("reconcile"), dict) else {}
+            recorded_digest = None
+            if isinstance(reconcile, dict):
+                for report in reconcile.get("ref_reports") or []:
+                    if isinstance(report, dict) and report.get("ref") == section:
+                        recorded_digest = report.get("normalized_content_digest")
+                        break
+            if section in ("target", "snapshot", "source") and isinstance(recorded_digest, str) and SHA256_RE.match(recorded_digest):
+                try:
+                    current_digest = hashlib.sha256(
+                        archive_services.bytes_normalized_for_content_compare(resolved.read_bytes())
+                    ).hexdigest()
+                except OSError:
+                    current_digest = None
+                if current_digest == recorded_digest:
+                    self.error(
+                        "mint_retired_draft_byte_drift_suspected_format",
+                        f"Retired draft receipt {section}.sha256 does not match, but bytes differ only by "
+                        "newline/BOM (suspected format drift, UNVERIFIED). Run retire-draft-reconcile to classify and clear.",
+                        path,
+                        suggested_command=f"archive retire-draft-reconcile <archive-root> --zettel-id {zettel_id} --dry-run",
+                    )
+                    return
+            self.error(
+                "mint_retired_draft_sha_mismatch",
+                f"Retired draft receipt {section}.sha256 does not match the referenced file.",
+                path,
+                suggested_command=f"archive retire-draft-reconcile <archive-root> --zettel-id {zettel_id} --dry-run",
+            )
 
     def _check_mint_receipt_status(self, data: dict[str, Any], path: Path, section: str, expected_status: str) -> None:
         section_data = data.get(section)
@@ -5330,6 +5367,7 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
             key_strategy=getattr(args, "key_strategy", archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY),
             key_prefix=getattr(args, "key_prefix", None),
             append_extension=bool(getattr(args, "key_append_extension", False)),
+            multipart_threshold_bytes=getattr(args, "multipart_threshold", None),
             send=send,
             endpoint_host=getattr(args, "endpoint_host", None),
             bucket=getattr(args, "bucket", None),
@@ -8833,6 +8871,7 @@ def command_remint_reconcile(args: argparse.Namespace) -> int:
                 relative_path=args.path,
                 reviewed_by=args.reviewed_by,
                 content_changed_ack=bool(args.content_changed_ack),
+                strip_bom=bool(getattr(args, "strip_bom", False)),
             )
         else:
             result = archive_services.remint_reconcile_plan(
@@ -8874,6 +8913,8 @@ def command_remint_reconcile(args: argparse.Namespace) -> int:
                 print("--- canonical text (end) ---")
         if result.get("content_change_ack_required"):
             print("Content change acknowledgment required: rerun --approve with --content-changed-ack.")
+        if result.get("bom_strip_note"):
+            print(f"BOM strip: {result.get('bom_strip_note')}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -8890,6 +8931,61 @@ def command_remint_reconcile(args: argparse.Namespace) -> int:
             print("Writes: none")
         else:
             print(f"Reconciled mint receipt: {result.get('mint_receipt_path')}")
+            print(f"Wrote reconcile receipt: {result.get('reconcile_receipt_path')}")
+    return 0 if result.get("ok") else 1
+
+
+def command_retire_draft_reconcile(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    approve = bool(args.approve)
+    if approve and not (args.reviewed_by or "").strip():
+        print("retire-draft-reconcile requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+    try:
+        if approve:
+            result = archive_services.retire_draft_reconcile_apply(
+                Path(args.archive_root),
+                zettel_id=args.zettel_id,
+                reviewed_by=args.reviewed_by,
+                content_changed_ack=bool(args.content_changed_ack),
+                strip_bom=bool(getattr(args, "strip_bom", False)),
+            )
+        else:
+            result = archive_services.retire_draft_reconcile_plan(
+                Path(args.archive_root),
+                zettel_id=args.zettel_id,
+            )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "passed" if result.get("ok") else "blocked"
+        print(f"Retire-draft reconcile {state} for {result.get('zettel_id')}.")
+        print(f"Retire receipt path: {result.get('retire_receipt_path') or '-'}")
+        print(f"Drift class: {result.get('drift_class') or 'unclassified'}")
+        for report in result.get("ref_reports") or []:
+            print(
+                f"- {report.get('ref')}: {report.get('drift_class')} "
+                f"(basis={report.get('classification_basis')})"
+                + (f" — {report.get('note')}" if report.get("note") else "")
+            )
+        if result.get("content_change_ack_required"):
+            print("Content change acknowledgment required: rerun --approve with --content-changed-ack.")
+        if result.get("bom_strip_note"):
+            print(f"BOM strip: {result.get('bom_strip_note')}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("dry_run"):
+            print("Writes: none")
+        else:
+            print(f"Reconciled retire receipt: {result.get('retire_receipt_path')}")
             print(f"Wrote reconcile receipt: {result.get('reconcile_receipt_path')}")
     return 0 if result.get("ok") else 1
 
@@ -13404,6 +13500,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     object_storage_upload.add_argument("--key-prefix", help="Literal raw-bytes key prefix (colon allowed) for --key-strategy prefix.")
     object_storage_upload.add_argument("--key-append-extension", action="store_true", help="Append the recovered original-filename extension under 'prefix' (no-op when unrecoverable).")
+    object_storage_upload.add_argument(
+        "--multipart-threshold",
+        type=int,
+        dest="multipart_threshold",
+        metavar="BYTES",
+        help="Validation/testing aid: multipart threshold in BYTES. Default 5 GiB. Override must be within [64 MiB, 5 GiB]; out-of-band is refused. Affects only the recorded/used threshold, never the integrity checks.",
+    )
     object_storage_upload.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
     object_storage_upload.add_argument("--dry-run", action="store_true", help="Preview the plan and execution-receipt shape without provider calls, byte reads, or secret reads.")
     object_storage_upload.add_argument("--approve", action="store_true", help="Attempt the live upload. Stage 1: fails closed (no live transport in this release).")
@@ -15305,8 +15408,36 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Human acknowledgment required to approve a content_change reconcile.",
     )
+    remint_reconcile.add_argument(
+        "--strip-bom",
+        action="store_true",
+        help="Opt-in: remove a single leading UTF-8 BOM from the canonical file (format_drift by definition; never bypasses the content-change ack gate).",
+    )
     remint_reconcile.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     remint_reconcile.set_defaults(func=command_remint_reconcile)
+
+    retire_draft_reconcile = subcommands.add_parser(
+        "retire-draft-reconcile",
+        help="Honestly reconcile a retire-draft receipt with its four refs after newline/BOM or content drift.",
+    )
+    retire_draft_reconcile.add_argument("archive_root", help="Archive root to inspect.")
+    retire_draft_reconcile.add_argument("--zettel-id", required=True, help="Zettel id whose retire-draft receipt to reconcile.")
+    retire_reconcile_mode = retire_draft_reconcile.add_mutually_exclusive_group()
+    retire_reconcile_mode.add_argument("--dry-run", action="store_true", help="Classify and preview without writing (default).")
+    retire_reconcile_mode.add_argument("--approve", action="store_true", help="Re-issue the retire receipt after human review; requires --reviewed-by.")
+    retire_draft_reconcile.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
+    retire_draft_reconcile.add_argument(
+        "--content-changed-ack",
+        action="store_true",
+        help="Human acknowledgment required to approve a content_change reconcile.",
+    )
+    retire_draft_reconcile.add_argument(
+        "--strip-bom",
+        action="store_true",
+        help="Opt-in: remove a single leading UTF-8 BOM from the target canonical (format_drift by definition; never bypasses the content-change ack gate).",
+    )
+    retire_draft_reconcile.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    retire_draft_reconcile.set_defaults(func=command_retire_draft_reconcile)
 
     index = subcommands.add_parser("index", help="Build a generated local SQLite search index.")
     index.add_argument("archive_root", help="Archive root to index.")

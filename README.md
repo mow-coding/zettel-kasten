@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.166 pre-release
+v0.3.167 pre-release
 ```
 
-Previous public baseline: v0.3.165 pre-release.
+Previous public baseline: v0.3.166 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -62,7 +62,7 @@ approval-gated write, or docs-only), see the
 - a public version-line roadmap that explains how the pre-1.0 minor lines map to idea, implementation, WOM feedback, UI/control-layer, and ZET feedback phases,
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
 - private archive lifecycle tools for doctor checks, draft creation, minting with dry-run checklist guidance, verified minted-draft retirement, delegation, receipts, search, and metadata review,
-- honest `archive remint-reconcile` that re-issues a mint receipt's recorded sha256 after a canonical zet drifts on disk (a CRLF/BOM re-checkout or a human content edit): it classifies the drift as newline/BOM-only `format_drift` or `content_change`, always shows the on-disk content, requires a reviewer to approve, never masks corruption, and writes both an in-place receipt update and a separate immutable audit receipt,
+- honest `archive remint-reconcile` (and the sibling `archive retire-draft-reconcile` for retire receipts) that re-issues a receipt's recorded sha256 after a zet drifts on disk (a CRLF/BOM re-checkout or a human content edit): it classifies the drift as newline/BOM-only `format_drift` or `content_change` even when the draft snapshot itself drifted — checking every content frontmatter field (a full-field reconstruction plus an `id`/`title` cross-check against the mint receipt) so an edit to any field, or a content-tampered snapshot, can never anchor `format_drift` — always shows the on-disk content, requires a reviewer to approve, offers an opt-in `--strip-bom` that never bypasses the content-change ack gate, never masks corruption, and writes both an in-place receipt update and a separate immutable audit receipt,
 - generated-index-backed duplicate checks, metadata-backed mint staleness fast paths, SQLite busy-timeout/WAL hardening for generated-index write paths, and standard-id source-path fast resolution for large archives,
 - scoped `validate --since` / `validate --scope` checks with generated-index body SHA cache support and optional `--progress`,
 - read-only `archive zet-quality-check --dry-run` for entity-term, document-type, OCR/parse metadata, table-structure, correction-event, source-rights, audience, and derived-artifact dependency risks before mint; optional `zet-quality-rules.yml` project rules can make forbidden entity aliases mint blockers without echoing matched terms,
