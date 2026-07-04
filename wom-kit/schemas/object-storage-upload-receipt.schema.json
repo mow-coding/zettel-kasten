@@ -33,8 +33,9 @@
     "object_id": {"type": "string"},
     "provider_kind": {"type": "string"},
     "store_ref": {"type": "string"},
-    "key_strategy": {"type": "string", "enum": ["sha256_content_addressed"]},
+    "key_strategy": {"type": "string", "enum": ["sha256_content_addressed", "prefix"]},
     "key_hint": {"type": "string"},
+    "remote_key": {"type": "string"},
     "result_status": {
       "type": "string",
       "enum": [

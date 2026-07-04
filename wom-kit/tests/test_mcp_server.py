@@ -1829,7 +1829,12 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(structured["lifecycle_action"], "object_storage_adapter_execution_contract")
                 self.assertEqual(structured["contract_state"], "contract_preview_ready")
                 self.assertEqual(structured["operation"], "upload_object")
-                self.assertEqual(structured["key_contract"]["strategy"], "sha256_content_addressed")
+                self.assertEqual(structured["key_contract"]["default_strategy"], "sha256_content_addressed")
+                self.assertIn("prefix", structured["key_contract"]["strategies_supported"])
+                self.assertEqual(
+                    structured["key_contract"]["sha256_content_addressed_remote_key_shape"],
+                    "sha256/<first2>/<sha256>",
+                )
                 self.assertTrue(structured["integrity_contract"]["sha256_required"])
                 self.assertTrue(structured["transfer_contract"]["resume_ledger_required"])
                 self.assertTrue(structured["receipt_contract"]["non_secret_execution_receipt_required_after_execution"])

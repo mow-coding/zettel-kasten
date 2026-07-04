@@ -163,6 +163,52 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.165` To `v0.3.166`
+
+This release makes the object-storage upload key selectable and recorded, adds a
+safe `object-storage-adopt-existing` workflow, and hardens the skip rule so an
+object stored under an operator's own key layout is never re-uploaded — or, worse,
+falsely skipped.
+
+Operator-visible notes:
+
+- No archive migration is required, and no hash change. The default key strategy
+  is byte-identical to v0.3.165: the two-field model is additive. Every
+  object-storage location and execution receipt now also records a `remote_key`
+  (the literal bucket-relative key the object is/was PUT/HEAD at) next to the
+  unchanged content-addressed `key_hint`. Existing receipts, manifests, and zets
+  are unaffected; the doctor accepts them as-is.
+- New opt-in flags on `object-storage-upload`, `object-storage-upload-plan`, and
+  `object-storage-upload-verify`: `--key-strategy {sha256_content_addressed,
+  prefix}` (default `sha256_content_addressed`), `--key-prefix <literal>` (the raw
+  bucket-relative prefix; a colon in an archive-id is a legal key byte), and
+  `--key-append-extension` (append the recovered original-filename extension only,
+  and only when recoverable — no bare trailing dot otherwise).
+- New command `archive object-storage-adopt-existing --dry-run|--approve`. Use it
+  BEFORE a first `--approve` upload if your objects already live under your own key
+  layout. A verified adopt (with `--approve` + live credentials) HEADs each key
+  presence-only and adopts ONLY on presence + Content-Length size-match (NOT a
+  content hash — the presence-only HEAD does not download the object body, so
+  adopting a large archive costs one HEAD per object, not one download per object;
+  add `--content-hash-verify` per object to additionally GetObject-and-rehash). A
+  404 / size-mismatch is not adopted, so a wrong `--key-prefix` or extension simply
+  re-uploads those objects. A declared adopt (`--accept-unverified-adopt`, a flag
+  distinct from `--approve`) records a NON-gating `declared_uploaded` location that
+  never skips a PUT. Adopt reports adopted-vs-total so a template miss is visible.
+  Verified adopt is a live surface and honours the same tiny-first tiered gate as
+  the upload command: a bulk first-live adopt REFUSES with `tiered_gate_unmet`
+  until a single tiny-first object (`--only <id>`) has proved the store.
+- Idempotency is now HEAD-verified. Under a live transport the executor always
+  re-HEADs the recorded `remote_key` before skipping; a recorded key that 404s
+  re-uploads. The re-HEAD matches how the location was verified: a presence+size
+  adopt is re-checked presence-only (no download), a content-hashed upload keeps its
+  checksum re-check. This live proof outranks the resume ledger — once a re-HEAD
+  proves an object absent, the re-upload is forced past any stale terminal-success
+  ledger row, so a wiped remote is never silently skipped. Plan echoes the resolved
+  key and apply refuses (fails closed) on divergence; the plan verdict is
+  strategy-aware so it never predicts a skip apply would not honour. See
+  `wom-kit/docs/releases/v0.3.166.md`.
+
 ## From `v0.3.164` To `v0.3.165`
 
 This release adds a normative Plain-Language for Humans convention to the

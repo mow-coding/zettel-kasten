@@ -50,20 +50,68 @@ The upload adapter contract requires:
 - a scoped `object-storage-operation-request-plan`,
 - a verified human approval receipt,
 - a local object whose content SHA-256 matches the `sha256:<hex>` object id,
-- a sha256 content-addressed remote key strategy,
-- a provider HEAD/idempotency check before upload,
+- a selectable remote key strategy (the default is sha256 content-addressed; see below),
+- a provider HEAD/idempotency check before upload, on the RECORDED remote key,
 - a provider confirmation check after upload,
 - a bounded retry and resume ledger for large media,
 - a non-secret execution receipt after execution,
 - a manifest location update only after provider confirmation.
 
-The remote key strategy is:
+### Remote key strategy (v0.3.166: selectable)
 
-```text
-{provider_prefix}/sha256/<first2>/<sha256>
-```
+Two strategies are supported, chosen per run with `--key-strategy`:
 
-The provider prefix value itself must not be echoed in public output.
+- **`sha256_content_addressed`** (default): the object lands at exactly
+
+  ```text
+  sha256/<first2>/<sha256>
+  ```
+
+  No provider prefix is prepended.
+
+- **`prefix`**: the object lands under an operator-supplied literal key prefix
+
+  ```text
+  <configured-prefix>/<sha256>[.<ext>]
+  ```
+
+  The extension suffix appears only under `--key-append-extension`, and only when
+  the original-filename extension is recoverable byte-exactly; otherwise nothing
+  is appended (no bare trailing dot). The full original filename never appears.
+
+The configured prefix VALUE is never echoed in public output
+(`remote_prefix_value_echoed: false`). Every location keeps a content-addressed
+`key_hint` (the digest binding on the immutable object id) AND records the actual
+`remote_key`. The HEAD-before idempotency check uses the recorded `remote_key`,
+not a recomputed content-addressed key — this is the fix for the false-skip where
+an object stored under a client's own key layout was re-uploaded (or, worse,
+falsely skipped).
+
+### Adopt-existing (the 158 GB false-skip fix)
+
+`object-storage-adopt-existing` lets an operator whose objects already live under
+their own key layout record those objects without re-uploading. A **verified**
+adopt (with `--approve` + a live transport) issues a **presence-only** `HeadObject`
+for each computed `remote_key` and adopts ONLY on a 200 + Content-Length
+size-match (presence+size). The presence-only HEAD deliberately does NOT trigger
+the whole-object re-download-and-hash described in Integrity Rules below — it reads
+presence and `Content-Length` only and leaves the checksum unset. This is the
+whole point of the cost design: adopting a large archive costs one HEAD per
+object, not one GetObject-download per object (a content re-hash of a 158 GB set
+would download all 158 GB). `--content-hash-verify` is an explicit per-object
+opt-in that additionally GetObject-and-rehashes; it is never the default. A 404 /
+size-mismatch does NOT adopt, so a wrong-prefix/wrong-extension template
+self-limits to zero adopts and those objects simply re-upload. A **declared** adopt
+(`--accept-unverified-adopt`, distinct from `--approve`) records a NON-gating
+`declared_uploaded` location that never skips a PUT.
+
+Verified adopt is a new live-execution surface (it reaches the live transport), so
+it honours the same SA-6 tiny-first tiered gate as `object-storage-upload`: a bulk
+first-live adopt REFUSES with `tiered_gate_unmet` until a single tiny-first object
+(`--only <id>`) has proved the store. A location adopted presence+size records
+`remote_key_verification: presence_size`, and the executor's later skip re-HEAD of
+such a location is likewise presence-only — a size-only proof is never silently
+promoted to a content-hash claim.
 
 ## Integrity Rules
 

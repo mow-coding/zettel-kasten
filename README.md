@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.165 pre-release
+v0.3.166 pre-release
 ```
 
-Previous public baseline: v0.3.164 pre-release.
+Previous public baseline: v0.3.165 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -160,6 +160,7 @@ Object storage:
 - object-storage adapter readiness planning, operation request packaging, upload execution-contract planning, and presigned URL planning,
 - approval-gated external upload evidence registration and read-only upload evidence auditing before live provider adapters,
 - Stage 2 of the live upload adapter: a real hand-rolled AWS SigV4 R2/S3 transport behind a single networking seam (no new dependency), with a bounded retry loop (single-PUT and multipart), a hard cumulative PUT ceiling, whole-object integrity verified by re-download-and-hash (no dependence on any provider checksum surface), orphan cleanup, and a tiered tiny-first gate; the capability is now real but a live `--approve` still fails closed without env credentials, a met tiered gate, and endpoint/bucket, and stays `unproven_against_live_provider` until the first human-run live object,
+- a selectable, recorded upload key strategy (`--key-strategy sha256_content_addressed|prefix`, default unchanged) plus a safe `object-storage-adopt-existing` command: objects already stored under an operator's own key layout are adopted only on a live HEAD proving presence + size-match at the recorded key, and under a live transport the executor always re-HEADs that recorded key before any skip (a 404 re-uploads, never a silent skip),
 
 IMAP:
 

@@ -1980,6 +1980,17 @@ class Doctor:
             expected_key_hint = f"sha256/{digest[:2]}/{digest}" if archive_services.SHA256_RE.match(digest) else None
             if expected_key_hint is None or data.get("key_hint") != expected_key_hint:
                 self.error("object_storage_upload_key_hint_mismatch", "Execution receipt key_hint must match its object id digest.", path)
+            # v0.3.166: key_hint stays content-addressed under every strategy; a
+            # prefix-strategy receipt additionally records remote_key, which MUST
+            # bind the digest (§3.1). Do not flag a prefix-strategy receipt as
+            # corrupt just because its key_strategy is not the default.
+            receipt_strategy = str(data.get("key_strategy") or archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY)
+            if receipt_strategy not in archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES:
+                self.error("object_storage_upload_key_strategy_invalid", "Execution receipt key_strategy is not a supported strategy.", path)
+            elif receipt_strategy != archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY:
+                remote_key = data.get("remote_key")
+                if not isinstance(remote_key, str) or not archive_services.safe_object_storage_remote_key(remote_key) or digest not in remote_key:
+                    self.error("object_storage_upload_remote_key_mismatch", "Execution receipt remote_key must bind its object id digest.", path)
             if data.get("checksum_algorithm") != archive_services.OBJECT_STORAGE_CHECKSUM_ALGORITHM:
                 self.error("object_storage_upload_checksum_invalid", "Execution receipt checksum_algorithm must be sha256.", path)
             # RC5 / SA-3: retry_summary must be scalar-only — no nested provider
@@ -5251,6 +5262,9 @@ def command_object_storage_upload_plan(args: argparse.Namespace) -> int:
             only=args.only,
             max_objects=args.max_objects,
             skip_uploaded=bool(args.skip_uploaded),
+            key_strategy=getattr(args, "key_strategy", archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY),
+            key_prefix=getattr(args, "key_prefix", None),
+            append_extension=bool(getattr(args, "key_append_extension", False)),
             dry_run=True,
         )
     except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
@@ -5271,6 +5285,9 @@ def command_object_storage_upload_verify(args: argparse.Namespace) -> int:
             store_ref=args.store_ref,
             only=args.only,
             max_objects=args.max_objects,
+            key_strategy=getattr(args, "key_strategy", archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY),
+            key_prefix=getattr(args, "key_prefix", None),
+            append_extension=bool(getattr(args, "key_append_extension", False)),
             dry_run=True,
         )
     except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
@@ -5310,6 +5327,9 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
             reviewed_by=args.reviewed_by,
             approve=approve,
             dry_run=bool(args.dry_run),
+            key_strategy=getattr(args, "key_strategy", archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY),
+            key_prefix=getattr(args, "key_prefix", None),
+            append_extension=bool(getattr(args, "key_append_extension", False)),
             send=send,
             endpoint_host=getattr(args, "endpoint_host", None),
             bucket=getattr(args, "bucket", None),
@@ -5319,6 +5339,50 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
     print_object_storage_upload_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
+
+
+def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("object-storage-adopt-existing requires exactly one of --dry-run or --approve.", file=sys.stderr)
+        return 1
+    approve = bool(args.approve)
+    if approve and not (args.reviewed_by or "").strip():
+        print("object-storage-adopt-existing requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+    # A verified adopt needs the live send seam; a declared (unverified) adopt
+    # does not touch the network. Only wire the sender for a verified --approve.
+    accept_unverified = bool(getattr(args, "accept_unverified_adopt", False))
+    send = archive_services._default_urllib_sender() if (approve and not accept_unverified) else None
+    try:
+        result = archive_services.object_storage_adopt_existing_run(
+            Path(args.archive_root),
+            provider_kind=args.provider_kind,
+            store_ref=args.store_ref,
+            access_key_id_ref=args.access_key_id_ref,
+            secret_access_key_ref=args.secret_access_key_ref,
+            only=args.only,
+            max_objects=args.max_objects,
+            reviewed_by=args.reviewed_by,
+            key_strategy=getattr(args, "key_strategy", archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY_PREFIX),
+            key_prefix=getattr(args, "key_prefix", None),
+            append_extension=bool(getattr(args, "key_append_extension", False)),
+            accept_unverified_adopt=accept_unverified,
+            content_hash_verify=bool(getattr(args, "content_hash_verify", False)),
+            approve=approve,
+            dry_run=bool(args.dry_run),
+            send=send,
+            endpoint_host=getattr(args, "endpoint_host", None),
+            bucket=getattr(args, "bucket", None),
+            region=getattr(args, "region", None),
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print_object_storage_adopt_existing_result(result, args.format)
     return 0 if result.get("ok", True) else 1
 
 
@@ -6593,10 +6657,35 @@ def print_object_storage_upload_result(result: dict[str, Any], output_format: st
     print(f"Archive: {result.get('archive_id') or '-'}")
     print(f"Provider: {result.get('provider_kind') or '-'}")
     print(f"Store ref: {result.get('store_ref') or '-'}")
+    print(f"Key strategy: {result.get('key_strategy') or '-'}")
     print(f"Reviewed by: {result.get('reviewed_by') or '-'}")
     print(f"Receipts written: {len(result.get('receipts_written') or [])}")
     print(f"Manifest updates: {result.get('manifest_updates')}")
     print("Live execution allowed now: no")
+    for warning in result.get("warnings") or []:
+        print(f"Warning: {warning}")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+
+
+def print_object_storage_adopt_existing_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    summary = result.get("adopt_summary") if isinstance(result.get("adopt_summary"), dict) else {}
+    print(f"Object storage adopt-existing: {result.get('execution_status') or '-'}")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Provider: {result.get('provider_kind') or '-'}")
+    print(f"Store ref: {result.get('store_ref') or '-'}")
+    print(f"Key strategy: {result.get('key_strategy') or '-'}")
+    print(f"Adopt mode: {result.get('adopt_mode') or '-'}")
+    print(f"Report: {summary.get('report') or '-'}")
+    print(f"Manifest updates: {result.get('manifest_updates')}")
+    print("Live execution allowed now: no")
+    for warning in result.get("warnings") or []:
+        print(f"Warning: {warning}")
     if result.get("blockers"):
         print("Blockers:")
         for blocker in result["blockers"]:
@@ -13247,6 +13336,14 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_upload_plan.add_argument("--only", help="Plan only this object id (sha256:<hex> or bare 64 hex).")
     object_storage_upload_plan.add_argument("--max-objects", type=int, help="REFUSE (not truncate) if the resolved plan exceeds this count.")
     object_storage_upload_plan.add_argument("--skip-uploaded", action="store_true", help="Verdict already_uploaded only on a digest-matched wom_uploaded location.")
+    object_storage_upload_plan.add_argument(
+        "--key-strategy",
+        choices=list(archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES),
+        default=archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+        help="Remote key strategy. Default sha256_content_addressed; 'prefix' places objects under --key-prefix.",
+    )
+    object_storage_upload_plan.add_argument("--key-prefix", help="Literal raw-bytes key prefix (colon allowed) for --key-strategy prefix. Not echoed by default previews.")
+    object_storage_upload_plan.add_argument("--key-append-extension", action="store_true", help="Append the recovered original-filename extension under 'prefix' (no-op when unrecoverable).")
     object_storage_upload_plan.add_argument("--dry-run", action="store_true", help="Required. Plan only; never calls providers, reads secrets, or writes files.")
     object_storage_upload_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_upload_plan.set_defaults(func=command_object_storage_upload_plan)
@@ -13266,6 +13363,14 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_upload_verify.add_argument("--store-ref", help="Optional safe store label/ref. Do not pass URLs, paths, tokens, or secrets.")
     object_storage_upload_verify.add_argument("--only", help="Verify only this object id (sha256:<hex> or bare 64 hex).")
     object_storage_upload_verify.add_argument("--max-objects", type=int, help="REFUSE if the resolved plan exceeds this count.")
+    object_storage_upload_verify.add_argument(
+        "--key-strategy",
+        choices=list(archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES),
+        default=archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+        help="Remote key strategy to preview the resolved remote_key under. Read-only; no network.",
+    )
+    object_storage_upload_verify.add_argument("--key-prefix", help="Literal raw-bytes key prefix (colon allowed) for --key-strategy prefix.")
+    object_storage_upload_verify.add_argument("--key-append-extension", action="store_true", help="Append the recovered original-filename extension under 'prefix' (no-op when unrecoverable).")
     object_storage_upload_verify.add_argument("--dry-run", action="store_true", help="Required. Verify local bytes only; never calls providers or writes files.")
     object_storage_upload_verify.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_upload_verify.set_defaults(func=command_object_storage_upload_verify)
@@ -13291,11 +13396,55 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_upload.add_argument("--only", help="Upload only this object id (sha256:<hex> or bare 64 hex). Tiny-first.")
     object_storage_upload.add_argument("--max-objects", type=int, help="REFUSE if the resolved plan exceeds this count.")
     object_storage_upload.add_argument("--skip-uploaded", action="store_true", help="Digest-aware manifest + remote-HEAD idempotency.")
+    object_storage_upload.add_argument(
+        "--key-strategy",
+        choices=list(archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES),
+        default=archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+        help="Remote key strategy. Default sha256_content_addressed; 'prefix' places objects under --key-prefix.",
+    )
+    object_storage_upload.add_argument("--key-prefix", help="Literal raw-bytes key prefix (colon allowed) for --key-strategy prefix.")
+    object_storage_upload.add_argument("--key-append-extension", action="store_true", help="Append the recovered original-filename extension under 'prefix' (no-op when unrecoverable).")
     object_storage_upload.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
     object_storage_upload.add_argument("--dry-run", action="store_true", help="Preview the plan and execution-receipt shape without provider calls, byte reads, or secret reads.")
     object_storage_upload.add_argument("--approve", action="store_true", help="Attempt the live upload. Stage 1: fails closed (no live transport in this release).")
     object_storage_upload.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_upload.set_defaults(func=command_object_storage_upload)
+
+    object_storage_adopt_existing = subcommands.add_parser(
+        "object-storage-adopt-existing",
+        aliases=["object-storage-upload-adopt-existing", "objet-storage-adopt-existing"],
+        help="Adopt objects already present at your own key layout so a later upload does not re-PUT them (the 158 GB false-skip fix).",
+    )
+    object_storage_adopt_existing.add_argument("archive_root", help="Archive root to update.")
+    object_storage_adopt_existing.add_argument(
+        "--provider-kind",
+        choices=sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS),
+        default="cloudflare-r2",
+        help="Object-storage provider kind label.",
+    )
+    object_storage_adopt_existing.add_argument("--store-ref", help="Safe store label/ref. Required. Do not pass URLs, bucket names, paths, tokens, or secrets.")
+    object_storage_adopt_existing.add_argument("--access-key-id-ref", help="Access key id ref (env: required for a verified adopt).")
+    object_storage_adopt_existing.add_argument("--secret-access-key-ref", help="Secret access key ref (env: required for a verified adopt).")
+    object_storage_adopt_existing.add_argument("--endpoint-host", help="Non-secret S3 endpoint host. Required for a verified --approve adopt.")
+    object_storage_adopt_existing.add_argument("--bucket", help="Non-secret bucket name. Required for a verified --approve adopt.")
+    object_storage_adopt_existing.add_argument("--region", help="S3 region. Defaults to 'auto' for cloudflare-r2.")
+    object_storage_adopt_existing.add_argument("--only", help="Adopt only this object id (sha256:<hex> or bare 64 hex).")
+    object_storage_adopt_existing.add_argument("--max-objects", type=int, help="REFUSE if the resolved plan exceeds this count.")
+    object_storage_adopt_existing.add_argument(
+        "--key-strategy",
+        choices=list(archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES),
+        default=archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY_PREFIX,
+        help="Remote key strategy the objects were stored under. Typically 'prefix' for adopt.",
+    )
+    object_storage_adopt_existing.add_argument("--key-prefix", help="Literal raw-bytes key prefix (colon allowed) the objects live under.")
+    object_storage_adopt_existing.add_argument("--key-append-extension", action="store_true", help="Include the recovered original-filename extension in the resolved key (no-op when unrecoverable).")
+    object_storage_adopt_existing.add_argument("--accept-unverified-adopt", action="store_true", help="Record a NON-gating declared_uploaded adopt without a live HEAD (will NOT skip a PUT).")
+    object_storage_adopt_existing.add_argument("--content-hash-verify", action="store_true", help="Per-object opt-in: additionally GetObject-and-rehash (costly; NOT the default presence-only HEAD check).")
+    object_storage_adopt_existing.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
+    object_storage_adopt_existing.add_argument("--dry-run", action="store_true", help="Preview the adopt plan without provider calls, byte reads, or secret reads.")
+    object_storage_adopt_existing.add_argument("--approve", action="store_true", help="Perform the adopt. Verified adopt HEADs each key presence-only (presence+size, no download); a bulk first-live adopt refuses until a tiny-first --only object proves the store; declared adopt needs --accept-unverified-adopt.")
+    object_storage_adopt_existing.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    object_storage_adopt_existing.set_defaults(func=command_object_storage_adopt_existing)
 
     imap_mailbox_operation_request = subcommands.add_parser(
         "imap-mailbox-operation-request-plan",
