@@ -822,6 +822,7 @@ The skill tells the AI to:
 - avoid exposing local absolute paths,
 - use dry-run checks before approval requests,
 - avoid MCP apply assumptions,
+- translate git/infrastructure/WOM-internal jargon into everyday language in human-facing prose while keeping the exact term in parentheses or logs,
 - respect `WOM`, `zet`, and `ZET` naming.
 
 ## Plugin Boundary
@@ -903,6 +904,18 @@ That means:
 - no provider token values,
 - no source file body reads,
 - no whole-disk scanning.
+
+## Plain-Language for Humans
+
+When an AI operator addresses a HUMAN, not a machine, a log line, or a JSON field, it must translate git/infrastructure/WOM-internal jargon into everyday language. The exact technical term stays available in parentheses or in the logs, so precision is never lost.
+
+Canonical worked examples:
+
+- "the update files arrived but the update button hasn't been pressed yet" (fetched, not checked out),
+- "a saved bookmark to a specific version" (a pin),
+- "the list of which files exist and their fingerprints" (the manifest).
+
+The read-only `ai-response-concept-guide --topic git_infra_terms` set gives operator AIs the plain phrasing to reach for. This convention governs human-facing prose only; machine, JSON, and receipt output stays exact and unchanged. It is guidance an operator AI applies when it writes; WOM does not validate or enforce plain-language output.
 
 ## Compatibility
 

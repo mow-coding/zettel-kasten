@@ -163,6 +163,29 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.164` To `v0.3.165`
+
+This release adds a normative Plain-Language for Humans convention to the
+operator-facing runtime surfaces and a git/infrastructure terminology
+translation layer to the read-only `ai-response-concept-guide`.
+
+Operator-visible notes:
+
+- No archive migration is required, and no hash change. The additions are
+  guidance prose (in the `AGENTS.md` templates, the runtime skill, and the
+  plugin-layer doc) plus a new read-only `--topic git_infra_terms` set on
+  `ai-response-concept-guide`. Existing receipts, manifests, and zets are
+  unaffected.
+- Guidance, not enforcement. The convention tells an operator AI to translate
+  git/infrastructure/WOM-internal jargon into everyday language for humans while
+  keeping the exact term in parentheses or logs. WOM does not validate or enforce
+  plain-language output; the reading AI applies it. Machine, JSON, and receipt
+  output stays exact and unchanged.
+- Look up the plain phrasing with `archive ai-response-concept-guide
+  <archive-root> --topic git_infra_terms --locale en-US --dry-run --format json`.
+  It writes nothing, calls no providers, and echoes no local paths or secret
+  values. See `wom-kit/docs/releases/v0.3.165.md`.
+
 ## From `v0.3.163` To `v0.3.164`
 
 This release adds Stage 2 of the object-storage upload adapter (WOM #11): a real

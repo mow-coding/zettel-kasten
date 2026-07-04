@@ -5710,6 +5710,11 @@ def command_ai_response_concept_guide(args: argparse.Namespace) -> int:
                 for term in section["edge_type_terms"]:
                     if isinstance(term, dict):
                         print(f"- {term.get('term') or '-'}: {term.get('selected_user_phrase') or '-'}")
+            if section.get("git_infra_terms"):
+                print("Git/infra terms:")
+                for term in section["git_infra_terms"]:
+                    if isinstance(term, dict):
+                        print(f"- {term.get('term') or '-'}: {term.get('selected_user_phrase') or '-'}")
         if result.get("next_safe_question"):
             print("\nNext safe question:")
             print(str(result["next_safe_question"]))

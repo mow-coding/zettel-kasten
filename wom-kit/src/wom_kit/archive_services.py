@@ -1921,6 +1921,7 @@ AI_RESPONSE_CONCEPT_GUIDE_TOPICS = {
     "manifest_vs_zet",
     "three_layers",
     "zet_markdown_style",
+    "git_infra_terms",
 }
 ZET_MARKDOWN_STYLE_GUIDE_TOPICS = {"all", "range_tilde"}
 AI_RESPONSE_CONCEPT_GUIDE_LOCALE_ALIASES = {
@@ -2217,6 +2218,136 @@ AI_OPERATIONAL_LIFECYCLE_TRANSLATIONS = [
     {
         "term": "provisional_meaning",
         "phrases": {"ko-KR": "아직 정식 edge type은 아니고 모아보는 의미 후보", "en-US": "meaning candidate collected before becoming an active edge type"},
+    },
+]
+AI_OPERATIONAL_GIT_INFRA_TRANSLATIONS = [
+    {
+        "term": "fetch",
+        "plain_meaning": "The update files arrived on this machine, but nothing in the working files changed yet.",
+        "phrases": {
+            "ko-KR": "업데이트 파일은 도착했지만, 아직 실제 파일에는 반영되지 않았다.",
+            "en-US": "The update files arrived, but the update button has not been pressed yet.",
+        },
+    },
+    {
+        "term": "checkout",
+        "plain_meaning": "Switch the working files to a chosen version, so what you see on disk becomes that version.",
+        "phrases": {
+            "ko-KR": "실제 파일을 고른 버전으로 바꿔서 화면에 그 버전이 보이게 한다.",
+            "en-US": "Press the update button so the files you see become that chosen version.",
+        },
+    },
+    {
+        "term": "pin",
+        "plain_meaning": "A saved bookmark to one specific version so it can be found again exactly.",
+        "phrases": {
+            "ko-KR": "특정 버전을 정확히 다시 찾을 수 있게 저장해 둔 북마크.",
+            "en-US": "A saved bookmark to a specific version.",
+        },
+    },
+    {
+        "term": "manifest",
+        "plain_meaning": "The list that says which files exist and what each one's fingerprint is.",
+        "phrases": {
+            "ko-KR": "어떤 파일이 있고 각 파일의 지문이 무엇인지 적어 둔 목록.",
+            "en-US": "The list of which files exist and their fingerprints.",
+        },
+    },
+    {
+        "term": "hash",
+        "plain_meaning": "A short fingerprint computed from the exact bytes; identical content always gives the same fingerprint.",
+        "phrases": {
+            "ko-KR": "내용의 바이트로 계산한 짧은 지문. 같은 내용이면 항상 같은 지문이 나온다.",
+            "en-US": "A fingerprint of the exact content.",
+        },
+    },
+    {
+        "term": "commit",
+        "plain_meaning": "One saved snapshot of the files with a note about what changed.",
+        "phrases": {
+            "ko-KR": "무엇이 바뀌었는지 메모와 함께 저장한 하나의 스냅샷.",
+            "en-US": "One saved snapshot of the files.",
+        },
+    },
+    {
+        "term": "tag",
+        "plain_meaning": "A friendly name stuck onto one saved snapshot, like a release label.",
+        "phrases": {
+            "ko-KR": "저장된 스냅샷 하나에 붙인 알기 쉬운 이름(예: 릴리스 라벨).",
+            "en-US": "A friendly name stuck onto one saved snapshot.",
+        },
+    },
+    {
+        "term": "branch",
+        "plain_meaning": "A separate line of work that can grow without disturbing the main one.",
+        "phrases": {
+            "ko-KR": "본선을 건드리지 않고 따로 이어 갈 수 있는 작업 갈래.",
+            "en-US": "A separate line of work.",
+        },
+    },
+    {
+        "term": "HEAD",
+        "plain_meaning": "The version your working files are currently sitting on.",
+        "phrases": {
+            "ko-KR": "지금 작업 파일이 놓여 있는 현재 버전.",
+            "en-US": "The version your files are currently on.",
+        },
+    },
+    {
+        "term": "remote",
+        "plain_meaning": "The shared copy kept somewhere else that people sync with.",
+        "phrases": {
+            "ko-KR": "다른 곳에 두고 여러 사람이 맞춰 쓰는 공유 사본.",
+            "en-US": "The shared copy kept somewhere else.",
+        },
+    },
+    {
+        "term": "mirror",
+        "plain_meaning": "A full local copy of the shared store kept in step with it.",
+        "phrases": {
+            "ko-KR": "공유 저장소를 그대로 따라 두는 전체 로컬 사본.",
+            "en-US": "A full local copy kept in step with the shared store.",
+        },
+    },
+    {
+        "term": "clone",
+        "plain_meaning": "Making your own full copy of a shared store for the first time.",
+        "phrases": {
+            "ko-KR": "공유 저장소의 전체 사본을 처음으로 내 쪽에 만든다.",
+            "en-US": "Making your own full copy for the first time.",
+        },
+    },
+    {
+        "term": "diff",
+        "plain_meaning": "A side-by-side view of what changed between two versions.",
+        "phrases": {
+            "ko-KR": "두 버전 사이에서 무엇이 달라졌는지 나란히 보여 주는 것.",
+            "en-US": "A view of what changed between two versions.",
+        },
+    },
+    {
+        "term": "staged",
+        "plain_meaning": "Changes set aside as ready to be saved into the next snapshot, but not saved yet.",
+        "phrases": {
+            "ko-KR": "다음 스냅샷에 저장할 준비만 해 둔, 아직 저장 전 변경.",
+            "en-US": "Changes set aside as ready to save, but not saved yet.",
+        },
+    },
+    {
+        "term": "rebase",
+        "plain_meaning": "Replaying your changes on top of a newer starting point so the history reads cleanly.",
+        "phrases": {
+            "ko-KR": "내 변경을 더 최신 출발점 위에 다시 얹어 이력이 깔끔해지게 한다.",
+            "en-US": "Replaying your changes on top of a newer starting point.",
+        },
+    },
+    {
+        "term": "stash",
+        "plain_meaning": "Tucking unfinished changes aside for later without saving them as a snapshot.",
+        "phrases": {
+            "ko-KR": "끝나지 않은 변경을 스냅샷으로 남기지 않고 잠깐 치워 둔다.",
+            "en-US": "Tucking unfinished changes aside for later.",
+        },
     },
 ]
 CONNECTED_ACCOUNT_SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -36111,6 +36242,7 @@ def ai_response_concept_guide(
     include_layers = resolved_topic in {"all", "three_layers"}
     include_operational_terms = resolved_topic in {"all", "operational_terms"}
     include_zet_markdown_style = resolved_topic in {"all", "zet_markdown_style"}
+    include_git_infra_terms = resolved_topic in {"all", "git_infra_terms"}
 
     sections: list[dict[str, Any]] = []
     if include_identity:
@@ -36187,6 +36319,8 @@ def ai_response_concept_guide(
         sections.append(ai_response_operational_terms_section(resolved_locale))
     if include_zet_markdown_style:
         sections.append(zet_markdown_style_section())
+    if include_git_infra_terms:
+        sections.append(ai_response_git_infra_terms_section(resolved_locale))
 
     return {
         "ok": not blockers,
@@ -36206,6 +36340,7 @@ def ai_response_concept_guide(
             "escalate_link_type_model_gaps_before_mapping": True,
             "range_tilde_requires_single_tilde_with_spaces": True,
             "double_tilde_reserved_for_markdown_strikethrough": True,
+            "translate_git_infra_jargon_for_humans": True,
         },
         "sections": sections,
         "next_safe_question": "Are we trying to register known object ids now, verify/upload the bytes now, or draft human zets from already registered evidence?",
@@ -36279,6 +36414,10 @@ def ai_response_concept_guide(
                 "command": "archive zet-markdown-style-guide <archive-root> --topic range_tilde --dry-run --format json",
             },
             {
+                "human_intent": "look up plain-language phrasing for git/infrastructure jargon before answering a human",
+                "command": "archive ai-response-concept-guide <archive-root> --topic git_infra_terms --locale en-US --dry-run --format json",
+            },
+            {
                 "human_intent": "upload or sync bytes",
                 "command": "future work until a later release explicitly adds an approval-gated adapter",
             },
@@ -36324,6 +36463,7 @@ def ai_response_concept_guide(
             "notion_client_fixture_request_package_available": True,
             "zet_markdown_style_guide_available": True,
             "range_tilde_strikethrough_guard_available": True,
+            "git_infra_term_translation_available": True,
             "mcp_tool_available": False,
             "object_upload_adapter_implemented": False,
             "provider_availability_probe_implemented": False,
@@ -36540,6 +36680,37 @@ def ai_response_operational_terms_section(locale: str) -> dict[str, Any]:
             "A synced block source mechanism is already a final relationship meaning.",
             "A child database should be forced into view_query or references when contains is missing.",
         ],
+    }
+
+
+def ai_response_git_infra_terms_section(locale: str) -> dict[str, Any]:
+    git_infra_terms = []
+    for entry in AI_OPERATIONAL_GIT_INFRA_TRANSLATIONS:
+        git_infra_terms.append(
+            {
+                "term": entry["term"],
+                "plain_meaning": entry["plain_meaning"],
+                "selected_user_phrase": ai_response_localized_phrase(entry, locale),
+                "phrases": copy.deepcopy(entry["phrases"]),
+            }
+        )
+    return {
+        "section_id": "git_infra_terms",
+        "title": "git and infrastructure terminology translation layer",
+        "locale": locale,
+        "beginner_explanation": "When an AI operator explains version or infrastructure state to a human, it should translate git/infrastructure jargon into everyday language and keep the exact term in parentheses or the logs only. This layer is complementary to the WOM operational-term layer: it covers git/infra words, not WOM concept words.",
+        "answer_order": [
+            "Name the everyday meaning first.",
+            "Put the exact technical term in parentheses or leave it in the logs, so nothing precise is lost.",
+            "Never let raw git/infra jargon stand alone in a sentence addressed to a human.",
+        ],
+        "git_infra_terms": git_infra_terms,
+        "worked_examples": [
+            "the update files arrived but the update button hasn't been pressed yet (fetched, not checked out)",
+            "a saved bookmark to a specific version (a pin)",
+            "the list of which files exist and their fingerprints (the manifest)",
+        ],
+        "boundary": "This governs human-facing prose only. Machine, JSON, and receipt output stays exact and unchanged. WOM does not validate or enforce plain-language output; this is guidance the operator AI applies while writing.",
     }
 
 

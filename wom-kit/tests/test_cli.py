@@ -9693,7 +9693,7 @@ state:
             self.assertTrue(result["guide_contract"]["double_tilde_reserved_for_markdown_strikethrough"])
             self.assertEqual(result["locale"], "ko-KR")
             section_ids = [section["section_id"] for section in result["sections"]]
-            self.assertEqual(section_ids, ["sha256_identity", "manifest_vs_zet", "three_layers", "operational_terms", "zet_markdown_style"])
+            self.assertEqual(section_ids, ["sha256_identity", "manifest_vs_zet", "three_layers", "operational_terms", "zet_markdown_style", "git_infra_terms"])
             identity_section = result["sections"][0]
             self.assertIn("sha256:<hex>", " ".join(identity_section["answer_order"]))
             self.assertIn("지문", identity_section["korean_script"])
@@ -9714,6 +9714,19 @@ state:
             )
             self.assertIn("contains", operational_section["semantic_source_mechanism_note"]["notion_containment"])
             self.assertTrue(result["guide_contract"]["escalate_link_type_model_gaps_before_mapping"])
+            git_infra_section = next(section for section in result["sections"] if section["section_id"] == "git_infra_terms")
+            self.assertEqual(git_infra_section["title"], "git and infrastructure terminology translation layer")
+            git_infra_terms = {term["term"]: term for term in git_infra_section["git_infra_terms"]}
+            for jargon in ("fetch", "checkout", "pin", "manifest", "hash", "commit", "branch", "HEAD"):
+                self.assertIn(jargon, git_infra_terms)
+                self.assertTrue(git_infra_terms[jargon]["plain_meaning"])
+                self.assertTrue(git_infra_terms[jargon]["selected_user_phrase"])
+            self.assertIn("업데이트", git_infra_terms["fetch"]["selected_user_phrase"])
+            self.assertIn("북마크", git_infra_terms["pin"]["selected_user_phrase"])
+            self.assertIn("지문", git_infra_terms["manifest"]["selected_user_phrase"])
+            self.assertTrue(result["guide_contract"]["translate_git_infra_jargon_for_humans"])
+            self.assertTrue(result["current_capability"]["git_infra_term_translation_available"])
+            self.assertTrue(any("--topic git_infra_terms" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("derive-text-coverage" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-objet-source-map-link-plan" in route["command"] for route in result["safe_routing"]))
             self.assertTrue(any("notion-objet-import-clue-audit" in route["command"] for route in result["safe_routing"]))
@@ -9791,6 +9804,34 @@ state:
             self.assertEqual([section["section_id"] for section in terms_result["sections"]], ["operational_terms"])
             supersedes_term = next(term for term in terms_result["sections"][0]["edge_type_terms"] if term["term"] == "supersedes")
             self.assertEqual(supersedes_term["selected_user_phrase"], "This newer note replaces the older one.")
+
+            git_infra_code, git_infra_output = self.run_cli(
+                [
+                    "ai-response-concept-guide",
+                    str(archive_root),
+                    "--topic",
+                    "git_infra_terms",
+                    "--locale",
+                    "en-US",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            git_infra_result = json.loads(git_infra_output)
+            git_infra_serialized = json.dumps(git_infra_result, ensure_ascii=False)
+            self.assertEqual(git_infra_code, 0, git_infra_output)
+            self.assertEqual(git_infra_result["locale"], "en-US")
+            self.assertEqual([section["section_id"] for section in git_infra_result["sections"]], ["git_infra_terms"])
+            git_infra_only = {term["term"]: term for term in git_infra_result["sections"][0]["git_infra_terms"]}
+            self.assertEqual(git_infra_only["checkout"]["selected_user_phrase"], "Press the update button so the files you see become that chosen version.")
+            self.assertEqual(git_infra_only["pin"]["selected_user_phrase"], "A saved bookmark to a specific version.")
+            self.assertEqual(git_infra_only["manifest"]["selected_user_phrase"], "The list of which files exist and their fingerprints.")
+            self.assertFalse(git_infra_result["privacy_guards"]["local_absolute_paths_echoed"])
+            self.assertFalse(git_infra_result["privacy_guards"]["secret_values_echoed"])
+            self.assertEqual(git_infra_result["would_change"], [])
+            self.assertNotIn("C:\\", git_infra_serialized)
+            self.assertNotIn(str(archive_root.resolve()), git_infra_serialized)
 
             no_dry_run_code, no_dry_run_output = self.run_cli(
                 [
