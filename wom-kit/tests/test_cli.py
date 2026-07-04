@@ -12067,6 +12067,10 @@ state:
                 )
             self.assertTrue(result["ok"], result)
             self.assertEqual(result["execution_status"], "executed")
+            # v0.3.167 Item 4: the RUN-outcome field truthfully reports the executed
+            # upload (was previously a copy-paste False that contradicted execution_status).
+            self.assertTrue(result["live_execution_allowed_now"], result)
+            self.assertEqual(result["execution_results"][0]["result_status"], "uploaded")
             self.assertEqual(len(result["receipts_written"]), 1)
             self.assertEqual(result["manifest_updates"], 1)
             self.assertTrue(result["closed_actions"]["credential_value_read"])
@@ -12187,6 +12191,80 @@ state:
             self.assertEqual(failed["result_status"], "failed_upload")
             self.assertEqual(trunc.delete_calls, 1, "completed-then-mismatch must delete the orphan (SA-5)")
             self.assertEqual(trunc.deleted_keys, [key_hint])
+
+    def test_object_storage_upload_multipart_threshold_override_bounds(self) -> None:  # Item 5
+        # v0.3.167 Item 5: --multipart-threshold override is code-bounded to
+        # [64 MiB, 5 GiB]. Below-floor and above-ceiling values are refused with a
+        # blocker (run does not proceed, no upload).
+        floor = archive_services.OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES
+        ceiling = archive_services.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES
+        for bad in (0, 1, floor - 1, ceiling + 1):
+            with self.subTest(threshold=bad):
+                with tempfile.TemporaryDirectory() as tmp:
+                    archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                    with patch.dict(
+                        archive_services.os.environ,
+                        {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                        clear=False,
+                    ):
+                        transport = _FakeObjectStorageTransport()
+                        result = self._upload_run(
+                            archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                            reviewed_by="kim", approve=True, transport=transport,
+                            multipart_threshold_bytes=bad,
+                        )
+                    self.assertFalse(result["ok"], result)
+                    self.assertEqual(result["execution_status"], "blocked", result)
+                    self.assertTrue(any("multipart_threshold_bytes" in b for b in result["blockers"]), result)
+                    self.assertEqual(transport.put_calls, 0, "a rejected threshold must not upload")
+
+    def test_object_storage_upload_receipt_records_threshold_and_part_count(self) -> None:  # Item 5
+        # v0.3.167 Item 5: the durable upload receipt now records the effective
+        # threshold used and the part_count. Default threshold on a small object is a
+        # single-part upload.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                result = self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport,
+                )
+            self.assertEqual(result["execution_status"], "executed", result)
+            receipt = json.loads((archive_root / result["receipts_written"][0]).read_text(encoding="utf-8"))
+            self.assertEqual(
+                receipt["effective_multipart_threshold_bytes"],
+                archive_services.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
+            )
+            self.assertEqual(receipt["part_count"], 1)
+            self.assertEqual(archive_cli.validate_schema(receipt, "object-storage-upload-receipt.schema.json"), [])
+
+    def test_object_storage_multipart_part_count_gt_one_at_floor_threshold(self) -> None:  # Item 5
+        # v0.3.167 Item 5: at the 64 MiB floor threshold, an object larger than one
+        # part splits into part_count > 1, exercising the real part-splitting path via
+        # the fake transport (no real socket).
+        floor = archive_services.OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            big = Path(tmp) / "big.bin"
+            # floor + 1 MiB => exactly 2 parts (one full 64 MiB part + a small tail).
+            big.write_bytes(b"\x00" * (floor + 1024 * 1024))
+            digest = archive_services.sha256_path(big)
+            size = big.stat().st_size
+            key_hint = f"sha256/{digest[:2]}/{digest}"
+            ledger = archive_services.ResumeLedger(Path(tmp) / "l.jsonl")
+            transport = _FakeObjectStorageTransport()
+            ok = archive_services.object_storage_execute_one_upload(
+                transport=transport, key=key_hint, data_path=big, size=size,
+                content_sha256=digest, multipart_threshold_bytes=floor, skip_uploaded=False, ledger=ledger,
+            )
+            self.assertEqual(ok["result_status"], "uploaded", ok)
+            self.assertEqual(ok["part_count"], 2, ok)
+            self.assertEqual(transport.multipart_calls, 1)
 
     def test_object_storage_multipart_rate_limited_retries_to_ceiling(self) -> None:  # SA-3 multipart
         # A rate_limited failure DURING a multipart part upload must be retried by
@@ -26852,6 +26930,25 @@ state:
         self.assertEqual(mint_code, 0, mint_output)
         return json.loads(mint_output)
 
+    def _mint_and_retire_lunch(self, archive_root: Path) -> dict:
+        """Mint the lunch draft then retire it, returning the retire receipt dict
+        plus zettel_id/retire_receipt_path for retire-draft-reconcile tests."""
+        mint = self._mint_lunch_for_reconcile(archive_root)
+        zid = mint["zettel_id"]
+        code, output = self.run_cli(
+            ["retire-draft", str(archive_root), "--zettel-id", zid, "--approve",
+             "--reviewed-by", "person:test", "--format", "json"]
+        )
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        return {
+            "zettel_id": zid,
+            "retire_receipt_path": result["retire_receipt_path"],
+            "canonical_path": mint["canonical_path"],
+            "draft_snapshot_path": mint["draft_snapshot_path"],
+            "mint_receipt_path": mint["mint_receipt_path"],
+        }
+
     def test_remint_reconcile_dry_run_writes_nothing_and_reports_class(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -27164,6 +27261,10 @@ state:
             self.assertFalse(json.loads(output)["ok"])
 
     def test_remint_reconcile_drifted_snapshot_falls_back_to_content_change(self) -> None:
+        # REVISED for v0.3.167 Item 1: the three CONTENT subscenarios below (missing /
+        # crlf_plus_content / bom_plus_content) still classify content_change because
+        # each carries a real HUMAN EDIT or no anchor. The NEW pure-format subscenarios
+        # (added in the sibling test below) flip to format_drift under Tier B.
         for scenario in ("missing", "crlf_plus_content", "bom_plus_content"):
             with self.subTest(scenario=scenario):
                 with tempfile.TemporaryDirectory() as tmp:
@@ -27187,6 +27288,550 @@ state:
                     result = json.loads(output)
                     self.assertEqual(result["drift_class"], "content_change", (scenario, result))
                     self.assertTrue(result["content_change_ack_required"])
+                    self.assertEqual(result["classification_basis"], "content_change_fallback", (scenario, result))
+
+    def test_remint_reconcile_tier_b_pure_format_snapshot_drift_is_format_drift(self) -> None:
+        # v0.3.167 Item 1 Tier B: when BOTH the canonical AND the snapshot are drifted
+        # by newline/BOM ONLY (byte-identical content), classification grants
+        # format_drift via normalized_content_match — NOT content_change. The snapshot's
+        # raw sha differs (so Tier A does not apply) but its raw-vs-normalized delta is
+        # provably newline/BOM-only (Proof 2) and the body is identical (Proof 1).
+        # Deterministic newline toggle regardless of the checkout's line endings: LF
+        # if the file currently has any CRLF, else CRLF. Either direction is a pure
+        # newline drift (no lone CR is introduced).
+        def _toggle_newlines(raw: bytes) -> bytes:
+            if b"\r\n" in raw:
+                return raw.replace(b"\r\n", b"\n")
+            return raw.replace(b"\n", b"\r\n")
+
+        for scenario in ("crlf_only_snapshot_drift", "bom_only_snapshot_drift"):
+            with self.subTest(scenario=scenario):
+                with tempfile.TemporaryDirectory() as tmp:
+                    archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                    mint = self._mint_lunch_for_reconcile(archive_root)
+                    zid = mint["zettel_id"]
+                    canonical = archive_root / mint["canonical_path"]
+                    snapshot = archive_root / mint["draft_snapshot_path"]
+                    if scenario == "crlf_only_snapshot_drift":
+                        canonical.write_bytes(_toggle_newlines(canonical.read_bytes()))
+                        snapshot.write_bytes(_toggle_newlines(snapshot.read_bytes()))
+                    else:  # bom_only_snapshot_drift
+                        canonical.write_bytes(b"\xef\xbb\xbf" + canonical.read_bytes())
+                        snapshot.write_bytes(b"\xef\xbb\xbf" + snapshot.read_bytes())
+                    code, output = self.run_cli(
+                        ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+                    )
+                    self.assertEqual(code, 0, output)
+                    result = json.loads(output)
+                    self.assertEqual(result["drift_class"], "format_drift", (scenario, result))
+                    self.assertFalse(result["content_change_ack_required"], (scenario, result))
+                    self.assertEqual(result["classification_basis"], "normalized_content_match", (scenario, result))
+                    self.assertFalse(result["body_changed"], (scenario, result))
+
+    def test_remint_reconcile_tier_b_format_drift_approves_without_ack_and_records_basis(self) -> None:
+        # v0.3.167 Item 1: a Tier-B format_drift is approvable WITHOUT --content-changed-ack
+        # (it is not a content change) and both receipts record classification_basis.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            snapshot = archive_root / mint["draft_snapshot_path"]
+
+            # Single-direction newline toggle so BOTH files genuinely drift away from
+            # their recorded shas by newline-only (Tier B, not a Tier-A round-trip).
+            def _toggle(raw: bytes) -> bytes:
+                return raw.replace(b"\r\n", b"\n") if b"\r\n" in raw else raw.replace(b"\n", b"\r\n")
+
+            canonical.write_bytes(_toggle(canonical.read_bytes()))
+            snapshot.write_bytes(_toggle(snapshot.read_bytes()))
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve", "--reviewed-by", "person:test", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["drift_class"], "format_drift", result)
+            self.assertEqual(result["classification_basis"], "normalized_content_match", result)
+            self.assertFalse(result["bom_stripped"], result)
+            audit = json.loads((archive_root / result["reconcile_receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(archive_cli.validate_schema(audit, "mint-reconcile-receipt.schema.json"), [])
+            self.assertEqual(audit["classification_basis"], "normalized_content_match")
+            self.assertFalse(audit["bom_stripped"])
+            mint_receipt = json.loads((archive_root / mint["mint_receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(mint_receipt["reconcile"]["classification_basis"], "normalized_content_match")
+            # doctor is clean after the honest reconcile.
+            doctor_code, _ = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0)
+
+    def test_remint_reconcile_tier_b_tampered_snapshot_title_is_content_change(self) -> None:
+        # v0.3.167 Item 1.4 (adversarial, THE hole-closing test): a Tier-B snapshot is
+        # newline-anchored but NOT sha-anchored, so its frontmatter is untrusted. Here
+        # an attacker newline-drifts the snapshot AND edits its draft `title` to match a
+        # tampered canonical `title`. If the expectation were reconstructed FROM the
+        # snapshot it would diff empty and launder the edit to format_drift. Because the
+        # expectation is sourced from the MINT RECEIPT's recorded zettel, the diff is
+        # non-empty -> content_change (ack required). This proves the hole is closed.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root, title="Original title")
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            snapshot = archive_root / mint["draft_snapshot_path"]
+
+            # 1) tamper the canonical title AND newline-drift it.
+            ctext = canonical.read_text(encoding="utf-8")
+            cmatch = archive_cli.FRONTMATTER_RE.match(ctext)
+            cfm = archive_cli.load_yaml(cmatch.group(1))
+            cbody = ctext[cmatch.end():]
+            cfm["title"] = "Tampered title"
+            canonical.write_bytes(
+                ("---\n" + archive_cli.dump_yaml(cfm) + "---\n\n" + cbody.lstrip()).encode("utf-8").replace(b"\n", b"\r\n")
+            )
+
+            # 2) tamper the snapshot draft title to MATCH, then newline-drift it, so the
+            #    snapshot's own frontmatter would reproduce the tampered title.
+            stext = snapshot.read_text(encoding="utf-8")
+            smatch = archive_cli.FRONTMATTER_RE.match(stext)
+            sfm = archive_cli.load_yaml(smatch.group(1))
+            sbody = stext[smatch.end():]
+            sfm["title"] = "Tampered title"
+            snapshot.write_bytes(
+                ("---\n" + archive_cli.dump_yaml(sfm) + "---\n\n" + sbody.lstrip()).encode("utf-8").replace(b"\n", b"\r\n")
+            )
+
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["drift_class"], "content_change", result)
+            self.assertTrue(result["content_change_ack_required"], result)
+            self.assertEqual(result["classification_basis"], "content_change_fallback", result)
+            self.assertTrue(any(c["field"] == "title" for c in result["frontmatter_field_changes"]), result)
+
+    def test_remint_reconcile_tier_b_non_receipt_field_edit_is_content_change(self) -> None:
+        # v0.3.167 Item 1.4 (adversarial, THE full-field hole-closing test): under Tier B
+        # the mint receipt records ONLY {id, title}, so a receipt-only frontmatter diff is
+        # BLIND to a canonical edit of any OTHER content field (visibility/kind/facets/
+        # provenance/edges/created_at/...). A canonical-only edit to such a field, with a
+        # GENUINE Tier-B snapshot (newline-drifted, content-identical, sha truly differs),
+        # MUST still classify content_change — a real content_change must NEVER be
+        # softened to format_drift (prime directive). The Tier-B gate is therefore the
+        # UNION of the FULL-FIELD snapshot-vs-canonical diff AND the receipt cross-check;
+        # the full-field member catches these unrecorded fields. This test edits ONLY a
+        # non-receipt field (id/title/status/body unchanged) and asserts content_change;
+        # it fails against a receipt-only Tier-B gate, surfacing the hole.
+        def _toggle(raw: bytes) -> bytes:
+            return raw.replace(b"\r\n", b"\n") if b"\r\n" in raw else raw.replace(b"\n", b"\r\n")
+
+        # (label, mutate canonical frontmatter in place, expected surfaced field name)
+        def _edit_visibility(fm: dict) -> None:
+            fm["visibility"] = dict(fm.get("visibility") or {})
+            fm["visibility"]["scope"] = "public"
+
+        def _edit_kind(fm: dict) -> None:
+            fm["kind"] = "reference_note"
+
+        def _edit_facets(fm: dict) -> None:
+            fm["facets"] = dict(fm.get("facets") or {})
+            fm["facets"]["domain"] = "work"
+
+        cases = {
+            "visibility_scope_private_to_public": (_edit_visibility, "visibility"),
+            "kind_edit": (_edit_kind, "kind"),
+            "facets_edit": (_edit_facets, "facets"),
+        }
+        for name, (mutate, field_name) in cases.items():
+            with self.subTest(case=name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                    mint = self._mint_lunch_for_reconcile(archive_root)
+                    zid = mint["zettel_id"]
+                    canonical = archive_root / mint["canonical_path"]
+                    snapshot = archive_root / mint["draft_snapshot_path"]
+
+                    # 1) edit ONLY a non-receipt content field on the canonical; id/title/
+                    #    status/body untouched. Then newline-drift the canonical.
+                    ctext = canonical.read_text(encoding="utf-8")
+                    cmatch = archive_cli.FRONTMATTER_RE.match(ctext)
+                    cfm = archive_cli.load_yaml(cmatch.group(1))
+                    cbody = ctext[cmatch.end():]
+                    mutate(cfm)
+                    canonical.write_bytes(
+                        _toggle(("---\n" + archive_cli.dump_yaml(cfm) + "---\n\n" + cbody.lstrip()).encode("utf-8"))
+                    )
+                    # 2) snapshot: newline-drift ONLY (content identical) -> genuine Tier B
+                    #    (raw sha truly differs; NOT a Tier-A round trip).
+                    snapshot.write_bytes(_toggle(snapshot.read_bytes()))
+
+                    code, output = self.run_cli(
+                        ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+                    )
+                    self.assertEqual(code, 0, output)
+                    result = json.loads(output)
+                    # Confirm we genuinely reached Tier B (snapshot IS a normalized anchor):
+                    # the warning naming the Tier-B anchor must be present, proving this is
+                    # not a Tier-C fallback masking the real coverage question.
+                    self.assertTrue(
+                        any("normalized content anchor (Tier B)" in w for w in result.get("warnings", [])),
+                        (name, result.get("warnings")),
+                    )
+                    self.assertEqual(result["drift_class"], "content_change", (name, result))
+                    self.assertTrue(result["content_change_ack_required"], (name, result))
+                    self.assertEqual(result["classification_basis"], "content_change_fallback", (name, result))
+                    self.assertTrue(
+                        any(c["field"] == field_name for c in result["frontmatter_field_changes"]),
+                        (name, result["frontmatter_field_changes"]),
+                    )
+
+    def test_remint_reconcile_tier_b_whitespace_and_unicode_body_edits_are_content_change(self) -> None:
+        # v0.3.167 Item 1 (normalizer-laundering guards): the normalized-equality
+        # definition does ZERO Unicode normalization and NO space collapsing, so a
+        # single->double space body edit and an NFC<->NFD codepoint change each survive
+        # normalization and correctly fail Proof 1 -> content_change (never format_drift),
+        # even when both files are also newline-drifted.
+        # NFC e-acute = U+00E9 (bytes C3 A9); NFD = e + U+0301 (bytes 65 CC 81).
+        # marker_before is written identically to BOTH files (Tier B eligible), then
+        # ONLY the canonical marker is edited to marker_after (a genuine content edit).
+        cases = {
+            "whitespace_body_edit": (b"lunch meeting", b"lunch  meeting"),
+            "nfc_vs_nfd_body_edit": (b"caf\xc3\xa9", b"cafe\xcc\x81"),
+        }
+        for name, (marker_before, marker_after) in cases.items():
+            with self.subTest(case=name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                    mint = self._mint_lunch_for_reconcile(archive_root)
+                    zid = mint["zettel_id"]
+                    canonical = archive_root / mint["canonical_path"]
+                    snapshot = archive_root / mint["draft_snapshot_path"]
+                    # LF-normalize first so the CRLF drift below is a CLEAN single
+                    # conversion regardless of the checkout's on-disk line endings.
+                    canonical.write_bytes(canonical.read_bytes().replace(b"\r\n", b"\n"))
+                    snapshot.write_bytes(snapshot.read_bytes().replace(b"\r\n", b"\n"))
+                    # 1) append the identical marker to BOTH files bodies.
+                    canonical.write_bytes(canonical.read_bytes() + b"\nmarker " + marker_before + b"\n")
+                    snapshot.write_bytes(snapshot.read_bytes() + b"\nmarker " + marker_before + b"\n")
+                    # 2) snapshot: newline-drift only (Tier B eligible).
+                    snapshot.write_bytes(snapshot.read_bytes().replace(b"\n", b"\r\n"))
+                    # 3) canonical: genuine body edit + newline-drift.
+                    canonical.write_bytes(
+                        canonical.read_bytes().replace(marker_before, marker_after).replace(b"\n", b"\r\n")
+                    )
+                    code, output = self.run_cli(
+                        ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+                    )
+                    self.assertEqual(code, 0, output)
+                    result = json.loads(output)
+                    self.assertEqual(result["drift_class"], "content_change", (name, result))
+                    self.assertTrue(result["content_change_ack_required"], (name, result))
+                    self.assertTrue(result["body_changed"], (name, result))
+
+    def test_remint_reconcile_strip_bom_removes_bom_and_classifies_format_drift(self) -> None:
+        # v0.3.167 Item 3: --strip-bom removes exactly the 3-byte leading BOM, clears
+        # the zettel_has_bom WARN, classifies format_drift (BOM strip is format by
+        # definition), and post-strip bytes equal original[3:] byte-for-byte.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            original = canonical.read_bytes()
+            canonical.write_bytes(b"\xef\xbb\xbf" + original)
+            # doctor sees a BOM before the strip.
+            _, before_doc = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            self.assertIn("zettel_has_bom", {i["code"] for i in json.loads(before_doc)})
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
+                 "--reviewed-by", "person:test", "--strip-bom", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["drift_class"], "format_drift", result)
+            self.assertTrue(result["bom_stripped"], result)
+            # exactly original[3:] — i.e. the BOM (and nothing else) was removed.
+            self.assertEqual(canonical.read_bytes(), original, result)
+            # BOM WARN cleared, doctor clean.
+            after_code, after_doc = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            self.assertNotIn("zettel_has_bom", {i["code"] for i in json.loads(after_doc)})
+            audit = json.loads((archive_root / result["reconcile_receipt_path"]).read_text(encoding="utf-8"))
+            self.assertTrue(audit["bom_stripped"])
+            self.assertEqual(archive_cli.validate_schema(audit, "mint-reconcile-receipt.schema.json"), [])
+
+    def test_remint_reconcile_strip_bom_on_no_bom_file_is_noop(self) -> None:
+        # v0.3.167 Item 3.1a: --strip-bom on a file with NO leading BOM refuses to
+        # rewrite anything (no-op refusal), leaving bytes untouched.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            # newline drift only so the run has something to reconcile (format_drift),
+            # but NO leading BOM.
+            canonical.write_bytes(canonical.read_bytes().replace(b"\r\n", b"\n"))
+            before = canonical.read_bytes()
+            self.assertFalse(before.startswith(b"\xef\xbb\xbf"))
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
+                 "--reviewed-by", "person:test", "--strip-bom", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertFalse(result["bom_stripped"], result)
+            self.assertIn("no leading BOM", result.get("bom_strip_note", ""))
+            self.assertEqual(canonical.read_bytes(), before)
+
+    def test_remint_reconcile_strip_bom_does_not_launder_content_change_without_ack(self) -> None:
+        # v0.3.167 Item 3.1e: --strip-bom NEVER bypasses the content-change ack gate.
+        # A file with a real content edit (title) AND a BOM is content_change; --strip-bom
+        # without --content-changed-ack is BLOCKED (zero writes, BOM not stripped). With
+        # the ack it proceeds as content_change AND still strips the BOM.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root, title="Original title")
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            text = canonical.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            fm = archive_cli.load_yaml(match.group(1))
+            body = text[match.end():]
+            fm["title"] = "Corrected title"
+            canonical.write_bytes(
+                b"\xef\xbb\xbf" + ("---\n" + archive_cli.dump_yaml(fm) + "---\n\n" + body.lstrip()).encode("utf-8")
+            )
+            with_bom = canonical.read_bytes()
+            # WITHOUT ack -> blocked, nothing written, BOM still present.
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
+                 "--reviewed-by", "person:test", "--strip-bom", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertTrue(canonical.read_bytes().startswith(b"\xef\xbb\xbf"))
+            self.assertEqual(canonical.read_bytes(), with_bom)
+            reconcile_dir = archive_root / "receipts" / "mint" / "reconciles"
+            self.assertFalse(reconcile_dir.exists() and list(reconcile_dir.glob("*")))
+            # WITH ack -> proceeds as content_change AND strips the BOM.
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
+                 "--reviewed-by", "person:test", "--strip-bom", "--content-changed-ack", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["drift_class"], "content_change", result)
+            self.assertTrue(result["content_change_ack"], result)
+            self.assertTrue(result["bom_stripped"], result)
+            self.assertFalse(canonical.read_bytes().startswith(b"\xef\xbb\xbf"))
+
+    # ------------------------------------------------------------------
+    # Item 2 (v0.3.167): retire-draft-reconcile sibling command
+    # ------------------------------------------------------------------
+
+    def test_retire_draft_reconcile_snapshot_newline_drift_is_format_and_closes_doctor(self) -> None:
+        # v0.3.167 Item 2: a pure newline drift on the retire receipt's snapshot ref
+        # classifies format_drift; approving it re-issues the receipt shas so the
+        # doctor mint_retired_draft_sha_mismatch closes.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            retire = self._mint_and_retire_lunch(archive_root)
+            zid = retire["zettel_id"]
+            snapshot = archive_root / retire["draft_snapshot_path"]
+            # pure newline drift on the snapshot (toggle to guarantee a real drift).
+            raw = snapshot.read_bytes()
+            snapshot.write_bytes(raw.replace(b"\r\n", b"\n") if b"\r\n" in raw else raw.replace(b"\n", b"\r\n"))
+            # doctor now flags the retire snapshot sha mismatch and routes to the sibling.
+            _, doc = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            items = json.loads(doc)
+            codes = {i["code"] for i in items}
+            self.assertTrue(
+                "mint_retired_draft_sha_mismatch" in codes or "mint_retired_draft_byte_drift_suspected_format" in codes,
+                codes,
+            )
+            routed = [i for i in items if i["code"].startswith("mint_retired_draft") and "suggested_command" in i]
+            self.assertTrue(any("retire-draft-reconcile" in i.get("suggested_command", "") for i in routed), items)
+            # dry-run reconcile: snapshot ref is format_drift, overall format_drift.
+            code, output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            plan = json.loads(output)
+            self.assertEqual(plan["drift_class"], "format_drift", plan)
+            snap_report = next(r for r in plan["ref_reports"] if r["ref"] == "snapshot")
+            self.assertEqual(snap_report["drift_class"], "format_drift", plan)
+            self.assertFalse(plan["content_change_ack_required"], plan)
+            # approve WITHOUT ack (format_drift needs none) -> re-issues shas.
+            code, output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
+                 "--reviewed-by", "person:test", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["drift_class"], "format_drift", result)
+            audit = json.loads((archive_root / result["reconcile_receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(archive_cli.validate_schema(audit, "retire-draft-reconcile-receipt.schema.json"), [])
+            retire_receipt = json.loads((archive_root / retire["retire_receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(archive_cli.validate_schema(retire_receipt, "mint-retired-draft-receipt.schema.json"), [])
+            self.assertIn("reconcile", retire_receipt)
+            self.assertEqual(len(retire_receipt["reconcile"]["history"]), 1)
+            # doctor now clean on the retire sha.
+            _, doc2 = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            self.assertNotIn("mint_retired_draft_sha_mismatch", {i["code"] for i in json.loads(doc2)})
+
+    def test_retire_draft_reconcile_snapshot_content_edit_needs_ack(self) -> None:
+        # v0.3.167 Item 2: a newline drift PLUS a real body edit on the snapshot ref is
+        # content_change and requires --content-changed-ack.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            retire = self._mint_and_retire_lunch(archive_root)
+            zid = retire["zettel_id"]
+            snapshot = archive_root / retire["draft_snapshot_path"]
+            snapshot.write_bytes(snapshot.read_bytes().replace(b"\r\n", b"\n") + b"\nHUMAN EDIT line\n")
+            # A non-newline byte change on the snapshot survives the Proof-2 guard as
+            # content_change.
+            code, output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            plan = json.loads(output)
+            self.assertEqual(plan["drift_class"], "content_change", plan)
+            self.assertTrue(plan["content_change_ack_required"], plan)
+            # approve WITHOUT ack -> blocked, no writes.
+            code, output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
+                 "--reviewed-by", "person:test", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            audit_dir = archive_root / "receipts" / "mint" / "retired-draft-reconciles"
+            self.assertFalse(audit_dir.exists() and list(audit_dir.glob("*")))
+            # approve WITH ack -> proceeds.
+            code, output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
+                 "--reviewed-by", "person:test", "--content-changed-ack", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            self.assertTrue(json.loads(output)["content_change_ack"])
+
+    def test_retire_draft_reconcile_tampered_frontmatter_is_content_change(self) -> None:
+        # v0.3.167 Item 2 (inherits Item 1.4): a tampered snapshot title that matches a
+        # tampered canonical title must NOT anchor format_drift. The shared mint-reconcile
+        # classifier sources the frontmatter expectation from the MINT RECEIPT, so the
+        # tamper diffs non-empty -> content_change (ack required).
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            retire = self._mint_and_retire_lunch(archive_root)
+            zid = retire["zettel_id"]
+            canonical = archive_root / retire["canonical_path"]
+            snapshot = archive_root / retire["draft_snapshot_path"]
+            for target in (canonical, snapshot):
+                text = target.read_text(encoding="utf-8")
+                match = archive_cli.FRONTMATTER_RE.match(text)
+                fm = archive_cli.load_yaml(match.group(1))
+                body = text[match.end():]
+                fm["title"] = "Tampered title"
+                target.write_bytes(
+                    ("---\n" + archive_cli.dump_yaml(fm) + "---\n\n" + body.lstrip()).encode("utf-8").replace(b"\n", b"\r\n")
+                )
+            code, output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            plan = json.loads(output)
+            self.assertEqual(plan["drift_class"], "content_change", plan)
+            self.assertTrue(plan["content_change_ack_required"], plan)
+
+    def test_retire_draft_reconcile_non_receipt_field_edit_is_content_change(self) -> None:
+        # v0.3.167 Item 2 (inherits the Item 1.4 full-field fix): the retire target/
+        # snapshot refs borrow the SHARED mint-reconcile verdict as their positive
+        # format_drift proof. A canonical edit to a non-receipt content field (here
+        # visibility.scope private->public; id/title/status/body unchanged) under a
+        # genuine Tier-B snapshot must make that shared verdict content_change, so the
+        # retire target/snapshot refs inherit content_change and never re-issue over a
+        # laundered edit. This is the retire analog of the mint full-field hole test.
+        def _toggle(raw: bytes) -> bytes:
+            return raw.replace(b"\r\n", b"\n") if b"\r\n" in raw else raw.replace(b"\n", b"\r\n")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            retire = self._mint_and_retire_lunch(archive_root)
+            zid = retire["zettel_id"]
+            canonical = archive_root / retire["canonical_path"]
+            snapshot = archive_root / retire["draft_snapshot_path"]
+
+            # Edit ONLY visibility.scope on the canonical (target ref); newline-drift it.
+            ctext = canonical.read_text(encoding="utf-8")
+            cmatch = archive_cli.FRONTMATTER_RE.match(ctext)
+            cfm = archive_cli.load_yaml(cmatch.group(1))
+            cbody = ctext[cmatch.end():]
+            cfm["visibility"] = dict(cfm.get("visibility") or {})
+            cfm["visibility"]["scope"] = "public"
+            canonical.write_bytes(
+                _toggle(("---\n" + archive_cli.dump_yaml(cfm) + "---\n\n" + cbody.lstrip()).encode("utf-8"))
+            )
+            # Snapshot: newline-drift only (content identical) -> genuine Tier B.
+            snapshot.write_bytes(_toggle(snapshot.read_bytes()))
+
+            code, output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            plan = json.loads(output)
+            self.assertEqual(plan["drift_class"], "content_change", plan)
+            self.assertTrue(plan["content_change_ack_required"], plan)
+            # The target ref specifically must NOT be format_drift.
+            target_ref = next(r for r in plan["ref_reports"] if r["ref"] == "target")
+            self.assertNotEqual(target_ref["drift_class"], "format_drift", plan)
+
+    def test_retire_draft_reconcile_pointer_ref_mismatch_is_content_change(self) -> None:
+        # v0.3.167 Item 2: the mint_receipt pointer ref has no format dimension; ANY
+        # sha mismatch is content_change even if the byte change is newline-shaped.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            retire = self._mint_and_retire_lunch(archive_root)
+            zid = retire["zettel_id"]
+            mint_receipt = archive_root / retire["mint_receipt_path"]
+            # Any byte change to the JSON pointer file.
+            mint_receipt.write_bytes(mint_receipt.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n", 1))
+            code, output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            plan = json.loads(output)
+            mr = next(r for r in plan["ref_reports"] if r["ref"] == "mint_receipt")
+            if mr["drift_class"] != "clean":
+                self.assertEqual(mr["drift_class"], "content_change", plan)
+                self.assertEqual(plan["drift_class"], "content_change", plan)
+
+    def test_retire_draft_reconcile_refuses_missing_receipt(self) -> None:
+        # v0.3.167 Item 2: no retire receipt for the id -> blocked, zero writes.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self._mint_lunch_for_reconcile(archive_root)  # minted but NOT retired
+            code, output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id",
+                 "zet_20260519_draft_ai_lunch_note", "--dry-run", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(result["blockers"])
+
+    def test_retire_draft_reconcile_strip_bom_on_target(self) -> None:
+        # v0.3.167 Item 2 + 3 parity: --strip-bom removes a leading BOM from the retire
+        # target canonical during reconcile.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            retire = self._mint_and_retire_lunch(archive_root)
+            zid = retire["zettel_id"]
+            canonical = archive_root / retire["canonical_path"]
+            original = canonical.read_bytes()
+            canonical.write_bytes(b"\xef\xbb\xbf" + original)
+            code, output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
+                 "--reviewed-by", "person:test", "--strip-bom", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["bom_stripped"], result)
+            self.assertEqual(canonical.read_bytes(), original)
 
     def test_retire_draft_sha_block_routes_to_reconcile_but_id_missing_does_not(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

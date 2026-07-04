@@ -1,9 +1,10 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.166 selectable upload key strategy and safe adopt-existing checkpoint
+Status: v0.3.167 snapshot-drift-aware reconcile and retire-draft-reconcile checkpoint
 Date: 2026-07-04
-Version: v0.3.166, release candidate
+Version: v0.3.167, release candidate
 
+Previous checkpoint: Status: v0.3.166 selectable upload key strategy and safe adopt-existing checkpoint
 Previous checkpoint: Status: v0.3.165 plain-language guidance convention checkpoint
 Previous checkpoint: Status: v0.3.164 object-storage upload adapter Stage 2 (live SigV4 transport) checkpoint
 Previous checkpoint: Status: v0.3.163 object-storage upload adapter Stage 1 checkpoint

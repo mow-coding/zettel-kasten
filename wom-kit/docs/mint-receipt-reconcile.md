@@ -45,12 +45,16 @@ archive remint-reconcile <archive-root> (--zettel-id <id> | --path <rel>)
         [--dry-run | --approve]
         [--reviewed-by <actor>]
         [--content-changed-ack]
+        [--strip-bom]
         [--format text|json]
 ```
 
 - `--dry-run` (the default) classifies and previews with zero writes.
 - `--approve` re-issues the receipt after review; it requires `--reviewed-by`.
 - `--content-changed-ack` is required to approve a `content_change`.
+- `--strip-bom` (opt-in) removes a single leading UTF-8 BOM; see below.
+
+This command family is CLI-only. There is no MCP surface for reconcile, by design.
 
 ## Drift classes
 
@@ -124,6 +128,124 @@ Frontmatter parsing and receipt/JSON reads tolerate a single leading UTF-8 BOM.
 The sha256 functions still hash raw bytes, so BOM and newline drift stay visible
 as a sha mismatch — the tolerance makes files parse, it does not hide drift. New
 mints pin the canonical write to LF newlines to reduce future re-drift.
+
+## Snapshot-drift-aware classification (v0.3.167 Item 1)
+
+A draft snapshot drifts on disk for the same reason a canonical does — a CRLF/BOM
+re-checkout under `core.autocrlf`. Earlier releases fell straight to
+`content_change` whenever the snapshot's raw sha differed, even if the drift was
+newline/BOM-only. v0.3.167 adds a middle anchor tier so a genuinely format-only
+snapshot drift can still yield `format_drift` — WITHOUT ever letting a
+content-tampered snapshot launder a real edit.
+
+Three anchor tiers, in order:
+
+1. **`clean_anchor` (Tier A).** The snapshot's raw sha still matches the recorded
+   sha. Body identity and frontmatter identity are both derived from the snapshot,
+   exactly as before.
+2. **`normalized_content_match` (Tier B).** The snapshot's raw sha differs, but
+   `format_drift` is still granted when ALL of the following hold: (a) the current
+   canonical body is byte-identical to the snapshot body under the one
+   normalized-equality definition (CRLF/CR→LF, strip one leading BOM, zero Unicode
+   normalization, no space collapsing); (b) the snapshot's OWN raw-vs-normalized
+   delta is provably newline/BOM-only (no lone-CR or other byte change); and (c)
+   the frontmatter field-diff is empty. Because the drifted snapshot is only
+   newline/BOM-anchored (not sha-anchored), that field-diff is the **union of two
+   independent checks**, and BOTH must be empty:
+   - a **full-field reconstruction** comparing every content frontmatter field of
+     the current canonical against the snapshot (the same all-fields diff Tier A
+     uses — `visibility`, `kind`, `facets`, `provenance`, `edges`, `created_at`,
+     `source_refs`, …, not just `id`/`title`). This catches a canonical-only edit
+     to any field, including the fields the mint receipt never records; and
+   - a **cross-check against the mint receipt's recorded `zettel`** (`id`/`title`).
+     This catches the residual case where the snapshot's own frontmatter was
+     tampered to match a tampered canonical (so the full-field diff would reproduce
+     itself and read empty) — the receipt is sha-independent of the snapshot, so the
+     tamper still surfaces.
+3. **`content_change_fallback` (Tier C).** Everything else, and the default.
+
+> **A content-tampered snapshot NEVER anchors `format_drift`.** Once the raw-sha
+> anchor is relaxed (Tier B), body identity uses a normalized compare against the
+> snapshot, while frontmatter identity uses the union above: a full-field
+> reconstruction over EVERY content field PLUS a cross-check of `id`/`title` against
+> the mint receipt. A canonical edit to any content field — including
+> `visibility`, `kind`, `facets`, `provenance`, `edges`, `created_at` — makes the
+> union non-empty and falls to `content_change`, and a snapshot whose frontmatter is
+> tampered to match a tampered canonical is caught by the receipt cross-check. No
+> single-field subset is trusted; a real content change can never be softened.
+
+The reconcile audit receipt records a `classification_basis`
+(`clean_anchor` / `normalized_content_match` / `content_change_fallback`) so an
+auditor can see WHY a `format_drift` was granted when the snapshot itself was
+dirty. The `drift_class` enum is unchanged: `format_drift` or `content_change`.
+
+## Retire-draft reconcile (sibling command)
+
+`archive retire-draft-reconcile <archive-root> --zettel-id <id> [--dry-run |
+--approve] [--reviewed-by <actor>] [--content-changed-ack] [--strip-bom]` is the
+sibling for a **retire-draft** receipt, which binds four raw-byte refs
+(`source` / `target` / `mint_receipt` / `snapshot`) rather than the mint receipt's
+three-sha shape. It is a separate command (not a flag on `remint-reconcile`) so the
+safety-critical mint classifier stays single-purpose.
+
+Honesty model (identical to mint reconcile): it recomputes the four refs from
+current on-disk bytes, shows the on-disk content, is approval-gated, and requires
+`--content-changed-ack` when ANY ref is `content_change`. Per-ref classification:
+
+- `target` / `snapshot` (text refs): inherit the Item 1 discipline. A ref is
+  `format_drift` only when the shared mint-reconcile classifier proves the
+  canonical and snapshot content-identical (body identity + the full-field
+  frontmatter union: an all-fields reconstruction over every content field plus the
+  `id`/`title` receipt cross-check) AND the structural newline/BOM delta guard holds
+  on the ref's bytes. A raw sha mismatch alone is never proof of content-identity,
+  and an edit to any content field — not just `id`/`title` — forces `content_change`.
+- `mint_receipt` (pure JSON pointer ref): no format dimension — any sha mismatch is
+  `content_change`.
+- `source` (the inbox draft): normally removed at retirement, so a missing source
+  is not a drift.
+
+Discoverability: `archive doctor` now attaches a `suggested_command`
+(`archive retire-draft-reconcile <archive-root> --zettel-id <id> --dry-run`) to the
+`mint_retired_draft_sha_mismatch` finding (previously a bare error). A byte-drift
+FORMAT variant softens only when a prior retire reconcile recorded a
+`normalized_content_digest` for that ref that still matches — the same honesty
+precondition as the mint route. Both stay ERRORs. Sibling audit receipts live under
+`receipts/mint/retired-draft-reconciles/<id>.retire-draft-reconcile.json`, and the
+retire receipt gains an append-only `reconcile` provenance block.
+
+## `--strip-bom` (format_drift by definition)
+
+`--strip-bom` is an opt-in boolean on both reconcile commands that removes exactly
+the 3-byte leading UTF-8 BOM (`EF BB BF`) from the canonical file. Because the BOM
+carries no text content, stripping it is `format_drift` **by definition** — it is
+not a new drift class, and the enum stays `["format_drift", "content_change"]`.
+
+Guarantees:
+
+- **Never changes text content.** It removes exactly `original[3:]` and asserts a
+  content-preserving invariant (`normalized(before) == normalized(after)`) before
+  committing; on any violation it aborts and writes nothing.
+- **Atomic.** The rewrite uses temp-file + fsync + `os.replace`; a crash leaves the
+  original byte-identical.
+- **No-op refusal.** On a file with no leading BOM, it reports "no leading BOM
+  present; nothing stripped" and rewrites nothing.
+- **Never bypasses the ack gate.** When the run's class is `content_change`,
+  `--strip-bom` still requires `--content-changed-ack`; a BOM strip never launders a
+  real content edit. When the class is `format_drift`, it proceeds under that class
+  and needs no ack.
+
+The re-issued `normalized_content_digest` is recomputed over the post-strip bytes
+(equal to the pre-strip normalized digest by construction, since the normalizer
+already strips a leading BOM), so `doctor`'s format-drift branch still matches.
+
+## Scope note: contract-preview vs run-outcome (adapter honesty)
+
+Unrelated to reconcile but corrected in the same release: the object-storage upload
+result has two distinct `live_execution_allowed_now` signals. The static
+CONTRACT-preview field is a capability statement (what the adapter is allowed to do
+in general) and stays as declared; the top-level RUN-outcome field reports what a
+specific run actually did — `true` only on a real executed upload, `false` on a
+preview or blocked run. They are different signals and are not interchangeable.
 
 ## Deferred
 

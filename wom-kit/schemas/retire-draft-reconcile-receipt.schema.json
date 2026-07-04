@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit retire-draft reconcile receipt",
+  "type": "object",
+  "required": [
+    "receipt_id",
+    "receipt_path",
+    "action",
+    "dry_run",
+    "archive_id",
+    "authority_mode",
+    "zettel",
+    "retire_receipt",
+    "drift_class",
+    "ref_reports",
+    "result"
+  ],
+  "properties": {
+    "receipt_id": {"type": "string"},
+    "receipt_path": {"type": "string"},
+    "action": {"type": "string", "enum": ["reconcile_retire_draft_receipt"]},
+    "dry_run": {"type": "boolean"},
+    "timestamp": {"type": "string"},
+    "archive_id": {"type": "string"},
+    "authority_mode": {"type": "string", "enum": ["basic"]},
+    "reviewed_by": {"type": "string"},
+    "zettel": {"type": "object"},
+    "retire_receipt": {"type": "object"},
+    "drift_class": {"type": "string", "enum": ["clean", "format_drift", "content_change"]},
+    "content_change_ack": {"type": "boolean"},
+    "bom_stripped": {"type": "boolean"},
+    "ref_reports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ref": {"type": "string", "enum": ["source", "target", "mint_receipt", "snapshot"]},
+          "path": {"type": ["string", "null"]},
+          "prior_sha256": {"type": ["string", "null"]},
+          "new_sha256": {"type": ["string", "null"]},
+          "drift_class": {"type": "string", "enum": ["clean", "format_drift", "content_change"]},
+          "classification_basis": {"type": "string", "enum": ["clean_anchor", "normalized_content_match", "content_change_fallback"]},
+          "normalized_content_digest": {"type": ["string", "null"]},
+          "note": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "result": {"type": "object"}
+  }
+}

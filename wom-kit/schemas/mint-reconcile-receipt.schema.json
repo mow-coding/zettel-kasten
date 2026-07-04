@@ -26,6 +26,8 @@
     "zettel": {"type": "object"},
     "mint_receipt": {"type": "object"},
     "drift_class": {"type": "string", "enum": ["format_drift", "content_change"]},
+    "classification_basis": {"type": "string", "enum": ["clean_anchor", "normalized_content_match", "content_change_fallback"]},
+    "bom_stripped": {"type": "boolean"},
     "content_change_ack": {"type": "boolean"},
     "prior_target_sha256": {"type": "string"},
     "new_target_sha256": {"type": "string"},

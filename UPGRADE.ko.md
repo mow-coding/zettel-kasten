@@ -152,6 +152,35 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.166` To `v0.3.167`
+
+이 release는 정직한 reconcile 계열을 확장합니다: 스냅샷이 함께 드리프트한 경우에도
+안전하게 분류하는 기능, retire receipt용 형제 명령 `retire-draft-reconcile`, opt-in
+`--strip-bom`을 추가하고, object-storage 실행 결과의 `live_execution_allowed_now`
+필드를 바로잡으며, 경계가 정해진 `--multipart-threshold` 테스트 보조 옵션을
+추가합니다. 모두 추가적(additive)이며 마이그레이션은 필요 없습니다.
+
+운영자에게 보이는 변경:
+
+- archive 마이그레이션이나 해시 변경은 없습니다. mint reconcile audit receipt의 두
+  새 필드(`classification_basis`, `bom_stripped`), retire receipt의 새 `reconcile`
+  provenance 블록, 새 `retire-draft-reconcile-receipt.schema.json`, object-storage
+  업로드 receipt의 두 새 필드(`effective_multipart_threshold_bytes`, `part_count`)는
+  모두 추가적입니다. 어떤 스키마도 `additionalProperties: false`를 쓰지 않으므로 기존
+  receipt·manifest·zet은 그대로 수용됩니다.
+- `remint-reconcile`은 이제 draft 스냅샷 자체가 드리프트한 경우에도 `format_drift`를
+  인식하지만, 두 개의 독립 증명과 전체 필드 frontmatter 검사(모든 content 필드를
+  재구성 비교 + mint receipt의 `id`/`title` 대조) 뒤에만 허용합니다 — 따라서 어떤
+  content 필드(`visibility`, `kind`, `facets` 등)를 수정하거나 내용이 변조된 스냅샷은
+  절대 `format_drift`의 앵커가 될 수 없습니다. 불확실하면 여전히 `content_change`로
+  분류하고 `--content-changed-ack`을 요구합니다.
+- 새 CLI 전용 명령 `archive retire-draft-reconcile --dry-run|--approve`는
+  retire-draft receipt의 네 ref를 reconcile하며, doctor는 이제
+  `mint_retired_draft_sha_mismatch` 결과를 `suggested_command`로 이 명령에
+  안내합니다. 두 reconcile 명령의 opt-in `--strip-bom`은 선행 UTF-8 BOM만 제거하고
+  내용 변경 ack 게이트를 절대 우회하지 않습니다.
+  `wom-kit/docs/releases/v0.3.167.md` 참고.
+
 ## From `v0.3.164` To `v0.3.165`
 
 이 release는 운영자용 runtime 표면에 normative Plain-Language for Humans 규약을
