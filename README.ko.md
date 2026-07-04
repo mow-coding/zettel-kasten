@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.168 pre-release
+v0.3.169 pre-release
 ```
 
-이전 공개 기준: v0.3.167 pre-release.
+이전 공개 기준: v0.3.168 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -89,7 +89,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 ### AI operator 계약과 runtime handoff
 
 - read-only `archive capabilities --machine`으로 AI 운영자가 현재 설치본의 실행 가능한 CLI 명령, alias, 필수 인자, option, nested subcommand, local release identity를 안정된 `ok/state/summary/data/blockers/warnings` 봉투로 확인할 수 있습니다. GitHub나 provider는 호출하지 않습니다.
-- read-only `archive operator-feedback-plan --dry-run`과 승인형 `archive operator-feedback-record --approve`로 AI 운영자가 만든 도구 피드백을 `ops/feedback/` 아래 draft/delivered/acknowledged/resolved/archived 상태 메타데이터로 추적합니다. 피드백 본문은 읽지 않고, 외부 제출도 하지 않으며, 사용자 지식 `objets/`를 피드백 수명주기 표면으로 쓰지 않게 합니다.
+- read-only `archive operator-feedback-plan --dry-run`과 승인형 `archive operator-feedback-record --approve`로 AI 운영자가 만든 도구 피드백을 `ops/feedback/` 아래 draft/delivered/acknowledged/resolved/archived 상태 메타데이터로 추적합니다. 여기에 더해 read-only `archive operator-feedback-ledger --dry-run`(별칭 `feedback-ledger`, `feedback-board`)은 전달 상태를 상태별 카운트와 대기(draft) 목록으로 집계하고, 승인형 `archive operator-feedback-mark-delivered --approve`는 draft→delivered 전달 경계를 한 번에 처리하며 `delivered_at`를 찍고 receipt 하나를 씁니다. 피드백 본문은 읽지 않고, 피드백 ref/제목을 노출하지 않으며, 외부 제출도 하지 않고(메타데이터일 뿐이며 `delivered`는 운영자가 직접 찍은 표시일 뿐 외부 전달의 증거가 아닙니다), 사용자 지식 `objets/`를 피드백 수명주기 표면으로 쓰지 않게 합니다.
 - read-only `archive approval-handoff-plan --dry-run`과 승인형 `archive approval-handoff-record --approve`로 AI가 사람 승인으로 넘겨야 하는 순간을 `ops/approval-handoffs/` 아래 needs_review/approved_once/denied/superseded/resolved 상태 메타데이터로 기록합니다. 실제 작업 실행, private material 읽기, provider 호출, target/action 값 재출력은 하지 않습니다.
 - read-only `archive approval-handoff-audit --dry-run`으로 후속 작업이 handoff 기록을 승인 근거로 쓰기 전에 상태, 작업 종류, reviewed_by 등을 검사합니다. 실제 작업 실행이나 target/action 값 재출력은 하지 않습니다.
 - read-only `archive operation-status-taxonomy --dry-run`으로 AI 운영자가 succeeded/preview/written/no_change와 partial/truncated/blocked/failed를 구분하게 합니다. 일부만 성공했거나 출력이 잘린 결과를 완료로 말하지 않기 위한 기준입니다.

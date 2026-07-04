@@ -32,6 +32,8 @@
     "updated_at": {"type": "string"},
     "reviewed_by": {"type": ["string", "null"]},
     "body_managed_by_this_record": {"type": "boolean", "const": false},
-    "external_submission_performed": {"type": "boolean", "const": false}
+    "external_submission_performed": {"type": "boolean", "const": false},
+    "delivered_at": {"type": "string"},
+    "acknowledged_at": {"type": "string"}
   }
 }

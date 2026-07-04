@@ -152,6 +152,35 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.168` To `v0.3.169`
+
+이 release는 read-only 운영자 피드백 전달 ledger와 승인형 일괄 mark-delivered
+명령을 추가합니다. 모두 추가적(additive)이며 마이그레이션은 필요 없습니다.
+
+운영자에게 보이는 변경:
+
+- **archive 마이그레이션 없음, 기존 record 불변, 해시 변경 없음.**
+  `operator-feedback.schema.json` record에 선택적(optional) 문자열 속성
+  `delivered_at`, `acknowledged_at`가 추가됩니다(`required`에는 넣지 않음). 기존
+  `ops/feedback/*.yml` record는 그대로 검증·읽힙니다. 일괄 receipt용으로 새
+  `operator-feedback-delivery-receipt.schema.json`이 함께 배포됩니다.
+- **새 read-only `archive operator-feedback-ledger`**(별칭 `feedback-ledger`,
+  `feedback-board`): `ops/feedback/*.yml`에서 전달 상태를 상태별 카운트 + 대기(draft)
+  목록 + 최신 전달 경계로 집계합니다. 아무것도 쓰지 않고, 피드백 본문을 읽지 않으며,
+  피드백 ref·제목·경로·토큰·비밀 값을 노출하지 않습니다. 손상된 record는 `unreadable`로
+  세어 건너뜁니다. 옛 `--status delivered` 경로로 delivered된 record는 `delivered_at`가
+  없어 경계가 `updated_at`로 대체됩니다.
+- **새 승인형 `archive operator-feedback-mark-delivered`**(별칭
+  `feedback-mark-delivered`): `--dry-run`은 draft→delivered 전이를 미리 보고 아무것도
+  쓰지 않습니다. `--approve --reviewed-by <actor>`는 대기 중인 모든 `draft` record를
+  delivered로 표시하고 `delivered_at`를 찍으며 receipt 하나를 씁니다. `--only <id>`는
+  단일 record만 표시합니다. `draft` record만 건드리고, 멱등하며, 손상된 record는 다른
+  record를 반쯤 쓰지 않고 건너뜁니다.
+- **정직 경계(과장 없음).** 이는 메타데이터 수명주기일 뿐입니다.
+  `external_submission_performed`는 `false`로 유지되며, `delivered`는 운영자가 직접
+  표시했다는 뜻이지 외부로 제출되었거나 사람이 수신했다는 증명이 아닙니다.
+  `wom-kit/docs/releases/v0.3.169.md` 참고.
+
 ## From `v0.3.167` To `v0.3.168`
 
 이 release는 draft 시점 identity 위생, attributed mint affirmation 플래그, 소비된

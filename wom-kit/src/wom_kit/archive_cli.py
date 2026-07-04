@@ -10,6 +10,10 @@ Commands:
           Show the operator-generated feedback storage and lifecycle contract.
   operator-feedback-record
           Preview or approve a metadata record for operator-generated feedback.
+  operator-feedback-ledger
+          Read-only delivery-status ledger of operator feedback records (status + ids only).
+  operator-feedback-mark-delivered
+          Preview or approve a batched draft->delivered delivery-boundary commit.
   approval-handoff-plan
           Show the AI-to-human approval handoff storage and lifecycle contract.
   approval-handoff-record
@@ -2884,6 +2888,74 @@ def command_operator_feedback_record(args: argparse.Namespace) -> int:
             print("Blockers:")
             for blocker in result["blockers"]:
                 print(f"- {blocker}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_operator_feedback_ledger(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print("operator-feedback-ledger is read-only and requires --dry-run.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.operator_feedback_ledger(Path(args.archive_root), dry_run=True)
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
+        print("Operator feedback delivery ledger.")
+        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Records: {summary.get('record_count', 0)}")
+        for status in archive_services.OPERATOR_FEEDBACK_STATUSES:
+            print(f"  {status}: {counts.get(status, 0)}")
+        if counts.get("unknown_status"):
+            print(f"  unknown_status: {counts.get('unknown_status')}")
+        if summary.get("unreadable_count"):
+            print(f"  unreadable: {summary.get('unreadable_count')}")
+        print(f"Pending ({summary.get('pending_count', 0)}): " + ", ".join(result.get("pending") or []))
+        print(f"Delivery boundary: {summary.get('delivery_boundary') or '-'}")
+    return 0 if result.get("ok", True) else 1
+
+
+def command_operator_feedback_mark_delivered(args: argparse.Namespace) -> int:
+    if args.dry_run == args.approve:
+        print("operator-feedback-mark-delivered requires exactly one of --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("operator-feedback-mark-delivered requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+    try:
+        result = archive_services.operator_feedback_mark_delivered(
+            Path(args.archive_root),
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+            only=args.only,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print("Operator feedback mark-delivered (draft->delivered).")
+        print(f"State: {result.get('state') or '-'}")
+        print(f"Candidates: {summary.get('candidate_count', 0)}")
+        print(f"Delivered: {summary.get('delivered_count', 0)}")
+        if summary.get("skipped_unreadable_count"):
+            print(f"Skipped (unreadable): {summary.get('skipped_unreadable_count')}")
+        print(f"Receipt path: {summary.get('receipt_path') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
 
 
@@ -12786,6 +12858,29 @@ def build_parser() -> argparse.ArgumentParser:
     operator_feedback_record.add_argument("--reviewed-by", help="Reviewer id required for approved writes.")
     operator_feedback_record.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     operator_feedback_record.set_defaults(func=command_operator_feedback_record)
+
+    operator_feedback_ledger = subcommands.add_parser(
+        "operator-feedback-ledger",
+        aliases=["feedback-ledger", "feedback-board"],
+        help="Read-only delivery-status ledger of operator feedback records (status + ids only).",
+    )
+    operator_feedback_ledger.add_argument("archive_root", help="Archive root to inspect.")
+    operator_feedback_ledger.add_argument("--dry-run", action="store_true", help="Required. Preview only; write nothing.")
+    operator_feedback_ledger.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    operator_feedback_ledger.set_defaults(func=command_operator_feedback_ledger)
+
+    operator_feedback_mark_delivered = subcommands.add_parser(
+        "operator-feedback-mark-delivered",
+        aliases=["feedback-mark-delivered"],
+        help="Preview or approve a batched draft->delivered delivery-boundary commit for operator feedback.",
+    )
+    operator_feedback_mark_delivered.add_argument("archive_root", help="Archive root whose pending feedback records are marked delivered.")
+    operator_feedback_mark_delivered.add_argument("--dry-run", action="store_true", help="Preview which draft records would transition; write nothing.")
+    operator_feedback_mark_delivered.add_argument("--approve", action="store_true", help="Write draft->delivered transitions and a single delivery-boundary receipt.")
+    operator_feedback_mark_delivered.add_argument("--reviewed-by", help="Reviewer id required for approved writes.")
+    operator_feedback_mark_delivered.add_argument("--only", help="Optional: mark only the single record with this safe feedback id.")
+    operator_feedback_mark_delivered.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    operator_feedback_mark_delivered.set_defaults(func=command_operator_feedback_mark_delivered)
 
     objet_capture_enable = subcommands.add_parser(
         "objet-capture-enable",

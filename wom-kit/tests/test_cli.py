@@ -1041,6 +1041,443 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(any(issue.code == "schema_const" for issue in broken_receipt_issues))
             self.assertTrue(any(issue.code == "schema_type" for issue in broken_receipt_issues))
 
+    def _seed_operator_feedback_record(
+        self,
+        archive_root: Path,
+        feedback_id: str,
+        *,
+        status: str,
+        feedback_ref: str,
+        title: str,
+        resolved_in: str | None = None,
+    ) -> None:
+        args = [
+            "operator-feedback-record",
+            str(archive_root),
+            "--feedback-id",
+            feedback_id,
+            "--feedback-ref",
+            feedback_ref,
+            "--status",
+            status,
+            "--title",
+            title,
+            "--approve",
+            "--reviewed-by",
+            "person:seed",
+            "--format",
+            "json",
+        ]
+        if resolved_in is not None:
+            args.extend(["--resolved-in", resolved_in])
+        code, output = self.run_cli(args)
+        self.assertEqual(code, 0, output)
+
+    def test_operator_feedback_ledger_aggregates_status_without_body_ref_or_title_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            secret_ref = "feedback:SECRET_REF_should_not_echo"
+            secret_title = "SECRET_TITLE_should_not_echo"
+            self._seed_operator_feedback_record(
+                archive_root, "ledger_draft_a", status="draft", feedback_ref=secret_ref, title=secret_title
+            )
+            self._seed_operator_feedback_record(
+                archive_root, "ledger_draft_b", status="draft", feedback_ref="feedback:b", title="Title B"
+            )
+            self._seed_operator_feedback_record(
+                archive_root, "ledger_ack", status="acknowledged", feedback_ref="feedback:c", title="Title C"
+            )
+            self._seed_operator_feedback_record(
+                archive_root,
+                "ledger_resolved",
+                status="resolved",
+                feedback_ref="feedback:d",
+                title="Title D",
+                resolved_in="v0.3.149",
+            )
+
+            code, output = self.run_cli(
+                ["operator-feedback-ledger", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            ledger = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(ledger["lifecycle_action"], "operator_feedback_ledger")
+            self.assertTrue(ledger["dry_run"])
+            self.assertEqual(ledger["counts"]["draft"], 2)
+            self.assertEqual(ledger["counts"]["acknowledged"], 1)
+            self.assertEqual(ledger["counts"]["resolved"], 1)
+            self.assertEqual(ledger["counts"]["delivered"], 0)
+            self.assertEqual(sorted(ledger["pending"]), ["ledger_draft_a", "ledger_draft_b"])
+            self.assertEqual(ledger["summary"]["pending_count"], 2)
+            self.assertEqual(ledger["summary"]["record_count"], 4)
+            self.assertEqual(ledger["would_change"], [])
+
+            serialized = json.dumps(ledger, ensure_ascii=False)
+            # The record on disk holds feedback_ref + title; the ledger must
+            # project only status + id + safe timestamps, never those values.
+            self.assertNotIn(secret_ref, serialized)
+            self.assertNotIn(secret_title, serialized)
+            self.assertNotIn("SECRET_REF_should_not_echo", serialized)
+            self.assertNotIn("SECRET_TITLE_should_not_echo", serialized)
+            self.assertFalse(ledger["privacy_guards"]["feedback_ref_value_echoed"])
+            self.assertFalse(ledger["privacy_guards"]["title_value_echoed"])
+            self.assertFalse(ledger["privacy_guards"]["writes"])
+
+    def test_operator_feedback_ledger_alias_and_read_only_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            for alias in ("feedback-ledger", "feedback-board"):
+                with self.subTest(alias=alias):
+                    code, output = self.run_cli([alias, str(archive_root), "--dry-run", "--format", "json"])
+                    self.assertEqual(code, 0, output)
+                    self.assertEqual(json.loads(output)["lifecycle_action"], "operator_feedback_ledger")
+            code, output = self.run_cli(["operator-feedback-ledger", str(archive_root), "--format", "json"])
+            self.assertEqual(code, 1, output)
+            self.assertIn("read-only", output)
+
+    def test_operator_feedback_mark_delivered_dry_run_previews_and_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            secret_ref = "feedback:MARK_SECRET_REF_should_not_echo"
+            secret_title = "MARK_SECRET_TITLE_should_not_echo"
+            self._seed_operator_feedback_record(
+                archive_root, "mark_draft_a", status="draft", feedback_ref=secret_ref, title=secret_title
+            )
+            self._seed_operator_feedback_record(
+                archive_root, "mark_ack", status="acknowledged", feedback_ref="feedback:x", title="Title X"
+            )
+
+            before = self.archive_tree_snapshot(archive_root)
+            code, output = self.run_cli(
+                ["operator-feedback-mark-delivered", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            preview = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(preview["state"], "preview")
+            self.assertTrue(preview["dry_run"])
+            transitions = {(entry["feedback_id"], entry["from_status"], entry["to_status"]) for entry in preview["would_change"]}
+            self.assertEqual(transitions, {("mark_draft_a", "draft", "delivered")})
+            # Writes nothing.
+            self.assertEqual(before, self.archive_tree_snapshot(archive_root))
+            self.assertEqual(preview["files_written"], [])
+
+            serialized = json.dumps(preview, ensure_ascii=False)
+            self.assertNotIn(secret_ref, serialized)
+            self.assertNotIn(secret_title, serialized)
+
+    def test_operator_feedback_mark_delivered_approve_transitions_only_draft_and_is_idempotent(self) -> None:
+        from wom_kit import schema_validator
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            secret_ref = "feedback:APPROVE_SECRET_REF_should_not_echo"
+            secret_title = "APPROVE_SECRET_TITLE_should_not_echo"
+            self._seed_operator_feedback_record(
+                archive_root, "app_draft", status="draft", feedback_ref=secret_ref, title=secret_title
+            )
+            self._seed_operator_feedback_record(
+                archive_root, "app_ack", status="acknowledged", feedback_ref="feedback:ack", title="Ack Title"
+            )
+            self._seed_operator_feedback_record(
+                archive_root,
+                "app_resolved",
+                status="resolved",
+                feedback_ref="feedback:res",
+                title="Res Title",
+                resolved_in="v0.3.149",
+            )
+
+            feedback_dir = archive_root / "ops" / "feedback"
+            ack_before = (feedback_dir / "app_ack.yml").read_bytes()
+            resolved_before = (feedback_dir / "app_resolved.yml").read_bytes()
+
+            # Requires --reviewed-by.
+            code, output = self.run_cli(
+                ["operator-feedback-mark-delivered", str(archive_root), "--approve", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertIn("reviewed-by", output)
+
+            code, output = self.run_cli(
+                [
+                    "operator-feedback-mark-delivered",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+            approved = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(approved["state"], "written")
+            self.assertTrue(approved["approved"])
+            self.assertEqual(approved["delivered_feedback_ids"], ["app_draft"])
+            self.assertEqual(approved["files_written"], ["ops/feedback/app_draft.yml"])
+
+            # Exactly one delivery-boundary receipt, batch shape, honesty fields.
+            receipt_dir = archive_root / "receipts" / "operator-feedback"
+            batch_receipts = sorted(receipt_dir.glob("delivery-batch.*.json"))
+            self.assertEqual(len(batch_receipts), 1)
+            receipt = json.loads(batch_receipts[0].read_text(encoding="utf-8"))
+            self.assertEqual(receipt["delivered_feedback_ids"], ["app_draft"])
+            self.assertEqual(receipt["delivered_count"], 1)
+            self.assertEqual(receipt["reviewed_by"], "person:me")
+            self.assertFalse(receipt["external_submission_performed"])
+            self.assertTrue(receipt["delivery_is_metadata_only"])
+            receipt_issues = schema_validator.validate_schema(
+                receipt, "operator-feedback-delivery-receipt.schema.json"
+            )
+            self.assertEqual([issue.message for issue in receipt_issues], [])
+
+            # Draft record mutated: delivered + delivered_at + reviewed_by, ref/title preserved.
+            record = archive_cli.load_yaml((feedback_dir / "app_draft.yml").read_text(encoding="utf-8"))
+            self.assertEqual(record["status"], "delivered")
+            self.assertTrue(record["delivered_at"])
+            self.assertEqual(record["reviewed_by"], "person:me")
+            self.assertFalse(record["external_submission_performed"])
+            # Field preservation: feedback_ref and title survived the mutation.
+            self.assertEqual(record["feedback_ref"], secret_ref)
+            self.assertEqual(record["title"], secret_title)
+            # Mutated record still conforms to the shipped schema (all 11 required
+            # fields survived and delivered_at did not break anything).
+            record_issues = schema_validator.validate_schema(record, "operator-feedback.schema.json")
+            self.assertEqual([issue.message for issue in record_issues], [])
+
+            # Non-draft records never touched (byte-identical).
+            self.assertEqual((feedback_dir / "app_ack.yml").read_bytes(), ack_before)
+            self.assertEqual((feedback_dir / "app_resolved.yml").read_bytes(), resolved_before)
+
+            # Leak guard on approve output and the on-disk receipt.
+            serialized = json.dumps(approved, ensure_ascii=False)
+            self.assertNotIn(secret_ref, serialized)
+            self.assertNotIn(secret_title, serialized)
+            receipt_text = batch_receipts[0].read_text(encoding="utf-8")
+            self.assertNotIn(secret_ref, receipt_text)
+            self.assertNotIn(secret_title, receipt_text)
+
+            # Idempotent: a second approve marks nothing new (zero drafts remain).
+            record_after = (feedback_dir / "app_draft.yml").read_bytes()
+            code, output = self.run_cli(
+                [
+                    "operator-feedback-mark-delivered",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+            second = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(second["summary"]["delivered_count"], 0)
+            self.assertEqual(second["delivered_feedback_ids"], [])
+            self.assertIsNone(second["summary"]["receipt_path"])
+            # Already-delivered record unchanged by the idempotent re-run.
+            self.assertEqual((feedback_dir / "app_draft.yml").read_bytes(), record_after)
+            # The no-op approve must NOT emit a zero-delivery boundary receipt:
+            # the receipt count did not grow (still exactly the one real batch).
+            self.assertEqual(len(sorted(receipt_dir.glob("delivery-batch.*.json"))), 1)
+
+            # Ledger now reflects the delivery boundary from the stamped record.
+            code, output = self.run_cli(
+                ["operator-feedback-ledger", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            ledger = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(ledger["counts"]["delivered"], 1)
+            self.assertEqual(ledger["pending"], [])
+            self.assertTrue(ledger["summary"]["delivery_boundary"])
+            self.assertEqual(ledger["summary"]["delivery_boundary_stamped_count"], 1)
+
+    def test_operator_feedback_mark_delivered_only_marks_single_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self._seed_operator_feedback_record(
+                archive_root, "only_target", status="draft", feedback_ref="feedback:t", title="Target"
+            )
+            self._seed_operator_feedback_record(
+                archive_root, "only_other", status="draft", feedback_ref="feedback:o", title="Other"
+            )
+            code, output = self.run_cli(
+                [
+                    "feedback-mark-delivered",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--only",
+                    "only_target",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["delivered_feedback_ids"], ["only_target"])
+            feedback_dir = archive_root / "ops" / "feedback"
+            target = archive_cli.load_yaml((feedback_dir / "only_target.yml").read_text(encoding="utf-8"))
+            other = archive_cli.load_yaml((feedback_dir / "only_other.yml").read_text(encoding="utf-8"))
+            self.assertEqual(target["status"], "delivered")
+            self.assertEqual(other["status"], "draft")
+
+    def test_operator_feedback_ledger_and_mark_delivered_redact_unsafe_hand_authored_id(self) -> None:
+        # Records are documented as hand-editable one at a time. A hand-authored
+        # record can therefore carry a secret-ish internal feedback_id (URL/token)
+        # even though the file stem is safe. The id read back from disk must be
+        # re-sanitized before it is projected into ledger pending / mark-delivered
+        # output / the delivery receipt — never echoed verbatim.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            feedback_dir = archive_root / "ops" / "feedback"
+            feedback_dir.mkdir(parents=True, exist_ok=True)
+            secret_id = "https://internal.example.com/secret?token=sk-abc123"
+            hand_record = {
+                "schema": "wom-kit/operator-feedback/v0.1",
+                "feedback_id": secret_id,
+                "feedback_ref": "feedback:hand",
+                "status": "draft",
+                "title": "Hand Authored",
+                "related_releases": [],
+                "resolved_in": None,
+                "updated_at": "2026-07-04T00:00:00Z",
+                "reviewed_by": "person:seed",
+                "body_managed_by_this_record": False,
+                "external_submission_performed": False,
+            }
+            (feedback_dir / "safe_stem.yml").write_text(
+                archive_cli.dump_yaml(hand_record), encoding="utf-8"
+            )
+
+            # Ledger must not echo the secret id anywhere.
+            code, output = self.run_cli(
+                ["operator-feedback-ledger", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            ledger = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertNotIn(secret_id, output)
+            self.assertNotIn("token=sk-abc123", output)
+            self.assertNotIn(secret_id, ledger["pending"])
+            # The safe file stem is the projected id instead.
+            self.assertIn("safe_stem", ledger["pending"])
+
+            # mark-delivered must not echo the secret id in output or the receipt.
+            code, output = self.run_cli(
+                [
+                    "operator-feedback-mark-delivered",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertNotIn(secret_id, output)
+            self.assertNotIn(secret_id, result["delivered_feedback_ids"])
+            self.assertIn("safe_stem", result["delivered_feedback_ids"])
+            receipt_dir = archive_root / "receipts" / "operator-feedback"
+            for receipt_path in receipt_dir.glob("delivery-batch.*.json"):
+                text = receipt_path.read_text(encoding="utf-8")
+                self.assertNotIn(secret_id, text)
+                self.assertNotIn("token=sk-abc123", text)
+
+    def test_operator_feedback_mark_delivered_same_second_batches_keep_distinct_receipts(self) -> None:
+        # Regression: the delivery-boundary receipt filename must carry a per-batch
+        # discriminator so two approve commits within the SAME wall-clock second
+        # cannot collapse to one file and silently destroy the earlier batch's
+        # audit record. Freeze the clock to force a same-second collision and
+        # deliver two records one at a time via the sanctioned --only workflow.
+        from datetime import datetime as real_datetime, timezone as real_timezone
+
+        frozen = real_datetime(2026, 7, 4, 11, 27, 16, tzinfo=real_timezone.utc)
+
+        class _FrozenDatetime(real_datetime):
+            @classmethod
+            def now(cls, tz=None):  # type: ignore[override]
+                return frozen if tz is None else frozen.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self._seed_operator_feedback_record(
+                archive_root, "same_a", status="draft", feedback_ref="feedback:a", title="A"
+            )
+            self._seed_operator_feedback_record(
+                archive_root, "same_b", status="draft", feedback_ref="feedback:b", title="B"
+            )
+
+            receipt_dir = archive_root / "receipts" / "operator-feedback"
+            with patch("wom_kit.archive_services.datetime", _FrozenDatetime):
+                first = archive_services.operator_feedback_mark_delivered(
+                    archive_root, approve=True, reviewed_by="person:me", only="same_a"
+                )
+                second = archive_services.operator_feedback_mark_delivered(
+                    archive_root, approve=True, reviewed_by="person:me", only="same_b"
+                )
+
+            self.assertEqual(first["delivered_feedback_ids"], ["same_a"])
+            self.assertEqual(second["delivered_feedback_ids"], ["same_b"])
+            # Both batches committed in the same second, yet BOTH receipts survive.
+            batch_receipts = sorted(receipt_dir.glob("delivery-batch.*.json"))
+            self.assertEqual(len(batch_receipts), 2)
+            delivered_sets = sorted(
+                tuple(json.loads(p.read_text(encoding="utf-8"))["delivered_feedback_ids"])
+                for p in batch_receipts
+            )
+            self.assertEqual(delivered_sets, [("same_a",), ("same_b",)])
+
+    def test_operator_feedback_ledger_and_mark_delivered_fail_safe_on_malformed_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self._seed_operator_feedback_record(
+                archive_root, "good_draft", status="draft", feedback_ref="feedback:g", title="Good"
+            )
+            feedback_dir = archive_root / "ops" / "feedback"
+            corrupt_path = feedback_dir / "corrupt.yml"
+            corrupt_bytes = b": : : not valid yaml : [\n"
+            corrupt_path.write_bytes(corrupt_bytes)
+            listy_path = feedback_dir / "listy.yml"
+            listy_path.write_text("- a\n- b\n", encoding="utf-8")  # valid YAML, not a mapping
+
+            # Ledger reports the malformed files as unreadable and still aggregates the valid one.
+            code, output = self.run_cli(
+                ["operator-feedback-ledger", str(archive_root), "--dry-run", "--format", "json"]
+            )
+            ledger = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(ledger["counts"]["draft"], 1)
+            self.assertEqual(ledger["summary"]["unreadable_count"], 2)
+            self.assertEqual(ledger["pending"], ["good_draft"])
+
+            # mark-delivered transitions the valid draft while skipping the corrupt files,
+            # with a sane return code and the corrupt file untouched.
+            code, output = self.run_cli(
+                [
+                    "operator-feedback-mark-delivered",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["delivered_feedback_ids"], ["good_draft"])
+            self.assertEqual(result["summary"]["skipped_unreadable_count"], 2)
+            self.assertTrue(result["warnings"])
+            self.assertEqual(corrupt_path.read_bytes(), corrupt_bytes)
+            self.assertEqual(
+                archive_cli.load_yaml((feedback_dir / "good_draft.yml").read_text(encoding="utf-8"))["status"],
+                "delivered",
+            )
+
     def test_approval_handoff_plan_and_record_without_action_echo_or_execution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
