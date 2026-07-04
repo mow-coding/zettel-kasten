@@ -6,6 +6,45 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.168 - 2026-07-04
+
+Draft-time identity hygiene, honest human affirmation, and continuation edges.
+All five items are additive; no archive migration, no id rewrite, no hash change.
+
+- Draft-id hygiene, forward-only (Item 마): the empty-slug fallback token in
+  `make_zettel_id` changes from `draft` to `note`, so a titleless or pure-Hangul
+  title no longer yields a misleading `zet_<ts>_draft` id. The fix touches ONLY the
+  generator of new draft ids — before any reference can exist — so no existing
+  canonical id is renamed or normalized and mint gains no id-rewrite path. The
+  existing same-second collision loop is unchanged (`…_note`, `…_note_2`).
+- Attributed mint affirmation (Item 나): `mint-zet` gains a repeatable `--affirm`
+  flag (accepts only the two human-review items `one_clear_purpose`,
+  `sensitive_content_reviewed`) that requires `--reviewed-by`. An affirmation is
+  threaded into the on-the-fly checklist evaluation (source label `cli_affirmation`,
+  distinct from `mint_frontmatter`/`legacy_promotion_frontmatter`/`machine`) so the
+  item evaluates as passed for this mint without a YAML hand-edit, and is recorded in
+  a new attributed `affirmations` block in the mint receipt (`item_id`, `affirmed_by`,
+  `affirmed_at`). `--affirm` is inert without an attributed reviewer (hard error),
+  cannot override machine-enforced items, and never flips an explicit YAML `false`.
+  Honest residual: like the pre-existing `--reviewed-by` gate, `--affirm` cannot
+  prove the reviewer string names a real human; it adds no new self-affirm hole and
+  its guarantee is auditability, not string-sniffing.
+- No silent auto-delete; discoverability pointer only (Item 다): a successful mint
+  result gains a `next_safe_actions` list pointing to
+  `archive retire-draft --zettel-id <id> --dry-run`, printed in text mode. Mint still
+  never deletes the consumed inbox draft; retirement stays its own approval-gated step.
+- Base `continues` edge type (Item 라): a `continues` link type is added to the base
+  vocabulary in both `types.yml` files (KIT and fake-archive fixture), carved away
+  from `derived_from`, `references`, `derived`, `supersedes`, and a generic `sequence`
+  step. It is deliberately NOT added to `CONNECTION_IMPORT_RECOMMENDED_EDGE_TYPES`, so
+  migration/revert and every pinned link-type test stay green untouched. Trade-off:
+  archives that vendored their own `types.yml` add the entry manually (it is additive).
+- Draft-time `--kind` validation (Item 가): `create-draft` now validates `--kind`
+  against the archive's own `zettel-rules.yml` and emits a WARNING (not a block) that
+  lists the valid kinds; default stays `fleeting_capture`, no argparse `choices=`. The
+  warning is now printed in the non-dry-run text path too, and a read-only
+  `--list-kinds` flag lists the archive's valid note kinds and exits without writing.
+
 ## v0.3.167 - 2026-07-04
 
 - Snapshot-drift-aware `format_drift` classification for `remint-reconcile` (Item 1):

@@ -152,6 +152,45 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.167` To `v0.3.168`
+
+이 release는 draft 시점 identity 위생, attributed mint affirmation 플래그, 소비된
+draft를 retire하도록 안내하는 포인터, base `continues` edge type, draft 시점
+`--kind` 검증을 추가합니다. 모두 추가적(additive)이며 마이그레이션은 필요 없습니다.
+
+운영자에게 보이는 변경:
+
+- **archive 마이그레이션 없음, 기존 id 불변, 해시 변경 없음.** 어떤 기존 canonical
+  id도 이름이 바뀌거나 정규화되지 않습니다. mint receipt에 새 추가 필드 `affirmations`
+  배열(`item_id`, `affirmed_by`, `affirmed_at`)이 생기고, mint 결과에 `next_safe_actions`
+  문자열 목록이 생깁니다. `mint-receipt.schema.json`은 `additionalProperties: false`를
+  쓰지 않으므로 기존 receipt·manifest·zet은 그대로 수용됩니다.
+- **draft-id 위생(forward-only).** ASCII 영숫자가 없는 제목(제목 없음 또는 한글뿐인
+  제목)의 NEW draft는 이제 옛 `zet_<ts>_draft` 대신 `zet_<ts>_note` id를 받습니다.
+  새로 만드는 draft에만 영향을 주며 기존 id는 그대로이고 mint에는 id 재작성 경로가
+  추가되지 않습니다.
+- **`mint-zet`의 attributed `--affirm`.** `mint-zet --approve --reviewed-by <actor>
+  --affirm <item_id>`(반복 가능; `one_clear_purpose`, `sensitive_content_reviewed`만
+  허용)는 두 human-review 체크리스트 항목을 raw `mint.checklist` YAML 편집 대신
+  검토자 귀속·감사 가능한 CLI 행위로 충족하며 receipt의 `affirmations` 블록에
+  기록됩니다. `--reviewed-by` 없으면 무효(hard error), machine-enforced 항목은
+  덮어쓸 수 없고, 명시적 YAML `false`도 뒤집지 않습니다. **정직한 잔여 위험:** 기존
+  `--reviewed-by` 게이트와 마찬가지로 `--affirm`은 검토자 문자열이 실제 사람인지
+  증명하지 못합니다. 새로운 self-affirm 구멍을 만들지 않으며, 보장하는 것은 귀속과
+  감사 가능성이지 문자열 검사가 아닙니다.
+- **retire 포인터, 자동 삭제 없음.** 성공한 mint 결과는 이제 `next_safe_actions`로
+  `archive retire-draft --zettel-id <id> --dry-run`을 안내합니다(text 모드에서 출력).
+  mint은 여전히 소비된 inbox draft를 삭제하지 않으며 retire는 자체 승인 게이트 단계로
+  남습니다.
+- **base `continues` edge type.** base `zettel-kasten/types.yml`(KIT과 fixture)이 이제
+  같은 흐름의 연속을 위한 `continues` link type를 정의합니다. **제한:** base 전용이며
+  `migrate link-types-v0.3`의 recommended 집합에 포함되지 않으므로, 자기 `types.yml`을
+  vendoring한 archive는 항목을 수동으로 추가합니다(추가적).
+- **draft 시점 `--kind` 검증 + `--list-kinds`.** `archive create-draft`는 이제 archive의
+  `zettel-rules.yml`에 없는 `--kind`에 대해 경고(차단 아님)하고 유효한 kind 목록을
+  보여줍니다. `archive create-draft --list-kinds`는 이를 read-only로 나열하며 아무것도
+  쓰지 않습니다. `wom-kit/docs/releases/v0.3.168.md` 참고.
+
 ## From `v0.3.166` To `v0.3.167`
 
 이 release는 정직한 reconcile 계열을 확장합니다: 스냅샷이 함께 드리프트한 경우에도

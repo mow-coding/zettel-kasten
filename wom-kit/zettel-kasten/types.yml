@@ -471,6 +471,13 @@ link_types:
     policy_notes:
       - Direction matters; use material for inputs and derived for outputs.
 
+  - id: continues
+    description: The target zet directly continues this zet's own line of thought or is the next installment in the SAME work. Use for same-thread follow-on only. Not derived_from (source/provenance), not references (topical citation), not derived (a distinct later product built from this zet), not supersedes (replacing an older version), and not a generic ordered process step.
+    from:
+      - Zettel
+    to:
+      - Zettel
+
   - id: semantic
     description: The target zet is meaningfully related, but the relation needs human wording before it becomes more specific.
     from:

@@ -2529,6 +2529,7 @@ ZETTEL_OVERVIEW_GIST_CHAR_LIMIT = 360
 ZETTEL_OVERVIEW_FRONTMATTER_FIELDS = ("gist", "summary", "abstract", "description", "overview")
 ZETTEL_EDGE_EXTERNAL_REF_RE = re.compile(r"^zet:(?P<source>[A-Za-z0-9_-]+):(?P<external_id>[A-Za-z0-9_-]+)$")
 MACHINE_ENFORCED_CHECKLIST_ITEMS = {"object_id_only", "allowed_edges"}
+HUMAN_AFFIRMABLE_CHECKLIST_ITEMS = {"one_clear_purpose", "sensitive_content_reviewed"}
 ZETTEL_PRIVATE_PROVIDER_LOCATOR_RE = re.compile(
     r"(?i)\bhttps?://(?:[^/\s\"'<>)]*\.)?(?:app\.notion\.com|notion\.so|api\.notion\.com|tiro\.ooo|api\.tiro\.ooo)(?:[/?#:]|$)"
 )
@@ -7975,6 +7976,15 @@ def create_draft_zettel(
         if creation_mode not in DRAFT_CREATION_MODES:
             blockers.append("creation_mode must be one of: " + ", ".join(sorted(DRAFT_CREATION_MODES)) + ".")
 
+    if kind:
+        valid_kinds = sorted(note_kind_rules(load_zettel_rules(root)).keys())
+        if kind not in valid_kinds:
+            warnings.append(
+                f"Unknown note kind '{kind}'. Valid kinds in this archive's zettel-rules: "
+                + ", ".join(valid_kinds)
+                + ". The draft was created; mint will warn on this kind too."
+            )
+
     assisted = clean_optional_string_list(assisted_by)
     supervised = clean_optional_string_list(supervised_by)
     explicit_derived = clean_optional_string_list(derived_from)
@@ -8142,6 +8152,7 @@ def promote_zettel_dry_run(
     *,
     zettel_id: str | None = None,
     relative_path: str | None = None,
+    affirmations: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
@@ -8219,7 +8230,9 @@ def promote_zettel_dry_run(
     if proposed_file.exists():
         blockers.append(f"Proposed canonical path already exists: {proposed_path}.")
 
-    checklist = build_minting_checklist(frontmatter, body, minting_rules, allowed_link_types)
+    checklist = build_minting_checklist(
+        frontmatter, body, minting_rules, allowed_link_types, affirmations=affirmations
+    )
     requires_checklist = bool(minting_rules.get("requires_checklist", True))
     if requires_checklist:
         for item in checklist:
@@ -8405,9 +8418,12 @@ def mint_zettel_dry_run(
     *,
     zettel_id: str | None = None,
     relative_path: str | None = None,
+    affirmations: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
-    promotion_dry_run = promote_zettel_dry_run(root, zettel_id=zettel_id, relative_path=relative_path)
+    promotion_dry_run = promote_zettel_dry_run(
+        root, zettel_id=zettel_id, relative_path=relative_path, affirmations=affirmations
+    )
     source_path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
     source_frontmatter, body = split_zettel_text(source_path.read_text(encoding="utf-8"))
     source_frontmatter = json_safe(source_frontmatter)
@@ -8489,13 +8505,32 @@ def mint_zettel(
     relative_path: str | None = None,
     reviewed_by: str,
     allow_warnings: bool = False,
+    affirmations: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     reviewer = reviewed_by.strip()
     if not reviewer:
         raise ArchiveServiceError("Real minting requires --reviewed-by.")
 
+    requested_affirmations = affirmations or {}
+    unknown_affirmations = sorted(
+        item_id for item_id in requested_affirmations if item_id not in HUMAN_AFFIRMABLE_CHECKLIST_ITEMS
+    )
+    if unknown_affirmations:
+        raise ArchiveServiceError(
+            "--affirm only accepts human-review items: "
+            + ", ".join(sorted(HUMAN_AFFIRMABLE_CHECKLIST_ITEMS))
+            + "."
+        )
+    applied_affirmations = {
+        item_id: reviewer
+        for item_id in requested_affirmations
+        if item_id in HUMAN_AFFIRMABLE_CHECKLIST_ITEMS
+    }
+
     root = require_existing_archive_root(archive_root)
-    dry_run = mint_zettel_dry_run(root, zettel_id=zettel_id, relative_path=relative_path)
+    dry_run = mint_zettel_dry_run(
+        root, zettel_id=zettel_id, relative_path=relative_path, affirmations=applied_affirmations
+    )
     if dry_run["blockers"]:
         raise ArchiveServiceError("Minting blocked by dry-run: " + "; ".join(dry_run["blockers"]))
     if dry_run["warnings"] and not allow_warnings:
@@ -8610,6 +8645,10 @@ def mint_zettel(
             "edges": source_frontmatter.get("edges") if isinstance(source_frontmatter.get("edges"), list) else [],
             "local_ai_sessions": extract_mint_local_ai_sessions(source_frontmatter),
             "checklist": dry_run["checklist"],
+            "affirmations": [
+                {"item_id": item_id, "affirmed_by": reviewer, "affirmed_at": now}
+                for item_id in sorted(applied_affirmations)
+            ],
             "near_duplicates": dry_run["near_duplicates"],
             "warnings": dry_run["warnings"],
             "result": {
@@ -8672,6 +8711,9 @@ def mint_zettel(
         "scratch_cleanup": scratch_cleanup_result,
         "checklist": dry_run["checklist"],
         "created_paths": created_paths,
+        "next_safe_actions": [
+            f"Verify the mint receipt, then close the consumed inbox draft with 'archive retire-draft --zettel-id {zettel_id_value} --dry-run' before approving retirement.",
+        ],
         "receipt": json_safe(receipt),
     }
 
@@ -11080,8 +11122,12 @@ def build_minting_checklist(
     body: str,
     minting_rules: dict[str, Any],
     allowed_link_types: set[str],
+    *,
+    affirmations: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    return build_lifecycle_checklist(frontmatter, body, minting_rules, allowed_link_types)
+    return build_lifecycle_checklist(
+        frontmatter, body, minting_rules, allowed_link_types, affirmations=affirmations
+    )
 
 
 def mint_checklist_guidance(checklist: list[dict[str, Any]]) -> dict[str, Any]:
@@ -11119,6 +11165,8 @@ def build_lifecycle_checklist(
     body: str,
     rules: dict[str, Any],
     allowed_link_types: set[str],
+    *,
+    affirmations: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     raw_items = rules.get("checklist") if isinstance(rules, dict) else []
     if not isinstance(raw_items, list):
@@ -11138,13 +11186,25 @@ def build_lifecycle_checklist(
         if explicit is None:
             explicit = promotion_checklist_decision(promotion, item_id)
             source_label = "legacy_promotion_frontmatter"
+        if (
+            explicit is None
+            and affirmations
+            and item_id in affirmations
+            and item_id in HUMAN_AFFIRMABLE_CHECKLIST_ITEMS
+        ):
+            explicit = True
+            source_label = "cli_affirmation"
         if item_id in MACHINE_ENFORCED_CHECKLIST_ITEMS and machine_status == "blocked":
             status = machine_status
             message = machine_message
             source = "machine"
         elif explicit is True:
             status = "passed"
-            message = "Marked as passed in frontmatter."
+            message = (
+                "Affirmed as passed by an attributed reviewer via --affirm."
+                if source_label == "cli_affirmation"
+                else "Marked as passed in frontmatter."
+            )
             source = source_label
         elif explicit is False:
             status = "blocked"
@@ -63036,7 +63096,7 @@ def default_private_visibility() -> dict[str, Any]:
 def make_zettel_id(title: str, iso_now: str) -> str:
     day = iso_now[:10].replace("-", "")
     time_part = iso_now[11:19].replace(":", "")
-    slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:32] or "draft"
+    slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:32] or "note"
     return f"zet_{day}_{time_part}_{slug}"
 
 
