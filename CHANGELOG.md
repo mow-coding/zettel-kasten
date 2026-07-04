@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.165 - 2026-07-04
+
+- Added a normative Plain-Language for Humans convention to the runtime-visible
+  operator surfaces: the personal/company/family `AGENTS.md` templates, the
+  runtime `wom-archive/SKILL.md` skill, and the
+  `wom-ai-runtime-skill-plugin-layer.md` normative doc (with a matching bullet in
+  its Skill Template list). When a WOM operator AI addresses a human, it must
+  translate git/infrastructure/WOM-internal jargon into everyday language and
+  keep the exact technical term in parentheses or in the logs only. The
+  convention governs human-facing prose only; machine, JSON, and receipt output
+  stays exact and unchanged. It is guidance the reading AI applies, not a code
+  check — WOM does not validate plain-language output.
+- Extended the read-only `archive ai-response-concept-guide` with a new
+  `git_infra_terms` topic and section: a git/infrastructure terminology
+  translation layer (fetch, checkout, pin, manifest, hash, commit, tag, branch,
+  HEAD, remote, mirror, clone, diff, staged, rebase, stash) with ko-KR/en-US
+  everyday phrasings, complementary to the existing WOM operational-term layer.
+  The guide adds `git_infra_term_translation_available`, the guide-contract flag
+  `translate_git_infra_jargon_for_humans`, and a safe-routing lookup entry. The
+  command still writes nothing, calls no providers, and echoes no local paths or
+  secret values. Documented as a §5 table in `ai-response-concept-guide.md`.
+- No archive migration and no hash change. Guidance and read-only surfaces only.
+
 ## v0.3.164 - 2026-07-04
 
 - Added Stage 2 of the live object-storage upload adapter (WOM #11): a real,

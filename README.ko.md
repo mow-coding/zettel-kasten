@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.164 pre-release
+v0.3.165 pre-release
 ```
 
-이전 공개 기준: v0.3.163 pre-release.
+이전 공개 기준: v0.3.164 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -96,6 +96,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 - read-only `archive input-provenance-taxonomy --dry-run`으로 AI 운영자가 tool-discovered/receipt-verified 입력과 caller-supplied/AI-generated/fixture/environment-inferred/unknown 입력을 구분하게 합니다. 호출자가 준 입력을 도구가 발견한 source truth처럼 말하지 않기 위한 기준입니다.
 - read-only `archive ai-response-contract --dry-run`으로 AI 운영자가 사람에게 답하기 전에 outcome, evidence basis, privacy/approval boundary, remaining work, conversational status board를 확인하게 합니다. 별도 web UI는 필요하지 않습니다.
 - 핵심 read-only operator 명령들은 top-level `status_class`, `input_provenance_class`, `secret_signal_class`, `operator_envelope` 필드를 노출하므로 AI가 prose를 추론하지 않고 응답 계약을 적용할 수 있습니다.
+- operator용 runtime 표면(`AGENTS.md` 템플릿, runtime skill, plugin-layer 문서)에 담은 normative plain-language 규약: 운영자 AI가 사람에게 답할 때 git/infrastructure/WOM 내부 용어를 일상어로 옮기고 정확한 기술 용어는 괄호나 로그에만 남기게 합니다. read-only `ai-response-concept-guide --topic git_infra_terms` 조회 레이어가 뒷받침하며, 이는 사람 대상 산문에만 적용하는 AI의 지침일 뿐 WOM이 강제·검증하는 검사는 아닙니다.
 
 ### Provider 연동
 

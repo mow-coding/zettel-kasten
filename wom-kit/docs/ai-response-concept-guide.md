@@ -24,7 +24,10 @@ removed from imported zettel bodies. v0.3.104 adds an import material-clue audit
 route so an AI can check whether omitted-locator imports preserved or can
 recover a safe material clue. v0.3.123 adds a model-gap escalation guard and a
 `contains` explanation for structural child page/database containment, so an AI
-does not silently force containment into unrelated edge types.
+does not silently force containment into unrelated edge types. v0.3.165 adds a
+git/infrastructure terminology translation layer so an operator AI can look up
+everyday phrasings for words such as fetch, checkout, pin, and manifest before
+explaining version or infrastructure state to a human.
 
 ## Command
 
@@ -47,6 +50,7 @@ sha256_identity
 manifest_vs_zet
 three_layers
 operational_terms
+git_infra_terms
 ```
 
 The command writes nothing and reads no source bodies. It returns structured
@@ -227,7 +231,56 @@ should say that a model decision is needed. It should not silently map
 structural containment to `view_query`, `references`, `material`, or
 `inherited_by` just because those edge types already exist.
 
-## 5. What The AI Should Ask Next
+## 5. Git and Infrastructure Terms
+
+When an AI operator explains version or infrastructure state to a human, it must
+translate git/infrastructure jargon into everyday language and keep the exact
+term in parentheses or in the logs only. This layer is complementary to the WOM
+operational-term layer in section 4: it covers git/infra words (fetch, checkout,
+commit, branch, and the like), which share no term keys with the section-4 edge,
+lifecycle, and connection vocabulary. Where a word such as `manifest` also
+appears as WOM vocabulary (section 2), both treatments frame it the same way —
+a catalog of objects and their fingerprints — so they reinforce rather than
+contradict each other.
+
+Look it up with:
+
+```bash
+archive ai-response-concept-guide <archive-root> --topic git_infra_terms --locale en-US --dry-run --format json
+```
+
+| Git/infra term | Beginner phrase |
+| --- | --- |
+| `fetch` | "The update files arrived, but the update button has not been pressed yet." |
+| `checkout` | "Press the update button so the files you see become that chosen version." |
+| `pin` | "A saved bookmark to a specific version." |
+| `manifest` | "The list of which files exist and their fingerprints." |
+| `hash` | "A fingerprint of the exact content." |
+| `commit` | "One saved snapshot of the files." |
+| `tag` | "A friendly name stuck onto one saved snapshot." |
+| `branch` | "A separate line of work." |
+| `HEAD` | "The version your files are currently on." |
+| `remote` | "The shared copy kept somewhere else." |
+| `mirror` | "A full local copy kept in step with the shared store." |
+| `clone` | "Making your own full copy for the first time." |
+| `diff` | "A view of what changed between two versions." |
+| `staged` | "Changes set aside as ready to save, but not saved yet." |
+| `rebase` | "Replaying your changes on top of a newer starting point." |
+| `stash` | "Tucking unfinished changes aside for later." |
+
+Canonical worked examples:
+
+```text
+the update files arrived but the update button hasn't been pressed yet (fetched, not checked out)
+a saved bookmark to a specific version (a pin)
+the list of which files exist and their fingerprints (the manifest)
+```
+
+This governs human-facing prose only. Machine, JSON, and receipt output stays
+exact and unchanged. WOM does not validate or enforce plain-language output; it
+is guidance the operator AI applies while writing.
+
+## 6. What The AI Should Ask Next
 
 When the human is unsure about order, ask one small question:
 
@@ -311,7 +364,7 @@ Then route safely:
 The CLI returns the same routing in `safe_routing` so a terminal-capable AI can
 pick the next safe command without inventing a live upload or provider action.
 
-## 6. Overclaim Guardrails
+## 7. Overclaim Guardrails
 
 The AI must not say:
 
@@ -332,7 +385,7 @@ The AI may say:
 - "A store label is safe to show; raw paths, provider URLs, account ids, and
   tokens are not."
 
-## 7. Relation To Existing Docs
+## 8. Relation To Existing Docs
 
 This guide rephrases existing model documents for AI-human conversation:
 

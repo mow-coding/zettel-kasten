@@ -35,6 +35,13 @@ archive operator-response-contract <archive-root> --dry-run
 The optional `conversation_status_board` section allows a compact status summary
 inside the AI answer. A separate web UI is not required.
 
+When the answer is for a human, follow the plain-language convention: translate
+git/infrastructure/WOM-internal jargon into everyday language and keep the exact
+term in parentheses or in the logs (see `wom-ai-runtime-skill-plugin-layer.md`
+and the `ai-response-concept-guide --topic git_infra_terms` set). This is
+guidance an operator AI applies while writing; the command validates nothing and
+enforces nothing.
+
 ## Related Taxonomies
 
 The command ties together:

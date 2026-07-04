@@ -152,6 +152,27 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.164` To `v0.3.165`
+
+이 release는 운영자용 runtime 표면에 normative Plain-Language for Humans 규약을
+추가하고, read-only `ai-response-concept-guide`에 git/infrastructure 용어 번역
+레이어를 추가합니다.
+
+운영자에게 보이는 변경:
+
+- archive 마이그레이션이나 해시 변경은 없습니다. 추가된 것은 지침 산문
+  (`AGENTS.md` 템플릿, runtime skill, plugin-layer 문서)과
+  `ai-response-concept-guide`의 새 read-only `--topic git_infra_terms` 세트뿐이며,
+  기존 receipt·manifest·zet은 영향을 받지 않습니다.
+- 강제가 아니라 지침입니다. 이 규약은 운영자 AI에게 git/infrastructure/WOM 내부
+  용어를 사람에게는 일상어로 옮기고 정확한 용어는 괄호나 로그에만 남기라고
+  안내합니다. WOM은 plain-language 출력을 검증하거나 강제하지 않으며, 읽는 AI가
+  적용합니다. machine·JSON·receipt 출력은 그대로 정확하게 유지됩니다.
+- `archive ai-response-concept-guide <archive-root> --topic git_infra_terms
+  --locale en-US --dry-run --format json`으로 일상어 표현을 조회하세요. 아무것도
+  쓰지 않고, provider를 호출하지 않으며, local path나 secret 값을 출력하지
+  않습니다. `wom-kit/docs/releases/v0.3.165.md` 참고.
+
 ## From `v0.3.163` To `v0.3.164`
 
 이 release는 object-storage 업로드 어댑터(WOM #11)의 Stage 2, 즉 실제 AWS SigV4

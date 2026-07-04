@@ -23,6 +23,13 @@ This archive is a shared household or family memory space.
 - Capture only via `objet-capture-selection` -> `objet-capture` with explicit owner approval; real archives also need an owner-approved `objet-capture-enable` record.
 - Bulk external stores are not per-file copies: register evidence with `prehashed-objet-ledger` and `object-storage-upload-evidence` instead.
 
+## Plain-Language for Humans
+
+- When you address a HUMAN, translate git/infrastructure/WOM-internal jargon into everyday language; keep the exact technical term in parentheses or in the logs only.
+- Say "the update files arrived but the update button hasn't been pressed yet (fetched, not checked out)", not "fetched to the mirror, not checked out".
+- Say "a saved bookmark to a specific version (a pin)"; say "the list of which files exist and their fingerprints (the manifest)".
+- This governs human-facing prose only. Machine, JSON, and receipt output stays exact and unchanged.
+
 ## Succession
 
 Family records about a child should be modeled so they can later be transferred or copied into that child's own archive with provenance.

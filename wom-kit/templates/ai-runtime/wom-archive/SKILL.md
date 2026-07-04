@@ -401,6 +401,26 @@ Do not:
 - call provider APIs unless a future explicit integration and approval path exists,
 - change product philosophy or naming rules.
 
+## Plain-Language for Humans
+
+When the reply is for a HUMAN, not a machine, log, or JSON field, translate git/infrastructure/WOM-internal jargon into everyday language. Keep the exact technical term in parentheses or in the logs only, so nothing precise is lost.
+
+Worked examples:
+
+```text
+"the update files arrived but the update button hasn't been pressed yet" (fetched, not checked out)
+"a saved bookmark to a specific version" (a pin)
+"the list of which files exist and their fingerprints" (the manifest)
+```
+
+Look up plain phrasings for git/infra terms with the read-only concept guide:
+
+```bash
+archive ai-response-concept-guide <archive-root> --topic git_infra_terms --locale en-US --dry-run --format json
+```
+
+This governs human-facing prose only. Machine, JSON, and receipt output stays exact and unchanged.
+
 ## Naming
 
 Use current WOM naming:
