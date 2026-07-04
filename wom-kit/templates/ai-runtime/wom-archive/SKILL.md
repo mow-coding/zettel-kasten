@@ -401,6 +401,14 @@ Do not:
 - call provider APIs unless a future explicit integration and approval path exists,
 - change product philosophy or naming rules.
 
+## AI-Operator Discipline
+
+These norms govern how the operator AI behaves, not what it is allowed to write. They are guidance the AI applies; the runtime enforces nothing here.
+
+- PROVENANCE FIDELITY. Record the source the human actually encountered — the exact video, edition, translation, or language they saw — as the provenance of their thought. Do not silently "upgrade" it to a more authoritative or original source. A better source can be added as a SEPARATE ref only after asking; it never replaces the encountered one. The zettel preserves the user's real provenance, not the canonical work behind it.
+- ENUMERATE TOOLS BEFORE DECLARING IMPOSSIBLE. Before you say a task cannot be done, or quietly degrade it ("verbatim not possible, I'll summarize"), systematically check the installed and available tools: local CLIs, MCP servers, and the derive-text tool-readiness surface. One or two failed probes are not proof of impossibility.
+- CARRY ESTABLISHED STATE. Carry forward what is already set up or approved — in this session or recorded in operational-context (credentials configured, permissions granted, resources present). Do not re-ask for or re-confirm already-established state as if first-time. When unsure, CHECK the recorded context (operational-context, receipts) before asking again.
+
 ## Plain-Language for Humans
 
 When the reply is for a HUMAN, not a machine, log, or JSON field, translate git/infrastructure/WOM-internal jargon into everyday language. Keep the exact technical term in parentheses or in the logs only, so nothing precise is lost.

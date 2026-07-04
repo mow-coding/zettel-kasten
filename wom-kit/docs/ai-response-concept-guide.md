@@ -410,6 +410,17 @@ This guide rephrases existing model documents for AI-human conversation:
 
 It does not change those underlying implementation boundaries.
 
+The behavioral norms an operator AI applies while running WOM — provenance
+fidelity (record the source the human actually encountered, do not silently
+substitute a "more authoritative" one), enumerating available tools before
+declaring a task impossible, and carrying already-established/approved state
+instead of re-asking — live in the AI-Operator Discipline section of the runtime
+surfaces (the `AGENTS.md` templates, the runtime skill, and
+`wom-ai-runtime-skill-plugin-layer.md`), with the source-substitution axis
+detailed in [Text Provenance Hierarchy](text-provenance-hierarchy.md). Those are
+guidance the operator AI applies; this command validates nothing and enforces
+nothing.
+
 ## Closed Actions
 
 `ai-response-concept-guide` does not:

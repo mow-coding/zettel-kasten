@@ -163,6 +163,32 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.169` To `v0.3.170`
+
+This release adds runtime AI-operator discipline norms. It is docs-only and
+additive: no command, schema, receipt, or archive change, and no new
+WOM-enforced check. No migration is required.
+
+Operator-visible notes:
+
+- **New `AI-Operator Discipline` section on the runtime surfaces.** The three
+  `AGENTS.md` templates (personal/company/family), the runtime `SKILL.md`, and
+  `wom-ai-runtime-skill-plugin-layer.md` now carry three behavioral norms an
+  operator AI applies: record the source the human actually encountered and never
+  silently substitute a "more authoritative"/original one; enumerate the
+  installed/available tools before declaring a task impossible or degrading it; and
+  carry forward already-established/approved state instead of re-asking. If you have
+  copied an older `AGENTS.md` into a real archive, you may add the new section, but
+  nothing breaks if you do not — it changes no command behavior.
+- **New source-substitution axis in `text-provenance-hierarchy.md`.** A `## 7.
+  Encountered-Source Fidelity` subsection names both provenance axes explicitly (the
+  existing derivation-tool axis and the new source-substitution axis). Documentation
+  only; the provenance model gains no new required field.
+- **Guidance, not enforcement.** WOM does not validate provenance fidelity, tool
+  enumeration, or state carry-over, and this release adds no check that does. The
+  `ai-response-concept-guide` topic enum is unchanged. See
+  `wom-kit/docs/releases/v0.3.170.md`.
+
 ## From `v0.3.168` To `v0.3.169`
 
 This release adds a read-only operator-feedback delivery ledger and an
