@@ -163,6 +163,37 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.168` To `v0.3.169`
+
+This release adds a read-only operator-feedback delivery ledger and an
+approval-gated batched mark-delivered command. All changes are additive; no
+migration is required.
+
+Operator-visible notes:
+
+- **No archive migration; existing records unchanged; no hash change.** The
+  `operator-feedback.schema.json` record gains two OPTIONAL string properties,
+  `delivered_at` and `acknowledged_at` (not added to `required`), so existing
+  `ops/feedback/*.yml` records validate and are read as-is. A new
+  `operator-feedback-delivery-receipt.schema.json` ships for the batch receipt.
+- **New read-only `archive operator-feedback-ledger`** (aliases `feedback-ledger`,
+  `feedback-board`): aggregates delivery-status counts + a pending (draft) list +
+  the newest delivery boundary from `ops/feedback/*.yml`. It writes nothing, reads
+  no feedback body, and echoes no feedback ref, title, path, token, or secret
+  values. Malformed records are counted as `unreadable` and skipped. Records
+  delivered via the older `--status delivered` path have no `delivered_at`, so the
+  boundary falls back to their `updated_at`.
+- **New approval-gated `archive operator-feedback-mark-delivered`** (alias
+  `feedback-mark-delivered`): `--dry-run` previews the draft->delivered transitions
+  and writes nothing; `--approve --reviewed-by <actor>` marks every pending `draft`
+  record delivered, stamps `delivered_at`, and writes one batch receipt. `--only
+  <id>` marks a single record. It only touches `draft` records, is idempotent, and
+  skips malformed records without half-writing others.
+- **Truth boundary (no overclaim).** This is metadata lifecycle only.
+  `external_submission_performed` stays `false`; `delivered` means the operator
+  marked it delivered, not that anything was submitted externally or proven
+  received. See `wom-kit/docs/releases/v0.3.169.md`.
+
 ## From `v0.3.167` To `v0.3.168`
 
 This release adds draft-time identity hygiene, an attributed mint affirmation flag,

@@ -6,6 +6,44 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.169 - 2026-07-04
+
+Operator-feedback delivery ledger and batched mark-delivered. Both commands are
+additive; no archive migration, no id rewrite, no hash change.
+
+- Read-only `archive operator-feedback-ledger` (aliases `feedback-ledger`,
+  `feedback-board`): enumerates `ops/feedback/*.yml` and aggregates delivery status
+  as counts by draft/delivered/acknowledged/resolved/archived plus a pending
+  (draft) list and the newest delivery-boundary timestamp among delivered records.
+  It projects only feedback id + status + safe timestamps — it reads no feedback
+  body and echoes no feedback ref, title, path, token, or secret values — and
+  writes nothing. Malformed or non-mapping records are counted into an `unreadable`
+  bucket and skipped so one bad file never fails the whole board. Honest boundary:
+  `delivered_at` is stamped only by mark-delivered, so records delivered via the
+  older `--status delivered` path have no `delivered_at` and the boundary falls back
+  to their `updated_at`; it is not proof of external delivery.
+- Approval-gated `archive operator-feedback-mark-delivered` (alias
+  `feedback-mark-delivered`): in one batched action marks every pending `draft`
+  record as `delivered`, stamps `delivered_at`, sets `reviewed_by`, and refreshes
+  `updated_at`, so the operator no longer hand-edits each record. `--dry-run`
+  previews which records would transition and writes nothing; `--approve` (requires
+  a safe `--reviewed-by`) reads each record, preserves every other field verbatim,
+  re-validates the mutated record against the shipped schema, writes the transitions
+  atomically per record, and writes one
+  `receipts/operator-feedback/delivery-batch.<ts>.<batch-digest>.json` receipt (the
+  per-batch digest in the filename keeps two same-second batches from colliding).
+  `--only <id>` marks a single record. It only transitions `draft->delivered`
+  (never touching acknowledged/resolved/archived), is idempotent — a no-op re-run
+  marks nothing new and writes no receipt — reports and skips malformed records
+  without half-writing others, and reads no feedback body.
+- Truth boundary: this is metadata lifecycle only. `external_submission_performed`
+  stays `false`; `delivered` means the operator marked it delivered, not that
+  anything was submitted externally or proven received.
+- Schema additions (additive): `operator-feedback.schema.json` gains optional
+  `delivered_at` / `acknowledged_at` string properties (not required), and a new
+  `operator-feedback-delivery-receipt.schema.json` ships for the batch receipt.
+- Closes the v0.3.149 "Still Future: feedback status board" item.
+
 ## v0.3.168 - 2026-07-04
 
 Draft-time identity hygiene, honest human affirmation, and continuation edges.

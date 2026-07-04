@@ -987,9 +987,12 @@ OPERATIONAL_CONTEXT_MAX_TEXT_LENGTH = 600
 OPERATIONAL_CONTEXT_MAX_LIST_ITEMS = 24
 OPERATOR_FEEDBACK_SCHEMA = "wom-kit/operator-feedback/v0.1"
 OPERATOR_FEEDBACK_RECEIPT_SCHEMA = "wom-kit/operator-feedback-receipt/v0.1"
+OPERATOR_FEEDBACK_DELIVERY_RECEIPT_SCHEMA = "wom-kit/operator-feedback-delivery-receipt/v0.1"
 OPERATOR_FEEDBACK_DIR = "ops/feedback"
 OPERATOR_FEEDBACK_RECEIPTS_DIR = "receipts/operator-feedback"
 OPERATOR_FEEDBACK_STATUSES = ("draft", "delivered", "acknowledged", "resolved", "archived")
+# Not-yet-delivered lifecycle state: the only status mark-delivered may transition from.
+OPERATOR_FEEDBACK_PENDING_STATUS = "draft"
 OPERATOR_FEEDBACK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,120}$")
 APPROVAL_HANDOFF_SCHEMA = "wom-kit/approval-handoff/v0.1"
 APPROVAL_HANDOFF_RECEIPT_SCHEMA = "wom-kit/approval-handoff-receipt/v0.1"
@@ -3448,6 +3451,370 @@ def operator_feedback_record(
         "warnings": warnings,
         "would_change": [] if approve and not blockers else ([record_relative, receipt_relative] if not blockers else []),
         "files_written": [record_relative, receipt_relative] if approve and not blockers else [],
+        "privacy_guards": {
+            "feedback_body_read": False,
+            "feedback_ref_value_echoed": False,
+            "title_value_echoed": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_paths_echoed": False,
+            "tokens_or_secrets_echoed": False,
+            "writes": approve and not blockers,
+        },
+    }
+
+
+def _read_operator_feedback_record_projection(path: Path) -> dict[str, Any] | None:
+    """Read one ops/feedback/<id>.yml and project ONLY non-sensitive lifecycle fields.
+
+    Returns a dict with {feedback_id, status, delivered_at, acknowledged_at,
+    updated_at} — never feedback_ref, title, or any body/path/url/secret — or
+    ``None`` when the file is missing, unreadable, non-YAML, or not a mapping.
+    The projection is deliberate: the raw record holds feedback_ref + title and
+    must never be spread into ledger/board output (runtime privacy contract).
+    """
+
+    try:
+        loaded = load_yaml(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):  # type: ignore[union-attr]
+        return None
+    if not isinstance(loaded, dict):
+        return None
+
+    status = loaded.get("status")
+    status = status.strip().lower() if isinstance(status, str) else None
+    # Re-sanitize the id read back from disk. The sanctioned record writer rejects
+    # unsafe ids, but records are documented as hand-editable, so a hand-authored
+    # feedback_id could hold a URL/token. safe_operator_feedback_id re-checks it;
+    # on failure fall back to the on-disk file stem (a safe filename by
+    # construction) so no unsafe id value is ever projected into ledger output.
+    raw_feedback_id = loaded.get("feedback_id")
+    feedback_id = safe_operator_feedback_id(raw_feedback_id if isinstance(raw_feedback_id, str) else None)
+    if feedback_id is None:
+        feedback_id = safe_operator_feedback_id(path.stem)
+
+    def _safe_ts(value: Any) -> str | None:
+        if isinstance(value, str):
+            text = value.strip()
+            return text or None
+        if isinstance(value, (date, datetime)):
+            return value.isoformat()
+        return None
+
+    return {
+        "feedback_id": feedback_id,
+        "status": status,
+        "delivered_at": _safe_ts(loaded.get("delivered_at")),
+        "acknowledged_at": _safe_ts(loaded.get("acknowledged_at")),
+        "updated_at": _safe_ts(loaded.get("updated_at")),
+    }
+
+
+def operator_feedback_ledger(archive_root: Path | str, *, dry_run: bool = True) -> dict[str, Any]:
+    """Read-only delivery-status ledger over ops/feedback/*.yml.
+
+    Aggregates STATUS + FEEDBACK-ID (+ safe delivered_at/acknowledged_at
+    timestamps) ONLY. It never reads or echoes feedback bodies, refs, titles,
+    paths, urls, or secrets, and writes nothing.
+
+    Honesty note on the delivery boundary: only records stamped by
+    ``operator-feedback-mark-delivered`` carry ``delivered_at``. Records that
+    reached ``delivered`` via the older ``operator-feedback-record --status
+    delivered`` path have no ``delivered_at``; for those the boundary falls back
+    to their ``updated_at``. The boundary is therefore the newest available
+    delivery timestamp among delivered records, not an authoritative proof of
+    when (or whether) anything was externally delivered.
+    """
+
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    if not dry_run:
+        blockers.append("operator-feedback-ledger is read-only and requires --dry-run.")
+
+    counts = {status: 0 for status in OPERATOR_FEEDBACK_STATUSES}
+    counts["unknown_status"] = 0
+    unreadable = 0
+    total = 0
+    pending: list[str] = []
+    delivered_boundary: str | None = None
+    stamped_delivered = 0
+
+    feedback_dir = root / OPERATOR_FEEDBACK_DIR
+    if feedback_dir.is_dir():
+        for path in safe_archive_glob(feedback_dir, "*.yml", root):
+            total += 1
+            projection = _read_operator_feedback_record_projection(path)
+            if projection is None:
+                unreadable += 1
+                continue
+            status = projection["status"]
+            if status in counts:
+                counts[status] += 1
+            else:
+                counts["unknown_status"] += 1
+            if status == OPERATOR_FEEDBACK_PENDING_STATUS and projection["feedback_id"]:
+                pending.append(projection["feedback_id"])
+            if status == "delivered":
+                if projection["delivered_at"]:
+                    stamped_delivered += 1
+                # Delivery boundary: prefer delivered_at, fall back to updated_at
+                # for records delivered via the older --status path.
+                candidate = projection["delivered_at"] or projection["updated_at"]
+                if candidate and (delivered_boundary is None or candidate > delivered_boundary):
+                    delivered_boundary = candidate
+
+    pending.sort()
+
+    return {
+        "ok": not blockers,
+        "state": "ready" if not blockers else "blocked",
+        "dry_run": True,
+        "lifecycle_action": "operator_feedback_ledger",
+        "archive_id": read_archive_id(root),
+        "summary": {
+            "feedback_dir": OPERATOR_FEEDBACK_DIR,
+            "receipt_dir": OPERATOR_FEEDBACK_RECEIPTS_DIR,
+            "record_count": total,
+            "pending_count": len(pending),
+            "unreadable_count": unreadable,
+            "delivery_boundary": delivered_boundary,
+            "delivery_boundary_stamped_count": stamped_delivered,
+            "pending_status": OPERATOR_FEEDBACK_PENDING_STATUS,
+        },
+        "counts": counts,
+        "pending": pending,
+        "data": {
+            "statuses": list(OPERATOR_FEEDBACK_STATUSES),
+            "record_schema": OPERATOR_FEEDBACK_SCHEMA,
+            "delivery_boundary_meaning": (
+                "newest delivery timestamp among delivered records; delivered_at is present "
+                "only on records stamped by mark-delivered, otherwise updated_at is used"
+            ),
+            "delivery_is_metadata_only": True,
+            "no_external_submission_performed": True,
+        },
+        "blockers": blockers,
+        "warnings": [],
+        "would_change": [],
+        "privacy_guards": {
+            "feedback_body_read": False,
+            "feedback_ref_value_echoed": False,
+            "title_value_echoed": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_paths_echoed": False,
+            "tokens_or_secrets_echoed": False,
+            "writes": False,
+        },
+    }
+
+
+def operator_feedback_delivery_receipt_relative_path(timestamp: str, batch_digest: str) -> str:
+    # The timestamp is whole-second UTC, so two batches committed within the same
+    # wall-clock second would collide on filename and the earlier batch's audit
+    # receipt would be silently overwritten. Key the filename on a per-batch
+    # content digest (mirroring mint_batch/retire_draft_batch receipt paths) so
+    # each delivery-boundary receipt is durable and uniquely named.
+    compact = re.sub(r"[^0-9TZ]", "", timestamp)
+    digest = re.sub(r"[^0-9a-f]", "", (batch_digest or "").lower())[:24] or "0"
+    return f"{OPERATOR_FEEDBACK_RECEIPTS_DIR}/delivery-batch.{compact}.{digest}.json"
+
+
+def operator_feedback_mark_delivered(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    only: str | None = None,
+) -> dict[str, Any]:
+    """Batch delivery-boundary commit: transition pending (draft) records to delivered.
+
+    In one action this marks draft records as ``delivered``, stamps
+    ``delivered_at``, sets ``reviewed_by``, and refreshes ``updated_at`` — so the
+    operator AI no longer hand-edits each record's status one at a time.
+
+    Truth boundary (no overclaim): this is metadata lifecycle only. It performs
+    NO external submission and proves NO human receipt. ``delivered`` here means
+    "the operator marked it delivered" — the same trust level as the existing
+    ``operator-feedback-record --status delivered``, just batched, timestamped,
+    and receipted. ``external_submission_performed`` stays ``False``.
+
+    It ONLY transitions ``draft`` -> ``delivered`` and never touches
+    acknowledged/resolved/archived records. It reads each existing record and
+    preserves every other field verbatim (feedback_ref, title, related_releases,
+    resolved_in, body_managed_by_this_record, external_submission_performed),
+    re-validating against the shipped schema before writing atomically per
+    record. A malformed target record is reported and skipped, never aborting
+    records already validated. Re-running is a no-op once no drafts remain
+    (idempotent). It never reads or echoes feedback bodies, refs, or titles.
+    """
+
+    root = require_existing_archive_root(archive_root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if dry_run == approve:
+        blockers.append("operator-feedback-mark-delivered requires exactly one of --dry-run or --approve.")
+
+    reviewer = safe_project_intake_actor_id(reviewed_by)
+    if approve and reviewer is None:
+        blockers.append("--approve requires a safe --reviewed-by actor id.")
+    if reviewed_by and reviewer is None:
+        blockers.append("reviewed_by must be a safe non-secret actor id.")
+
+    safe_only = safe_operator_feedback_id(only) if only is not None else None
+    if only is not None and safe_only is None:
+        blockers.append("--only must be a safe feedback id using letters, numbers, dot, underscore, or hyphen.")
+
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    would_change: list[dict[str, Any]] = []
+    files_written: list[str] = []
+    skipped_unreadable: list[str] = []
+    matched_only = False
+
+    if not blockers:
+        feedback_dir = root / OPERATOR_FEEDBACK_DIR
+        if feedback_dir.is_dir():
+            for path in safe_archive_glob(feedback_dir, "*.yml", root):
+                # Scope by --only against the on-disk file stem (never echoed).
+                if safe_only is not None and path.stem != safe_only:
+                    continue
+                try:
+                    loaded = load_yaml(path.read_text(encoding="utf-8"))
+                except (OSError, yaml.YAMLError):  # type: ignore[union-attr]
+                    if safe_only is not None:
+                        matched_only = True
+                    skipped_unreadable.append(path.stem)
+                    continue
+                if not isinstance(loaded, dict):
+                    if safe_only is not None:
+                        matched_only = True
+                    skipped_unreadable.append(path.stem)
+                    continue
+
+                if safe_only is not None:
+                    matched_only = True
+
+                # Re-sanitize the id read back from disk before echoing it into
+                # would_change / delivered_feedback_ids / the receipt. Records are
+                # documented as hand-editable, so a hand-authored feedback_id could
+                # hold a URL/token; fall back to the safe on-disk file stem so no
+                # unsafe id value is ever echoed. (The actual on-disk record and
+                # receipt paths already key on path.stem, never this value.)
+                raw_record_id = loaded.get("feedback_id")
+                record_id = safe_operator_feedback_id(raw_record_id if isinstance(raw_record_id, str) else None)
+                if record_id is None:
+                    record_id = safe_operator_feedback_id(path.stem) or path.stem
+                current_status = loaded.get("status")
+                current_status = current_status.strip().lower() if isinstance(current_status, str) else None
+
+                # Only transition the pending state; never touch delivered/
+                # acknowledged/resolved/archived (idempotent by construction).
+                if current_status != OPERATOR_FEEDBACK_PENDING_STATUS:
+                    continue
+
+                would_change.append(
+                    {
+                        "feedback_id": record_id,
+                        "from_status": current_status,
+                        "to_status": "delivered",
+                    }
+                )
+
+                if approve:
+                    updated = dict(loaded)
+                    updated["status"] = "delivered"
+                    updated["delivered_at"] = now
+                    updated["updated_at"] = now
+                    updated["reviewed_by"] = reviewer
+                    # Never claim external submission from a metadata stamp.
+                    updated["external_submission_performed"] = False
+                    normalized = json_safe(updated)
+                    schema_issues = validate_schema(normalized, "operator-feedback.schema.json")
+                    if schema_issues:
+                        # A malformed/corrupt record must not corrupt or half-write
+                        # others: report and skip, keep going per-record.
+                        skipped_unreadable.append(record_id)
+                        would_change.pop()
+                        continue
+                    write_text_atomic(path, dump_yaml(normalized))
+                    files_written.append(operator_feedback_record_relative_path(path.stem))
+
+        if safe_only is not None and not matched_only:
+            warnings.append("--only did not match any operator feedback record.")
+        if skipped_unreadable:
+            warnings.append("One or more operator feedback records were unreadable or malformed and were skipped.")
+
+    delivered_ids = [entry["feedback_id"] for entry in would_change]
+    receipt_relative: str | None = None
+    receipt: dict[str, Any] | None = None
+
+    # Write the delivery-boundary receipt only when this approve actually
+    # transitioned at least one record. An idempotent no-op approve (no drafts
+    # remain) transitions nothing, so it must NOT emit a zero-delivery receipt —
+    # that would accumulate misleading empty boundary artifacts and contradict
+    # "re-running marks nothing new".
+    if approve and not blockers and delivered_ids:
+        # Uniquely name the receipt per batch so two commits within the same
+        # wall-clock second cannot collapse to one file (see path helper).
+        batch_digest = sha256_json_hex(
+            {
+                "delivered_feedback_ids": sorted(delivered_ids),
+                "reviewed_by": reviewer,
+                "created_at": now,
+                "only": safe_only,
+            }
+        )
+        receipt_relative = operator_feedback_delivery_receipt_relative_path(now, batch_digest)
+        receipt = {
+            "schema": OPERATOR_FEEDBACK_DELIVERY_RECEIPT_SCHEMA,
+            "dry_run": False,
+            "approved": True,
+            "reviewed_by": reviewer,
+            "delivered_feedback_ids": delivered_ids,
+            "delivered_count": len(delivered_ids),
+            "skipped_unreadable_count": len(skipped_unreadable),
+            "only": safe_only,
+            "batch_digest": batch_digest,
+            "external_submission_performed": False,
+            "delivery_is_metadata_only": True,
+            "created_at": now,
+        }
+        receipt_path = root / receipt_relative
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(receipt_path, json.dumps(json_safe(receipt), indent=2, ensure_ascii=False) + "\n")
+
+    state = "blocked" if blockers else ("written" if approve else "preview")
+    return {
+        "ok": not blockers,
+        "state": state,
+        "dry_run": dry_run or not approve,
+        "approved": approve and not blockers,
+        "lifecycle_action": "operator_feedback_mark_delivered",
+        "archive_id": read_archive_id(root),
+        "summary": {
+            "transition": "draft->delivered",
+            "candidate_count": len(would_change),
+            "delivered_count": len(files_written) if approve else 0,
+            "skipped_unreadable_count": len(skipped_unreadable),
+            "receipt_path": receipt_relative,
+            "reviewed_by": reviewer if approve else None,
+            "only": safe_only,
+        },
+        "would_change": would_change if not (approve and not blockers) else [],
+        "delivered_feedback_ids": delivered_ids if approve and not blockers else [],
+        "files_written": files_written,
+        "data": {
+            "record_schema": OPERATOR_FEEDBACK_SCHEMA,
+            "delivery_receipt_schema": OPERATOR_FEEDBACK_DELIVERY_RECEIPT_SCHEMA,
+            "pending_status": OPERATOR_FEEDBACK_PENDING_STATUS,
+            "delivery_is_metadata_only": True,
+            "no_external_submission_performed": True,
+            "delivered_meaning": "the operator marked it delivered; nothing was submitted externally or proven received",
+        },
+        "blockers": blockers,
+        "warnings": warnings,
         "privacy_guards": {
             "feedback_body_read": False,
             "feedback_ref_value_echoed": False,
