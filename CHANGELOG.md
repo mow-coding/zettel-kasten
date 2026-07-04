@@ -6,6 +6,60 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.166 - 2026-07-04
+
+- Added a selectable, recorded object-storage upload key strategy plus a safe
+  adopt-existing workflow (WOM #11), fixing the false-skip where an object stored
+  under a client's own key layout was re-uploaded — or, worse, could be skipped
+  against a key it was never at. The new `--key-strategy {sha256_content_addressed,
+  prefix}` (default unchanged), `--key-prefix`, and `--key-append-extension` flags
+  are available on `object-storage-upload`, `object-storage-upload-plan`,
+  `object-storage-upload-verify`, and the new `object-storage-adopt-existing`
+  command.
+- Two-field key model (additive, no migration): every object-storage location and
+  execution receipt now carries a new `remote_key` (the literal bucket-relative
+  key the object is/was PUT/HEAD at) alongside the unchanged content-addressed
+  `key_hint`. The HEAD-before idempotency check, the skip matcher, and future
+  download tooling key off `remote_key`; the digest audits keep validating
+  `key_hint`, so no existing location is flagged corrupt.
+- Fail-safe idempotency (the one invariant): a skip is legal only when backed by a
+  live HEAD proving present-at-the-recorded-key + size-match in the same run. Under
+  a live transport the executor ALWAYS re-HEADs the recorded `remote_key` before
+  skipping — a recorded key that 404s re-uploads, never silently skips. The re-HEAD
+  matches the recorded verification (presence-only for a presence+size adopt,
+  checksum for a content-hashed upload), and this live proof OUTRANKS the resume
+  ledger's terminal-success short-circuit: once a re-HEAD proves an object absent,
+  the re-upload is forced past any stale ledger row, so a wiped remote can never be
+  silently skipped from a prior run's ledger. Plan echoes the fully-resolved
+  `remote_key` per row and apply refuses (fails closed) if its re-resolved key
+  diverges; the plan verdict is strategy-aware so a prior location under a different
+  key layout never predicts a skip apply would then re-upload.
+- `object-storage-adopt-existing`: a verified adopt (`--approve` + live transport)
+  issues a PRESENCE-ONLY HEAD per computed client key (presence + `Content-Length`
+  only, no body download) and adopts ONLY on presence + size-match — so adopting a
+  large archive costs one HEAD per object, not one download per object (a content
+  re-hash would download the whole archive; `--content-hash-verify` is an explicit
+  per-object opt-in that GetObject-and-rehashes). A 404 / size-mismatch is not
+  adopted, so a wrong prefix/extension self-limits to zero adopts. A declared adopt
+  (`--accept-unverified-adopt`, distinct from `--approve`) records a NON-gating
+  `declared_uploaded` location that never skips a PUT. Adopt reports
+  verified-vs-total so a template miss is visible, never a silent partial. Verified
+  adopt is a live surface and honours the same tiny-first tiered gate as the upload
+  command: a bulk first-live adopt REFUSES until a single tiny-first `--only` object
+  has proved the store.
+- The three manifest audits and the execution-receipt doctor audit now accept a
+  correct `prefix`-strategy location/receipt without flagging it corrupt, and
+  additionally verify that a non-default `remote_key` binds the record's digest
+  (kills a valid-looking-but-wrong-object key). The upload evidence writer now
+  shares the single content-addressed `key_hint` producer (the duplicate literal
+  is gone). The execution-contract preview tells the truth for both strategies
+  (the default lands at exactly `sha256/<first2>/<sha256>` with no prefix).
+- `remote_key` has its own validator: it holds a path within the bucket (slashes,
+  dots, and the archive-id colon are legal) but never a leading slash, `..`, a
+  bucket name, an endpoint host, or a URL — leak-checked so public-privacy stays
+  green. No archive migration and no hash change; the default strategy is
+  byte-identical to before.
+
 ## v0.3.165 - 2026-07-04
 
 - Added a normative Plain-Language for Humans convention to the runtime-visible

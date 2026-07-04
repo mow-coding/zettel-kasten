@@ -225,6 +225,9 @@ object-storage-upload-evidence
 object-storage-upload-evidence-audit
   Audit one upload evidence receipt against objects/manifests/files.jsonl. Dry-run only; validates receipt schema, non-secret privacy guards, no-provider closed actions, linked object_storage locations, declared_uploaded availability, sha256 key hints, and receipt/location count consistency without writing files, calling providers, reading object bytes, checking remote availability, uploading, downloading, syncing, creating provider URLs, or retrieving secrets.
 
+object-storage-adopt-existing
+  Adopt objects already stored under your own key layout so a later upload does not re-PUT them (the false-skip fix). Takes the explicit key strategy (--key-strategy prefix --key-prefix <literal> [--key-append-extension]). A verified adopt (--approve + live credentials) HEADs each computed remote_key and adopts ONLY on presence + Content-Length size-match (--content-hash-verify opts one in to a full re-hash per object); a 404 or size-mismatch is not adopted, so a wrong prefix/extension simply re-uploads. A declared adopt (--accept-unverified-adopt, distinct from --approve) records a NON-gating declared_uploaded location that never skips a PUT. It reports adopted-vs-total, echoes no bucket names, prefixes, provider URLs, local paths, exact credential refs, tokens, or secret values, and the companion object-storage-upload/-plan/-verify commands accept the same --key-strategy family (default sha256_content_addressed, unchanged) and record the actual remote_key next to the content-addressed key_hint.
+
 external-export-plan
   Plan a text-first Notion, Google Drive, or generic workspace export before large media downloads. Dry-run only; detects the broad workspace/database export trap, returns safe text-only and targeted first-pass command shapes, starts no export, calls no providers, reads no files, downloads no attachments, writes nothing, and echoes no provider URLs or local paths.
 

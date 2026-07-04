@@ -48,6 +48,12 @@ class _FakeObjectStorageTransport:
     def __init__(self, *, present=None, present_size=None, present_checksum=None, put_status="ok", truncate_multipart=False, put_status_sequence=None, part_status_sequence=None):
         self.store = {}
         self.creds_seen = []
+        self.heads = []
+        # Keys HEADed with presence_only=False, i.e. the ones that on real R2
+        # would trigger a whole-object GetObject-and-rehash (V14). A presence+size
+        # caller (verified adopt, presence_size skip fast-path) must never appear
+        # here, so tests assert this list stays empty on the size-only paths.
+        self.content_hash_heads = []
         self.put_calls = 0
         self.multipart_calls = 0
         self.part_calls = 0
@@ -67,14 +73,21 @@ class _FakeObjectStorageTransport:
         self._part_status_sequence = list(part_status_sequence) if part_status_sequence else None
         self._truncate_multipart = truncate_multipart
 
-    def head_object(self, *, key):
+    def head_object(self, *, key, presence_only=False):
+        self.heads.append(key)
+        if not presence_only:
+            # On real R2 this HEAD path GetObject-rehashes the whole body (V14).
+            self.content_hash_heads.append(key)
         if key in self.store:
             v = self.store[key]
-            return {"present": True, "size": v["size"], "checksum_sha256": v["sha"]}
+            sha = None if presence_only else v["sha"]
+            return {"present": True, "size": v["size"], "checksum_sha256": sha}
         if self._present == "same" and self._present_size is not None:
-            return {"present": True, "size": self._present_size, "checksum_sha256": self._present_checksum}
+            sha = None if presence_only else self._present_checksum
+            return {"present": True, "size": self._present_size, "checksum_sha256": sha}
         if self._present == "different" and self._present_size is not None:
-            return {"present": True, "size": self._present_size, "checksum_sha256": "0" * 64}
+            sha = None if presence_only else "0" * 64
+            return {"present": True, "size": self._present_size, "checksum_sha256": sha}
         return {"present": False, "size": None, "checksum_sha256": None}
 
     def put_object(self, *, key, data_path, size, content_sha256):
@@ -12096,11 +12109,15 @@ state:
                 transport = _FakeObjectStorageTransport()
                 self._upload_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", approve=True, transport=transport, skip_uploaded=True)
                 first_puts = transport.put_calls
-                # Re-run with --skip-uploaded: Layer A wom_uploaded match => no new PUT.
+                # Re-run with --skip-uploaded: the manifest wom_uploaded match makes
+                # the plan verdict already_uploaded, but F0-b re-HEADs the recorded
+                # remote_key before skipping. The object is still present at the same
+                # key => skipped_remote_same (a LIVE-HEAD-backed skip, not a manifest
+                # trust), and no second PUT.
                 result2 = self._upload_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", approve=True, transport=transport, skip_uploaded=True)
             self.assertEqual(first_puts, 1)
             self.assertEqual(transport.put_calls, 1, "second run must not PUT again")
-            self.assertEqual(result2["execution_results"][0]["result_status"], "skipped_already_present")
+            self.assertEqual(result2["execution_results"][0]["result_status"], "skipped_remote_same")
 
     def test_object_storage_upload_declared_uploaded_never_skips(self) -> None:  # T-fake3
         with tempfile.TemporaryDirectory() as tmp:
@@ -12389,6 +12406,508 @@ state:
             self.assertFalse(result["ok"])
             self.assertTrue(any("env_only_first_live" in b for b in result["blockers"]), result["blockers"])
             self.assertEqual(transport.put_calls, 0)
+
+    # ------------------------------------------------------------------
+    # v0.3.166 — selectable key strategy + safe adopt-existing (§12).
+    # The REAL basoon colon-bearing prefix is pinned (not a placeholder).
+    # ------------------------------------------------------------------
+
+    _BASOON_PREFIX = "archives/archive:personal:basoon/objets"
+
+    def _adopt_env(self):
+        return patch.dict(
+            archive_services.os.environ,
+            {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+            clear=False,
+        )
+
+    def _adopt_run(self, root, **kwargs):
+        defaults = dict(
+            provider_kind="cloudflare-r2",
+            store_ref="r2-basoon-20260704",
+            access_key_id_ref="env:WOM_R2_ACCESS_KEY_ID",
+            secret_access_key_ref="env:WOM_R2_SECRET_ACCESS_KEY",
+        )
+        defaults.update(kwargs)
+        return archive_services.object_storage_adopt_existing_run(root, **defaults)
+
+    # --- §12.1/§12.2 prefix key byte-exact + edge matrix ---
+
+    def test_object_storage_prefix_key_byte_exact(self) -> None:  # §12.1
+        remote_key = archive_services.object_storage_remote_key(
+            strategy="prefix", key_prefix=self._BASOON_PREFIX,
+            digest=_FAKE_SHA_A, ext="jpg", append_extension=True,
+        )
+        self.assertEqual(
+            remote_key,
+            f"archives/archive:personal:basoon/objets/{_FAKE_SHA_A}.jpg",
+        )
+
+    def test_object_storage_prefix_key_edge_matrix(self) -> None:  # §12.2
+        a = archive_services
+        # no-ext -> <prefix>/<sha> with NO trailing dot
+        no_ext = a.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A, append_extension=True)
+        self.assertEqual(no_ext, f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}")
+        self.assertFalse(no_ext.endswith("."))
+        # trailing-slash prefix normalizes identically to no-slash
+        with_slash = a.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX + "/", digest=_FAKE_SHA_A, ext="jpg", append_extension=True)
+        without_slash = a.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A, ext="jpg", append_extension=True)
+        self.assertEqual(with_slash, without_slash)
+        # nested multi-slash literal prefix survives
+        nested = a.object_storage_remote_key(strategy="prefix", key_prefix="a/b/c/d", digest=_FAKE_SHA_A)
+        self.assertEqual(nested, f"a/b/c/d/{_FAKE_SHA_A}")
+        # colon survives the §5 remote-key validator
+        self.assertTrue(a.safe_object_storage_remote_key(f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}.jpg"))
+        # append_extension off => no extension even when recoverable
+        off = a.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A, ext="jpg", append_extension=False)
+        self.assertEqual(off, f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}")
+
+    # --- §12.3 HEAD-before finds client-scheme object -> skip, no re-PUT ---
+
+    def test_object_storage_head_before_finds_client_key_skips(self) -> None:  # §12.3
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            with self._adopt_env():
+                seed = _FakeObjectStorageTransport()
+                seed.store[key] = {"size": 151, "sha": _FAKE_SHA_A}
+                # adopt first so a gating wom_uploaded location exists
+                self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=seed)
+                # upload run against a transport that still has the object
+                transport = _FakeObjectStorageTransport()
+                transport.store[key] = {"size": 151, "sha": _FAKE_SHA_A}
+                result = self._upload_run(archive_root, store_ref="r2-basoon-20260704", only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", approve=True, transport=transport, skip_uploaded=True, key_strategy="prefix", key_prefix=self._BASOON_PREFIX)
+            self.assertEqual(result["execution_results"][0]["result_status"], "skipped_remote_same")
+            self.assertEqual(transport.put_calls, 0)
+
+    # --- §12.4 F0-b adversarial false-skip guard (CARDINAL) ---
+
+    def test_object_storage_recorded_key_404_forces_upload_never_skips(self) -> None:  # §12.4
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            with self._adopt_env():
+                seed = _FakeObjectStorageTransport()
+                seed.store[key] = {"size": 151, "sha": _FAKE_SHA_A}
+                self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=seed)
+                # A manifest wom_uploaded location now claims the object present at
+                # `key`. Run the upload against a transport where `key` 404s.
+                gone = _FakeObjectStorageTransport()  # empty store => 404
+                result = self._upload_run(archive_root, store_ref="r2-basoon-20260704", only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", approve=True, transport=gone, skip_uploaded=True, key_strategy="prefix", key_prefix=self._BASOON_PREFIX)
+            # NEVER a silent skip: the executor re-HEADs remote_key, sees 404, uploads.
+            self.assertEqual(result["execution_results"][0]["result_status"], "uploaded")
+            self.assertEqual(gone.put_calls, 1)
+            # It HEADed the ACTUAL recorded remote_key, not a content-addressed key.
+            self.assertIn(key, gone.heads)
+
+    # --- §12.5 verified adopt writes a matcher-honored location ---
+
+    def test_object_storage_verified_adopt_writes_gating_location(self) -> None:  # §12.5
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                transport.store[key] = {"size": 151, "sha": _FAKE_SHA_A}
+                result = self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=transport)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["adopt_summary"]["adopted_count"], 1)
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [json.loads(l) for l in manifest_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            record = next(r for r in records if r["object_id"] == f"sha256:{_FAKE_SHA_A}")
+            loc = next(l for l in record["locations"] if l.get("availability") == "wom_uploaded")
+            self.assertEqual(loc["remote_key"], key)
+            self.assertEqual(loc["remote_key_verification"], "presence_size")
+            self.assertEqual(loc["key_strategy"], "prefix")
+            self.assertEqual(loc["key_hint"], f"sha256/{_FAKE_SHA_A[:2]}/{_FAKE_SHA_A}")
+            # matcher honors it
+            gating = archive_services.object_storage_wom_uploaded_location_matches(
+                record["locations"], provider_kind="cloudflare-r2", store_ref="r2-basoon-20260704", digest=_FAKE_SHA_A
+            )
+            self.assertEqual(gating, key)
+
+    # --- §12.6 declared adopt is opt-in + labeled + NON-gating ---
+
+    def test_object_storage_declared_adopt_is_nongating(self) -> None:  # §12.6
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with self._adopt_env():
+                # declared adopt needs NO transport; requires the distinct flag
+                result = self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, accept_unverified_adopt=True)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["adopt_summary"]["declared_count"], 1)
+            self.assertFalse(result["adopt_results"][0]["gating"])
+            self.assertIn("not verified", result["adopt_results"][0]["caveat"])
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [json.loads(l) for l in manifest_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            record = next(r for r in records if r["object_id"] == f"sha256:{_FAKE_SHA_A}")
+            loc = next(l for l in record["locations"] if l.get("provider") == "object_storage")
+            self.assertEqual(loc["availability"], "declared_uploaded")
+            # matcher returns None even with skip_uploaded => would_upload
+            gating = archive_services.object_storage_wom_uploaded_location_matches(
+                record["locations"], provider_kind="cloudflare-r2", store_ref="r2-basoon-20260704", digest=_FAKE_SHA_A
+            )
+            self.assertIsNone(gating)
+            plan = archive_services.object_storage_upload_plan(
+                archive_root, store_ref="r2-basoon-20260704", access_key_id_ref="env:WOM_R2_ACCESS_KEY_ID",
+                secret_access_key_ref="env:WOM_R2_SECRET_ACCESS_KEY", only=f"sha256:{_FAKE_SHA_A}",
+                skip_uploaded=True, key_strategy="prefix", key_prefix=self._BASOON_PREFIX, dry_run=True,
+            )
+            self.assertEqual(plan["plan"]["objects"][0]["idempotency_verdict"], "would_upload")
+
+    # --- §12.7 dry-run == apply ---
+
+    def test_object_storage_dry_run_matches_apply(self) -> None:  # §12.7
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            with self._adopt_env():
+                seed = _FakeObjectStorageTransport()
+                seed.store[key] = {"size": 151, "sha": _FAKE_SHA_A}
+                self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=seed)
+                # dry-run predicts already_uploaded
+                plan = archive_services.object_storage_upload_plan(
+                    archive_root, store_ref="r2-basoon-20260704", access_key_id_ref="env:WOM_R2_ACCESS_KEY_ID",
+                    secret_access_key_ref="env:WOM_R2_SECRET_ACCESS_KEY", only=f"sha256:{_FAKE_SHA_A}",
+                    skip_uploaded=True, key_strategy="prefix", key_prefix=self._BASOON_PREFIX, dry_run=True,
+                )
+                self.assertEqual(plan["plan"]["objects"][0]["idempotency_verdict"], "already_uploaded")
+                # apply skips (via HEAD) — no PUT
+                transport = _FakeObjectStorageTransport()
+                transport.store[key] = {"size": 151, "sha": _FAKE_SHA_A}
+                applied = self._upload_run(archive_root, store_ref="r2-basoon-20260704", only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", approve=True, transport=transport, skip_uploaded=True, key_strategy="prefix", key_prefix=self._BASOON_PREFIX)
+            self.assertEqual(applied["execution_results"][0]["result_status"], "skipped_remote_same")
+            self.assertEqual(transport.put_calls, 0)
+
+    # --- §12.8 F0-c divergence refusal ---
+
+    def test_object_storage_plan_apply_divergence_refuses(self) -> None:  # §12.8
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                # Build a plan row, then corrupt its recorded remote_key so apply's
+                # re-resolution diverges — apply must refuse (fail closed).
+                real_candidate = archive_services._object_storage_upload_plan_candidate
+
+                def divergent_candidate(root, **kwargs):
+                    row = real_candidate(root, **kwargs)
+                    row["remote_key"] = "archives/tampered/" + _FAKE_SHA_A
+                    return row
+
+                with patch.object(archive_services, "_object_storage_upload_plan_candidate", side_effect=divergent_candidate):
+                    result = self._upload_run(archive_root, store_ref="r2-basoon-20260704", only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", approve=True, transport=transport, key_strategy="prefix", key_prefix=self._BASOON_PREFIX)
+            self.assertFalse(result["ok"], result)
+            self.assertTrue(any("plan_apply_key_divergence" in b for b in result["blockers"]), result["blockers"])
+            self.assertEqual(transport.put_calls, 0)
+
+    # --- §12.9 digest-binding / collision ---
+
+    def test_object_storage_digest_binding_and_collision(self) -> None:  # §12.9
+        a = archive_services
+        # a template missing <sha> is refused at parse (the resolver only accepts
+        # a prefix and appends the digest, so an operator cannot omit it, but a
+        # remote_key that lacks the digest must be rejected by the binding audit)
+        good = {"remote_key": f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}", "key_strategy": "prefix"}
+        self.assertTrue(a.object_storage_location_remote_key_binds_digest(good, f"sha256:{_FAKE_SHA_A}"))
+        # a remote_key for the WRONG object (a different digest) is rejected
+        wrong = {"remote_key": f"{self._BASOON_PREFIX}/{_FAKE_SHA_B}", "key_strategy": "prefix"}
+        self.assertFalse(a.object_storage_location_remote_key_binds_digest(wrong, f"sha256:{_FAKE_SHA_A}"))
+        # a remote_key that dropped the digest entirely is rejected
+        empty = {"remote_key": f"{self._BASOON_PREFIX}/thumbnail", "key_strategy": "prefix"}
+        self.assertFalse(a.object_storage_location_remote_key_binds_digest(empty, f"sha256:{_FAKE_SHA_A}"))
+
+    # --- §12.10 doctor/audit on a prefix-strategy location ---
+
+    def test_object_storage_doctor_accepts_prefix_strategy_location(self) -> None:  # §12.10
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                transport.store[key] = {"size": 151, "sha": _FAKE_SHA_A}
+                self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=transport)
+            # doctor must NOT flag the correct prefix wom_uploaded location or receipt.
+            code, output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
+            result = json.loads(output)
+            joined = json.dumps(result)
+            self.assertNotIn("object_storage_upload_wom_location_invalid", joined)
+            self.assertNotIn("object_storage_upload_wom_location_digest_mismatch", joined)
+            self.assertNotIn("object_storage_upload_key_hint_mismatch", joined)
+            self.assertNotIn("object_storage_upload_remote_key_mismatch", joined)
+            self.assertNotIn("object_storage_upload_key_strategy_invalid", joined)
+            # And the audit predicates pass directly on the prefix location.
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [json.loads(l) for l in manifest_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            record = next(r for r in records if r["object_id"] == f"sha256:{_FAKE_SHA_A}")
+            loc = next(l for l in record["locations"] if l.get("availability") == "wom_uploaded")
+            errors = archive_services.object_storage_wom_uploaded_audit_location_errors(
+                loc, digest=_FAKE_SHA_A, provider_kind="cloudflare-r2", store_ref="r2-basoon-20260704"
+            )
+            self.assertEqual(errors, [])
+            self.assertTrue(archive_services.object_storage_location_digest_matches_record(loc, f"sha256:{_FAKE_SHA_A}"))
+
+    # --- §12.11 migration: stale declared location does not block adopt ---
+
+    def test_object_storage_stale_declared_does_not_block_adopt(self) -> None:  # §12.11
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            # Pre-existing declared_uploaded under the OLD content-addressed key.
+            ledger = Path(tmp) / "ext.jsonl"
+            ledger.write_text(json.dumps({"sha256": _FAKE_SHA_A, "bytes": 151, "status": "uploaded"}) + "\n", encoding="utf-8")
+            code, _ = self.run_cli([
+                "object-storage-upload-evidence", str(archive_root), "--ledger", str(ledger),
+                "--provider-kind", "cloudflare-r2", "--store-ref", "r2-basoon-20260704",
+                "--approve", "--reviewed-by", "person:test", "--format", "json",
+            ])
+            self.assertEqual(code, 0)
+            key = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                transport.store[key] = {"size": 151, "sha": _FAKE_SHA_A}
+                result = self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=transport)
+            self.assertEqual(result["adopt_summary"]["adopted_count"], 1, result)
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [json.loads(l) for l in manifest_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            record = next(r for r in records if r["object_id"] == f"sha256:{_FAKE_SHA_A}")
+            # matcher now honors the verified remote_key, not the stale declared one.
+            gating = archive_services.object_storage_wom_uploaded_location_matches(
+                record["locations"], provider_kind="cloudflare-r2", store_ref="r2-basoon-20260704", digest=_FAKE_SHA_A
+            )
+            self.assertEqual(gating, key)
+
+    # --- §12.12 leak: remote_key never carries a bucket/URL/host ---
+
+    def test_object_storage_remote_key_leak_guard(self) -> None:  # §12.12
+        a = archive_services
+        # A realistic remote_key is green for public-privacy containment.
+        self.assertTrue(a.safe_object_storage_remote_key(f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}.jpg"))
+        # A bucket/URL/host can never enter a remote_key.
+        self.assertFalse(a.safe_object_storage_remote_key("https://acct.r2.cloudflarestorage.com/bucket/key"))
+        self.assertFalse(a.safe_object_storage_remote_key("s3://my-bucket/objets/" + _FAKE_SHA_A))
+        self.assertFalse(a.safe_object_storage_remote_key("/leading/slash/" + _FAKE_SHA_A))
+        self.assertFalse(a.safe_object_storage_remote_key("objets/../../etc/passwd"))
+        self.assertFalse(a.safe_object_storage_remote_key("objets/with space/" + _FAKE_SHA_A))
+
+    # --- §12.13 partial-adopt report ---
+
+    def _seed_proven_tier2(self, root, *, provider="cloudflare-r2", store="r2-basoon-20260704"):
+        """Seed prior success receipts so the store proves tier >= 2 (a multipart /
+        large-object proof), which a batch adopt (requested tier 3) requires under
+        the SA-6 / F5 tiered gate. Uses distinct synthetic object_ids so it does
+        not touch the two real objects the batch adopt operates on.
+        """
+        s = archive_services
+        for case, oid, nbytes in (
+            ("tier-seed-small", "sha256:" + "a" * 64, 10),
+            ("tier-seed-big", "sha256:" + "b" * 64, s.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES),
+        ):
+            s.object_storage_write_execution_receipt(root, case, {
+                "schema": s.OBJECT_STORAGE_UPLOAD_RECEIPT_SCHEMA,
+                "provider_kind": provider, "store_ref": store,
+                "object_id": oid, "result_status": "uploaded",
+                "bytes_uploaded": nbytes, "object_count": 1,
+            })
+
+    def test_object_storage_partial_adopt_report(self) -> None:  # §12.13
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key_a = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            # SA-6 (F5): a batch adopt requests tier 3, which needs a proven tier
+            # >= 2 (a multipart proof). Seed that proof — mirroring a client who
+            # already ran a tiny-first + large upload before the batch adopt.
+            self._seed_proven_tier2(archive_root)
+            # SHA_B intentionally NOT seeded => it 404s and is not adopted.
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                transport.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}
+                result = self._adopt_run(archive_root, max_objects=10, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=transport)
+            self.assertTrue(result["ok"], result)
+            summary = result["adopt_summary"]
+            self.assertEqual(summary["adopted_count"], 1)
+            self.assertGreaterEqual(summary["would_reupload_count"], 1)
+            self.assertIn("adopted (presence+size)", summary["report"])
+            self.assertIn("will re-upload", summary["report"])
+            # And the presence+size adopt HEADs presence-only: on real R2 that
+            # avoids GetObject-rehashing the whole object just to confirm presence.
+            self.assertEqual(transport.content_hash_heads, [])
+
+    # --- §12.14 contract doc truthful shape ---
+
+    def test_object_storage_contract_truthful_shape(self) -> None:  # §12.14
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            result = archive_services.object_storage_adapter_execution_contract(
+                archive_root, operation="upload_object", object_id=f"sha256:{_FAKE_SHA_A}", dry_run=True
+            )
+            kc = result["key_contract"]
+            self.assertEqual(kc["sha256_content_addressed_remote_key_shape"], "sha256/<first2>/<sha256>")
+            self.assertIn("prefix", kc["strategies_supported"])
+            self.assertFalse(kc["remote_prefix_value_echoed"])
+            self.assertTrue(kc["must_not_include_full_original_filename"])
+            self.assertNotIn("object_key_must_not_include_original_filename", kc)
+
+    # --- §12.15 default strategy unchanged (regression) ---
+
+    def test_object_storage_default_strategy_remote_key_equals_key_hint(self) -> None:  # §12.15
+        a = archive_services
+        default_key = a.object_storage_remote_key(strategy="sha256_content_addressed", digest=_FAKE_SHA_A)
+        self.assertEqual(default_key, a.object_storage_content_addressed_key_hint(_FAKE_SHA_A))
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                result = self._upload_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", approve=True, transport=transport)
+            self.assertEqual(result["execution_results"][0]["result_status"], "uploaded")
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [json.loads(l) for l in manifest_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            record = next(r for r in records if r["object_id"] == f"sha256:{_FAKE_SHA_A}")
+            loc = next(l for l in record["locations"] if l.get("availability") == "wom_uploaded")
+            self.assertEqual(loc["key_strategy"], "sha256_content_addressed")
+            self.assertEqual(loc["remote_key"], loc["key_hint"])
+            self.assertEqual(loc["remote_key"], f"sha256/{_FAKE_SHA_A[:2]}/{_FAKE_SHA_A}")
+
+    # --- §12.16 (F1) ledger terminal-success must NEVER false-skip a wiped remote ---
+
+    def test_object_storage_ledger_terminal_success_never_false_skips_wiped_remote(self) -> None:  # §12.16
+        # THE CARDINAL SIN (F0/F0-b): after a successful --approve upload writes a
+        # persisted terminal-success resume-ledger row, a --skip-uploaded re-run
+        # against a WIPED remote must NOT be ledger-skipped. The manifest verdict
+        # is already_uploaded, F0-b re-HEADs the recorded remote_key, gets a 404,
+        # and MUST force the upload past the stale ledger row — never a silent
+        # skip that would be silent data loss on restore.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with self._adopt_env():
+                # RUN1: default strategy, tiny-first, uploads and writes a ledger row.
+                transport1 = _FakeObjectStorageTransport()
+                run1 = self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport1, skip_uploaded=True,
+                )
+                self.assertEqual(run1["execution_results"][0]["result_status"], "uploaded")
+                self.assertEqual(transport1.put_calls, 1)
+                # A persisted resume-ledger row now exists for this object.
+                ledger_dir = archive_root / "receipts" / "providers" / "object-storage-executions"
+                self.assertEqual(len(sorted(ledger_dir.glob("*.resume-ledger.jsonl"))), 1)
+                # The manifest wom_uploaded location is INTACT (this is NOT the
+                # crash-recovery case where it is stripped) => verdict already_uploaded.
+
+                # WIPE the remote: a brand-new empty transport (bucket lost / object gone).
+                wiped = _FakeObjectStorageTransport()  # empty store => every HEAD 404s
+                run2 = self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=wiped, skip_uploaded=True,
+                )
+            # NEVER a silent ledger skip: the F0-b HEAD saw a 404, so the object
+            # is RE-UPLOADED past the stale ledger terminal-success row.
+            self.assertEqual(run2["execution_results"][0]["result_status"], "uploaded")
+            self.assertEqual(wiped.put_calls, 1, "a proven-absent object must be re-uploaded, never ledger-skipped")
+
+    # --- §12.17 (F2) plan verdict is strategy/remote_key-aware (plan == apply) ---
+
+    def test_object_storage_plan_verdict_is_strategy_aware(self) -> None:  # §12.17
+        # A prior PREFIX adopt records a wom_uploaded location under the client
+        # key. A DEFAULT-strategy plan run must NOT predict already_uploaded (its
+        # resolved key differs from the gating location's key); it must predict
+        # would_upload, matching what apply does — no plan!=apply divergence (§8).
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            prefix_key = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            with self._adopt_env():
+                seed = _FakeObjectStorageTransport()
+                seed.store[prefix_key] = {"size": 151, "sha": _FAKE_SHA_A}
+                self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=seed)
+                # DEFAULT-strategy plan against the SAME store: its resolved key is
+                # the content-addressed key, which the prefix-adopt location does
+                # NOT record => must NOT gate.
+                plan = archive_services.object_storage_upload_plan(
+                    archive_root, store_ref="r2-basoon-20260704", access_key_id_ref="env:WOM_R2_ACCESS_KEY_ID",
+                    secret_access_key_ref="env:WOM_R2_SECRET_ACCESS_KEY", only=f"sha256:{_FAKE_SHA_A}",
+                    skip_uploaded=True, dry_run=True,  # default strategy (no key_strategy passed)
+                )
+            row = plan["plan"]["objects"][0]
+            self.assertEqual(row["idempotency_verdict"], "would_upload", row)
+            # The SAME-strategy (prefix) plan still gates correctly.
+            with self._adopt_env():
+                plan_prefix = archive_services.object_storage_upload_plan(
+                    archive_root, store_ref="r2-basoon-20260704", access_key_id_ref="env:WOM_R2_ACCESS_KEY_ID",
+                    secret_access_key_ref="env:WOM_R2_SECRET_ACCESS_KEY", only=f"sha256:{_FAKE_SHA_A}",
+                    skip_uploaded=True, key_strategy="prefix", key_prefix=self._BASOON_PREFIX, dry_run=True,
+                )
+            self.assertEqual(plan_prefix["plan"]["objects"][0]["idempotency_verdict"], "already_uploaded")
+
+    # --- §12.18 (F3/F4) presence+size skip re-HEADs presence-only (no 158 GB rehash) ---
+
+    def test_object_storage_presence_size_skip_does_not_rehash(self) -> None:  # §12.18
+        # A presence+size verified adopt records remote_key_verification=presence_size.
+        # A later --skip-uploaded upload run must re-HEAD that key PRESENCE-ONLY
+        # (F0-b live proof) and skip — WITHOUT a content-hash GetObject-rehash,
+        # which on real R2 would download the whole object just to confirm a skip.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            with self._adopt_env():
+                seed = _FakeObjectStorageTransport()
+                seed.store[key] = {"size": 151, "sha": _FAKE_SHA_A}
+                adopt = self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=seed)
+                self.assertEqual(adopt["adopt_summary"]["adopted_count"], 1)
+                # The adopt itself HEADed presence-only (no rehash).
+                self.assertEqual(seed.content_hash_heads, [])
+                # Now a --skip-uploaded upload run over the adopted object.
+                transport = _FakeObjectStorageTransport()
+                transport.store[key] = {"size": 151, "sha": _FAKE_SHA_A}
+                result = self._upload_run(archive_root, store_ref="r2-basoon-20260704", only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", approve=True, transport=transport, skip_uploaded=True, key_strategy="prefix", key_prefix=self._BASOON_PREFIX)
+            self.assertEqual(result["execution_results"][0]["result_status"], "skipped_remote_same")
+            self.assertEqual(transport.put_calls, 0)
+            # THE FIX: the skip re-HEAD was presence-only — NO whole-object rehash.
+            self.assertEqual(transport.content_hash_heads, [], "presence_size skip must not GetObject-rehash")
+            self.assertEqual(result["execution_results"][0]["remote_key_verification"], "presence_size")
+
+    # --- §12.19 (F5) verified adopt honours the SA-6 tiny-first tiered gate ---
+
+    def test_object_storage_adopt_batch_refuses_without_tiny_first(self) -> None:  # §12.19
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key_a = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                transport.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}
+                # A batch adopt on a fresh store (no prior proven tier) REFUSES.
+                batch = self._adopt_run(archive_root, max_objects=10, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=transport)
+                self.assertFalse(batch["ok"], batch)
+                self.assertTrue(any("tiered_gate_unmet" in b for b in batch["blockers"]), batch["blockers"])
+                self.assertEqual(batch["adopt_summary"]["adopted_count"], 0)
+                # A single tiny-first adopt is always permitted (tier 1).
+                single = self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=transport)
+            self.assertTrue(single["ok"], single)
+            self.assertEqual(single["adopt_summary"]["adopted_count"], 1)
+
+    # --- §12.20 (F6) round-trip skip is anchored to an INDEPENDENTLY-real key ---
+
+    def test_object_storage_skip_round_trip_anchored_to_real_key(self) -> None:  # §12.20
+        # Guard against a consistent-but-wrong resolver: seed the remote at the
+        # LITERAL byte-exact key the basoon client uses (computed here as a string
+        # constant, NOT via object_storage_remote_key), adopt+skip, and assert the
+        # object was HEADed at THAT literal key. A resolver that returns a
+        # different-but-self-consistent key would 404 here and fail, because the
+        # seed key is not derived from the resolver under test.
+        literal_key = f"archives/archive:personal:basoon/objets/{_FAKE_SHA_A}"
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with self._adopt_env():
+                seed = _FakeObjectStorageTransport()
+                seed.store[literal_key] = {"size": 151, "sha": _FAKE_SHA_A}
+                adopt = self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=seed)
+                self.assertEqual(adopt["adopt_summary"]["adopted_count"], 1, adopt)
+                # The adopt HEADed the LITERAL key, proving the resolver produced it.
+                self.assertIn(literal_key, seed.heads)
+                transport = _FakeObjectStorageTransport()
+                transport.store[literal_key] = {"size": 151, "sha": _FAKE_SHA_A}
+                result = self._upload_run(archive_root, store_ref="r2-basoon-20260704", only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", approve=True, transport=transport, skip_uploaded=True, key_strategy="prefix", key_prefix=self._BASOON_PREFIX)
+            self.assertEqual(result["execution_results"][0]["result_status"], "skipped_remote_same")
+            self.assertEqual(transport.put_calls, 0)
+            self.assertIn(literal_key, transport.heads)
 
     # --- Stage 2: SigV4 signing KATs (byte-exact, offline) ---
 
@@ -13015,10 +13534,10 @@ state:
             manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
             real_builder = archive_services.object_storage_wom_uploaded_location
 
-            def leaky_builder(*, digest, provider_kind, store_ref, execution_receipt_ref, uploaded_at):
+            def leaky_builder(*, digest, provider_kind, store_ref, execution_receipt_ref, uploaded_at, **kwargs):
                 location = real_builder(
                     digest=digest, provider_kind=provider_kind, store_ref=store_ref,
-                    execution_receipt_ref=execution_receipt_ref, uploaded_at=uploaded_at,
+                    execution_receipt_ref=execution_receipt_ref, uploaded_at=uploaded_at, **kwargs,
                 )
                 # Adversarial: a future edit threads the raw secret into the delta.
                 location["debug_note"] = _R2_SECRET_HEX64
@@ -13598,7 +14117,18 @@ state:
             self.assertEqual(result["operation"], "upload_object")
             self.assertEqual(result["object_id"], f"sha256:{digest}")
             self.assertEqual(result["store_ref"], "object-store-execution-contract")
-            self.assertEqual(result["key_contract"]["strategy"], "sha256_content_addressed")
+            # v0.3.166: truthful key_contract for BOTH strategies.
+            self.assertEqual(result["key_contract"]["default_strategy"], "sha256_content_addressed")
+            self.assertIn("prefix", result["key_contract"]["strategies_supported"])
+            self.assertEqual(
+                result["key_contract"]["sha256_content_addressed_remote_key_shape"],
+                "sha256/<first2>/<sha256>",
+            )
+            self.assertFalse(result["key_contract"]["remote_prefix_value_echoed"])
+            self.assertTrue(result["key_contract"]["must_not_include_full_original_filename"])
+            self.assertTrue(result["key_contract"]["head_before_uses_recorded_remote_key"])
+            self.assertTrue(result["key_contract"]["verified_adopt_is_presence_size_only"])
+            self.assertTrue(result["key_contract"]["declared_adopt_does_not_gate_put"])
             self.assertTrue(result["integrity_contract"]["sha256_required"])
             self.assertTrue(result["integrity_contract"]["etag_is_not_treated_as_sha256_unless_provider_policy_is_verified"])
             self.assertTrue(result["transfer_contract"]["resume_ledger_required"])

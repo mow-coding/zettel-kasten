@@ -1731,6 +1731,20 @@ OBJECT_STORAGE_ADAPTER_EXECUTION_CONTRACT_OPERATIONS = {
     "upload_object",
 }
 OBJECT_STORAGE_UPLOAD_KEY_STRATEGY = "sha256_content_addressed"
+# v0.3.166: selectable key strategy. The default stays byte-identical to
+# sha256_content_addressed; `prefix` places the object under an operator-supplied
+# literal key prefix. One noun everywhere ("strategy"), matching the shipped
+# manifest field key_strategy and the constant above (locked spec §2).
+OBJECT_STORAGE_UPLOAD_KEY_STRATEGY_PREFIX = "prefix"
+OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES = (
+    OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+    OBJECT_STORAGE_UPLOAD_KEY_STRATEGY_PREFIX,
+)
+# A remote_key holds a bucket-relative path (slashes/dots/colons allowed); it is
+# NOT a safe label like store_ref and NOT a URL/bucket name. S3 caps keys at 1024
+# bytes (locked spec §5).
+OBJECT_STORAGE_REMOTE_KEY_MAX_LEN = 1024
+OBJECT_STORAGE_REMOTE_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9/._:-]{0,1023}$")
 # Live upload adapter (WOM #11) Stage 1 constants (§5 of the locked spec).
 OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES = 5 * 1024 * 1024 * 1024  # 5 GiB; >= this => multipart
 OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES = 64 * 1024 * 1024  # 64 MiB parts
@@ -41447,15 +41461,26 @@ def object_storage_upload_evidence_location(
     store_ref: str,
     receipt_path: str,
     registered_at: str,
+    key_strategy: str = OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+    remote_key: str | None = None,
 ) -> dict[str, Any]:
+    # key_hint is produced by the SHARED content-addressed function (the second
+    # hardcoded literal is gone, §7/V7). remote_key records the actual key an
+    # external tool declared the object at; for the default strategy it equals
+    # the content-addressed key. This location is declared_uploaded and NEVER
+    # gates a PUT (the matcher rejects declared_uploaded), so it is unverified.
+    resolved_remote_key = remote_key if remote_key is not None else object_storage_content_addressed_key_hint(digest)
     return {
         "provider": "object_storage",
         "provider_kind": provider_kind,
         "store_ref": store_ref,
         "availability": "declared_uploaded",
         "content_addressed": True,
-        "key_strategy": OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
-        "key_hint": f"sha256/{digest[:2]}/{digest}",
+        "key_strategy": key_strategy,
+        "key_hint": object_storage_content_addressed_key_hint(digest),
+        "remote_key": resolved_remote_key,
+        "remote_key_verified": False,
+        "remote_key_verification": "none",
         "byte_verification_by_wom_kit": False,
         "provider_confirmation_by_wom_kit": False,
         "evidence_receipt": receipt_path,
@@ -41807,11 +41832,19 @@ def object_storage_upload_evidence_audit_location_errors(
         errors.append("manifest object-storage location must use declared_uploaded availability.")
     if location.get("content_addressed") is not True:
         errors.append("manifest object-storage location must be content-addressed.")
-    if location.get("key_strategy") != OBJECT_STORAGE_UPLOAD_KEY_STRATEGY:
-        errors.append("manifest object-storage location key_strategy is not sha256 content-addressed.")
+    location_strategy = str(location.get("key_strategy") or OBJECT_STORAGE_UPLOAD_KEY_STRATEGY)
+    if location_strategy not in OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES:
+        errors.append("manifest object-storage location key_strategy is not a supported strategy.")
+    # key_hint stays content-addressed under EVERY strategy (RC3, digest binding
+    # on the immutable object id); a prefix location additionally binds its
+    # remote_key to the digest (§3.1) so a wrong remote_key is caught even though
+    # the key_hint string is correct.
     expected_key_hint = f"sha256/{digest[:2]}/{digest}" if SHA256_RE.match(digest) else None
     if expected_key_hint is None or location.get("key_hint") != expected_key_hint:
         errors.append("manifest object-storage location key_hint does not match the object id.")
+    if location_strategy != OBJECT_STORAGE_UPLOAD_KEY_STRATEGY:
+        if not object_storage_location_remote_key_binds_digest(location, f"sha256:{digest}"):
+            errors.append("manifest object-storage location remote_key does not bind the object id digest.")
     if location.get("byte_verification_by_wom_kit") is not False:
         errors.append("manifest object-storage location must not claim WOM-kit byte verification.")
     if location.get("provider_confirmation_by_wom_kit") is not False:
@@ -41829,13 +41862,20 @@ def object_storage_location_digest_matches_record(location: dict[str, Any], obje
 
     equal the enclosing manifest record's object_id digest. Used by the audit
     and doctor to close the digest-blind false-skip / mismatched-advance hole.
+    key_hint stays content-addressed under every strategy; a non-default (prefix)
+    location must ALSO bind its remote_key to the digest (§3.1) so a valid-looking
+    remote_key for the wrong object is caught.
     """
     if not isinstance(location, dict):
         return False
     digest = str(object_id or "").removeprefix("sha256:").lower()
     if not SHA256_RE.match(digest):
         return False
-    return location.get("key_hint") == f"sha256/{digest[:2]}/{digest}"
+    if location.get("key_hint") != f"sha256/{digest[:2]}/{digest}":
+        return False
+    if str(location.get("key_strategy") or OBJECT_STORAGE_UPLOAD_KEY_STRATEGY) != OBJECT_STORAGE_UPLOAD_KEY_STRATEGY:
+        return object_storage_location_remote_key_binds_digest(location, object_id)
+    return True
 
 
 def object_storage_wom_uploaded_audit_location_errors(
@@ -41865,11 +41905,15 @@ def object_storage_wom_uploaded_audit_location_errors(
         errors.append("manifest wom_uploaded location must use wom_uploaded availability.")
     if location.get("content_addressed") is not True:
         errors.append("manifest wom_uploaded location must be content-addressed.")
-    if location.get("key_strategy") != OBJECT_STORAGE_UPLOAD_KEY_STRATEGY:
-        errors.append("manifest wom_uploaded location key_strategy is not sha256 content-addressed.")
+    location_strategy = str(location.get("key_strategy") or OBJECT_STORAGE_UPLOAD_KEY_STRATEGY)
+    if location_strategy not in OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES:
+        errors.append("manifest wom_uploaded location key_strategy is not a supported strategy.")
     expected_key_hint = f"sha256/{digest[:2]}/{digest}" if SHA256_RE.match(digest) else None
     if expected_key_hint is None or location.get("key_hint") != expected_key_hint:
         errors.append("manifest wom_uploaded location key_hint does not match the object id.")
+    if location_strategy != OBJECT_STORAGE_UPLOAD_KEY_STRATEGY:
+        if not object_storage_location_remote_key_binds_digest(location, f"sha256:{digest}"):
+            errors.append("manifest wom_uploaded location remote_key does not bind the object id digest.")
     if location.get("byte_verification_by_wom_kit") is not True:
         errors.append("manifest wom_uploaded location must claim WOM-kit byte verification.")
     if location.get("provider_confirmation_by_wom_kit") is not True:
@@ -46059,13 +46103,28 @@ def object_storage_adapter_execution_contract(
             "provider_head_after_upload_required": True,
         },
         "key_contract": {
-            "strategy": OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+            # v0.3.166: selectable key strategy, truthful shapes for BOTH.
+            "strategies_supported": list(OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES),
+            "default_strategy": OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
             "content_address_source": "sha256 object id",
-            "remote_key_shape": "{provider_prefix}/sha256/<first2>/<sha256>",
+            # The default strategy prepends NO prefix — the object lands at exactly
+            # sha256/<first2>/<sha256> (the previous "{provider_prefix}/..." string
+            # was a lie; the code never prepended a prefix).
+            "sha256_content_addressed_remote_key_shape": "sha256/<first2>/<sha256>",
+            # The prefix strategy is a CONFIGURED template; the prefix VALUE is
+            # never echoed into a shareable preview.
+            "prefix_remote_key_shape": "<configured-prefix>/<sha256>[.<ext>]",
             "remote_prefix_value_echoed": False,
             "bucket_name_echoed": False,
             "object_id_required": True,
-            "object_key_must_not_include_original_filename": True,
+            # Under --key-append-extension the extension-only suffix may appear;
+            # the FULL original filename never does.
+            "must_not_include_full_original_filename": True,
+            "extension_only_under_explicit_opt_in": True,
+            "remote_key_recorded_in_location": True,
+            "head_before_uses_recorded_remote_key": True,
+            "verified_adopt_is_presence_size_only": True,
+            "declared_adopt_does_not_gate_put": True,
         },
         "integrity_contract": {
             "sha256_required": True,
@@ -55562,8 +55621,13 @@ class ObjectStorageTransport(Protocol):
     NO provider error body is ever returned to the caller (RC5).
     """
 
-    def head_object(self, *, key: str) -> dict[str, Any]:
+    def head_object(self, *, key: str, presence_only: bool = False) -> dict[str, Any]:
         # -> {"present": bool, "size": int | None, "checksum_sha256": str | None}
+        # presence_only=True MUST NOT read the object body: it returns presence +
+        # size only and leaves checksum_sha256 None. On R2 the whole-object sha256
+        # is a GetObject-and-rehash (V14), so a presence+size caller (verified
+        # adopt §6.3, the presence_size skip fast-path) MUST pass presence_only to
+        # avoid downloading 158 GB just to confirm a skip.
         ...
 
     def put_object(self, *, key: str, data_path: Path, size: int, content_sha256: str) -> dict[str, Any]:
@@ -55596,7 +55660,7 @@ class ObjectStorageTransport(Protocol):
 class NullTransport:
     """Stage-1 transport whose every method raises. Ships in place of a live client."""
 
-    def head_object(self, *, key: str) -> dict[str, Any]:
+    def head_object(self, *, key: str, presence_only: bool = False) -> dict[str, Any]:
         raise ObjectStorageTransportNotImplemented(
             "object-storage-upload has no live transport in this release (Stage 1)."
         )
@@ -55836,7 +55900,7 @@ class S3CompatibleTransport:
 
     # -- transport methods -------------------------------------------------
 
-    def head_object(self, *, key: str) -> dict[str, Any]:
+    def head_object(self, *, key: str, presence_only: bool = False) -> dict[str, Any]:
         # Whole-object sha256 verification is done by re-download-and-hash (CB-Q2
         # fallback), NOT by a stored server-side checksum. R2 does not implement
         # GetObjectAttributes and marks x-amz-checksum-sha256 "Feature Not
@@ -55846,6 +55910,14 @@ class S3CompatibleTransport:
         # them here to the lowercase hex the executor compares. This works
         # identically for single-part and multipart objects and depends on no
         # provider checksum surface. Both HEAD and GET sign UNSIGNED-PAYLOAD.
+        #
+        # presence_only=True short-circuits AFTER the cheap HeadObject and does
+        # NOT GetObject the body: it returns presence + size with
+        # checksum_sha256=None. This is the ONLY way a presence+size caller
+        # (verified adopt §6.3; the presence_size skip fast-path) avoids
+        # downloading the whole object (158 GB) merely to confirm a skip. A
+        # size-only proof never claims content identity — the None checksum makes
+        # that explicit to the caller.
         head = self._dispatch(method="HEAD", key=key, payload_hash=SIGV4_UNSIGNED_PAYLOAD)
         head_status = int(head.get("status") or 0)
         if head_status == 404:
@@ -55861,6 +55933,9 @@ class S3CompatibleTransport:
                     size = int(raw_len)
                 except (ValueError, TypeError):
                     size = None
+        if presence_only:
+            # Presence + size only: NO GetObject, NO body read, NO egress cost.
+            return {"present": True, "size": size, "checksum_sha256": None}
         # GetObject and hash the streamed bytes to the whole-object sha256 hex.
         checksum_hex = self._get_object_sha256_hex(key)
         return {"present": True, "size": size, "checksum_sha256": checksum_hex}
@@ -56066,6 +56141,130 @@ def object_storage_content_addressed_key_hint(digest: str) -> str:
     return f"sha256/{clean[:2]}/{clean}"
 
 
+def safe_object_storage_remote_key(value: Any) -> bool:
+    """Validate a bucket-relative object key (locked spec §5).
+
+    Distinct from safe_object_storage_ref (store_ref is a slash-free label):
+    a remote_key legitimately holds slashes, dots, and the colon that the
+    basoon archive-id uses as a literal key byte. FORBIDS a leading slash, any
+    `..` path segment, NUL/whitespace/control, empties, and — via the shared
+    leak gate — any bucket name, endpoint host, or provider URL. A remote_key is
+    a PATH WITHIN a bucket, never a URL and never the bucket name.
+    """
+    if not isinstance(value, str):
+        return False
+    text = value
+    if not text or not text.isascii():
+        return False
+    if len(text) > OBJECT_STORAGE_REMOTE_KEY_MAX_LEN:
+        return False
+    if text.startswith("/"):
+        return False
+    if "\x00" in text:
+        return False
+    if any(ch.isspace() for ch in text):
+        return False
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):
+        return False
+    if ".." in text.split("/"):
+        return False
+    if not OBJECT_STORAGE_REMOTE_KEY_RE.match(text):
+        return False
+    # Leak backstop: a key must never carry a provider URL, endpoint host, or a
+    # secret-shaped token, and must not resolve to a local absolute path.
+    if contains_forbidden_location_reference(text) or source_intake_has_provider_url(text) or source_intake_secret_like(text):
+        return False
+    return True
+
+
+def object_storage_normalize_key_prefix(key_prefix: str) -> str:
+    """Collapse trailing slashes so `.../objets/` and `.../objets` resolve
+    identically (locked spec §4, Critique B edge (c)). Leading slashes are not
+    stripped here; a leading slash is rejected by the remote-key validator.
+    """
+    return str(key_prefix or "").rstrip("/")
+
+
+def object_storage_remote_key(
+    *,
+    strategy: str,
+    digest: str,
+    ext: str | None = None,
+    key_prefix: str | None = None,
+    append_extension: bool = False,
+) -> str:
+    """Resolve the literal bucket-relative key an object is PUT/HEAD at (§4).
+
+    - sha256_content_addressed -> byte-identical to the content-addressed hint
+      (default UNCHANGED, D6).
+    - prefix -> `<normalized_prefix>/<digest>` with an optional recovered
+      extension. The result ALWAYS contains the full 64-hex digest (§3.1
+      collision safety); this is asserted as defense in depth.
+
+    Refuses loud, never silently mis-keys: an unknown strategy, a missing/unsafe
+    key_prefix, or a resolved key that fails the remote-key validator all raise
+    ArchiveServiceError so plan/apply fail closed rather than HEAD a wrong key.
+    """
+    clean = str(digest or "").removeprefix("sha256:").lower()
+    if not SHA256_RE.match(clean):
+        raise ArchiveServiceError("object_storage_remote_key requires a 64-hex sha256 digest.")
+    normalized_strategy = str(strategy or "").strip()
+    if normalized_strategy == OBJECT_STORAGE_UPLOAD_KEY_STRATEGY:
+        key = object_storage_content_addressed_key_hint(clean)
+    elif normalized_strategy == OBJECT_STORAGE_UPLOAD_KEY_STRATEGY_PREFIX:
+        raw_prefix = str(key_prefix or "").strip()
+        if not raw_prefix:
+            raise ArchiveServiceError(
+                "object_storage_remote_key strategy 'prefix' requires a non-empty --key-prefix."
+            )
+        normalized_prefix = object_storage_normalize_key_prefix(raw_prefix)
+        if not normalized_prefix or not safe_object_storage_remote_key(normalized_prefix):
+            raise ArchiveServiceError(
+                "object_storage_remote_key --key-prefix is not a safe object key prefix "
+                "(no leading slash, no '..', no URL/bucket/host, no whitespace/control)."
+            )
+        key = f"{normalized_prefix}/{clean}"
+        if append_extension:
+            ext_norm = str(ext or "").strip().lower().lstrip(".")
+            # No bare trailing dot when the extension is unrecoverable (§4.1,
+            # Critique B open-answer): append only a real, non-empty extension.
+            if ext_norm and re.match(r"^[a-z0-9]{1,16}$", ext_norm):
+                key = f"{key}.{ext_norm}"
+    else:
+        raise ArchiveServiceError(
+            "object_storage_remote_key strategy must be one of: "
+            + ", ".join(OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES)
+            + "."
+        )
+    # §3.1 defense in depth: the resolved key MUST embed the full digest and be a
+    # storable key. A template that dropped/truncated the digest is a hard error.
+    if clean not in key or not safe_object_storage_remote_key(key):
+        raise ArchiveServiceError(
+            "object_storage_remote_key resolved to an unsafe key or one that does not "
+            "embed the full object digest."
+        )
+    return key
+
+
+def object_storage_location_remote_key_binds_digest(location: Any, object_id: str) -> bool:
+    """§3.1 digest-binding audit for a non-default (prefix-strategy) location.
+
+    Returns True iff the location's recorded remote_key is a safe object key AND
+    contains the enclosing record's full sha256 digest as a literal substring.
+    A wrong remote_key for the wrong object is caught here even when the string
+    is a syntactically valid key (kills hash-collision-across-schemes false-skip).
+    """
+    if not isinstance(location, dict):
+        return False
+    digest = str(object_id or "").removeprefix("sha256:").lower()
+    if not SHA256_RE.match(digest):
+        return False
+    remote_key = location.get("remote_key")
+    if not isinstance(remote_key, str) or not safe_object_storage_remote_key(remote_key):
+        return False
+    return digest in remote_key
+
+
 def safe_object_storage_execution_receipt_relative(value: Any) -> bool:
     if not isinstance(value, str):
         return False
@@ -56113,24 +56312,45 @@ def assert_no_secret_or_location_leak(serialized: str, *, key_values: list[str])
     return unique_preserve_order(hits)
 
 
-def object_storage_wom_uploaded_location_matches(
+def object_storage_wom_uploaded_location_match(
     locations: list[Any],
     *,
     provider_kind: str,
     store_ref: str,
     digest: str,
-) -> bool:
-    """Digest-aware Layer A (RC3 + R1). An object is `already_uploaded` for
+    expected_remote_key: str | None = None,
+) -> dict[str, Any] | None:
+    """Digest-aware Layer A gating (RC3 + R1 + F0-a). Returns a small scalar dict
+    describing the gating location — {"remote_key", "remote_key_verification"} —
+    or None when nothing gates.
 
-    --skip-uploaded ONLY if a location has provider==object_storage, matching
-    (provider_kind, store_ref), availability==wom_uploaded (NOT declared_uploaded),
-    AND key_hint == sha256/<first2>/<digest>. declared_uploaded and manifest-only
-    hits never cost-skip a live PUT.
+    An object gates --skip-uploaded ONLY via a location with
+    provider==object_storage, matching (provider_kind, store_ref),
+    availability==wom_uploaded (NOT declared_uploaded), key_hint still content-
+    addressed (RC3), AND a recorded remote_key that binds this digest (§3.1).
+    For a default-strategy location the remote_key equals the content-addressed
+    key; for a prefix-strategy location it is the operator key, which the
+    executor then re-HEADs (F0-b) before any skip. declared_uploaded and
+    manifest-only hits never cost-skip a live PUT.
+
+    Strategy-aware gating (F2 — plan==apply): when `expected_remote_key` is
+    given, a location gates ONLY if its recorded remote_key equals the key THIS
+    run would resolve. This stops the plan from predicting an "already_uploaded"
+    skip against a prior location whose key differs from the one apply will
+    HEAD/PUT (e.g. a prior prefix adopt vs a default-strategy run), which apply
+    would then re-upload — a plan!=apply verdict divergence. Passing None keeps
+    the legacy key-agnostic gating for callers that do not resolve a run key.
+
+    The returned remote_key (not just a bool) lets the executor HEAD the ACTUAL
+    recorded key rather than a recomputed content-addressed one (F0-a); the
+    returned remote_key_verification lets the executor re-HEAD presence-only when
+    the location was adopted presence+size (never claiming a content hash it
+    never had — F4).
     """
     expected_key_hint = object_storage_content_addressed_key_hint(digest)
     clean_digest = str(digest or "").removeprefix("sha256:").lower()
     if not SHA256_RE.match(clean_digest):
-        return False
+        return None
     for location in locations:
         if not isinstance(location, dict):
             continue
@@ -56142,9 +56362,86 @@ def object_storage_wom_uploaded_location_matches(
             continue
         if location.get("availability") != "wom_uploaded":
             continue
+        # RC3: key_hint stays content-addressed under every strategy (the digest
+        # binding on the immutable object id). This is written on every location.
         if location.get("key_hint") != expected_key_hint:
             continue
-        return True
+        # The gating/idempotency key is remote_key (F0-a). Legacy wom_uploaded
+        # locations that predate the field fall back to the content-addressed
+        # key_hint so they keep matching without migration.
+        remote_key = location.get("remote_key")
+        if remote_key is None:
+            remote_key = expected_key_hint
+        if not isinstance(remote_key, str) or not safe_object_storage_remote_key(remote_key):
+            continue
+        # §3.1: the recorded remote_key MUST bind this digest under any strategy.
+        if clean_digest not in remote_key:
+            continue
+        # F2: a gating hit only counts when the recorded key is the key THIS run
+        # will act on, so the plan verdict matches what apply does.
+        if expected_remote_key is not None and remote_key != expected_remote_key:
+            continue
+        verification = location.get("remote_key_verification")
+        if not isinstance(verification, str) or not verification:
+            # A legacy wom_uploaded location that predates the field was written
+            # by a genuine content-hashed upload; treat it as content_hash so the
+            # executor's re-HEAD keeps its stronger (checksum) skip check.
+            verification = "content_hash"
+        return {"remote_key": remote_key, "remote_key_verification": verification}
+    return None
+
+
+def object_storage_wom_uploaded_location_matches(
+    locations: list[Any],
+    *,
+    provider_kind: str,
+    store_ref: str,
+    digest: str,
+    expected_remote_key: str | None = None,
+) -> str | None:
+    """Back-compat thin wrapper returning only the gating remote_key (or None).
+
+    Kept for callers that need just the key. New code that also needs the
+    verification mode should call object_storage_wom_uploaded_location_match.
+    """
+    match = object_storage_wom_uploaded_location_match(
+        locations,
+        provider_kind=provider_kind,
+        store_ref=store_ref,
+        digest=digest,
+        expected_remote_key=expected_remote_key,
+    )
+    return match["remote_key"] if match else None
+
+
+def _object_storage_wom_uploaded_remote_key_present(
+    locations: list[Any],
+    *,
+    provider_kind: str,
+    store_ref: str,
+    remote_key: str,
+) -> bool:
+    """§6.5 de-dup: True iff an existing wom_uploaded location for this
+    (provider_kind, store_ref) already records exactly `remote_key`. A stale
+    declared_uploaded location under a different key never counts, so a corrected
+    verified remote_key can always be added/superseded.
+    """
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        if location.get("provider") != "object_storage":
+            continue
+        if str(location.get("provider_kind") or "") != provider_kind:
+            continue
+        if str(location.get("store_ref") or "") != store_ref:
+            continue
+        if location.get("availability") != "wom_uploaded":
+            continue
+        existing_key = location.get("remote_key")
+        if existing_key is None:
+            existing_key = location.get("key_hint")
+        if existing_key == remote_key:
+            return True
     return False
 
 
@@ -56155,19 +56452,31 @@ def object_storage_wom_uploaded_location(
     store_ref: str,
     execution_receipt_ref: str,
     uploaded_at: str,
+    key_strategy: str = OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+    remote_key: str | None = None,
+    remote_key_verified: bool = True,
+    remote_key_verification: str = "content_hash",
+    remote_size: int | None = None,
 ) -> dict[str, Any]:
-    """Provider-confirmed WOM live-upload location (§4.1). availability=wom_uploaded,
-
-    both by_wom_kit flags true.
+    """Provider-confirmed WOM live-upload location (§4.1 / §3). availability=
+    wom_uploaded, both by_wom_kit flags true. key_hint stays content-addressed
+    (RC3, written under every strategy); remote_key is the actual PUT/HEAD key,
+    with an explicit record of what verification actually proved (never claim a
+    content-hash for a size-only adopt).
     """
+    resolved_remote_key = remote_key if remote_key is not None else object_storage_content_addressed_key_hint(digest)
     return {
         "provider": "object_storage",
         "provider_kind": provider_kind,
         "store_ref": store_ref,
         "availability": "wom_uploaded",
         "content_addressed": True,
-        "key_strategy": OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+        "key_strategy": key_strategy,
         "key_hint": object_storage_content_addressed_key_hint(digest),
+        "remote_key": resolved_remote_key,
+        "remote_key_verified": bool(remote_key_verified),
+        "remote_key_verification": remote_key_verification,
+        "remote_size": remote_size,
         "byte_verification_by_wom_kit": True,
         "provider_confirmation_by_wom_kit": True,
         "execution_receipt_ref": execution_receipt_ref,
@@ -56402,6 +56711,7 @@ def object_storage_execute_one_upload(
     max_attempts: int = OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT,
     sleep: Callable[[float], None] = time.sleep,
     rng: Callable[[], float] = random.random,
+    force_upload: bool = False,
 ) -> dict[str, Any]:
     """Per-object upload spine (§2.3). Ledger read -> HEAD-before -> PUT/multipart
 
@@ -56422,12 +56732,24 @@ def object_storage_execute_one_upload(
     cost-skip is ledger authority (§3.3): a terminal-success ledger row means the
     object is already done. When the HEAD-before does run it is authoritative
     (Layer B), so a deleted-remote is correctly re-uploaded on a full-HEAD sweep.
+
+    force_upload (F1): when the caller has ALREADY proved the object absent under
+    a live HEAD (the F0-b re-HEAD in object_storage_upload_run), the ledger's
+    terminal-success short-circuit — a second recorded-skip authority keyed on
+    object_id only, with no presence field, that persists across a remote wipe —
+    would otherwise silently skip the re-upload. force_upload bypasses that stale
+    ledger row AND the now-redundant HEAD-before so a proven-absent object is
+    re-uploaded, never ledger-skipped. This is the cardinal-sin guard (a recorded
+    skip authority that survives a remote wipe -> silent data loss on restore).
     """
     _ = skip_uploaded  # Layer-A cost-skip is enforced upstream; see docstring.
     object_id = f"sha256:{content_sha256}"
     key_hint = key
-    # Ledger authority: a terminal-success row means this object is done (§3.3, T-fake4).
-    if object_id in ledger.terminal_success_object_ids():
+    # Ledger authority: a terminal-success row means this object is done (§3.3,
+    # T-fake4). force_upload bypasses it because the caller already proved this
+    # exact object ABSENT under a live HEAD (F1) — a stale terminal-success row
+    # must never re-skip a proven-absent object.
+    if not force_upload and object_id in ledger.terminal_success_object_ids():
         return {
             "object_id": object_id,
             "key_hint": key_hint,
@@ -56444,8 +56766,12 @@ def object_storage_execute_one_upload(
     backoff_ms_total = 0
     try:
         # HEAD-before (Layer B correctness). Only suppressed by Layer A upstream.
-        head_before = transport.head_object(key=key)
-        attempts += 1
+        # force_upload also skips it: the caller's F0-b HEAD already proved
+        # absence, so a second HEAD (a full GetObject-rehash on R2) would be pure
+        # wasted egress on the proven-absent re-upload path.
+        head_before = {"present": False} if force_upload else transport.head_object(key=key)
+        if not force_upload:
+            attempts += 1
         if head_before.get("present"):
             remote_size = head_before.get("size")
             remote_checksum = head_before.get("checksum_sha256")
@@ -56633,6 +56959,26 @@ def _object_storage_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _object_storage_recovered_extension(record: Any) -> str | None:
+    """Recover the object's original-filename extension byte-exactly from the
+    manifest record's logical_key, or None (§4.1). WOM does not key on filename,
+    so an unrecoverable/ambiguous extension yields None and the resolver appends
+    nothing — verification (§6.1), not the template, is the safety backstop.
+    """
+    if not isinstance(record, dict):
+        return None
+    logical_key = record.get("logical_key")
+    if not isinstance(logical_key, str) or not logical_key.strip():
+        return None
+    tail = logical_key.rsplit("/", 1)[-1]
+    if "." not in tail:
+        return None
+    ext = tail.rsplit(".", 1)[-1].strip().lower()
+    if not re.match(r"^[a-z0-9]{1,16}$", ext):
+        return None
+    return ext
+
+
 def _object_storage_upload_plan_candidate(
     root: Path,
     *,
@@ -56641,11 +56987,35 @@ def _object_storage_upload_plan_candidate(
     store_ref: str,
     skip_uploaded: bool,
     dry_run: bool,
+    key_strategy: str = OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+    key_prefix: str | None = None,
+    append_extension: bool = False,
 ) -> dict[str, Any]:
-    """Resolve one object into a plan row: local path, size, key_hint, verdict."""
+    """Resolve one object into a plan row: local path, size, key_hint, remote_key,
+    strategy, verdict (§4/§8). key_hint stays content-addressed (RC3); remote_key
+    is the fully-resolved actual PUT/HEAD key the plan echoes verbatim so apply
+    can refuse a divergent re-resolution (F0-c).
+    """
     resolution = resolve_objet_ref(root, object_id=object_id, dry_run=True)
     digest = str(object_id or "").removeprefix("sha256:").lower()
     key_hint = object_storage_content_addressed_key_hint(digest)
+    record = find_manifest_record(root, object_id)
+    ext = _object_storage_recovered_extension(record) if append_extension else None
+    # Resolve the actual remote_key for this run's explicit strategy. A bad
+    # template (e.g. prefix without a prefix) surfaces as a plan blocker rather
+    # than a silently mis-keyed HEAD.
+    remote_key = None
+    key_resolution_error = None
+    try:
+        remote_key = object_storage_remote_key(
+            strategy=key_strategy,
+            digest=digest,
+            ext=ext,
+            key_prefix=key_prefix,
+            append_extension=append_extension,
+        )
+    except ArchiveServiceError as exc:
+        key_resolution_error = str(exc)
     local_relative = None
     size_bytes = None
     for candidate in resolution.get("local_candidates") or []:
@@ -56659,19 +57029,36 @@ def _object_storage_upload_plan_candidate(
                 size_bytes = local_path.stat().st_size
         except (ArchiveServiceError, ArchivePathError, OSError):
             local_relative = None
-    record = find_manifest_record(root, object_id)
     locations = record.get("locations") if isinstance(record, dict) and isinstance(record.get("locations"), list) else []
-    already_uploaded = object_storage_wom_uploaded_location_matches(
-        locations, provider_kind=provider_kind, store_ref=store_ref, digest=digest
+    # F2 (plan==apply): only gate when a prior wom_uploaded location records the
+    # SAME remote_key this run resolved. A prior location under a different key
+    # layout (e.g. a prefix adopt vs a default run) must NOT predict a skip the
+    # apply path would then re-upload. When this run could not resolve a key,
+    # fall back to key-agnostic gating (there is no run key to compare).
+    gating_match = object_storage_wom_uploaded_location_match(
+        locations,
+        provider_kind=provider_kind,
+        store_ref=store_ref,
+        digest=digest,
+        expected_remote_key=remote_key,
     )
+    gating_remote_key = gating_match["remote_key"] if gating_match else None
+    gating_verification = gating_match["remote_key_verification"] if gating_match else None
+    already_uploaded = gating_remote_key is not None
     verdict = "already_uploaded" if (skip_uploaded and already_uploaded) else "would_upload"
     return {
         "object_id": object_id,
         "key_hint": key_hint,
+        "key_strategy": key_strategy,
+        "remote_key": remote_key,
+        "recovered_ext": ext,
+        "key_resolution_error": key_resolution_error,
         "size_bytes": size_bytes,
         "local_available": bool(local_relative),
         "local_relative": local_relative,
         "wom_uploaded_present": already_uploaded,
+        "gating_remote_key": gating_remote_key,
+        "gating_remote_key_verification": gating_verification,
         "idempotency_verdict": verdict,
     }
 
@@ -56772,6 +57159,36 @@ def _object_storage_validate_credential_refs(
     return summary
 
 
+def _object_storage_validate_key_strategy(
+    *,
+    key_strategy: str | None,
+    key_prefix: str | None,
+    blockers: list[str],
+) -> str:
+    """Validate the per-run key strategy (§4/§11). Returns the normalized strategy
+    (defaults to sha256_content_addressed on error so downstream rows still build).
+    A `prefix` strategy REFUSES a missing/unsafe --key-prefix loudly.
+    """
+    normalized = str(key_strategy or "").strip() or OBJECT_STORAGE_UPLOAD_KEY_STRATEGY
+    if normalized not in OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES:
+        blockers.append(
+            "key_strategy must be one of: " + ", ".join(OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES) + "."
+        )
+        return OBJECT_STORAGE_UPLOAD_KEY_STRATEGY
+    if normalized == OBJECT_STORAGE_UPLOAD_KEY_STRATEGY_PREFIX:
+        raw_prefix = str(key_prefix or "").strip()
+        if not raw_prefix:
+            blockers.append("key_strategy 'prefix' requires --key-prefix.")
+        elif not safe_object_storage_remote_key(object_storage_normalize_key_prefix(raw_prefix)):
+            blockers.append(
+                "--key-prefix is not a safe object key prefix "
+                "(no leading slash, no '..', no URL/bucket/host, no whitespace/control)."
+            )
+    elif str(key_prefix or "").strip():
+        blockers.append("--key-prefix is only valid with --key-strategy prefix.")
+    return normalized
+
+
 def object_storage_upload_plan(
     archive_root: Path | str,
     *,
@@ -56782,6 +57199,9 @@ def object_storage_upload_plan(
     only: str | None = None,
     max_objects: int | None = None,
     skip_uploaded: bool = False,
+    key_strategy: str = OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+    key_prefix: str | None = None,
+    append_extension: bool = False,
     dry_run: bool = True,
 ) -> dict[str, Any]:
     """Read-only upload planner (§1.1). Writes nothing, reads no secret."""
@@ -56799,6 +57219,11 @@ def object_storage_upload_plan(
     if not normalized_store_ref or not safe_object_storage_ref(normalized_store_ref):
         blockers.append("store_ref must be a safe store label; do not pass a URL, path, token, or secret.")
 
+    normalized_strategy = _object_storage_validate_key_strategy(
+        key_strategy=key_strategy, key_prefix=key_prefix, blockers=blockers
+    )
+    strategy_explicit = bool(str(key_strategy or "").strip()) and normalized_strategy != OBJECT_STORAGE_UPLOAD_KEY_STRATEGY
+
     credential_summary = _object_storage_validate_credential_refs(
         access_key_id_ref=access_key_id_ref,
         secret_access_key_ref=secret_access_key_ref,
@@ -56812,6 +57237,8 @@ def object_storage_upload_plan(
     plan_rows: list[dict[str, Any]] = []
     would_upload = 0
     already_uploaded = 0
+    saw_non_default_prior_location = False
+    saw_declared_or_adopted_location = False
     if not blockers:
         for object_id in object_ids:
             row = _object_storage_upload_plan_candidate(
@@ -56821,12 +57248,44 @@ def object_storage_upload_plan(
                 store_ref=normalized_store_ref,
                 skip_uploaded=skip_uploaded,
                 dry_run=True,
+                key_strategy=normalized_strategy,
+                key_prefix=key_prefix,
+                append_extension=append_extension,
             )
             plan_rows.append(row)
             if row["idempotency_verdict"] == "already_uploaded":
                 already_uploaded += 1
             else:
                 would_upload += 1
+            record = find_manifest_record(root, object_id)
+            locations = record.get("locations") if isinstance(record, dict) and isinstance(record.get("locations"), list) else []
+            for location in locations:
+                if not isinstance(location, dict) or location.get("provider") != "object_storage":
+                    continue
+                if str(location.get("provider_kind") or "") != normalized_provider:
+                    continue
+                if str(location.get("store_ref") or "") != normalized_store_ref:
+                    continue
+                availability = location.get("availability")
+                if availability in {"declared_uploaded", "wom_uploaded"}:
+                    saw_declared_or_adopted_location = True
+                if str(location.get("key_strategy") or OBJECT_STORAGE_UPLOAD_KEY_STRATEGY) != OBJECT_STORAGE_UPLOAD_KEY_STRATEGY:
+                    saw_non_default_prior_location = True
+
+    # §10 discoverability: silence is the whole bug. Surface a visible hint when
+    # objects may already exist under a different key layout than this run's, so
+    # an operator runs adopt-existing before paying to re-upload.
+    if not blockers:
+        if not strategy_explicit and saw_declared_or_adopted_location:
+            warnings.append(
+                "objects may already exist under a different key layout — run object-storage-adopt-existing "
+                "with your --key-prefix before --approve to avoid re-uploading."
+            )
+        if normalized_strategy == OBJECT_STORAGE_UPLOAD_KEY_STRATEGY and saw_non_default_prior_location:
+            warnings.append(
+                "this store already has locations recorded under a non-default key strategy; a default-strategy "
+                "upload may re-PUT objects that already exist — verify with object-storage-adopt-existing first."
+            )
 
     result = _object_storage_upload_base_result(
         lifecycle_action="object_storage_upload_plan",
@@ -56839,7 +57298,7 @@ def object_storage_upload_plan(
     result.update(
         {
             "ok": not blockers,
-            "key_strategy": OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+            "key_strategy": normalized_strategy,
             "credential_refs": credential_summary,
             "plan": {
                 "object_count": len(object_ids),
@@ -56862,11 +57321,16 @@ def object_storage_upload_verify(
     store_ref: str | None = None,
     only: str | None = None,
     max_objects: int | None = None,
+    key_strategy: str = OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+    key_prefix: str | None = None,
+    append_extension: bool = False,
     dry_run: bool = True,
 ) -> dict[str, Any]:
     """Read-only local RAW-byte verification (§1.2). sha256_path over RAW bytes ==
 
-    the object_id digest. Never uses bytes_normalized_for_content_compare.
+    the object_id digest. Never uses bytes_normalized_for_content_compare. The
+    key strategy is mirrored here (§10) so an operator can preview the remote_key
+    the same run would use, without any network call.
     """
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -56882,6 +57346,10 @@ def object_storage_upload_verify(
     if normalized_store_ref and not safe_object_storage_ref(normalized_store_ref):
         blockers.append("store_ref must be a safe store label; do not pass a URL, path, token, or secret.")
 
+    normalized_strategy = _object_storage_validate_key_strategy(
+        key_strategy=key_strategy, key_prefix=key_prefix, blockers=blockers
+    )
+
     object_ids = _object_storage_resolve_upload_targets(
         root, only=only, max_objects=max_objects, blockers=blockers
     )
@@ -56892,6 +57360,18 @@ def object_storage_upload_verify(
     if not blockers:
         for object_id in object_ids:
             digest = str(object_id).removeprefix("sha256:").lower()
+            record = find_manifest_record(root, object_id)
+            ext = _object_storage_recovered_extension(record) if append_extension else None
+            try:
+                remote_key = object_storage_remote_key(
+                    strategy=normalized_strategy,
+                    digest=digest,
+                    ext=ext,
+                    key_prefix=key_prefix,
+                    append_extension=append_extension,
+                )
+            except ArchiveServiceError:
+                remote_key = None
             resolution = resolve_objet_ref(root, object_id=object_id, dry_run=True)
             local_relative = None
             for candidate in resolution.get("local_candidates") or []:
@@ -56909,7 +57389,13 @@ def object_storage_upload_verify(
                 except (ArchiveServiceError, ArchivePathError, OSError):
                     verified = False
             verifications.append(
-                {"object_id": object_id, "verified": verified, "size_bytes": size_bytes}
+                {
+                    "object_id": object_id,
+                    "verified": verified,
+                    "size_bytes": size_bytes,
+                    "key_strategy": normalized_strategy,
+                    "remote_key": remote_key,
+                }
             )
             if verified:
                 verified_count += 1
@@ -56927,6 +57413,7 @@ def object_storage_upload_verify(
     result.update(
         {
             "ok": not blockers,
+            "key_strategy": normalized_strategy,
             "local_byte_verification": verifications,
             "verified_count": verified_count,
             "mismatch_count": mismatch_count,
@@ -56950,6 +57437,9 @@ def object_storage_upload_run(
     reviewed_by: str | None = None,
     approve: bool = False,
     dry_run: bool = False,
+    key_strategy: str = OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+    key_prefix: str | None = None,
+    append_extension: bool = False,
     transport: ObjectStorageTransport | None = None,
     send: Callable[..., dict[str, Any]] | None = None,
     endpoint_host: str | None = None,
@@ -56990,6 +57480,10 @@ def object_storage_upload_run(
     normalized_store_ref = str(store_ref or "").strip()
     if not normalized_store_ref or not safe_object_storage_ref(normalized_store_ref):
         blockers.append("store_ref must be a safe store label; do not pass a URL, path, token, or secret.")
+
+    normalized_strategy = _object_storage_validate_key_strategy(
+        key_strategy=key_strategy, key_prefix=key_prefix, blockers=blockers
+    )
 
     normalized_reviewer = str(reviewed_by or "").strip()
     if approve and not normalized_reviewer:
@@ -57062,6 +57556,9 @@ def object_storage_upload_run(
                     store_ref=normalized_store_ref,
                     skip_uploaded=skip_uploaded,
                     dry_run=True,
+                    key_strategy=normalized_strategy,
+                    key_prefix=key_prefix,
+                    append_extension=append_extension,
                 )
             )
 
@@ -57146,19 +57643,106 @@ def object_storage_upload_run(
                             break
                         object_id = row["object_id"]
                         digest = str(object_id).removeprefix("sha256:").lower()
-                        if row["idempotency_verdict"] == "already_uploaded":
-                            execution_results.append(
-                                {
-                                    "object_id": object_id,
-                                    "key_hint": row["key_hint"],
-                                    "result_status": "skipped_already_present",
-                                    "bytes": 0,
-                                    "part_count": 0,
-                                    "attempts": 0,
-                                    "provider_api_called": False,
-                                }
+                        # F0-c: apply re-resolves the remote_key and REFUSES the run
+                        # (fail closed) if it diverges from the key the plan echoed.
+                        # A wrong-strategy drift becomes a loud refusal, never a
+                        # silent wrong-key HEAD.
+                        plan_remote_key = row.get("remote_key")
+                        if row.get("key_resolution_error") or not plan_remote_key:
+                            blockers.append(
+                                "key_resolution_failed: could not resolve a remote_key for "
+                                f"{object_id[:20]} ({row.get('key_resolution_error') or 'unknown'})."
                             )
-                            continue
+                            break
+                        try:
+                            apply_remote_key = object_storage_remote_key(
+                                strategy=normalized_strategy,
+                                digest=digest,
+                                ext=row.get("recovered_ext"),
+                                key_prefix=key_prefix,
+                                append_extension=append_extension,
+                            )
+                        except ArchiveServiceError as exc:
+                            blockers.append(
+                                f"key_resolution_failed: apply could not re-resolve remote_key for "
+                                f"{object_id[:20]} ({exc})."
+                            )
+                            break
+                        if apply_remote_key != plan_remote_key:
+                            blockers.append(
+                                "plan_apply_key_divergence: apply re-resolved a different remote_key than the "
+                                f"plan recorded for {object_id[:20]}; refusing to HEAD/PUT a divergent key (F0-c)."
+                            )
+                            break
+                        remote_key = apply_remote_key
+                        # F0-b (CARDINAL): a live transport is present here, so a
+                        # recorded/plan `already_uploaded` verdict is NEVER trusted
+                        # without a re-HEAD of the ACTUAL remote_key right now. A
+                        # 200 + size-match => a legal skip (skipped_remote_same,
+                        # backed by a live HEAD); a 404 => fall through and UPLOAD.
+                        # This closes the "recorded key that 404s => silent skip"
+                        # data-loss hole. Never skip on a purely recorded key.
+                        #
+                        # F1: a proven-absent object must ALSO bypass the resume
+                        # ledger's terminal-success short-circuit, which is a
+                        # second recorded-skip authority keyed on object_id only
+                        # (no presence field, persists across a remote wipe). We
+                        # force the upload past that row below.
+                        force_upload_after_absent = False
+                        if row["idempotency_verdict"] == "already_uploaded":
+                            manifest_size = row.get("size_bytes")
+                            # F4: re-HEAD honours the recorded verification mode.
+                            # A location adopted presence+size (§6.3) is re-checked
+                            # presence-only (NO GetObject-rehash of 158 GB just to
+                            # confirm a skip); a content-hashed location keeps the
+                            # stronger checksum skip. We never claim a content hash
+                            # the location never had.
+                            gating_verification = row.get("gating_remote_key_verification") or "content_hash"
+                            presence_size_gate = gating_verification == "presence_size"
+                            head_now = resolved_transport.head_object(
+                                key=remote_key, presence_only=presence_size_gate
+                            )
+                            result["closed_actions"]["provider_api_called"] = True
+                            size_matches = (
+                                head_now.get("present")
+                                and isinstance(manifest_size, int)
+                                and head_now.get("size") == manifest_size
+                            )
+                            if presence_size_gate:
+                                skip_ok = bool(size_matches)
+                            else:
+                                skip_ok = bool(size_matches and head_now.get("checksum_sha256") == digest)
+                            if skip_ok:
+                                execution_results.append(
+                                    {
+                                        "object_id": object_id,
+                                        "key_hint": row["key_hint"],
+                                        "remote_key": remote_key,
+                                        "result_status": "skipped_remote_same",
+                                        "bytes": 0,
+                                        "part_count": 0,
+                                        "attempts": 1,
+                                        "provider_api_called": True,
+                                        "remote_key_verification": (
+                                            "presence_size" if presence_size_gate else "content_hash"
+                                        ),
+                                    }
+                                )
+                                continue
+                            # Absent / size-mismatch at the recorded key: re-upload.
+                            # This needs the local bytes; if they are missing we
+                            # cannot honor the (now falsified) skip, so surface it.
+                            if not row["local_available"]:
+                                blockers.append(
+                                    "false_skip_prevented_but_local_bytes_missing: the recorded remote_key for "
+                                    f"{object_id[:20]} is absent/size-mismatched and local bytes are unavailable to re-upload."
+                                )
+                                continue
+                            # We just proved absence/mismatch under a live HEAD, so
+                            # a stale ledger terminal-success row for this object
+                            # must NOT be allowed to skip the re-upload (F1). Force
+                            # the upload past the ledger short-circuit.
+                            force_upload_after_absent = True
                         if not row["local_available"]:
                             blockers.append(f"local_bytes_missing_for_object: {object_id[:20]}")
                             continue
@@ -57196,9 +57780,18 @@ def object_storage_upload_run(
                                 "run aborted to bound cost."
                             )
                             break
+                        # F0-a: HEAD/PUT the ACTUAL recorded remote_key, not the
+                        # content-addressed key_hint. F0-b: the executor always
+                        # re-HEADs remote_key before any skip (a 404 => upload).
+                        # F1: when the F0-b re-HEAD above already proved the object
+                        # ABSENT under a live transport, force the upload past BOTH
+                        # the ledger terminal-success short-circuit AND the now-
+                        # redundant HEAD-before — a proven-absent object is
+                        # re-uploaded, never ledger-skipped, and we do not pay a
+                        # second full HEAD (GetObject-rehash on R2) for it.
                         one = object_storage_execute_one_upload(
                             transport=resolved_transport,
-                            key=row["key_hint"],
+                            key=remote_key,
                             data_path=local_path,
                             size=size,
                             content_sha256=digest,
@@ -57207,7 +57800,13 @@ def object_storage_upload_run(
                             ledger=ledger,
                             sleep=sleep,
                             rng=rng,
+                            force_upload=force_upload_after_absent,
                         )
+                        # The executor reports the key it used under "key_hint"; the
+                        # durable receipt/manifest keep key_hint content-addressed and
+                        # carry the actual key in remote_key. Normalize here.
+                        one["remote_key"] = remote_key
+                        one["key_hint"] = row["key_hint"]
                         total_put_calls += int(one.get("put_calls") or 0)
                         backoff_ms_run_total += int(one.get("backoff_ms_total") or 0)
                         result["closed_actions"]["provider_api_called"] = True
@@ -57222,6 +57821,8 @@ def object_storage_upload_run(
                             result=one,
                             reviewed_by=normalized_reviewer,
                             uploaded_at=uploaded_at,
+                            key_strategy=normalized_strategy,
+                            remote_key=remote_key,
                         )
                         # §6 leak gate on the fully-serialized receipt BEFORE write.
                         serialized = json.dumps(json_safe(receipt), ensure_ascii=False, default=str)
@@ -57249,6 +57850,10 @@ def object_storage_upload_run(
                                     execution_receipt_ref=receipt_relative,
                                     uploaded_at=uploaded_at,
                                     leak_guard=_leak_guard,
+                                    key_strategy=normalized_strategy,
+                                    remote_key=remote_key,
+                                    remote_key_verification="content_hash",
+                                    remote_size=int(one.get("bytes") or size),
                                 )
                             except ObjectStorageSecretLeak:
                                 execution_results.append(
@@ -57276,7 +57881,7 @@ def object_storage_upload_run(
         {
             "ok": not blockers,
             "execution_status": "blocked" if blockers else ("preview" if dry_run else "executed"),
-            "key_strategy": OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+            "key_strategy": normalized_strategy,
             "reviewed_by": normalized_reviewer or None,
             "credential_refs": credential_summary,
             "plan": {"object_count": len(object_ids), "objects": plan_rows},
@@ -57327,6 +57932,537 @@ def object_storage_upload_run(
     return result
 
 
+def object_storage_adopt_existing_run(
+    archive_root: Path | str,
+    *,
+    provider_kind: str = "cloudflare-r2",
+    store_ref: str | None = None,
+    access_key_id_ref: str | None = None,
+    secret_access_key_ref: str | None = None,
+    only: str | None = None,
+    max_objects: int | None = None,
+    reviewed_by: str | None = None,
+    key_strategy: str = OBJECT_STORAGE_UPLOAD_KEY_STRATEGY_PREFIX,
+    key_prefix: str | None = None,
+    append_extension: bool = False,
+    accept_unverified_adopt: bool = False,
+    content_hash_verify: bool = False,
+    approve: bool = False,
+    dry_run: bool = False,
+    transport: ObjectStorageTransport | None = None,
+    send: Callable[..., dict[str, Any]] | None = None,
+    endpoint_host: str | None = None,
+    bucket: str | None = None,
+    region: str | None = None,
+) -> dict[str, Any]:
+    """Adopt objects already present at the client's own key layout (§6 — the
+    158 GB false-skip fix).
+
+    VERIFIED adopt (the ONLY path that gates a future skip): with --approve + a
+    live transport, HEAD each computed remote_key and adopt ONLY on 200 +
+    Content-Length size-match (presence+size; NOT a content hash — R2 has no
+    server-side sha256 and a full re-hash would GetObject 158 GB, §6.3). A 404 /
+    size-mismatch does NOT adopt (that object re-uploads normally), so a
+    wrong-prefix/wrong-ext template self-limits to zero adopts (§6.1).
+
+    DECLARED (unverified) adopt: requires the DISTINCT flag
+    accept_unverified_adopt (separate from --approve), writes declared_uploaded
+    (never wom_uploaded), and by the matcher's contract does NOT gate a PUT
+    (§6.2). The matcher is not weakened.
+
+    Reports verified-count vs total (§6.4) so a template miss is visible, never a
+    silent partial adopt.
+    """
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if dry_run and approve:
+        blockers.append("Use either --dry-run or --approve, not both.")
+    if not dry_run and not approve:
+        blockers.append("object-storage-adopt-existing requires exactly one of --dry-run or --approve.")
+
+    normalized_provider = str(provider_kind or "").strip().lower()
+    if normalized_provider not in OBJECT_STORAGE_ALLOWED_PROVIDERS:
+        blockers.append("provider_kind must be a supported object-storage provider kind.")
+    normalized_store_ref = str(store_ref or "").strip()
+    if not normalized_store_ref or not safe_object_storage_ref(normalized_store_ref):
+        blockers.append("store_ref must be a safe store label; do not pass a URL, path, token, or secret.")
+
+    normalized_strategy = _object_storage_validate_key_strategy(
+        key_strategy=key_strategy, key_prefix=key_prefix, blockers=blockers
+    )
+
+    normalized_reviewer = str(reviewed_by or "").strip()
+    if approve and not normalized_reviewer:
+        blockers.append("object-storage-adopt-existing requires --reviewed-by when --approve is used.")
+
+    credential_summary = _object_storage_validate_credential_refs(
+        access_key_id_ref=access_key_id_ref,
+        secret_access_key_ref=secret_access_key_ref,
+        blockers=blockers,
+    )
+
+    object_ids = _object_storage_resolve_upload_targets(
+        root, only=only, max_objects=max_objects, blockers=blockers
+    )
+
+    injected_transport = transport
+    live_transport_reachable = injected_transport is not None or (
+        send is not None and normalized_provider in {"cloudflare-r2", "generic-s3"}
+    )
+
+    # A verified adopt needs a live HEAD; a declared adopt does not. Enforce the
+    # distinct opt-in for the non-gating declared path (§6.2).
+    if approve:
+        access_ref = str(access_key_id_ref or "").strip()
+        secret_ref = str(secret_access_key_ref or "").strip()
+        if not accept_unverified_adopt:
+            # Verified path: env-only-first-live + live transport required.
+            if credential_ref_store(access_ref) != "env" or credential_ref_store(secret_ref) != "env":
+                blockers.append(
+                    "env_only_first_live: verified adopt requires both credential refs to be env: refs in this release."
+                )
+            if not live_transport_reachable:
+                blockers.append(
+                    "live_transport_not_implemented: verified adopt has no live transport reachable "
+                    "(pass --accept-unverified-adopt for a non-gating declared adopt instead)."
+                )
+            # SA-6 (F5): verified adopt is a NEW live-execution surface — it
+            # issues a live HEAD per object (a batch of 19,000 = 19,000 live
+            # HEADs). It must honour the SAME tiered tiny-first gate as
+            # object-storage-upload: a bulk first-live adopt (no prior proven
+            # tier for this store) REFUSES; a single tiny-first object is always
+            # permitted. Without this a client could issue an unbounded first
+            # live batch with no tiny-first proof and no cost bound.
+            requested_tier = object_storage_requested_tier(object_count=len(object_ids))
+            proven_tier = object_storage_proven_tier(
+                root, provider_kind=normalized_provider, store_ref=normalized_store_ref
+            )
+            if requested_tier - 1 > proven_tier:
+                blockers.append(
+                    "tiered_gate_unmet: this verified adopt requests a higher live tier than prior receipts "
+                    f"have proved for this store (requested tier {requested_tier}, proven tier {proven_tier}); "
+                    "adopt a single tiny-first object (--only <id>) before a batch."
+                )
+
+    # Resolve each object's remote_key up front (no bytes, no secret).
+    plan_rows: list[dict[str, Any]] = []
+    if not blockers:
+        for object_id in object_ids:
+            digest = str(object_id).removeprefix("sha256:").lower()
+            record = find_manifest_record(root, object_id)
+            ext = _object_storage_recovered_extension(record) if append_extension else None
+            remote_key = None
+            key_error = None
+            try:
+                remote_key = object_storage_remote_key(
+                    strategy=normalized_strategy,
+                    digest=digest,
+                    ext=ext,
+                    key_prefix=key_prefix,
+                    append_extension=append_extension,
+                )
+            except ArchiveServiceError as exc:
+                key_error = str(exc)
+            size_bytes = record.get("size_bytes") if isinstance(record, dict) else None
+            plan_rows.append(
+                {
+                    "object_id": object_id,
+                    "digest": digest,
+                    "remote_key": remote_key,
+                    "key_resolution_error": key_error,
+                    "size_bytes": size_bytes if isinstance(size_bytes, int) else None,
+                    "record_present": isinstance(record, dict),
+                }
+            )
+
+    adopt_results: list[dict[str, Any]] = []
+    adopted_count = 0
+    not_adopted_count = 0
+    declared_count = 0
+    manifest_updates = 0
+    total_objects = len(plan_rows)
+
+    result = _object_storage_upload_base_result(
+        lifecycle_action="object_storage_adopt_existing",
+        archive_id=archive_id,
+        provider_kind=normalized_provider,
+        store_ref=normalized_store_ref or None,
+        dry_run=dry_run,
+        approve=approve,
+    )
+
+    if approve and not blockers and accept_unverified_adopt:
+        # DECLARED (unverified) adopt — non-gating, no network, no secret read.
+        registered_at = _object_storage_now_iso()
+        for row in plan_rows:
+            if not row["remote_key"]:
+                not_adopted_count += 1
+                adopt_results.append(
+                    {
+                        "object_id": row["object_id"],
+                        "adopt_status": "key_unresolved",
+                        "remote_key": None,
+                        "gating": False,
+                        "caveat": row.get("key_resolution_error") or "remote_key unresolved",
+                    }
+                )
+                continue
+            changed = _object_storage_apply_declared_adopt_location(
+                root,
+                object_id=row["object_id"],
+                provider_kind=normalized_provider,
+                store_ref=normalized_store_ref,
+                digest=row["digest"],
+                key_strategy=normalized_strategy,
+                remote_key=row["remote_key"],
+                registered_at=registered_at,
+            )
+            manifest_updates += changed
+            declared_count += 1
+            adopt_results.append(
+                {
+                    "object_id": row["object_id"],
+                    "adopt_status": "declared_unverified",
+                    "remote_key": row["remote_key"],
+                    "gating": False,
+                    "caveat": "claimed, not verified — will NOT skip a PUT.",
+                }
+            )
+        if manifest_updates:
+            result["closed_actions"]["manifest_updated"] = True
+            result["closed_actions"]["files_written"] = True
+    elif approve and not blockers and live_transport_reachable:
+        # VERIFIED adopt — HEAD presence+size (or content-hash opt-in) then write
+        # a matcher-honored wom_uploaded location for the client remote_key.
+        access_ref = str(access_key_id_ref or "").strip()
+        secret_ref = str(secret_access_key_ref or "").strip()
+        access_value = None
+        secret_value = None
+        try:
+            access_value, _ = resolve_credential_value(access_ref, credential_ref_store(access_ref))
+            secret_value, _ = resolve_credential_value(secret_ref, credential_ref_store(secret_ref))
+            if not access_value or not secret_value:
+                blockers.append("credential_value_unresolved: a credential ref did not resolve to a value.")
+            else:
+                result["closed_actions"]["credential_value_read"] = True
+                resolved_region = str(region or "").strip() or (
+                    R2_DEFAULT_REGION if normalized_provider == "cloudflare-r2" else ""
+                )
+                if injected_transport is not None:
+                    resolved_transport = injected_transport
+                else:
+                    resolved_transport = object_storage_resolve_transport(
+                        normalized_provider,
+                        send=send,
+                        credential={
+                            "endpoint_host": endpoint_host,
+                            "bucket": bucket,
+                            "access_key_id": access_value,
+                            "secret_access_key": secret_value,
+                            "region": resolved_region,
+                        },
+                    )
+                if resolved_transport is None:
+                    blockers.append(
+                        "live_transport_not_implemented: could not build a live transport for verified adopt."
+                    )
+                else:
+                    derived_material: list[str] = []
+                    try:
+                        now_utc = datetime.now(timezone.utc)
+                        region_for_key = resolved_region or "auto"
+                        for offset_days in (0, 1):
+                            stamp = (now_utc - timedelta(days=offset_days)).strftime("%Y%m%d")
+                            derived_material.append(_sigv4_signing_key(secret_value, stamp, region_for_key).hex())
+                    except (ValueError, TypeError):
+                        pass
+                    guard_key_values = [access_value, secret_value] + derived_material
+
+                    def _adopt_leak_guard(serialized_delta: str) -> list[str]:
+                        return assert_no_secret_or_location_leak(serialized_delta, key_values=guard_key_values)
+
+                    for row in plan_rows:
+                        if blockers:
+                            break
+                        if not row["remote_key"]:
+                            not_adopted_count += 1
+                            adopt_results.append(
+                                {
+                                    "object_id": row["object_id"],
+                                    "adopt_status": "key_unresolved",
+                                    "remote_key": None,
+                                    "gating": False,
+                                    "caveat": row.get("key_resolution_error") or "remote_key unresolved",
+                                }
+                            )
+                            continue
+                        # §6.3: presence+size adopt HEADs presence-only (NO
+                        # GetObject-rehash of the whole object). Only the explicit
+                        # per-object --content-hash-verify opt-in downloads the body
+                        # to hash it. Adopting 158 GB must not cost 158 GB of egress.
+                        head = resolved_transport.head_object(
+                            key=row["remote_key"], presence_only=not content_hash_verify
+                        )
+                        result["closed_actions"]["provider_api_called"] = True
+                        present = bool(head.get("present"))
+                        remote_size = head.get("size")
+                        size_match = (
+                            row["size_bytes"] is not None
+                            and isinstance(remote_size, int)
+                            and remote_size == row["size_bytes"]
+                        )
+                        if not present or not size_match:
+                            not_adopted_count += 1
+                            adopt_results.append(
+                                {
+                                    "object_id": row["object_id"],
+                                    "adopt_status": "absent_or_size_mismatch",
+                                    "remote_key": row["remote_key"],
+                                    "gating": False,
+                                    "caveat": "not present at this key with matching size — will re-upload.",
+                                }
+                            )
+                            continue
+                        verification = "presence_size"
+                        if content_hash_verify:
+                            # §6.3 explicit per-object opt-in: GetObject-and-rehash.
+                            remote_hash = head.get("checksum_sha256")
+                            if remote_hash != row["digest"]:
+                                not_adopted_count += 1
+                                adopt_results.append(
+                                    {
+                                        "object_id": row["object_id"],
+                                        "adopt_status": "content_hash_mismatch",
+                                        "remote_key": row["remote_key"],
+                                        "gating": False,
+                                        "caveat": "content hash did not match — will re-upload.",
+                                    }
+                                )
+                                continue
+                            verification = "content_hash"
+                        # Adopt: write a wom_uploaded location the matcher honors.
+                        adopt_receipt_ref = _object_storage_write_adopt_receipt(
+                            root,
+                            archive_id=archive_id,
+                            object_id=row["object_id"],
+                            provider_kind=normalized_provider,
+                            store_ref=normalized_store_ref,
+                            key_strategy=normalized_strategy,
+                            remote_key=row["remote_key"],
+                            remote_size=remote_size,
+                            verification=verification,
+                            reviewed_by=normalized_reviewer,
+                            registered_at=_object_storage_now_iso(),
+                            leak_guard=_adopt_leak_guard,
+                        )
+                        if adopt_receipt_ref is None:
+                            not_adopted_count += 1
+                            adopt_results.append(
+                                {
+                                    "object_id": row["object_id"],
+                                    "adopt_status": "failed_secret_guard",
+                                    "remote_key": row["remote_key"],
+                                    "gating": False,
+                                    "caveat": "adopt delta failed the secret/location leak guard.",
+                                }
+                            )
+                            continue
+                        try:
+                            manifest_updates += _object_storage_apply_wom_uploaded_location(
+                                root,
+                                object_id=row["object_id"],
+                                provider_kind=normalized_provider,
+                                store_ref=normalized_store_ref,
+                                digest=row["digest"],
+                                execution_receipt_ref=adopt_receipt_ref,
+                                uploaded_at=_object_storage_now_iso(),
+                                leak_guard=_adopt_leak_guard,
+                                key_strategy=normalized_strategy,
+                                remote_key=row["remote_key"],
+                                remote_key_verification=verification,
+                                remote_size=remote_size,
+                            )
+                        except ObjectStorageSecretLeak:
+                            not_adopted_count += 1
+                            adopt_results.append(
+                                {
+                                    "object_id": row["object_id"],
+                                    "adopt_status": "failed_secret_guard",
+                                    "remote_key": row["remote_key"],
+                                    "gating": False,
+                                    "caveat": "adopt delta failed the secret/location leak guard.",
+                                }
+                            )
+                            continue
+                        adopted_count += 1
+                        result["closed_actions"]["files_written"] = True
+                        result["closed_actions"]["manifest_updated"] = True
+                        adopt_results.append(
+                            {
+                                "object_id": row["object_id"],
+                                "adopt_status": "adopted",
+                                "remote_key": row["remote_key"],
+                                "gating": True,
+                                "remote_key_verification": verification,
+                                "caveat": (
+                                    "presence+size verified (not content-hashed)"
+                                    if verification == "presence_size"
+                                    else "presence+size+content-hash verified"
+                                ),
+                            }
+                        )
+        finally:
+            access_value = None
+            secret_value = None
+
+    would_reupload = max(total_objects - adopted_count - declared_count, 0)
+    result.update(
+        {
+            "ok": not blockers,
+            "execution_status": "blocked" if blockers else ("preview" if dry_run else "executed"),
+            "key_strategy": normalized_strategy,
+            "reviewed_by": normalized_reviewer or None,
+            "credential_refs": credential_summary,
+            "adopt_mode": "declared_unverified" if accept_unverified_adopt else "verified_presence_size",
+            "content_hash_verify": bool(content_hash_verify),
+            "adopt_results": adopt_results,
+            "adopt_summary": {
+                "total_objects": total_objects,
+                "adopted_count": adopted_count,
+                "declared_count": declared_count,
+                "not_adopted_count": not_adopted_count,
+                "would_reupload_count": would_reupload,
+                # §6.4: a human-readable partial-adopt line so a template miss is
+                # visible rather than silently paid for on re-upload.
+                "report": (
+                    f"{adopted_count} of {total_objects} adopted (presence+size); "
+                    f"{would_reupload} will re-upload."
+                    if not accept_unverified_adopt
+                    else f"{declared_count} of {total_objects} declared (unverified — will NOT skip a PUT)."
+                ),
+            },
+            "manifest_updates": manifest_updates,
+            "live_execution_allowed_now": False,
+            "blockers": unique_preserve_order(blockers),
+            "warnings": unique_preserve_order(warnings),
+        }
+    )
+    return result
+
+
+def _object_storage_apply_declared_adopt_location(
+    root: Path,
+    *,
+    object_id: str,
+    provider_kind: str,
+    store_ref: str,
+    digest: str,
+    key_strategy: str,
+    remote_key: str,
+    registered_at: str,
+) -> int:
+    """§6.2/§6.5: append a NON-gating declared_uploaded location for the client's
+    real remote_key. De-dup keys on remote_key so a stale content-addressed
+    declared location never blocks recording the corrected client key.
+    """
+    manifest_path = archive_internal_path(root, "objects/manifests/files.jsonl")
+    if not manifest_path.is_file():
+        return 0
+    new_location = object_storage_upload_evidence_location(
+        digest=digest,
+        provider_kind=provider_kind,
+        store_ref=store_ref,
+        receipt_path="<adopt-declared-unverified>",
+        registered_at=registered_at,
+        key_strategy=key_strategy,
+        remote_key=remote_key,
+    )
+    changed = 0
+    with _ObjetCaptureManifestLock(root):
+        rewritten_lines: list[str] = []
+        for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line:
+                rewritten_lines.append(raw_line)
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                rewritten_lines.append(raw_line)
+                continue
+            if str(record.get("object_id") or "").lower() == object_id.lower():
+                locations = record.get("locations") if isinstance(record.get("locations"), list) else []
+                already = any(
+                    isinstance(loc, dict)
+                    and loc.get("provider") == "object_storage"
+                    and str(loc.get("provider_kind") or "") == provider_kind
+                    and str(loc.get("store_ref") or "") == store_ref
+                    and loc.get("availability") == "declared_uploaded"
+                    and (loc.get("remote_key") if loc.get("remote_key") is not None else loc.get("key_hint")) == remote_key
+                    for loc in locations
+                )
+                if not already:
+                    locations.append(new_location)
+                    record["locations"] = locations
+                    changed += 1
+                rewritten_lines.append(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+            else:
+                rewritten_lines.append(raw_line)
+        if changed:
+            _atomic_write_text(manifest_path, "\n".join(rewritten_lines) + "\n")
+    return changed
+
+
+def _object_storage_write_adopt_receipt(
+    root: Path,
+    *,
+    archive_id: str,
+    object_id: str,
+    provider_kind: str,
+    store_ref: str,
+    key_strategy: str,
+    remote_key: str,
+    remote_size: int | None,
+    verification: str,
+    reviewed_by: str,
+    registered_at: str,
+    leak_guard: Callable[[str], list[str]] | None = None,
+) -> str | None:
+    """Write a verified-adopt execution receipt (result_status skipped_remote_same)
+    so the execution-receipt doctor audit (V12) links it to the wom_uploaded
+    location. Returns the archive-relative path, or None on a leak-guard hit.
+    """
+    digest = str(object_id or "").removeprefix("sha256:").lower()
+    receipt = _object_storage_build_execution_receipt(
+        archive_id=archive_id,
+        object_id=object_id,
+        provider_kind=provider_kind,
+        store_ref=store_ref,
+        key_hint=object_storage_content_addressed_key_hint(digest),
+        result={
+            "result_status": "skipped_remote_same",
+            "bytes": 0,
+            "attempts": 1,
+            "backoff_ms_total": 0,
+        },
+        reviewed_by=reviewed_by,
+        uploaded_at=registered_at,
+        key_strategy=key_strategy,
+        remote_key=remote_key,
+    )
+    receipt["adopt_verification"] = verification
+    receipt["remote_size"] = remote_size if isinstance(remote_size, int) else None
+    if leak_guard is not None:
+        serialized = json.dumps(json_safe(receipt), ensure_ascii=False, default=str)
+        if leak_guard(serialized):
+            return None
+    case_id = object_storage_execution_case_id(archive_id, digest, registered_at)
+    return object_storage_write_execution_receipt(root, case_id, receipt)
+
+
 def _object_storage_build_execution_receipt(
     *,
     archive_id: str,
@@ -57337,10 +58473,14 @@ def _object_storage_build_execution_receipt(
     result: dict[str, Any],
     reviewed_by: str,
     uploaded_at: str,
+    key_strategy: str = OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+    remote_key: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the execution receipt from a FIXED scalar allowlist (RC5).
 
-    Never built from provider bodies or caught exception args.
+    Never built from provider bodies or caught exception args. key_hint stays
+    content-addressed (RC3 / V12 audit); remote_key + key_strategy record the
+    actual PUT key (§7) so the receipt audit can bind a prefix-strategy receipt.
     """
     return {
         "schema": OBJECT_STORAGE_UPLOAD_RECEIPT_SCHEMA,
@@ -57353,8 +58493,9 @@ def _object_storage_build_execution_receipt(
         "object_id": object_id,
         "provider_kind": provider_kind,
         "store_ref": store_ref,
-        "key_strategy": OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+        "key_strategy": key_strategy,
         "key_hint": key_hint,
+        "remote_key": remote_key if remote_key is not None else key_hint,
         "result_status": str(result.get("result_status") or "failed_upload"),
         "bytes_uploaded": int(result.get("bytes") or 0),
         "checksum_algorithm": OBJECT_STORAGE_CHECKSUM_ALGORITHM,
@@ -57388,6 +58529,10 @@ def _object_storage_apply_wom_uploaded_location(
     execution_receipt_ref: str,
     uploaded_at: str,
     leak_guard: Callable[[str], list[str]] | None = None,
+    key_strategy: str = OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
+    remote_key: str | None = None,
+    remote_key_verification: str = "content_hash",
+    remote_size: int | None = None,
 ) -> int:
     """Append a wom_uploaded location to the object's manifest record, under the
 
@@ -57395,6 +58540,11 @@ def _object_storage_apply_wom_uploaded_location(
     When leak_guard is supplied, the serialized manifest-location DELTA is passed
     through it BEFORE the write (§6: gate the manifest delta on the write path);
     a non-empty result raises ObjectStorageSecretLeak so the caller rolls back.
+
+    §6.5 migration: de-dup is now keyed on the resolved remote_key, so a stale
+    declared_uploaded location under the old content-addressed key never blocks
+    recording the corrected verified remote_key; only an existing wom_uploaded
+    location for the SAME remote_key is treated as already-present.
     """
     manifest_path = archive_internal_path(root, "objects/manifests/files.jsonl")
     if not manifest_path.is_file():
@@ -57405,7 +58555,13 @@ def _object_storage_apply_wom_uploaded_location(
         store_ref=store_ref,
         execution_receipt_ref=execution_receipt_ref,
         uploaded_at=uploaded_at,
+        key_strategy=key_strategy,
+        remote_key=remote_key,
+        remote_key_verified=True,
+        remote_key_verification=remote_key_verification,
+        remote_size=remote_size,
     )
+    resolved_remote_key = new_location["remote_key"]
     if leak_guard is not None:
         location_serialized = json.dumps(json_safe(new_location), ensure_ascii=False, default=str)
         if leak_guard(location_serialized):
@@ -57427,8 +58583,11 @@ def _object_storage_apply_wom_uploaded_location(
                 continue
             if str(record.get("object_id") or "").lower() == object_id.lower():
                 locations = record.get("locations") if isinstance(record.get("locations"), list) else []
-                already = object_storage_wom_uploaded_location_matches(
-                    locations, provider_kind=provider_kind, store_ref=store_ref, digest=digest
+                already = _object_storage_wom_uploaded_remote_key_present(
+                    locations,
+                    provider_kind=provider_kind,
+                    store_ref=store_ref,
+                    remote_key=resolved_remote_key,
                 )
                 if not already:
                     locations.append(new_location)
