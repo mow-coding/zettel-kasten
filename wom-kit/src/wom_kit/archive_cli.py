@@ -7626,6 +7626,28 @@ def command_notion_objet_manifest_locator_label(args: argparse.Namespace) -> int
 
 
 def command_create_draft(args: argparse.Namespace) -> int:
+    if args.list_kinds:
+        try:
+            rules = archive_services.load_zettel_rules(Path(args.archive_root))
+            valid_kinds = sorted(archive_services.note_kind_rules(rules).keys())
+        except (archive_services.ArchiveServiceError, OSError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if args.format == "json":
+            print_json({"note_kinds": valid_kinds})
+        else:
+            print("Valid note kinds:")
+            for kind_id in valid_kinds:
+                print(f"- {kind_id}")
+        return 0
+
+    if not args.title:
+        print("create-draft requires --title (unless --list-kinds is used).", file=sys.stderr)
+        return 1
+    if args.body is None and args.body_file is None:
+        print("create-draft requires --body or --body-file.", file=sys.stderr)
+        return 1
+
     try:
         body = read_body_arg(args)
         created_by = args.created_by or "cli:archive"
@@ -7679,6 +7701,8 @@ def command_create_draft(args: argparse.Namespace) -> int:
             print("Draft dry-run passed." if result["ok"] else "Draft dry-run blocked.")
         else:
             print(f"Created draft zettel {result['zettel_id']} at {result['path']}")
+            for warning in result.get("warnings", []):
+                print(f"Warning: {warning}")
     return 0 if result.get("ok", True) else 1
 
 
@@ -8615,12 +8639,36 @@ def command_promote(args: argparse.Namespace) -> int:
 
 
 def command_mint_zettel(args: argparse.Namespace) -> int:
+    affirm_ids = args.affirm or []
+    reviewer = (args.reviewed_by or "").strip()
+    if affirm_ids and not reviewer:
+        print(
+            "--affirm requires --reviewed-by to attribute the human affirmation.",
+            file=sys.stderr,
+        )
+        return 1
+    unknown_affirm_ids = sorted(
+        item_id
+        for item_id in affirm_ids
+        if item_id not in archive_services.HUMAN_AFFIRMABLE_CHECKLIST_ITEMS
+    )
+    if unknown_affirm_ids:
+        print(
+            "--affirm only accepts human-review items: "
+            + ", ".join(sorted(archive_services.HUMAN_AFFIRMABLE_CHECKLIST_ITEMS))
+            + ".",
+            file=sys.stderr,
+        )
+        return 1
+    affirmations = {item_id: reviewer for item_id in affirm_ids} if reviewer else {}
+
     if args.dry_run:
         try:
             result = archive_services.mint_zettel_dry_run(
                 Path(args.archive_root),
                 zettel_id=args.zettel_id,
                 relative_path=args.path,
+                affirmations=affirmations,
             )
         except archive_services.ArchiveServiceError as exc:
             print(str(exc), file=sys.stderr)
@@ -8667,6 +8715,7 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
             relative_path=args.path,
             reviewed_by=args.reviewed_by,
             allow_warnings=args.allow_warnings,
+            affirmations=affirmations,
         )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
@@ -8683,6 +8732,13 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
             print("Warnings approved:")
             for warning in result["warnings"]:
                 print(f"- {warning}")
+        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
+        affirmed = receipt.get("affirmations") if isinstance(receipt.get("affirmations"), list) else []
+        if affirmed:
+            affirmed_ids = [str(entry.get("item_id")) for entry in affirmed if isinstance(entry, dict)]
+            print(f"Affirmed by {reviewer}: " + ", ".join(affirmed_ids))
+        for action in result.get("next_safe_actions", []):
+            print(f"Next: {action}")
     return 0
 
 
@@ -15230,12 +15286,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     create_draft = subcommands.add_parser("create-draft", help="Create a draft zettel in inbox/.")
     create_draft.add_argument("archive_root", help="Archive root to write to.")
-    create_draft.add_argument("--title", required=True, help="Draft title.")
-    body = create_draft.add_mutually_exclusive_group(required=True)
+    create_draft.add_argument("--title", help="Draft title. Required unless --list-kinds is used.")
+    body = create_draft.add_mutually_exclusive_group(required=False)
     body.add_argument("--body", help="Draft body text.")
     body.add_argument("--body-file", help="Path to a UTF-8 text file containing the draft body.")
     create_draft.add_argument("--archive-id", help="Archive id. Defaults to archive.yml archive_id.")
     create_draft.add_argument("--kind", default="fleeting_capture", help="Zettel kind.")
+    create_draft.add_argument(
+        "--list-kinds",
+        action="store_true",
+        help="List valid note kinds from this archive's zettel-rules and exit (read-only, writes nothing).",
+    )
     create_draft.add_argument("--facet", action="append", help="Facet in KEY=VALUE form. May be repeated.")
     create_draft.add_argument("--dry-run", action="store_true", help="Preview draft creation without writing files.")
     create_draft.add_argument("--expected-archive-id", help="Expected archive id; mismatch blocks.")
@@ -15296,6 +15357,14 @@ def build_parser() -> argparse.ArgumentParser:
     mint.add_argument("--dry-run", action="store_true", help="Preview minting without writing canonical memory.")
     mint.add_argument("--approve", action="store_true", help="Actually mint after dry-run gates pass.")
     mint.add_argument("--reviewed-by", help="Reviewer id required for real minting, e.g. person:me.")
+    mint.add_argument(
+        "--affirm",
+        action="append",
+        help=(
+            "Record an attributed human affirmation for a human-review checklist item "
+            "(one_clear_purpose, sensitive_content_reviewed). May be repeated. Requires --reviewed-by."
+        ),
+    )
     mint.add_argument(
         "--allow-warnings",
         action="store_true",

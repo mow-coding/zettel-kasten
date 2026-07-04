@@ -33184,6 +33184,432 @@ state:
             self.assertIn("schema_type", output)
             self.assertIn("$.actions", output)
 
+    # --- v0.3.168: draft-time identity hygiene, attributed affirmation, continues ---
+
+    def make_human_review_only_draft(
+        self, archive_root: Path, edges: list[dict] | None = None
+    ) -> Path:
+        """A draft blocked ONLY on the two human-review checklist items.
+
+        Every other required checklist item is set true via YAML; the two
+        needs_human_review items (one_clear_purpose, sensitive_content_reviewed)
+        are deliberately omitted so they block unless affirmed.
+        """
+        path = archive_root / "inbox" / "zet_20260519_draft_ai_lunch_note.md"
+        text = path.read_text(encoding="utf-8")
+        match = archive_cli.FRONTMATTER_RE.match(text)
+        self.assertIsNotNone(match)
+        assert match is not None
+        frontmatter = archive_cli.load_yaml(match.group(1))
+        body = text[match.end() :].lstrip()
+        frontmatter["title"] = "Human review needed note"
+        frontmatter["kind"] = "permanent_note"
+        if edges is not None:
+            frontmatter["edges"] = edges
+        human_items = {"one_clear_purpose", "sensitive_content_reviewed"}
+        frontmatter["promotion"] = {
+            "stage": "promotion_candidate",
+            "ready_for_promotion": True,
+            "checklist": {
+                item_id: True
+                for item_id in PROMOTION_CHECKLIST_IDS
+                if item_id not in human_items
+            },
+        }
+        path.write_text(
+            "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body,
+            encoding="utf-8",
+        )
+        return path
+
+    def test_create_draft_unknown_kind_warns_and_lists_without_blocking(self) -> None:
+        # Item (가): unknown --kind warns (does not block), names the kind, and
+        # enumerates the archive's valid kinds; the draft is still written.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            code, output = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "Unknown kind note",
+                    "--body",
+                    "This body has enough content to be a real draft note here.",
+                    "--kind",
+                    "reflection",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["status"], "draft")
+            self.assertTrue((archive_root / result["path"]).is_file())
+            warning_blob = " ".join(result["warnings"])
+            self.assertIn("reflection", warning_blob)
+            valid_kinds = sorted(
+                archive_services.note_kind_rules(
+                    archive_services.load_zettel_rules(archive_root)
+                ).keys()
+            )
+            self.assertTrue(valid_kinds)
+            for kind_id in valid_kinds:
+                self.assertIn(kind_id, warning_blob)
+
+    def test_create_draft_list_kinds_is_read_only(self) -> None:
+        # Item (가): --list-kinds returns the sorted kind ids, writes nothing,
+        # and does not require --title/--body.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.archive_tree_snapshot(archive_root)
+            code, output = self.run_cli(
+                ["create-draft", str(archive_root), "--list-kinds", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            expected = sorted(
+                archive_services.note_kind_rules(
+                    archive_services.load_zettel_rules(archive_root)
+                ).keys()
+            )
+            self.assertEqual(result["note_kinds"], expected)
+            after = self.archive_tree_snapshot(archive_root)
+            self.assertEqual(before, after)
+
+    def test_mint_zet_affirm_mints_without_yaml_edit(self) -> None:
+        # Item (나): a draft blocked only on the two human-review items mints
+        # with --affirm and no frontmatter hand-edit of those two items.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_human_review_only_draft(archive_root)
+            code, output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--affirm",
+                    "one_clear_purpose",
+                    "--affirm",
+                    "sensitive_content_reviewed",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue((archive_root / result["canonical_path"]).is_file())
+            self.assertTrue((archive_root / result["mint_receipt_path"]).is_file())
+            self.assertTrue((archive_root / result["draft_snapshot_path"]).is_file())
+
+    def test_mint_zet_affirm_is_inert_without_reviewer(self) -> None:
+        # Item (나): --affirm without --reviewed-by is rejected and nothing writes.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_human_review_only_draft(archive_root)
+            before = self.archive_tree_snapshot(archive_root)
+            code, output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--affirm",
+                    "one_clear_purpose",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("--affirm requires --reviewed-by", output)
+            self.assertEqual(self.archive_tree_snapshot(archive_root), before)
+
+    def test_mint_zet_affirm_records_attributed_receipt_block(self) -> None:
+        # Item (나): the receipt carries an attributed affirmations block and the
+        # affirmed checklist entries record source == cli_affirmation.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_human_review_only_draft(archive_root)
+            code, output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--affirm",
+                    "one_clear_purpose",
+                    "--affirm",
+                    "sensitive_content_reviewed",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            receipt = json.loads(
+                (archive_root / result["mint_receipt_path"]).read_text(encoding="utf-8")
+            )
+            affirmations = receipt["affirmations"]
+            self.assertEqual(
+                {entry["item_id"] for entry in affirmations},
+                {"one_clear_purpose", "sensitive_content_reviewed"},
+            )
+            for entry in affirmations:
+                self.assertEqual(entry["affirmed_by"], "person:me")
+                self.assertTrue(entry["affirmed_at"])
+            by_id = {item["id"]: item for item in receipt["checklist"]}
+            self.assertEqual(by_id["one_clear_purpose"]["source"], "cli_affirmation")
+            self.assertEqual(by_id["one_clear_purpose"]["status"], "passed")
+            self.assertEqual(
+                by_id["sensitive_content_reviewed"]["source"], "cli_affirmation"
+            )
+            self.assertEqual(by_id["sensitive_content_reviewed"]["status"], "passed")
+
+    def test_mint_zet_affirm_cannot_override_machine_item(self) -> None:
+        # Item (나): --affirm object_id_only is rejected AND object_id_only stays
+        # machine-blocked on a draft with a forbidden-locator body.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            path = self.make_human_review_only_draft(archive_root)
+            text = path.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            assert match is not None
+            forbidden_body = (
+                "This draft body links to https://www.notion.so/workspace/page-123 "
+                "which is a private provider locator and must block object_id_only.\n"
+            )
+            path.write_text(
+                text[: match.end()] + "\n" + forbidden_body, encoding="utf-8"
+            )
+            before = self.archive_tree_snapshot(archive_root)
+            code, output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--affirm",
+                    "object_id_only",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("only accepts human-review items", output)
+            self.assertEqual(self.archive_tree_snapshot(archive_root), before)
+
+            # Even if an out-of-scope affirmation is smuggled straight into the
+            # service (bypassing the CLI guard), the machine-enforced-blocked
+            # branch precedes the affirmation branch, so object_id_only stays
+            # machine-blocked and can never be flipped by --affirm.
+            dry_result = archive_services.mint_zettel_dry_run(
+                archive_root,
+                relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
+                affirmations={"object_id_only": "person:me"},
+            )
+            by_id = {item["id"]: item for item in dry_result["checklist"]}
+            self.assertEqual(by_id["object_id_only"]["status"], "blocked")
+            self.assertEqual(by_id["object_id_only"]["source"], "machine")
+
+    def test_mint_zet_dry_run_rejects_out_of_scope_affirm(self) -> None:
+        # Item (나): the --dry-run path rejects an out-of-scope --affirm id the
+        # same way real mint does, so dry-run and real-mint feedback are symmetric.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_human_review_only_draft(archive_root)
+            before = self.archive_tree_snapshot(archive_root)
+            code, output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--dry-run",
+                    "--reviewed-by",
+                    "person:me",
+                    "--affirm",
+                    "object_id_only",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("only accepts human-review items", output)
+            self.assertEqual(self.archive_tree_snapshot(archive_root), before)
+
+    def test_mint_zet_result_points_to_retire_draft(self) -> None:
+        # Item (다): a successful mint result carries a next_safe_actions entry
+        # that names retire-draft and the minted zettel id.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.make_fake_lunch_draft_promotion_ready(archive_root)
+            code, output = self.run_cli(
+                [
+                    "mint-zet",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260519_draft_ai_lunch_note.md",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            actions = result["next_safe_actions"]
+            self.assertTrue(
+                any(
+                    "retire-draft" in action
+                    and result["zettel_id"] in action
+                    for action in actions
+                ),
+                actions,
+            )
+
+    def test_continues_edge_is_writable_and_migration_stays_green(self) -> None:
+        # Item (라): a continues edge passes the allowed_edges checklist item, and
+        # the link-type migration/revert cycle is unaffected by the base addition.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.assertIn(
+                "continues", archive_services.load_allowed_link_types(archive_root)
+            )
+            self.make_human_review_only_draft(
+                archive_root,
+                edges=[
+                    {
+                        "type": "continues",
+                        "target": "zet:example:earlier-thought-001",
+                    }
+                ],
+            )
+            dry_result = archive_services.mint_zettel_dry_run(
+                archive_root, relative_path="inbox/zet_20260519_draft_ai_lunch_note.md"
+            )
+            by_id = {item["id"]: item for item in dry_result["checklist"]}
+            self.assertEqual(by_id["allowed_edges"]["status"], "passed")
+
+            # Migration/revert on a stale archive still round-trips the 8-member
+            # recommended set without ever touching the base continues member.
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            types_data = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
+            recommended = {
+                "material",
+                "derived",
+                "semantic",
+                "embed",
+                "mention",
+                "contains",
+                "view_query",
+                "comment_context",
+            }
+            types_data["link_types"] = [
+                item
+                for item in types_data["link_types"]
+                if isinstance(item, dict) and item.get("id") not in recommended
+            ]
+            types_path.write_text(archive_cli.dump_yaml(types_data), encoding="utf-8")
+
+            approve_code, approve_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "link-types-v0.3", "--approve", "--format", "json"]
+            )
+            self.assertEqual(approve_code, 0, approve_output)
+            migrated_ids = {
+                item["id"]
+                for item in archive_cli.load_yaml(
+                    types_path.read_text(encoding="utf-8")
+                )["link_types"]
+                if isinstance(item, dict)
+            }
+            self.assertTrue(recommended <= migrated_ids)
+            # continues survives the migration untouched (base-only member).
+            self.assertIn("continues", migrated_ids)
+
+            revert_code, revert_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "link-types-v0.3", "--revert", "--approve", "--format", "json"]
+            )
+            self.assertEqual(revert_code, 0, revert_output)
+            reverted_ids = {
+                item["id"]
+                for item in archive_cli.load_yaml(
+                    types_path.read_text(encoding="utf-8")
+                )["link_types"]
+                if isinstance(item, dict)
+            }
+            self.assertFalse(recommended & reverted_ids)
+            # continues is never a revert candidate, so it is kept.
+            self.assertIn("continues", reverted_ids)
+
+    def test_titleless_and_hangul_drafts_get_note_id_forward_only(self) -> None:
+        # Item (마): titleless and pure-Hangul titles get a _note id (not _draft);
+        # two same-second titleless drafts get distinct ids and distinct files;
+        # an existing zet_<ts>_draft fixture id is untouched.
+        titleless = archive_services.make_zettel_id("!!!", "2026-07-04T12:00:00+09:00")
+        hangul = archive_services.make_zettel_id("한글제목", "2026-07-04T12:00:00+09:00")
+        self.assertTrue(titleless.endswith("_note"), titleless)
+        self.assertTrue(hangul.endswith("_note"), hangul)
+        self.assertNotIn("_draft", titleless)
+        self.assertNotIn("_draft", hangul)
+        # A real title slug that literally contains "draft" is unaffected.
+        real = archive_services.make_zettel_id(
+            "draft ai lunch note", "2026-07-04T12:00:00+09:00"
+        )
+        self.assertTrue(real.endswith("_draft_ai_lunch_note"), real)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            # An existing zet_<ts>_draft fixture id must stay exactly as-is.
+            fixture = archive_root / "inbox" / "zet_20260519_draft_ai_lunch_note.md"
+            self.assertTrue(fixture.is_file())
+
+            code1, out1 = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "###",
+                    "--body",
+                    "First titleless draft body with plenty of content here.",
+                    "--created-at",
+                    "2026-07-04T09:00:00+09:00",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code1, 0, out1)
+            r1 = json.loads(out1)
+            code2, out2 = self.run_cli(
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "한글 제목",
+                    "--body",
+                    "Second titleless-by-ascii draft body with plenty of content.",
+                    "--created-at",
+                    "2026-07-04T09:00:00+09:00",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code2, 0, out2)
+            r2 = json.loads(out2)
+            self.assertTrue(r1["zettel_id"].endswith("_note"), r1["zettel_id"])
+            self.assertTrue(r2["zettel_id"].endswith("_note_2"), r2["zettel_id"])
+            self.assertNotEqual(r1["zettel_id"], r2["zettel_id"])
+            self.assertTrue((archive_root / r1["path"]).is_file())
+            self.assertTrue((archive_root / r2["path"]).is_file())
+            self.assertNotEqual(r1["path"], r2["path"])
+            # The pre-existing draft fixture file is still present, untouched.
+            self.assertTrue(fixture.is_file())
+
 
 class ObjetCaptureTests(unittest.TestCase):
     maxDiff = None

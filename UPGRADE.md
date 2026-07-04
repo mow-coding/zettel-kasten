@@ -163,6 +163,49 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.167` To `v0.3.168`
+
+This release adds draft-time identity hygiene, an attributed mint affirmation flag,
+a discoverability pointer to retire consumed drafts, a base `continues` edge type,
+and draft-time `--kind` validation. All changes are additive; no migration is
+required.
+
+Operator-visible notes:
+
+- **No archive migration; existing ids unchanged; no hash change.** No existing
+  canonical id is renamed or normalized. The mint receipt gains a new additive
+  `affirmations` array (`item_id`, `affirmed_by`, `affirmed_at`), and the mint result
+  gains a `next_safe_actions` string list; `mint-receipt.schema.json` uses no
+  `additionalProperties: false`, so existing receipts, manifests, and zets are
+  accepted as-is.
+- **Draft-id hygiene (forward-only).** A NEW draft whose title has no ASCII
+  alphanumerics (a titleless or pure-Hangul title) now gets a `zet_<ts>_note` id
+  instead of the old `zet_<ts>_draft` fallback. This affects only newly created
+  drafts; existing ids are untouched and mint gains no id-rewrite path.
+- **Attributed `--affirm` on `mint-zet`.** `mint-zet --approve --reviewed-by <actor>
+  --affirm <item_id>` (repeatable; accepts only `one_clear_purpose`,
+  `sensitive_content_reviewed`) satisfies the two human-review checklist items via an
+  audited, reviewer-attributed CLI act instead of a raw `mint.checklist` YAML edit,
+  recorded in the receipt's `affirmations` block. It is inert without `--reviewed-by`
+  (hard error), cannot override machine-enforced items, and never flips an explicit
+  YAML `false`. **Honest residual:** like the pre-existing `--reviewed-by` gate,
+  `--affirm` cannot prove the reviewer string names a real human; it adds no new
+  self-affirm hole and its guarantee is attribution and auditability, not
+  string-sniffing.
+- **Retire pointer, no auto-delete.** A successful mint result now points to
+  `archive retire-draft --zettel-id <id> --dry-run` via `next_safe_actions` (printed
+  in text mode). Mint still never deletes the consumed inbox draft; retirement stays
+  its own approval-gated step.
+- **Base `continues` edge type.** The base `zettel-kasten/types.yml` (KIT and
+  fixture) now defines a `continues` link type for a same-thread continuation.
+  **Limitation:** it is base-only and NOT part of the `migrate link-types-v0.3`
+  recommended set, so archives that vendored their own `types.yml` add the entry
+  manually (it is additive).
+- **Draft-time `--kind` validation + `--list-kinds`.** `archive create-draft`
+  now warns (does not block) on a `--kind` not in the archive's `zettel-rules.yml`
+  and lists the valid kinds; `archive create-draft --list-kinds` lists them read-only
+  and writes nothing. See `wom-kit/docs/releases/v0.3.168.md`.
+
 ## From `v0.3.166` To `v0.3.167`
 
 This release extends the honest reconcile family (snapshot-drift-aware
