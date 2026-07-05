@@ -152,6 +152,33 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.171` To `v0.3.172`
+
+두 가지 검증-정직성(verification-honesty) 수정입니다. 둘 다 추가적(additive)이며
+마이그레이션이 필요 없고, 모든 기본 경로는 v0.3.171과 바이트 단위로 동일합니다.
+
+운영자에게 보이는 변경:
+
+- **`object-storage-upload`에 새 `--multipart-part-size <BYTES>`와 `--allow-tiny-parts`.**
+  기본 part 크기(64 MiB)는 그대로입니다. 오버라이드는 `[4096, 64 MiB]` 범위이고, 기본값
+  미만이면 `--allow-tiny-parts`가 필요합니다. 낮춘 `--multipart-threshold`와 함께 쓰면
+  작은 객체에도 멀티파트를 강제해 라이브 R2 멀티파트를 증명할 수 있습니다. 파일을 읽어
+  분할하는 방식만 바뀌며, 전체 객체 사전 해시·HEAD-after 전체 객체 검증·orphan 정리·leak
+  게이트는 그대로입니다. 실제 R2는 마지막 조각을 제외하고 5 MiB 미만 멀티파트 part를
+  거부하므로 작은 part 크기는 라이브 검증용 보조 수단입니다 — 라이브에서의 작은-part 거부는
+  업로드 거부(failed 상태)이지 조용한 무결성 우회가 아닙니다. 플래그를 넘기지 않으면 변화
+  없음.
+- **추가 receipt 필드.** object-storage 업로드 실행 receipt에
+  `effective_multipart_part_size_bytes`가 추가됩니다. 스키마는 비파괴적입니다
+  (`additionalProperties:false` 없음, `required` 아님). 기존 receipt와 소비자에 영향
+  없음.
+- **strip-bom dry-run 패리티.** `remint-reconcile`과 `retire-draft-reconcile`의
+  `--dry-run`에서 `--strip-bom`은 이제 `--approve` 실행이 기록하는 것과 동일한 strip
+  의도 메타데이터(`bom_stripped`, `bom_strip_note`)를 미리 보여줍니다. 분류에는 전혀
+  영향이 없는 no-op이라 `--strip-bom` 유무와 무관하게 `drift_class`와 내용-변경 ack
+  요건이 동일하며, 실제 `content_change`가 `format_drift`로 세탁되지 않습니다.
+- `wom-kit/docs/releases/v0.3.172.md`를 보세요.
+
 ## From `v0.3.170` To `v0.3.171`
 
 이 release는 `object-storage-adopt-existing`에 선택형 플래그 `--key-map` 하나를

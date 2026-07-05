@@ -52,6 +52,7 @@
     "bytes_uploaded": {"type": "integer"},
     "checksum_algorithm": {"type": "string", "enum": ["sha256"]},
     "effective_multipart_threshold_bytes": {"type": "integer"},
+    "effective_multipart_part_size_bytes": {"type": "integer"},
     "part_count": {"type": "integer"},
     "retry_summary": {"type": "object"},
     "object_count": {"type": "integer"},

@@ -1753,6 +1753,12 @@ OBJECT_STORAGE_REMOTE_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9/._:-]{0,1023}
 # Live upload adapter (WOM #11) Stage 1 constants (§5 of the locked spec).
 OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES = 5 * 1024 * 1024 * 1024  # 5 GiB; >= this => multipart
 OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES = 64 * 1024 * 1024  # 64 MiB parts
+# v0.3.172 Item 1: floor for a LIVE-VERIFICATION part-size override (--multipart-part-size
+# + --allow-tiny-parts). 4 KiB is a sane concrete minimum: well above zero, and it keeps
+# part_count bounded under OBJECT_STORAGE_TOTAL_PUT_CEILING for a small verification fixture.
+# Real R2 rejects multipart parts < 5 MiB except the last, so a sub-5-MiB part is a
+# fake-transport/local validation aid, never an R2-accepted upload.
+OBJECT_STORAGE_MULTIPART_MIN_PART_SIZE_BYTES = 4096  # 4 KiB
 OBJECT_STORAGE_CHECKSUM_ALGORITHM = "sha256"
 # Live upload adapter (WOM #11) Stage 2 constants (locked spec Part II).
 # Hard cumulative provider-PUT cap per run (SA-2): a misclassified status or a
@@ -9726,17 +9732,40 @@ def _reconcile_recorded_field_changes(
     return changes
 
 
+def _reconcile_strip_bom_preview(raw: bytes) -> dict[str, Any]:
+    """v0.3.172 Item 2: preview the strip-intent METADATA for a --strip-bom dry-run.
+
+    A CLASSIFICATION NO-OP: this reads the canonical raw bytes ONCE and reports what an
+    --approve --strip-bom run WOULD do to the file's leading BOM. It never touches the
+    Tier A/B/C classifier (which is already BOM-insensitive: utf-8-sig read +
+    bytes_normalized_for_content_compare), so a real content_change can never be
+    laundered to format_drift by strip-intent. Mirrors the apply-path notes
+    (remint_reconcile_apply / retire_draft_reconcile_apply).
+    """
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return {"bom_stripped": True, "bom_strip_note": "would strip one leading UTF-8 BOM from canonical"}
+    return {"bom_stripped": False, "bom_strip_note": "no leading BOM present; nothing stripped"}
+
+
 def remint_reconcile_plan(
     archive_root: Path | str,
     *,
     zettel_id: str | None = None,
     relative_path: str | None = None,
+    strip_bom: bool = False,
 ) -> dict[str, Any]:
     """Read/classify/preview an honest mint-receipt reconcile. ZERO writes.
 
     Refuses (blockers) before any classification when the file cannot be honestly
     reconciled (R1). Classifies as format_drift only on positive proof (R2/R5),
     else content_change (the stricter path). Never writes.
+
+    strip_bom (v0.3.172 Item 2): when True, the preview surfaces the strip-intent
+    METADATA (`bom_stripped` would-strip preview + `bom_strip_note`) an --approve
+    --strip-bom run would record, so a dry-run has parity with apply. It is a
+    CLASSIFICATION NO-OP: drift_class and content_change_ack_required are IDENTICAL
+    whether strip_bom is True or False, because the classifier is already
+    BOM-insensitive. When False the preview fields are omitted (unchanged behavior).
     """
     root = require_existing_archive_root(archive_root)
     canonical_path = resolve_zettel_path(root, zettel_id, relative_path)
@@ -9744,6 +9773,10 @@ def remint_reconcile_plan(
 
     blockers: list[str] = []
     warnings: list[str] = []
+
+    # v0.3.172 Item 2: the strip preview is computed from the RAW canonical bytes, once,
+    # and NEVER fed into the classifier. It only decorates the returned preview.
+    strip_bom_preview = _reconcile_strip_bom_preview(canonical_path.read_bytes()) if strip_bom else None
 
     canonical_text = canonical_path.read_text(encoding="utf-8-sig")
     canonical_frontmatter, canonical_body = split_zettel_text(canonical_text)
@@ -9804,7 +9837,7 @@ def remint_reconcile_plan(
 
     # If a hard refusal fired, do not classify. Return unclassified, no writes.
     if blockers:
-        return {
+        blocked_result = {
             "ok": False,
             "dry_run": True,
             "action": "reconcile_mint_receipt",
@@ -9823,6 +9856,9 @@ def remint_reconcile_plan(
             "next_safe_actions": [],
             "writes": "none",
         }
+        if strip_bom_preview is not None:
+            blocked_result.update(strip_bom_preview)
+        return blocked_result
 
     # Three-tier anchor classification (locked spec v0.3.167, Item 1). The snapshot
     # holds the raw draft bytes (frontmatter + body).
@@ -9949,7 +9985,7 @@ def remint_reconcile_plan(
 
     content_change_ack_required = drift_class == "content_change"
 
-    return {
+    classified_result = {
         "ok": True,
         "dry_run": True,
         "action": "reconcile_mint_receipt",
@@ -9968,6 +10004,11 @@ def remint_reconcile_plan(
         "next_safe_actions": [],
         "writes": "none",
     }
+    # v0.3.172 Item 2: strip-intent metadata is preview-ONLY and never influenced
+    # drift_class/classification_basis above (classifier untouched, BOM-insensitive).
+    if strip_bom_preview is not None:
+        classified_result.update(strip_bom_preview)
+    return classified_result
 
 
 def _reconcile_provenance_block(
@@ -10082,7 +10123,11 @@ def remint_reconcile_apply(
         raise ArchiveServiceError("Reconcile requires --reviewed-by.")
 
     root = require_existing_archive_root(archive_root)
-    plan = remint_reconcile_plan(root, zettel_id=zettel_id, relative_path=relative_path)
+    # v0.3.172 Item 2 (Decision A): pass strip_bom through so the plan the apply consumes
+    # previews the SAME strip-intent metadata the dry-run does. drift_class is unchanged
+    # either way (the classifier is BOM-insensitive); this only keeps the previewed
+    # bom_strip_note/next_safe_actions identical between dry-run and apply.
+    plan = remint_reconcile_plan(root, zettel_id=zettel_id, relative_path=relative_path, strip_bom=strip_bom)
     if not plan.get("ok"):
         raise ArchiveServiceError("Reconcile blocked: " + "; ".join(str(b) for b in plan.get("blockers", [])))
 
@@ -10443,6 +10488,11 @@ def _retire_reconcile_content_anchor_class(root: Path, zettel_id: str) -> str | 
     modulo newline/BOM. Returns the drift_class string, or None if it cannot classify.
     """
     try:
+        # v0.3.172 Item 2 (Decision B): keep strip_bom=False (the default). This helper
+        # derives the SHARED content-identity anchor for retire's target/snapshot refs; it
+        # must classify on actual on-disk bytes and must NOT carry strip-intent metadata
+        # into the anchor verdict. Retire's own strip preview is surfaced by
+        # retire_draft_reconcile_plan, not by this anchor helper.
         plan = remint_reconcile_plan(root, zettel_id=zettel_id)
     except (ArchiveServiceError, OSError):
         return None
@@ -10476,10 +10526,37 @@ def _retire_reconcile_build_ref_reports(
     return ref_reports
 
 
+def _retire_reconcile_strip_bom_preview(root: Path, receipt: dict[str, Any]) -> dict[str, Any]:
+    """v0.3.172 Item 2: preview the strip-intent METADATA for a retire --strip-bom dry-run.
+
+    Reads the canonical TARGET ref bytes ONCE (the same ref retire_draft_reconcile_apply
+    strips) and reports what an --approve --strip-bom run WOULD do. A CLASSIFICATION
+    NO-OP: it never touches the per-ref drift classifier. Mirrors the apply-path notes.
+    """
+    target_section = receipt.get("target") if isinstance(receipt.get("target"), dict) else {}
+    target_rel = target_section.get("path") if isinstance(target_section.get("path"), str) else None
+    target_path = None
+    if target_rel:
+        try:
+            target_path = resolve_archive_relative_path(root, target_rel)
+        except ArchivePathError:
+            target_path = None
+    if target_path is None or not target_path.is_file():
+        return {"bom_stripped": False, "bom_strip_note": "target canonical unavailable; nothing stripped"}
+    try:
+        raw = target_path.read_bytes()
+    except OSError:
+        return {"bom_stripped": False, "bom_strip_note": "target canonical unavailable; nothing stripped"}
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return {"bom_stripped": True, "bom_strip_note": "would strip one leading UTF-8 BOM from target canonical"}
+    return {"bom_stripped": False, "bom_strip_note": "no leading BOM present; nothing stripped"}
+
+
 def retire_draft_reconcile_plan(
     archive_root: Path | str,
     *,
     zettel_id: str,
+    strip_bom: bool = False,
 ) -> dict[str, Any]:
     """Read/classify/preview an honest retire-draft-receipt reconcile. ZERO writes.
 
@@ -10488,6 +10565,12 @@ def retire_draft_reconcile_plan(
     classifier proves the canonical+snapshot content-identical (Item 1) AND the
     Proof-2 structural guard holds; otherwise content_change. Overall
     content_change_ack is required when ANY ref is content_change. Never writes.
+
+    strip_bom (v0.3.172 Item 2): when True, the preview surfaces the strip-intent
+    METADATA (`bom_stripped` would-strip preview + `bom_strip_note`) an --approve
+    --strip-bom run would record on the target canonical, so a dry-run has parity with
+    apply. A CLASSIFICATION NO-OP: drift_class is IDENTICAL whether strip_bom is True or
+    False. When False the preview fields are omitted (unchanged behavior).
     """
     root = require_existing_archive_root(archive_root)
     blockers: list[str] = []
@@ -10496,6 +10579,12 @@ def retire_draft_reconcile_plan(
         root, zettel_id=zettel_id, blockers=blockers
     )
     zid = str(zettel_id or "").strip()
+
+    # v0.3.172 Item 2: strip preview computed from the target ref raw bytes only, never
+    # fed into per-ref classification. Omitted entirely when strip_bom is False.
+    strip_bom_preview = (
+        _retire_reconcile_strip_bom_preview(root, receipt) if (strip_bom and not blockers) else None
+    )
 
     ref_reports: list[dict[str, Any]] = []
     if not blockers:
@@ -10528,7 +10617,7 @@ def retire_draft_reconcile_plan(
             "writes": "none",
         }
 
-    return {
+    classified_result = {
         "ok": True,
         "dry_run": True,
         "action": "reconcile_retire_draft_receipt",
@@ -10542,6 +10631,11 @@ def retire_draft_reconcile_plan(
         "next_safe_actions": [],
         "writes": "none",
     }
+    # v0.3.172 Item 2: strip-intent metadata is preview-ONLY and never influenced the
+    # per-ref classification/overall above. Omitted when strip_bom is False.
+    if strip_bom_preview is not None:
+        classified_result.update(strip_bom_preview)
+    return classified_result
 
 
 def retire_draft_reconcile_apply(
@@ -57814,6 +57908,7 @@ def object_storage_execute_one_upload(
     sleep: Callable[[float], None] = time.sleep,
     rng: Callable[[], float] = random.random,
     force_upload: bool = False,
+    multipart_part_size_bytes: int = OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES,
 ) -> dict[str, Any]:
     """Per-object upload spine (§2.3). Ledger read -> HEAD-before -> PUT/multipart
 
@@ -57913,7 +58008,11 @@ def object_storage_execute_one_upload(
         while True:
             if is_multipart:
                 put_result, part_count = _object_storage_multipart_put(
-                    transport=transport, key=key, data_path=data_path, content_sha256=content_sha256
+                    transport=transport,
+                    key=key,
+                    data_path=data_path,
+                    content_sha256=content_sha256,
+                    part_size_bytes=multipart_part_size_bytes,
                 )
                 # Each multipart run issues create + N put_part + complete; count
                 # the mutating provider calls for the cumulative PUT ceiling (SA-2).
@@ -58013,7 +58112,12 @@ def _object_storage_failed_result(
 
 
 def _object_storage_multipart_put(
-    *, transport: ObjectStorageTransport, key: str, data_path: Path, content_sha256: str
+    *,
+    transport: ObjectStorageTransport,
+    key: str,
+    data_path: Path,
+    content_sha256: str,
+    part_size_bytes: int = OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES,
 ) -> tuple[dict[str, Any], int]:
     # A provider error at ANY multipart step (create / put_part / complete) must
     # surface its REAL status_class so the executor's bounded retry loop can retry
@@ -58029,7 +58133,7 @@ def _object_storage_multipart_put(
         parts: list[dict[str, Any]] = []
         with data_path.open("rb") as handle:
             while True:
-                chunk = handle.read(OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES)
+                chunk = handle.read(part_size_bytes)
                 if not chunk:
                     break
                 part_number += 1
@@ -58543,6 +58647,8 @@ def object_storage_upload_run(
     key_prefix: str | None = None,
     append_extension: bool = False,
     multipart_threshold_bytes: int | None = None,
+    multipart_part_size_bytes: int | None = None,
+    allow_tiny_parts: bool = False,
     transport: ObjectStorageTransport | None = None,
     send: Callable[..., dict[str, Any]] | None = None,
     endpoint_host: str | None = None,
@@ -58588,22 +58694,61 @@ def object_storage_upload_run(
         key_strategy=key_strategy, key_prefix=key_prefix, blockers=blockers
     )
 
+    # v0.3.172 Item 1: a LIVE-VERIFICATION part-size override. Default keeps the 64 MiB
+    # module part size (normal runs UNCHANGED). An override is CODE-BOUNDED to
+    # [OBJECT_STORAGE_MULTIPART_MIN_PART_SIZE_BYTES (4 KiB),
+    # OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES (64 MiB)] and, below the 64 MiB default,
+    # requires the --allow-tiny-parts acknowledgment. It changes ONLY handle.read()
+    # fragmentation and the threshold floor governing the threshold validator below;
+    # the whole-object before-hash, HEAD-after full-object check, SA-5 delete, and the
+    # §6 leak gate are all invariant. This is evaluated BEFORE the threshold block so
+    # effective_multipart_part_size_bytes is known when the threshold floor is checked.
+    effective_multipart_part_size_bytes = OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES
+    if multipart_part_size_bytes is not None:
+        if not isinstance(multipart_part_size_bytes, int) or isinstance(multipart_part_size_bytes, bool):
+            blockers.append("multipart_part_size_bytes must be an integer number of bytes.")
+        elif multipart_part_size_bytes < OBJECT_STORAGE_MULTIPART_MIN_PART_SIZE_BYTES:
+            blockers.append(
+                "multipart_part_size_bytes below the "
+                f"{OBJECT_STORAGE_MULTIPART_MIN_PART_SIZE_BYTES}-byte minimum for --multipart-part-size "
+                "(a live-verification aid); refuse to fragment an object into sub-minimum parts."
+            )
+        elif multipart_part_size_bytes > OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES:
+            blockers.append(
+                "multipart_part_size_bytes above the 64 MiB part-size ceiling "
+                f"({OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES} bytes)."
+            )
+        elif multipart_part_size_bytes < OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES and not allow_tiny_parts:
+            blockers.append(
+                "multipart_part_size_bytes below the 64 MiB default requires --allow-tiny-parts "
+                "(a live-verification aid; real R2 rejects multipart parts < 5 MiB except the last)."
+            )
+        else:
+            effective_multipart_part_size_bytes = multipart_part_size_bytes
+
     # Item 5 (v0.3.167): validation/testing aid. Default keeps the 5 GiB threshold.
-    # An override is CODE-BOUNDED to [OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES (64 MiB),
-    # OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES (5 GiB)]: below the part size would
-    # fragment a tiny object into sub-part-size parts (weakening the real part-split
-    # path); above the default is meaningless. Out-of-band -> blocker, run does not
-    # proceed. The override changes ONLY the recorded/used threshold, never the local
-    # sha256==object_id check nor the provider-HEAD-after gate.
+    # An override is CODE-BOUNDED to [effective_multipart_part_size_bytes,
+    # OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES (5 GiB)]: below the effective part size
+    # would fragment a tiny object into sub-part-size parts (weakening the real
+    # part-split path); above the default is meaningless. Out-of-band -> blocker, run
+    # does not proceed. The override changes ONLY the recorded/used threshold, never the
+    # local sha256==object_id check nor the provider-HEAD-after gate. v0.3.172: the floor
+    # is the EFFECTIVE part size (not the 64 MiB constant) so that to force multipart on a
+    # small object an operator lowers BOTH --multipart-threshold and --multipart-part-size;
+    # if the floor still referenced 64 MiB the threshold could never drop below it and
+    # is_multipart would never be true — the part-size feature would be dead on arrival.
     effective_multipart_threshold_bytes = OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES
     if multipart_threshold_bytes is not None:
         if not isinstance(multipart_threshold_bytes, int) or isinstance(multipart_threshold_bytes, bool):
             blockers.append("multipart_threshold_bytes must be an integer number of bytes.")
-        elif multipart_threshold_bytes < OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES:
+        elif multipart_threshold_bytes < effective_multipart_part_size_bytes:
             blockers.append(
                 "multipart_threshold_bytes below the multipart part size floor "
-                f"({OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES} bytes); refuse to fragment "
-                "an object into sub-part-size parts."
+                f"({effective_multipart_part_size_bytes} bytes); refuse to fragment "
+                "an object into sub-part-size parts. To lower the floor for live "
+                "verification, also pass --multipart-part-size (bounded "
+                f"[{OBJECT_STORAGE_MULTIPART_MIN_PART_SIZE_BYTES}, "
+                f"{OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES}] bytes) with --allow-tiny-parts."
             )
         elif multipart_threshold_bytes > OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES:
             blockers.append(
@@ -58929,6 +59074,7 @@ def object_storage_upload_run(
                             sleep=sleep,
                             rng=rng,
                             force_upload=force_upload_after_absent,
+                            multipart_part_size_bytes=effective_multipart_part_size_bytes,
                         )
                         # The executor reports the key it used under "key_hint"; the
                         # durable receipt/manifest keep key_hint content-addressed and
@@ -58952,6 +59098,7 @@ def object_storage_upload_run(
                             key_strategy=normalized_strategy,
                             remote_key=remote_key,
                             effective_multipart_threshold_bytes=effective_multipart_threshold_bytes,
+                            effective_multipart_part_size_bytes=effective_multipart_part_size_bytes,
                         )
                         # §6 leak gate on the fully-serialized receipt BEFORE write.
                         serialized = json.dumps(json_safe(receipt), ensure_ascii=False, default=str)
@@ -59726,6 +59873,7 @@ def _object_storage_build_execution_receipt(
     key_strategy: str = OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
     remote_key: str | None = None,
     effective_multipart_threshold_bytes: int = OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
+    effective_multipart_part_size_bytes: int = OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES,
 ) -> dict[str, Any]:
     """Assemble the execution receipt from a FIXED scalar allowlist (RC5).
 
@@ -59754,6 +59902,11 @@ def _object_storage_build_execution_receipt(
         # how many parts the object was split into. Previously the threshold was
         # nowhere in the receipt and part_count lived only in memory + the ledger row.
         "effective_multipart_threshold_bytes": int(effective_multipart_threshold_bytes),
+        # v0.3.172 Item 1: the part size actually used this run. part_count alone proves a
+        # split happened but not the granularity; recording the part size lets an auditor
+        # verify ceil(size/part_size) == part_count, proving the split was FORCED (a
+        # live-verification aid) rather than incidental to object size.
+        "effective_multipart_part_size_bytes": int(effective_multipart_part_size_bytes),
         "part_count": int(result.get("part_count") or 0),
         "retry_summary": {
             "attempts": int(result.get("attempts") or 0),

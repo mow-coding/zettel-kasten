@@ -1,9 +1,10 @@
 # WOM-kit Capability Matrix
 
-Status: v0.3.171 object-storage-adopt-existing --key-map (158 GB false-skip fix, hardened) checkpoint
-Date: 2026-07-04
-Version: v0.3.171, release candidate
+Status: v0.3.172 live-multipart part-size override and strip-bom dry-run parity checkpoint
+Date: 2026-07-05
+Version: v0.3.172, release candidate
 
+Previous checkpoint: Status: v0.3.171 object-storage-adopt-existing --key-map (158 GB false-skip fix, hardened) checkpoint
 Previous checkpoint: Status: v0.3.170 runtime AI-operator discipline checkpoint
 Previous checkpoint: Status: v0.3.169 operator-feedback delivery ledger and batched mark-delivered checkpoint
 Previous checkpoint: Status: v0.3.168 draft-time identity hygiene, attributed mint affirmation, and continues edge checkpoint

@@ -5440,6 +5440,8 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
             key_prefix=getattr(args, "key_prefix", None),
             append_extension=bool(getattr(args, "key_append_extension", False)),
             multipart_threshold_bytes=getattr(args, "multipart_threshold", None),
+            multipart_part_size_bytes=getattr(args, "multipart_part_size", None),
+            allow_tiny_parts=bool(getattr(args, "allow_tiny_parts", False)),
             send=send,
             endpoint_host=getattr(args, "endpoint_host", None),
             bucket=getattr(args, "bucket", None),
@@ -9014,6 +9016,7 @@ def command_remint_reconcile(args: argparse.Namespace) -> int:
                 Path(args.archive_root),
                 zettel_id=args.zettel_id,
                 relative_path=args.path,
+                strip_bom=bool(getattr(args, "strip_bom", False)),
             )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
@@ -9092,6 +9095,7 @@ def command_retire_draft_reconcile(args: argparse.Namespace) -> int:
             result = archive_services.retire_draft_reconcile_plan(
                 Path(args.archive_root),
                 zettel_id=args.zettel_id,
+                strip_bom=bool(getattr(args, "strip_bom", False)),
             )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
@@ -13664,7 +13668,20 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         dest="multipart_threshold",
         metavar="BYTES",
-        help="Validation/testing aid: multipart threshold in BYTES. Default 5 GiB. Override must be within [64 MiB, 5 GiB]; out-of-band is refused. Affects only the recorded/used threshold, never the integrity checks.",
+        help="Validation/testing aid: multipart threshold in BYTES. Default 5 GiB. Override must be within [effective part size, 5 GiB]; out-of-band is refused. Affects only the recorded/used threshold, never the integrity checks.",
+    )
+    object_storage_upload.add_argument(
+        "--multipart-part-size",
+        type=int,
+        dest="multipart_part_size",
+        metavar="BYTES",
+        help="Live-verification aid: multipart part size in BYTES. Default 64 MiB. Override must be within [4096, 64 MiB]; below the 64 MiB default requires --allow-tiny-parts. Lets an operator FORCE multipart on a small object (paired with a lowered --multipart-threshold) to prove live R2 multipart. Affects only handle.read() fragmentation, never the whole-object integrity checks. Real R2 rejects parts < 5 MiB except the last.",
+    )
+    object_storage_upload.add_argument(
+        "--allow-tiny-parts",
+        action="store_true",
+        dest="allow_tiny_parts",
+        help="Acknowledge a sub-64-MiB --multipart-part-size (a live-verification aid; real R2 rejects multipart parts < 5 MiB except the last). Required to set --multipart-part-size below the 64 MiB default.",
     )
     object_storage_upload.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
     object_storage_upload.add_argument("--dry-run", action="store_true", help="Preview the plan and execution-receipt shape without provider calls, byte reads, or secret reads.")
