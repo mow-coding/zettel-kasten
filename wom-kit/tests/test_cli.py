@@ -12703,6 +12703,174 @@ state:
             self.assertEqual(ok["part_count"], 2, ok)
             self.assertEqual(transport.multipart_calls, 1)
 
+    # ------------------------------------------------------------------
+    # v0.3.172 Item 1: live-multipart part-size override
+    # (--multipart-part-size + --allow-tiny-parts). The whole-object before-hash and
+    # HEAD-after full-object verify are INVARIANT; the flag changes only handle.read()
+    # fragmentation. No real socket — the injected fake transport proves the envelope.
+    # ------------------------------------------------------------------
+
+    def _install_multipart_fixture_object(self, archive_root: Path, size: int) -> str:
+        """Install a `size`-byte object into the copied archive's manifest and return its
+        sha256 digest (hex). Used so the FULL object_storage_upload_run path can force a
+        multipart split on a SMALL object via a lowered part size."""
+        payload = bytes((i * 7 + 3) % 256 for i in range(size))
+        rel = "objects/sample/multipart-fixture.bin"
+        obj_path = archive_root / rel
+        obj_path.write_bytes(payload)
+        digest = archive_services.sha256_path(obj_path)
+        manifest = archive_root / "objects" / "manifests" / "files.jsonl"
+        row = {
+            "object_id": f"sha256:{digest}",
+            "sha256": digest,
+            "logical_key": rel,
+            "mime": "application/octet-stream",
+            "size_bytes": size,
+            "locations": [{"provider": "local", "path": rel, "availability": "available"}],
+            "provenance": {"created_in": "archive:personal:fake-life", "source": "fake_sample"},
+        }
+        with manifest.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+        return digest
+
+    def test_object_storage_multipart_part_size_forces_split_on_small_object(self) -> None:  # 1.T1
+        # A SMALL object (a few KiB) split into part_count > 1 by a lowered part size,
+        # with whole-object integrity intact. Models the 65 MiB floor test but small.
+        floor = archive_services.OBJECT_STORAGE_MULTIPART_MIN_PART_SIZE_BYTES  # 4096
+        size = floor * 3 + 111  # => 4 parts (three full + a tail)
+        with tempfile.TemporaryDirectory() as tmp:
+            small = Path(tmp) / "small.bin"
+            small.write_bytes(bytes((i * 5 + 1) % 256 for i in range(size)))
+            digest = archive_services.sha256_path(small)
+            key_hint = f"sha256/{digest[:2]}/{digest}"
+            ledger = archive_services.ResumeLedger(Path(tmp) / "l.jsonl")
+            transport = _FakeObjectStorageTransport()
+            ok = archive_services.object_storage_execute_one_upload(
+                transport=transport, key=key_hint, data_path=small, size=size,
+                content_sha256=digest, multipart_threshold_bytes=floor, skip_uploaded=False, ledger=ledger,
+                multipart_part_size_bytes=floor,
+            )
+            self.assertEqual(ok["result_status"], "uploaded", ok)
+            self.assertGreater(ok["part_count"], 1, ok)
+            self.assertEqual(ok["part_count"], 4, ok)  # ceil(size/part_size)
+            # multipart envelope invoked (create/put_part/complete), NOT put_object.
+            self.assertEqual(transport.multipart_calls, 1)
+            self.assertEqual(transport.put_calls, 0, "small-object split must not use put_object")
+            # Whole-object before-hash + HEAD-after full-object verify both ran: the object
+            # is stored under content_sha256 and HEAD-after passed (result is "uploaded").
+            self.assertEqual(transport.store[key_hint]["sha"], digest)
+            self.assertEqual(transport.store[key_hint]["size"], size)
+
+    def test_object_storage_multipart_part_size_below_minimum_refused(self) -> None:  # 1.T2
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                result = self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport,
+                    multipart_part_size_bytes=1024, allow_tiny_parts=True,
+                )
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["execution_status"], "blocked", result)
+            self.assertTrue(any("multipart_part_size_bytes" in b for b in result["blockers"]), result)
+            self.assertEqual(transport.put_calls, 0, "a rejected part size must not upload")
+
+    def test_object_storage_multipart_part_size_missing_ack_refused(self) -> None:  # 1.T3
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                result = self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport,
+                    multipart_part_size_bytes=archive_services.OBJECT_STORAGE_MULTIPART_MIN_PART_SIZE_BYTES,
+                    allow_tiny_parts=False,
+                )
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["execution_status"], "blocked", result)
+            self.assertTrue(any("--allow-tiny-parts" in b for b in result["blockers"]), result)
+            self.assertEqual(transport.put_calls, 0)
+
+    def test_object_storage_multipart_part_size_above_ceiling_refused(self) -> None:  # 1.T4
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                result = self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport,
+                    multipart_part_size_bytes=archive_services.OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES + 1,
+                    allow_tiny_parts=True,
+                )
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["execution_status"], "blocked", result)
+            self.assertTrue(any("ceiling" in b for b in result["blockers"]), result)
+            self.assertEqual(transport.put_calls, 0)
+
+    def test_object_storage_multipart_part_size_default_unchanged(self) -> None:  # 1.T5
+        # No --multipart-part-size => single-part small-object upload, and the receipt
+        # records the default 64 MiB part size.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                result = self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport,
+                )
+            self.assertEqual(result["execution_status"], "executed", result)
+            receipt = json.loads((archive_root / result["receipts_written"][0]).read_text(encoding="utf-8"))
+            self.assertEqual(receipt["part_count"], 1)
+            self.assertEqual(
+                receipt["effective_multipart_part_size_bytes"],
+                archive_services.OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES,
+            )
+            self.assertEqual(archive_cli.validate_schema(receipt, "object-storage-upload-receipt.schema.json"), [])
+
+    def test_object_storage_multipart_receipt_records_used_part_size(self) -> None:  # 1.T6
+        # The FULL run forces a small-object multipart split via a lowered threshold +
+        # part size, and the durable receipt records the used part size and validates.
+        floor = archive_services.OBJECT_STORAGE_MULTIPART_MIN_PART_SIZE_BYTES  # 4096
+        size = floor * 3 + 111  # 4 parts
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            digest = self._install_multipart_fixture_object(archive_root, size)
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                result = self._upload_run(
+                    archive_root, only=f"sha256:{digest}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport,
+                    multipart_threshold_bytes=floor, multipart_part_size_bytes=floor,
+                    allow_tiny_parts=True,
+                )
+            self.assertEqual(result["execution_status"], "executed", result)
+            self.assertEqual(transport.multipart_calls, 1, result)
+            receipt = json.loads((archive_root / result["receipts_written"][0]).read_text(encoding="utf-8"))
+            self.assertEqual(receipt["effective_multipart_part_size_bytes"], floor, receipt)
+            self.assertGreater(receipt["part_count"], 1, receipt)
+            self.assertEqual(archive_cli.validate_schema(receipt, "object-storage-upload-receipt.schema.json"), [])
+
     def test_object_storage_multipart_rate_limited_retries_to_ceiling(self) -> None:  # SA-3 multipart
         # A rate_limited failure DURING a multipart part upload must be retried by
         # the executor's bounded loop up to the attempt ceiling, exactly like the
@@ -28492,6 +28660,144 @@ state:
             self.assertFalse(canonical.read_bytes().startswith(b"\xef\xbb\xbf"))
 
     # ------------------------------------------------------------------
+    # v0.3.172 Item 2: strip-bom dry-run parity (remint-reconcile). The classifier is
+    # already BOM-insensitive; --strip-bom in a dry-run surfaces the SAME strip-intent
+    # metadata an --approve run records, and NEVER launders a content_change.
+    # ------------------------------------------------------------------
+
+    def test_remint_reconcile_strip_bom_dry_run_pure_bom_is_format_drift(self) -> None:  # 2.T1
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            canonical.write_bytes(b"\xef\xbb\xbf" + canonical.read_bytes())
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run",
+                 "--strip-bom", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["drift_class"], "format_drift", result)
+            self.assertFalse(result["content_change_ack_required"], result)
+            # Dry-run wrote nothing.
+            self.assertEqual(result["writes"], "none", result)
+
+    def test_remint_reconcile_strip_bom_dry_run_preview_matches_apply(self) -> None:  # 2.T2
+        # The dry-run previews bom_stripped/bom_strip_note that match the --approve run.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            original = canonical.read_bytes()
+            canonical.write_bytes(b"\xef\xbb\xbf" + original)
+            # dry-run preview.
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run",
+                 "--strip-bom", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            preview = json.loads(output)
+            self.assertTrue(preview["bom_stripped"], preview)
+            self.assertIn("would strip", preview["bom_strip_note"])
+            # dry-run did NOT modify the file (BOM still present).
+            self.assertTrue(canonical.read_bytes().startswith(b"\xef\xbb\xbf"))
+            # now approve: outcome agrees (bom actually stripped, format_drift).
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
+                 "--reviewed-by", "person:test", "--strip-bom", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            applied = json.loads(output)
+            self.assertEqual(applied["drift_class"], preview["drift_class"], (preview, applied))
+            self.assertTrue(applied["bom_stripped"], applied)
+            self.assertEqual(canonical.read_bytes(), original)
+
+    def test_remint_reconcile_strip_bom_dry_run_no_bom_is_noop(self) -> None:  # 2.T3
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            # newline drift only (format_drift), NO leading BOM.
+            canonical.write_bytes(canonical.read_bytes().replace(b"\r\n", b"\n"))
+            before = canonical.read_bytes()
+            self.assertFalse(before.startswith(b"\xef\xbb\xbf"))
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run",
+                 "--strip-bom", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertFalse(result["bom_stripped"], result)
+            self.assertIn("no leading BOM", result["bom_strip_note"])
+            # never previews a byte rewrite; file untouched.
+            self.assertEqual(canonical.read_bytes(), before)
+
+    def test_remint_reconcile_strip_bom_dry_run_content_edit_stays_content_change(self) -> None:  # 2.T4
+        # THE ANTI-LAUNDERING ASSERTION: a BOM + real title edit stays content_change +
+        # ack in the DRY-RUN. Fails if post-strip modeling ever short-circuits the
+        # frontmatter/body comparison.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root, title="Original title")
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            text = canonical.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            fm = archive_cli.load_yaml(match.group(1))
+            body = text[match.end():]
+            fm["title"] = "Corrected title"
+            canonical.write_bytes(
+                b"\xef\xbb\xbf" + ("---\n" + archive_cli.dump_yaml(fm) + "---\n\n" + body.lstrip()).encode("utf-8")
+            )
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run",
+                 "--strip-bom", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["drift_class"], "content_change", result)
+            self.assertTrue(result["content_change_ack_required"], result)
+            # strip-intent metadata is STILL previewed, but did not change the class.
+            self.assertTrue(result["bom_stripped"], result)
+
+    def test_remint_reconcile_strip_bom_apply_content_edit_matches_dry_run(self) -> None:  # 2.T5
+        # Apply agrees with the 2.T4 dry-run: BOM + title edit without ack is BLOCKED;
+        # with ack it proceeds as content_change AND strips the BOM.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root, title="Original title")
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            text = canonical.read_text(encoding="utf-8")
+            match = archive_cli.FRONTMATTER_RE.match(text)
+            fm = archive_cli.load_yaml(match.group(1))
+            body = text[match.end():]
+            fm["title"] = "Corrected title"
+            canonical.write_bytes(
+                b"\xef\xbb\xbf" + ("---\n" + archive_cli.dump_yaml(fm) + "---\n\n" + body.lstrip()).encode("utf-8")
+            )
+            # WITHOUT ack -> blocked, BOM still present.
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
+                 "--reviewed-by", "person:test", "--strip-bom", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertTrue(canonical.read_bytes().startswith(b"\xef\xbb\xbf"))
+            # WITH ack -> content_change AND strips.
+            code, output = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--approve",
+                 "--reviewed-by", "person:test", "--strip-bom", "--content-changed-ack", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["drift_class"], "content_change", result)
+            self.assertTrue(result["bom_stripped"], result)
+            self.assertFalse(canonical.read_bytes().startswith(b"\xef\xbb\xbf"))
+
+    # ------------------------------------------------------------------
     # Item 2 (v0.3.167): retire-draft-reconcile sibling command
     # ------------------------------------------------------------------
 
@@ -28701,6 +29007,78 @@ state:
             result = json.loads(output)
             self.assertTrue(result["bom_stripped"], result)
             self.assertEqual(canonical.read_bytes(), original)
+
+    # ------------------------------------------------------------------
+    # v0.3.172 Item 2: strip-bom dry-run parity (retire-draft-reconcile). Mirrors the
+    # remint 2.T1/2.T3/2.T4 assertions on the retire target canonical.
+    # ------------------------------------------------------------------
+
+    def test_retire_draft_reconcile_strip_bom_dry_run_pure_bom_is_format_drift(self) -> None:  # 2.T6
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            retire = self._mint_and_retire_lunch(archive_root)
+            zid = retire["zettel_id"]
+            canonical = archive_root / retire["canonical_path"]
+            canonical.write_bytes(b"\xef\xbb\xbf" + canonical.read_bytes())
+            code, output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run",
+                 "--strip-bom", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            plan = json.loads(output)
+            self.assertEqual(plan["drift_class"], "format_drift", plan)
+            self.assertFalse(plan["content_change_ack_required"], plan)
+            self.assertTrue(plan["bom_stripped"], plan)
+            self.assertIn("would strip", plan["bom_strip_note"])
+            self.assertEqual(plan["writes"], "none", plan)
+            # dry-run wrote nothing: BOM still present.
+            self.assertTrue(canonical.read_bytes().startswith(b"\xef\xbb\xbf"))
+
+    def test_retire_draft_reconcile_strip_bom_dry_run_no_bom_is_noop(self) -> None:  # 2.T7
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            retire = self._mint_and_retire_lunch(archive_root)
+            zid = retire["zettel_id"]
+            snapshot = archive_root / retire["draft_snapshot_path"]
+            # newline drift on the snapshot so there's something to reconcile, no BOM.
+            raw = snapshot.read_bytes()
+            snapshot.write_bytes(raw.replace(b"\r\n", b"\n") if b"\r\n" in raw else raw.replace(b"\n", b"\r\n"))
+            canonical = archive_root / retire["canonical_path"]
+            before = canonical.read_bytes()
+            self.assertFalse(before.startswith(b"\xef\xbb\xbf"))
+            code, output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run",
+                 "--strip-bom", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            plan = json.loads(output)
+            self.assertFalse(plan["bom_stripped"], plan)
+            self.assertIn("no leading BOM", plan["bom_strip_note"])
+            # never previews a byte rewrite; target untouched.
+            self.assertEqual(canonical.read_bytes(), before)
+
+    def test_retire_draft_reconcile_strip_bom_dry_run_content_edit_stays_content_change(self) -> None:  # 2.T8
+        # Anti-laundering: a BOM on the target PLUS a real snapshot content edit stays
+        # content_change + ack in the DRY-RUN; the strip preview never softens the class.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            retire = self._mint_and_retire_lunch(archive_root)
+            zid = retire["zettel_id"]
+            canonical = archive_root / retire["canonical_path"]
+            snapshot = archive_root / retire["draft_snapshot_path"]
+            # BOM on the target canonical + a real content edit on the snapshot ref.
+            canonical.write_bytes(b"\xef\xbb\xbf" + canonical.read_bytes())
+            snapshot.write_bytes(snapshot.read_bytes().replace(b"\r\n", b"\n") + b"\nHUMAN EDIT line\n")
+            code, output = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run",
+                 "--strip-bom", "--format", "json"]
+            )
+            self.assertEqual(code, 0, output)
+            plan = json.loads(output)
+            self.assertEqual(plan["drift_class"], "content_change", plan)
+            self.assertTrue(plan["content_change_ack_required"], plan)
+            # strip-intent preview is STILL surfaced but did not change the class.
+            self.assertTrue(plan["bom_stripped"], plan)
 
     def test_retire_draft_sha_block_routes_to_reconcile_but_id_missing_does_not(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

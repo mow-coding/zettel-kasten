@@ -6,6 +6,39 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.172 - 2026-07-05
+
+Two verification-honesty fixes. Both are additive, need no migration, and leave every
+default path byte-identical to v0.3.171.
+
+- **Live-multipart part-size override.** New `--multipart-part-size <BYTES>` and
+  `--allow-tiny-parts` on `object-storage-upload`. Default part size (64 MiB) is
+  unchanged; an override is bounded to `[4096, 64 MiB]` and below the default requires
+  `--allow-tiny-parts`. It lets an operator FORCE multipart on a small object (paired
+  with a lowered `--multipart-threshold`) to prove LIVE R2 multipart — real per-part
+  SigV4 and an R2-accepted `CompleteMultipartUpload`. It changes ONLY `handle.read()`
+  fragmentation: the whole-object before-hash, the full-object sha256 handed to
+  `complete_multipart`, the HEAD-after full-object verify, SA-5 delete-on-mismatch, and
+  the leak gate are all invariant. On any violation the run does not proceed and
+  `put_calls` stays 0. Honest framing corrected: the multipart CODE path was already
+  fake-transport unit-tested; what these flags let an operator prove is the LIVE path.
+  Real R2 rejects multipart parts < 5 MiB except the last, so a tiny part is a
+  fake-transport/local aid and a live tiny-part rejection is an upload rejection, never a
+  silent bypass.
+- **Threshold-floor re-basing.** When a part size is supplied, the `--multipart-threshold`
+  floor is compared against the effective part size (not the 64 MiB constant), so the
+  threshold can drop below 64 MiB together with the part size — otherwise the small-object
+  multipart path was dead on arrival.
+- **Receipt field.** The execution receipt gains `effective_multipart_part_size_bytes`
+  (additive; the schema has no `additionalProperties:false` and does not list it in
+  `required`). It lets an auditor verify `ceil(size/part_size) == part_count`.
+- **Strip-bom dry-run parity (both reconcile surfaces).** `--strip-bom` on a dry-run of
+  `remint-reconcile` AND `retire-draft-reconcile` now previews the same strip-intent
+  metadata (`bom_stripped`, `bom_strip_note`) an `--approve` run records. The classifier
+  is already BOM-insensitive, so this is a strict classification NO-OP: `drift_class` and
+  `content_change_ack_required` are identical whether `--strip-bom` is passed or not, and
+  a real `content_change` is never laundered to `format_drift`.
+
 ## v0.3.171 - 2026-07-04
 
 `object-storage-adopt-existing --key-map`: the hardened 158 GB false-skip fix. A

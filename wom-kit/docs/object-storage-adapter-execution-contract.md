@@ -163,6 +163,45 @@ Official references checked for this checkpoint:
 - Cloudflare R2 S3 API compatibility:
   <https://developers.cloudflare.com/r2/api/s3/api/>
 
+## Multipart part size and live-verification override (v0.3.172)
+
+An object at or above `--multipart-threshold` (default 5 GiB) uploads via multipart:
+create → N × put_part → complete, with each part read from disk in
+`OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES` (64 MiB) chunks by default.
+
+The multipart **code path** is already unit-tested with no network: the injected fake
+transport drives a 65 MiB fixture to `part_count == 2`, exercising
+create/put_part/complete/abort-on-error. What that does NOT prove is **live R2
+multipart** — real per-part SigV4 signing and a `CompleteMultipartUpload` accepted by
+R2's authorizer. That remains `unproven_against_live_provider` until a human runbook
+confirms the first live multipart object.
+
+To make that live proof reachable on a small object, `object-storage-upload` accepts a
+live-verification part-size override:
+
+- **`--multipart-part-size <BYTES>`** — bounded to `[4096, 64 MiB]`. It changes ONLY the
+  `handle.read()` chunk size (how the file is fragmented into parts); it changes nothing
+  about integrity.
+- **`--allow-tiny-parts`** — required to set a part size below the 64 MiB default. The
+  acknowledgment exists because real R2 rejects multipart parts smaller than 5 MiB except
+  the last. A sub-5-MiB part is therefore a fake-transport / local validation aid: a live
+  tiny-part rejection is an upload **rejection** (a failed status), never a silent
+  integrity bypass. Tiny parts are NOT R2-accepted.
+
+To force multipart on a small object you lower BOTH `--multipart-threshold` and
+`--multipart-part-size` — the two flags are paired. The threshold floor is validated
+against the *effective part size*, not the 64 MiB constant, so the threshold can drop
+below 64 MiB together with the part size. The threshold stays an explicit,
+receipt-recorded operator choice; the part-size flag does not silently move it.
+
+Integrity is unchanged by the part size. The before-hash is the whole-object
+`content_sha256`, computed once over the whole file; `complete_multipart` and the
+HEAD-after re-download-and-hash both verify the FULL-OBJECT sha256, never a per-part
+digest; SA-5 delete-on-mismatch and the leak gate are unconditional. On any part-size,
+threshold, or acknowledgment violation the run does not proceed and no provider PUT is
+issued. The execution receipt records `effective_multipart_part_size_bytes` so an auditor
+can verify `ceil(size / part_size) == part_count` and confirm the split was forced.
+
 ## Resume Ledger
 
 Large media uploads must not be a blind one-shot action. A future adapter needs
@@ -196,6 +235,7 @@ Expected safe fields:
 - result status,
 - uploaded byte count,
 - checksum algorithm,
+- the effective multipart threshold and part size, and the part count,
 - retry summary,
 - manifest update preview.
 

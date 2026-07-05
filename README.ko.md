@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.171 pre-release
+v0.3.172 pre-release
 ```
 
-이전 공개 기준: v0.3.170 pre-release.
+이전 공개 기준: v0.3.171 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -55,7 +55,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 - WOM / zet / ZET 설계 기준, specs, schemas, fake archive, release notes, work logs,
 - `wom-kit/` 안의 local CLI와 MCP tooling,
 - doctor, draft, mint, delegate, receipt, search, metadata review 같은 private archive lifecycle 도구. draft 생성은 forward-only draft-id 위생을 갖춰 제목이 없거나 한글뿐인 제목이 더 이상 오해를 주는 `_draft` id로 떨어지지 않고, draft 시점에 `--kind`를 검증해 경고와 함께 유효한 kind 목록을 보여줍니다. mint는 attributed `--affirm` 플래그로 두 human-review 체크리스트 항목을 raw YAML 편집 대신 검토자 귀속(attributed)·감사 가능한 CLI 행위로 충족합니다(mint receipt에 기록, `--reviewed-by` 없으면 무효, machine-enforced 항목은 절대 덮어쓰지 않음).
-- 정직한 `archive remint-reconcile`(그리고 retire receipt용 형제 명령 `archive retire-draft-reconcile`): zet의 바이트가 디스크에서 드리프트한 뒤(CRLF/BOM 재체크아웃 또는 사람의 내용 수정) receipt에 기록된 sha256을 재발급합니다. draft 스냅샷 자체가 드리프트한 경우에도 드리프트를 개행/BOM만인 `format_drift`나 `content_change`로 분류하되, 모든 content frontmatter 필드를 검사(전체 필드 재구성 + mint receipt의 `id`/`title` 대조)하므로 어떤 필드를 수정하거나 내용이 변조된 스냅샷도 절대 `format_drift`의 앵커가 되지 않습니다. 항상 디스크의 현재 내용을 보여주고, 승인하려면 reviewer가 필요하며, 내용 변경 ack 게이트를 절대 우회하지 않는 opt-in `--strip-bom`을 제공하고, 손상을 절대 가리지 않으며, in-place receipt 갱신과 별도의 불변 audit receipt를 함께 씁니다.
+- 정직한 `archive remint-reconcile`(그리고 retire receipt용 형제 명령 `archive retire-draft-reconcile`): zet의 바이트가 디스크에서 드리프트한 뒤(CRLF/BOM 재체크아웃 또는 사람의 내용 수정) receipt에 기록된 sha256을 재발급합니다. draft 스냅샷 자체가 드리프트한 경우에도 드리프트를 개행/BOM만인 `format_drift`나 `content_change`로 분류하되, 모든 content frontmatter 필드를 검사(전체 필드 재구성 + mint receipt의 `id`/`title` 대조)하므로 어떤 필드를 수정하거나 내용이 변조된 스냅샷도 절대 `format_drift`의 앵커가 되지 않습니다. 항상 디스크의 현재 내용을 보여주고, 승인하려면 reviewer가 필요하며, 내용 변경 ack 게이트를 절대 우회하지 않는 opt-in `--strip-bom`을 제공하고(그리고 v0.3.172부터 dry-run에서도 approve 실행이 기록하는 것과 동일한 strip 의도 메타데이터를 미리 보여줍니다 — 분류에는 전혀 영향이 없는 no-op이며 `content_change`를 절대 세탁하지 않습니다), 손상을 절대 가리지 않으며, in-place receipt 갱신과 별도의 불변 audit receipt를 함께 씁니다.
 - read-only `archive zet-quality-check --dry-run`으로 mint 전 entity-term, document-type, OCR/parse metadata, table-structure, correction-event, source-rights, audience, derived-artifact dependency 위험을 점검합니다. 선택적 `zet-quality-rules.yml` 프로젝트 규칙은 matched term을 출력하지 않으면서 금지 entity alias를 mint blocker로 만들 수 있습니다.
 - read-only `archive status-board --dry-run`으로 canonical zet, active draft, retire 대기 minted draft, document/audience metadata gap, source metadata gap, derived-artifact sync gap, 선택적 quality count를 한 번에 요약합니다. title/body/source value/provider URL/local path는 출력하지 않습니다.
 - read-only `archive derived-artifact-staleness --dry-run`으로 `derived_artifacts`가 마지막 검토 sync 이후 더 최신 source zet을 놓치고 있는지 확인합니다. 외부 보고서 본문은 열지 않고, artifact ref/title/body/provider URL/local path는 출력하지 않습니다.
@@ -128,6 +128,7 @@ Object storage:
 - approval-gated 외부 upload evidence 등록과 read-only upload evidence 감사(라이브 provider adapter 이전 단계),
 - 라이브 업로드 어댑터 Stage 2: 단일 네트워킹 seam 뒤에 손으로 구현한 실제 AWS SigV4 R2/S3 전송 계층(새 의존성 없음), (단일 PUT·multipart 모두에 적용되는) bounded 재시도 루프, 하드 누적 PUT 상한, 프로바이더의 체크섬 표면에 의존하지 않고 재다운로드-후-해시로 검증하는 전체 객체 무결성, orphan 정리, tiered tiny-first 게이트. 이제 실제 업로드 능력을 갖췄지만 라이브 `--approve`는 여전히 env 자격 증명·충족된 tiered 게이트·endpoint/bucket 없이는 닫힌 상태로 실패하며, 첫 사람 실행 라이브 객체 전까지 `unproven_against_live_provider` 상태를 유지,
 - 선택 가능하고 기록되는 업로드 키 전략(`--key-strategy sha256_content_addressed|prefix`, 기본값 불변)과 안전한 `object-storage-adopt-existing` 명령: 운영자 자신의 키 레이아웃에 이미 저장된 객체는 기록된 키에서 존재+크기 일치를 증명하는 라이브 HEAD가 있을 때만 채택하고, 라이브 전송 계층에서는 실행기가 스킵 전에 항상 그 기록된 키를 다시 HEAD 한다(404면 재업로드하며, 조용한 스킵은 없음); 콘텐츠 주소 템플릿이 객체별 확장자를 복원하지 못할 때는 선택형 `--key-map`(JSONL sha256 -> 정확한 원격 키)으로 운영자의 실제 키에 저장된 객체를 채택하며, 크기는 여전히 매니페스트에서만 가져오고 모든 키는 digest 바인딩과 leak 가드를 통과한다,
+- 라이브 검증용 `--multipart-part-size` 오버라이드(`--allow-tiny-parts` 승인과 함께, `[4096, 64 MiB]` 범위, receipt에 `effective_multipart_part_size_bytes`로 기록): 낮춘 `--multipart-threshold`와 함께 쓰면 작은 객체에도 멀티파트를 강제해 라이브 R2 멀티파트를 증명한다. `handle.read()` 분할만 바뀌고 전체 객체 사전 해시·HEAD-after 전체 객체 검증·orphan 정리·leak 게이트는 바이트 단위로 그대로 유지된다,
 
 IMAP:
 

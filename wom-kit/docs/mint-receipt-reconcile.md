@@ -238,6 +238,26 @@ The re-issued `normalized_content_digest` is recomputed over the post-strip byte
 (equal to the pre-strip normalized digest by construction, since the normalizer
 already strips a leading BOM), so `doctor`'s format-drift branch still matches.
 
+### `--strip-bom` dry-run parity (v0.3.172)
+
+`--strip-bom` on a **dry-run** now previews the same strip-intent metadata an `--approve`
+run records, so an operator can see the outcome before approving. When a leading BOM is
+present the preview reports `bom_stripped: true` and `bom_strip_note: "would strip one
+leading UTF-8 BOM from canonical"`; with no BOM it reports `bom_stripped: false` and
+`"no leading BOM present; nothing stripped"` — a documented no-op that never previews a
+byte rewrite. When `--strip-bom` is not passed the preview fields are omitted.
+
+This is a strict **classification no-op**. The classifier is already BOM-insensitive
+(the canonical is read with `utf-8-sig`, and the body compare strips the BOM and folds
+newlines under the one normalized-equality definition), so `drift_class` and the
+content-change ack requirement are identical whether `--strip-bom` is passed or not, for
+every file. The strip preview only decorates the returned metadata; it never touches the
+Tier A/B/C comparison. A BOM plus a real content edit stays `content_change` (ack
+required) in the dry-run exactly as it does at apply — the strip never launders a content
+change. **`retire-draft-reconcile` has the same dry-run parity**: its `--strip-bom`
+dry-run previews the strip-intent metadata for the target canonical, and its
+per-ref classification is likewise untouched.
+
 ## Scope note: contract-preview vs run-outcome (adapter honesty)
 
 Unrelated to reconcile but corrected in the same release: the object-storage upload

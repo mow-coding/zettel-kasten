@@ -163,6 +163,34 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.171` To `v0.3.172`
+
+Two verification-honesty fixes. Both are additive; no migration is required, and every
+default path is byte-identical to v0.3.171.
+
+Operator-visible notes:
+
+- **New `--multipart-part-size <BYTES>` and `--allow-tiny-parts` on
+  `object-storage-upload`.** Default part size (64 MiB) is unchanged. An override is
+  bounded to `[4096, 64 MiB]`, and below the default it requires `--allow-tiny-parts`.
+  Paired with a lowered `--multipart-threshold`, it forces multipart on a small object so
+  you can prove LIVE R2 multipart. It changes only how the file is fragmented for reads;
+  the whole-object before-hash, the HEAD-after full-object verify, orphan cleanup, and the
+  leak gate are unchanged. Real R2 rejects multipart parts smaller than 5 MiB except the
+  last, so a tiny part size is a live-verification aid — a live tiny-part rejection is an
+  upload rejection (failed status), never a silent integrity bypass. No change if you do
+  not pass the flag.
+- **Additive receipt field.** The object-storage upload execution receipt gains
+  `effective_multipart_part_size_bytes`. The schema is non-breaking (no
+  `additionalProperties:false`; the field is not `required`). Existing receipts and
+  consumers are unaffected.
+- **Strip-bom dry-run parity.** `--strip-bom` on a `--dry-run` of `remint-reconcile` and
+  `retire-draft-reconcile` now previews the same strip-intent metadata (`bom_stripped`,
+  `bom_strip_note`) an `--approve` run records. This is a strict classification no-op:
+  `drift_class` and the content-change ack requirement are identical whether `--strip-bom`
+  is passed or not, so a real `content_change` is never laundered to `format_drift`.
+- See `wom-kit/docs/releases/v0.3.172.md`.
+
 ## From `v0.3.170` To `v0.3.171`
 
 This release adds one opt-in flag, `--key-map`, to `object-storage-adopt-existing`.

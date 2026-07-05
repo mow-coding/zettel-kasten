@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.171 pre-release
+v0.3.172 pre-release
 ```
 
-Previous public baseline: v0.3.170 pre-release.
+Previous public baseline: v0.3.171 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -62,7 +62,7 @@ approval-gated write, or docs-only), see the
 - a public version-line roadmap that explains how the pre-1.0 minor lines map to idea, implementation, WOM feedback, UI/control-layer, and ZET feedback phases,
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
 - private archive lifecycle tools for doctor checks, draft creation (with forward-only draft-id hygiene so a titleless or Hangul-only title no longer yields a misleading `_draft` id, and draft-time `--kind` validation that warns and lists valid kinds), minting with dry-run checklist guidance and an attributed `--affirm` flag that satisfies the two human-review checklist items via an audited, reviewer-attributed CLI act instead of a raw YAML edit (recorded in the mint receipt, inert without `--reviewed-by`, never overriding machine-enforced items), verified minted-draft retirement, delegation, receipts, search, and metadata review,
-- honest `archive remint-reconcile` (and the sibling `archive retire-draft-reconcile` for retire receipts) that re-issues a receipt's recorded sha256 after a zet drifts on disk (a CRLF/BOM re-checkout or a human content edit): it classifies the drift as newline/BOM-only `format_drift` or `content_change` even when the draft snapshot itself drifted — checking every content frontmatter field (a full-field reconstruction plus an `id`/`title` cross-check against the mint receipt) so an edit to any field, or a content-tampered snapshot, can never anchor `format_drift` — always shows the on-disk content, requires a reviewer to approve, offers an opt-in `--strip-bom` that never bypasses the content-change ack gate, never masks corruption, and writes both an in-place receipt update and a separate immutable audit receipt,
+- honest `archive remint-reconcile` (and the sibling `archive retire-draft-reconcile` for retire receipts) that re-issues a receipt's recorded sha256 after a zet drifts on disk (a CRLF/BOM re-checkout or a human content edit): it classifies the drift as newline/BOM-only `format_drift` or `content_change` even when the draft snapshot itself drifted — checking every content frontmatter field (a full-field reconstruction plus an `id`/`title` cross-check against the mint receipt) so an edit to any field, or a content-tampered snapshot, can never anchor `format_drift` — always shows the on-disk content, requires a reviewer to approve, offers an opt-in `--strip-bom` that never bypasses the content-change ack gate (and, since v0.3.172, previews the same strip-intent metadata on a dry-run as an approve run records — a strict classification no-op that never launders a `content_change`), never masks corruption, and writes both an in-place receipt update and a separate immutable audit receipt,
 - generated-index-backed duplicate checks, metadata-backed mint staleness fast paths, SQLite busy-timeout/WAL hardening for generated-index write paths, and standard-id source-path fast resolution for large archives,
 - scoped `validate --since` / `validate --scope` checks with generated-index body SHA cache support and optional `--progress`,
 - read-only `archive zet-quality-check --dry-run` for entity-term, document-type, OCR/parse metadata, table-structure, correction-event, source-rights, audience, and derived-artifact dependency risks before mint; optional `zet-quality-rules.yml` project rules can make forbidden entity aliases mint blockers without echoing matched terms,
@@ -162,6 +162,7 @@ Object storage:
 - approval-gated external upload evidence registration and read-only upload evidence auditing before live provider adapters,
 - Stage 2 of the live upload adapter: a real hand-rolled AWS SigV4 R2/S3 transport behind a single networking seam (no new dependency), with a bounded retry loop (single-PUT and multipart), a hard cumulative PUT ceiling, whole-object integrity verified by re-download-and-hash (no dependence on any provider checksum surface), orphan cleanup, and a tiered tiny-first gate; the capability is now real but a live `--approve` still fails closed without env credentials, a met tiered gate, and endpoint/bucket, and stays `unproven_against_live_provider` until the first human-run live object,
 - a selectable, recorded upload key strategy (`--key-strategy sha256_content_addressed|prefix`, default unchanged) plus a safe `object-storage-adopt-existing` command: objects already stored under an operator's own key layout are adopted only on a live HEAD proving presence + size-match at the recorded key, and under a live transport the executor always re-HEADs that recorded key before any skip (a 404 re-uploads, never a silent skip); an opt-in `--key-map` (JSONL sha256 -> exact remote key) adopts objects stored under the operator's own per-object extension when the content-addressed template cannot recover it, size still manifest-sourced and every key digest-bound and leak-guarded,
+- a live-verification `--multipart-part-size` override (with the `--allow-tiny-parts` acknowledgment, bounded `[4096, 64 MiB]`, recorded in the receipt as `effective_multipart_part_size_bytes`) that, paired with a lowered `--multipart-threshold`, forces multipart on a small object to prove LIVE R2 multipart; it changes only `handle.read()` fragmentation and leaves the whole-object before-hash, HEAD-after full-object verify, orphan cleanup, and leak gate byte-for-byte unchanged,
 
 IMAP:
 
