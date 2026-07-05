@@ -13424,6 +13424,438 @@ state:
             self.assertEqual(transport.put_calls, 0)
             self.assertIn(literal_key, transport.heads)
 
+    # ------------------------------------------------------------------
+    # v0.3.171 — object-storage-adopt-existing --key-map (§8). The 158 GB
+    # false-skip fix, hardened. All in temp dirs; fake transport for HEAD.
+    # ------------------------------------------------------------------
+
+    def _write_key_map(self, tmp, rows, *, name="key-map.jsonl", bom=False):
+        """Write a JSONL key-map: rows is a list of (sha, remote_key) or of raw
+        pre-serialized line strings. bom prepends a UTF-8 BOM to the first line.
+        """
+        path = Path(tmp) / name
+        lines = []
+        for row in rows:
+            if isinstance(row, str):
+                lines.append(row)
+            else:
+                sha, remote_key = row
+                lines.append(json.dumps({"sha256": sha, "remote_key": remote_key}))
+        text = "\n".join(lines) + ("\n" if lines else "")
+        if bom:
+            text = "﻿" + text
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def _make_prehashed_signature(self, archive_root):
+        """Rewrite the fake archive manifest logical_keys to the prehashed-ledger
+        signature (a logical_key with NO filename extension) so
+        _object_storage_recovered_extension returns None — the exact case where
+        --key-append-extension recovers nothing and the discoverability hint fires.
+        """
+        manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+        records = [json.loads(l) for l in manifest_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        for record in records:
+            digest = record["object_id"].removeprefix("sha256:")
+            record["logical_key"] = f"objects/external/prehashed/r2/{digest[:2]}/{digest}"
+        manifest_path.write_text(
+            "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n", encoding="utf-8"
+        )
+
+    # --- §8.1 --key-map with the exact client-scheme key adopts (presence+size) ---
+
+    def test_key_map_exact_key_adopts(self) -> None:  # §8.1
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            # Client scheme: key carries the ORIGINAL extension the template cannot
+            # recover for a prehashed object. --key-map hands WOM the exact key.
+            mapped_key = f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}.png"
+            key_map = self._write_key_map(tmp, [(_FAKE_SHA_A, mapped_key)])
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                transport.store[mapped_key] = {"size": 151, "sha": _FAKE_SHA_A}
+                result = self._adopt_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim",
+                    key_map_path=key_map, approve=True, transport=transport,
+                )
+            self.assertTrue(result["ok"], result)
+            summary = result["adopt_summary"]
+            self.assertEqual(summary["adopted_count"], 1)
+            self.assertTrue(summary["key_map_used"])
+            self.assertEqual(summary["mapped_count"], 1)
+            self.assertEqual(summary["unmapped_count"], 0)
+            row = result["adopt_results"][0]
+            self.assertEqual(row["adopt_status"], "adopted")
+            self.assertEqual(row["key_source"], "map")
+            self.assertEqual(row["remote_key"], mapped_key)
+            self.assertEqual(row["remote_key_verification"], "presence_size")
+            # It HEADed the EXACT mapped key (with extension), not a template key.
+            self.assertIn(mapped_key, transport.heads)
+            self.assertEqual(transport.put_calls, 0)
+            self.assertEqual(transport.content_hash_heads, [])
+            # The gating wom_uploaded location records the mapped key.
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [json.loads(l) for l in manifest_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            record = next(r for r in records if r["object_id"] == f"sha256:{_FAKE_SHA_A}")
+            loc = next(l for l in record["locations"] if l.get("availability") == "wom_uploaded")
+            self.assertEqual(loc["remote_key"], mapped_key)
+
+    # --- §8.2 a map entry that does NOT bind the digest is refused (per-row skip) ---
+
+    def test_key_map_binding_rejected_not_adopted(self) -> None:  # §8.2
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            # sha-A is mapped to sha-B's real key: the key binds NEITHER as a
+            # segment nor as the stem of sha-A, so the binding audit refuses it.
+            wrong_key = f"{self._BASOON_PREFIX}/{_FAKE_SHA_B}.png"
+            key_map = self._write_key_map(tmp, [(_FAKE_SHA_A, wrong_key)])
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                transport.store[wrong_key] = {"size": 151, "sha": _FAKE_SHA_B}
+                result = self._adopt_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim",
+                    key_map_path=key_map, approve=True, transport=transport,
+                )
+            self.assertTrue(result["ok"], result)  # per-row skip, run continues
+            summary = result["adopt_summary"]
+            self.assertEqual(summary["adopted_count"], 0)
+            self.assertEqual(summary["map_rejected_count"], 1)
+            row = result["adopt_results"][0]
+            self.assertEqual(row["key_source"], "map_rejected")
+            self.assertIsNone(row["remote_key"])
+            self.assertEqual(row["adopt_status"], "key_unresolved")
+            # It never HEADed sha-B's key on behalf of sha-A.
+            self.assertNotIn(wrong_key, transport.heads)
+
+    # --- §8.3 a mapped key that 404s / size-mismatches re-uploads, never false-skips ---
+
+    def test_key_map_absent_or_size_mismatch_reuploads(self) -> None:  # §8.3
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mapped_key = f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}.png"
+            key_map = self._write_key_map(tmp, [(_FAKE_SHA_A, mapped_key)])
+            # 404 variant: empty store.
+            with self._adopt_env():
+                gone = _FakeObjectStorageTransport()
+                result = self._adopt_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim",
+                    key_map_path=key_map, approve=True, transport=gone,
+                )
+            self.assertEqual(result["adopt_summary"]["adopted_count"], 0)
+            row = result["adopt_results"][0]
+            self.assertEqual(row["adopt_status"], "absent_or_size_mismatch")
+            self.assertIn(mapped_key, gone.heads)  # HEADed the real mapped key, saw 404
+            # size-mismatch variant: present at a DIFFERENT size.
+            with self._adopt_env():
+                wrong_size = _FakeObjectStorageTransport()
+                wrong_size.store[mapped_key] = {"size": 999999, "sha": _FAKE_SHA_A}
+                result2 = self._adopt_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim",
+                    key_map_path=key_map, approve=True, transport=wrong_size,
+                )
+            self.assertEqual(result2["adopt_summary"]["adopted_count"], 0)
+            self.assertEqual(result2["adopt_results"][0]["adopt_status"], "absent_or_size_mismatch")
+
+    # --- §8.4 unmapped manifest rows are reported, NOT silently adopted ---
+
+    def test_key_map_unmapped_rows_reported_not_adopted(self) -> None:  # §8.4
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self._seed_proven_tier2(archive_root)  # batch adopt needs proven tier
+            key_a = f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}.png"
+            # Map covers ONLY sha-A; sha-B is unmapped.
+            key_map = self._write_key_map(tmp, [(_FAKE_SHA_A, key_a)])
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                transport.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}
+                result = self._adopt_run(
+                    archive_root, max_objects=10, reviewed_by="kim",
+                    key_map_path=key_map, approve=True, transport=transport,
+                )
+            self.assertTrue(result["ok"], result)
+            summary = result["adopt_summary"]
+            self.assertEqual(summary["adopted_count"], 1)
+            self.assertEqual(summary["mapped_count"], 1)
+            self.assertEqual(summary["unmapped_count"], 1)
+            self.assertIn("unmapped", summary["report"])
+            unmapped_row = next(r for r in result["adopt_results"] if r["object_id"] == f"sha256:{_FAKE_SHA_B}")
+            self.assertEqual(unmapped_row["key_source"], "unmapped")
+            self.assertEqual(unmapped_row["adopt_status"], "key_unresolved")
+
+    # --- §8.5 mapped object with a null manifest size never adopts (distinct count) ---
+
+    def test_key_map_null_manifest_size_not_adopted(self) -> None:  # §8.5
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            # Strip size_bytes from sha-A's manifest record => null manifest size.
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [json.loads(l) for l in manifest_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            for record in records:
+                if record["object_id"] == f"sha256:{_FAKE_SHA_A}":
+                    record.pop("size_bytes", None)
+            manifest_path.write_text(
+                "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n", encoding="utf-8"
+            )
+            mapped_key = f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}.png"
+            key_map = self._write_key_map(tmp, [(_FAKE_SHA_A, mapped_key)])
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                transport.store[mapped_key] = {"size": 151, "sha": _FAKE_SHA_A}  # present!
+                result = self._adopt_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim",
+                    key_map_path=key_map, approve=True, transport=transport,
+                )
+            # Present at the key, but a null manifest size must NEVER adopt on presence.
+            self.assertEqual(result["adopt_summary"]["adopted_count"], 0)
+            self.assertEqual(result["adopt_summary"]["mapped_but_no_manifest_size_count"], 1)
+            self.assertEqual(result["adopt_results"][0]["adopt_status"], "absent_or_size_mismatch")
+
+    # --- §8.6 malformed map fail-safe: adopt ZERO on any whole-run-fatal error ---
+
+    def test_key_map_malformed_fail_safe_adopts_zero(self) -> None:  # §8.6
+        good_key = f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}.png"
+        good_line = json.dumps({"sha256": _FAKE_SHA_A, "remote_key": good_key})
+        cases = {
+            # (a) non-JSON line mixed with a valid one (JSONDecodeError path).
+            "non_json": ["not json at all", good_line],
+            # (a2) raw non-UTF-8 bytes: exercises the `except (OSError, UnicodeError)`
+            # branch in read_object_storage_key_map (the JSONDecodeError path above
+            # cannot reach it, so this is the ONLY test that proves "fail-closed
+            # UTF-8" is real). Sentinel string; written as raw bytes below.
+            "non_utf8": ["__RAW_NON_UTF8__"],
+            # (b) missing remote_key field.
+            "missing_field": [json.dumps({"sha256": _FAKE_SHA_A})],
+            # (c) non-hex sha.
+            "non_hex_sha": [json.dumps({"sha256": "zz", "remote_key": good_key})],
+            # (d) unsafe remote_key (URL).
+            "unsafe_key": [json.dumps({"sha256": _FAKE_SHA_A, "remote_key": "https://acct.r2.cloudflarestorage.com/b/x"})],
+            # (e) duplicate sha with conflicting keys.
+            "dup_conflict": [good_line, json.dumps({"sha256": _FAKE_SHA_A, "remote_key": f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}.jpg"})],
+        }
+        for label, rows in cases.items():
+            with self.subTest(case=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                    if label == "non_utf8":
+                        # A byte sequence that is invalid UTF-8 (0xff/0xfe are never
+                        # valid UTF-8 lead bytes), plus enough to look JSON-ish so we
+                        # know it is the DECODE that fails, not the JSON parse.
+                        key_map = Path(tmp) / "key-map.jsonl"
+                        key_map.write_bytes(b'{"sha256":"\xff\xfe\xff\xfe","remote_key":"x"}\n')
+                    else:
+                        key_map = self._write_key_map(tmp, rows)
+                    with self._adopt_env():
+                        transport = _FakeObjectStorageTransport()
+                        transport.store[good_key] = {"size": 151, "sha": _FAKE_SHA_A}
+                        result = self._adopt_run(
+                            archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim",
+                            key_map_path=key_map, approve=True, transport=transport,
+                        )
+                    self.assertFalse(result["ok"], (label, result))
+                    self.assertEqual(result["adopt_summary"]["adopted_count"], 0)
+                    self.assertTrue(result["blockers"], label)
+                    self.assertEqual(transport.heads, [], "a fatal map must not issue any HEAD")
+        # (f) over max_entries: patch the cap low so a small map trips it.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key_map = self._write_key_map(tmp, [
+                (_FAKE_SHA_A, f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}"),
+                (_FAKE_SHA_B, f"{self._BASOON_PREFIX}/{_FAKE_SHA_B}"),
+            ])
+            with patch.object(archive_services, "OBJECT_STORAGE_KEY_MAP_MAX_ENTRIES", 1):
+                with self._adopt_env():
+                    transport = _FakeObjectStorageTransport()
+                    result = self._adopt_run(
+                        archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim",
+                        key_map_path=key_map, approve=True, transport=transport,
+                    )
+            self.assertFalse(result["ok"], result)
+            self.assertTrue(any("cap" in b for b in result["blockers"]), result["blockers"])
+            self.assertEqual(result["adopt_summary"]["adopted_count"], 0)
+
+    # --- §8.7 duplicate sha with the IDENTICAL key dedups, adopts once ---
+
+    def test_key_map_duplicate_identical_key_dedups(self) -> None:  # §8.7
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mapped_key = f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}.png"
+            line = json.dumps({"sha256": _FAKE_SHA_A, "remote_key": mapped_key})
+            key_map = self._write_key_map(tmp, [line, line])  # exact duplicate
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                transport.store[mapped_key] = {"size": 151, "sha": _FAKE_SHA_A}
+                result = self._adopt_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim",
+                    key_map_path=key_map, approve=True, transport=transport,
+                )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["adopt_summary"]["adopted_count"], 1)
+            self.assertEqual(result["adopt_summary"]["mapped_count"], 1)
+
+    # --- §8.7b a UTF-8 BOM on the first map line is stripped; the map still adopts ---
+
+    def test_key_map_leading_bom_is_stripped_and_adopts(self) -> None:  # §8.7b
+        # BOM-stripping is a load-bearing v0.3.x discipline (spec §2). A map whose
+        # first line carries a leading UTF-8 BOM must parse and adopt byte-identically
+        # to a BOM-free map — this exercises the `line.lstrip("﻿")` path.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mapped_key = f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}.png"
+            key_map = self._write_key_map(tmp, [(_FAKE_SHA_A, mapped_key)], bom=True)
+            # Sanity: the file really does start with a BOM on disk.
+            self.assertTrue(key_map.read_bytes().startswith(b"\xef\xbb\xbf"))
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                transport.store[mapped_key] = {"size": 151, "sha": _FAKE_SHA_A}
+                result = self._adopt_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim",
+                    key_map_path=key_map, approve=True, transport=transport,
+                )
+            self.assertTrue(result["ok"], result)
+            summary = result["adopt_summary"]
+            self.assertEqual(summary["adopted_count"], 1)
+            self.assertEqual(summary["mapped_count"], 1)
+            self.assertTrue(summary["key_map_used"])
+            row = result["adopt_results"][0]
+            self.assertEqual(row["key_source"], "map")
+            self.assertEqual(row["remote_key"], mapped_key)
+
+    # --- §8.8 leak: a basoon archive-id key passes; a bucket/host/URL key refused ---
+
+    def test_key_map_leak_guard(self) -> None:  # §8.8
+        a = archive_services
+        # The basoon archive-id key (colon literal) is a SAFE bucket-relative key.
+        self.assertTrue(a.safe_object_storage_remote_key(f"archives/archive:personal:basoon/objets/{_FAKE_SHA_A}.png"))
+        self.assertTrue(a.object_storage_map_key_binds_digest_segment(
+            f"archives/archive:personal:basoon/objets/{_FAKE_SHA_A}.png", _FAKE_SHA_A
+        ))
+        # A bucket/host/URL-shaped key is refused by the loader (whole-run-fatal).
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            for bad in (
+                "https://acct.r2.cloudflarestorage.com/bucket/" + _FAKE_SHA_A,
+                "s3://my-bucket/objets/" + _FAKE_SHA_A,
+                "/leading/slash/" + _FAKE_SHA_A,
+            ):
+                key_map = self._write_key_map(tmp, [(_FAKE_SHA_A, bad)], name="bad.jsonl")
+                with self._adopt_env():
+                    transport = _FakeObjectStorageTransport()
+                    result = self._adopt_run(
+                        archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim",
+                        key_map_path=key_map, approve=True, transport=transport,
+                    )
+                self.assertFalse(result["ok"], (bad, result))
+                self.assertEqual(result["adopt_summary"]["adopted_count"], 0)
+
+    # --- §8.9 discoverability hint on the prehashed signature + append-extension ---
+
+    def test_key_map_discoverability_hint(self) -> None:  # §8.9
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self._make_prehashed_signature(archive_root)  # logical_key has no dot
+            # A dry-run with --key-append-extension, no --key-map => hint fires.
+            result = self._adopt_run(
+                archive_root, max_objects=10, reviewed_by="kim",
+                key_strategy="prefix", key_prefix=self._BASOON_PREFIX,
+                append_extension=True, dry_run=True,
+            )
+            joined = " ".join(result["warnings"])
+            self.assertIn("--key-map", joined)
+            self.assertIn("runbook", joined)
+            self.assertIn("mime", joined)
+            # No hint when --key-map IS supplied.
+            key_map = self._write_key_map(tmp, [(_FAKE_SHA_A, f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}")])
+            result2 = self._adopt_run(
+                archive_root, max_objects=10, reviewed_by="kim",
+                key_map_path=key_map, append_extension=True, dry_run=True,
+            )
+            self.assertFalse(any("key_map_hint" in w for w in result2["warnings"]), result2["warnings"])
+
+    # --- §8.10 --content-hash-verify with --key-map still rehashes; mismatch skips ---
+
+    def test_key_map_with_content_hash_verify(self) -> None:  # §8.10
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mapped_key = f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}.png"
+            key_map = self._write_key_map(tmp, [(_FAKE_SHA_A, mapped_key)])
+            # Matching content hash => adopts with content_hash verification.
+            with self._adopt_env():
+                good = _FakeObjectStorageTransport()
+                good.store[mapped_key] = {"size": 151, "sha": _FAKE_SHA_A}
+                result = self._adopt_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim",
+                    key_map_path=key_map, content_hash_verify=True, approve=True, transport=good,
+                )
+            self.assertEqual(result["adopt_summary"]["adopted_count"], 1)
+            self.assertEqual(result["adopt_results"][0]["remote_key_verification"], "content_hash")
+            self.assertIn(mapped_key, good.content_hash_heads)  # it DID rehash
+            # A content-hash MISMATCH at the mapped key => not adopted.
+            with self._adopt_env():
+                bad = _FakeObjectStorageTransport()
+                bad.store[mapped_key] = {"size": 151, "sha": _FAKE_SHA_B}  # wrong bytes, same size
+                result2 = self._adopt_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim",
+                    key_map_path=key_map, content_hash_verify=True, approve=True, transport=bad,
+                )
+            self.assertEqual(result2["adopt_summary"]["adopted_count"], 0)
+            self.assertEqual(result2["adopt_results"][0]["adopt_status"], "content_hash_mismatch")
+
+    # --- §8.11 default (no --key-map) byte-identical to v0.3.166 behavior ---
+
+    def test_key_map_default_path_byte_identical(self) -> None:  # §8.11
+        # With no --key-map, the plan/gate is unchanged: adopt_results and the
+        # legacy adopt_summary fields must match the pre-v0.3.171 shape, key_source
+        # stays "template", and the new key-map counts are inert (0 / False).
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                transport.store[key] = {"size": 151, "sha": _FAKE_SHA_A}
+                result = self._adopt_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim",
+                    key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=transport,
+                )
+            summary = result["adopt_summary"]
+            self.assertEqual(summary["adopted_count"], 1)
+            # Legacy report shape (NO key-map clause) preserved for the default path.
+            self.assertEqual(summary["report"], "1 of 1 adopted (presence+size); 0 will re-upload.")
+            self.assertFalse(summary["key_map_used"])
+            self.assertEqual(summary["mapped_count"], 0)
+            self.assertEqual(summary["unmapped_count"], 0)
+            self.assertEqual(summary["map_rejected_count"], 0)
+            row = result["adopt_results"][0]
+            self.assertEqual(row["key_source"], "template")
+            self.assertEqual(row["remote_key"], key)
+
+    # --- §8.12 CLI end-to-end: --key-map flag flows through adopt ---
+
+    def test_key_map_cli_flag_end_to_end(self) -> None:  # §8.12
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mapped_key = f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}.png"
+            key_map = self._write_key_map(tmp, [(_FAKE_SHA_A, mapped_key)])
+            seed = _FakeObjectStorageTransport()
+            seed.store[mapped_key] = {"size": 151, "sha": _FAKE_SHA_A}
+            with self._adopt_env(), patch.object(
+                archive_services, "object_storage_resolve_transport", return_value=seed
+            ):
+                code, output = self.run_cli([
+                    "object-storage-adopt-existing", str(archive_root),
+                    "--store-ref", "r2-basoon-20260704",
+                    "--access-key-id-ref", "env:WOM_R2_ACCESS_KEY_ID",
+                    "--secret-access-key-ref", "env:WOM_R2_SECRET_ACCESS_KEY",
+                    "--endpoint-host", "acct.r2.cloudflarestorage.com", "--bucket", "b",
+                    "--only", f"sha256:{_FAKE_SHA_A}", "--max-objects", "1",
+                    "--key-map", str(key_map),
+                    "--reviewed-by", "kim", "--approve", "--format", "json",
+                ])
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["adopt_summary"]["adopted_count"], 1)
+            self.assertTrue(result["adopt_summary"]["key_map_used"])
+            self.assertEqual(result["adopt_results"][0]["key_source"], "map")
+
     # --- Stage 2: SigV4 signing KATs (byte-exact, offline) ---
 
     def test_sigv4_kat_v1_aws_documented_get(self) -> None:  # V1

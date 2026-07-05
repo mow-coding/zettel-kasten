@@ -5480,6 +5480,7 @@ def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
             key_strategy=getattr(args, "key_strategy", archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY_PREFIX),
             key_prefix=getattr(args, "key_prefix", None),
             append_extension=bool(getattr(args, "key_append_extension", False)),
+            key_map_path=Path(args.key_map) if getattr(args, "key_map", None) else None,
             accept_unverified_adopt=accept_unverified,
             content_hash_verify=bool(getattr(args, "content_hash_verify", False)),
             approve=approve,
@@ -6792,6 +6793,13 @@ def print_object_storage_adopt_existing_result(result: dict[str, Any], output_fo
     print(f"Key strategy: {result.get('key_strategy') or '-'}")
     print(f"Adopt mode: {result.get('adopt_mode') or '-'}")
     print(f"Report: {summary.get('report') or '-'}")
+    if summary.get("key_map_used"):
+        print(
+            "Key map: mapped "
+            f"{summary.get('mapped_count', 0)}, unmapped {summary.get('unmapped_count', 0)}, "
+            f"refused {summary.get('map_rejected_count', 0)}, "
+            f"mapped-but-no-manifest-size {summary.get('mapped_but_no_manifest_size_count', 0)}"
+        )
     print(f"Manifest updates: {result.get('manifest_updates')}")
     print("Live execution allowed now: no")
     for warning in result.get("warnings") or []:
@@ -13692,6 +13700,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     object_storage_adopt_existing.add_argument("--key-prefix", help="Literal raw-bytes key prefix (colon allowed) the objects live under.")
     object_storage_adopt_existing.add_argument("--key-append-extension", action="store_true", help="Include the recovered original-filename extension in the resolved key (no-op when unrecoverable).")
+    object_storage_adopt_existing.add_argument(
+        "--key-map",
+        dest="key_map",
+        help=(
+            "JSONL file mapping each object sha256 to its EXACT existing remote key "
+            "({\"sha256\":\"<64hex>\",\"remote_key\":\"<key>\"} per line). Overrides "
+            "--key-strategy/--key-prefix/--key-append-extension per mapped object; "
+            "unmapped objects are reported and NOT adopted. Recovers the prehashed 158 GB false-skip."
+        ),
+    )
     object_storage_adopt_existing.add_argument("--accept-unverified-adopt", action="store_true", help="Record a NON-gating declared_uploaded adopt without a live HEAD (will NOT skip a PUT).")
     object_storage_adopt_existing.add_argument("--content-hash-verify", action="store_true", help="Per-object opt-in: additionally GetObject-and-rehash (costly; NOT the default presence-only HEAD check).")
     object_storage_adopt_existing.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")

@@ -163,6 +163,33 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.170` To `v0.3.171`
+
+This release adds one opt-in flag, `--key-map`, to `object-storage-adopt-existing`.
+It is additive and adopt-only: the default path (no `--key-map`) is byte-identical to
+v0.3.170, and `object-storage-upload` is unchanged. No migration is required.
+
+Operator-visible notes:
+
+- **New `--key-map <file>` on `object-storage-adopt-existing`.** Hand WOM the exact
+  existing remote key per object, as JSONL, one object per line:
+  `{"sha256":"<64hex>","remote_key":"<key>"}`. For a mapped object the map value is
+  the resolved key verbatim, so `--key-strategy`/`--key-prefix`/
+  `--key-append-extension` are ignored for that object. Use this when objects already
+  live under your own per-object filename extension that the content-addressed
+  template cannot recover (the prehashed-ledger case, where the manifest logical_key
+  has no extension). Objects with no map entry are reported and NOT adopted.
+- **Safety is unchanged and stronger.** Size is always sourced from the manifest, not
+  the map; a mapped key that 404s or size-mismatches re-uploads rather than
+  false-skipping; each key must digest-bind (the object's sha256 as a path segment or
+  filename stem) and pass the leak guard; a malformed or ambiguous map is whole-run
+  fatal and adopts nothing. For any map you did not mechanically generate from a
+  trusted per-object upload record, add `--content-hash-verify` — it is the only
+  cryptographic proof against a same-size, different-bytes object.
+- **No change if you do not use it.** Without `--key-map`, adopt behaves exactly as in
+  v0.3.170. See `wom-kit/docs/releases/v0.3.171.md` and the runbook
+  `wom-kit/docs/object-storage-adopt-existing-key-map-runbook.md`.
+
 ## From `v0.3.169` To `v0.3.170`
 
 This release adds runtime AI-operator discipline norms. It is docs-only and

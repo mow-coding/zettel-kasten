@@ -152,6 +152,34 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.170` To `v0.3.171`
+
+이 release는 `object-storage-adopt-existing`에 선택형 플래그 `--key-map` 하나를
+추가합니다. 추가적(additive)이며 adopt 전용입니다. 기본 경로(--key-map 없음)는
+v0.3.170과 바이트 단위로 동일하고, `object-storage-upload`는 바뀌지 않습니다.
+마이그레이션은 필요 없습니다.
+
+운영자에게 보이는 변경:
+
+- **`object-storage-adopt-existing`에 새 `--key-map <file>`.** 객체별로 이미
+  존재하는 정확한 원격 키를 WOM에 직접 넘깁니다. JSONL, 한 줄에 한 객체:
+  `{"sha256":"<64hex>","remote_key":"<key>"}`. 매핑된 객체는 그 값이 그대로 결정
+  키가 되므로 해당 객체에 대해 `--key-strategy`/`--key-prefix`/
+  `--key-append-extension`는 무시됩니다. 콘텐츠 주소 템플릿이 복원하지 못하는
+  객체별 파일 확장자(매니페스트 logical_key에 확장자가 없는 prehashed-ledger
+  경우)에 저장된 객체를 채택할 때 사용하세요. 매핑 항목이 없는 객체는 보고되며
+  채택되지 않습니다.
+- **안전성은 그대로이며 더 강해집니다.** 크기는 항상 매니페스트에서 가져오고 map에서
+  가져오지 않습니다. 매핑된 키가 404거나 크기가 다르면 조용한 스킵 대신
+  재업로드합니다. 각 키는 digest 바인딩(객체 sha256이 경로 세그먼트 또는 파일명
+  stem)을 통과하고 leak 가드를 통과해야 합니다. 잘못되었거나 모호한 map은 전체 실행이
+  치명적으로 실패하며 아무것도 채택하지 않습니다. 신뢰할 수 있는 객체별 업로드 기록에서
+  기계적으로 생성하지 않은 map이라면 `--content-hash-verify`를 추가하세요 — 크기는
+  같지만 바이트가 다른 객체에 대한 유일한 암호학적 증명입니다.
+- **사용하지 않으면 변화 없음.** `--key-map` 없이는 adopt가 v0.3.170과 정확히 동일하게
+  동작합니다. `wom-kit/docs/releases/v0.3.171.md`와 runbook
+  `wom-kit/docs/object-storage-adopt-existing-key-map-runbook.md`를 보세요.
+
 ## From `v0.3.169` To `v0.3.170`
 
 이 release는 runtime AI 운영자 규율 규범을 추가합니다. 문서 전용이며
