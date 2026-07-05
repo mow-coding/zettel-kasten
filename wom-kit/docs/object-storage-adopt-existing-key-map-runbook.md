@@ -1,8 +1,8 @@
 # Runbook — `object-storage-adopt-existing --key-map`
 
 Status: active
-Date: 2026-07-04
-Applies to: `wom-kit` v0.3.171+
+Date: 2026-07-05
+Applies to: `wom-kit` v0.3.171+ (tiny-first gate decoupled from the upload 5 GiB proof since v0.3.174)
 
 Use `--key-map` when objects already sit in your bucket under your own key layout and
 the content-addressed template cannot rebuild the exact key — most importantly when
@@ -84,8 +84,28 @@ archive object-storage-adopt-existing <archive-root> \
   --dry-run --format json
 ```
 
-Then a verified adopt. Start tiny-first (`--only <one-sha>`) to prove the store, then
-run the batch:
+Then a verified adopt. This is a two-step run — **tiny-first before a batch is
+mandatory**, and it is the only thing that unblocks a large `--key-map` handover.
+
+**Step A — one verified tiny-first adopt (unlocks the batch).** Pick any single object
+and adopt it with `--only <one-sha>`:
+
+```bash
+archive object-storage-adopt-existing <archive-root> \
+  --provider-kind cloudflare-r2 \
+  --store-ref <store-ref> \
+  --access-key-id-ref env:WOM_R2_ACCESS_KEY_ID \
+  --secret-access-key-ref env:WOM_R2_SECRET_ACCESS_KEY \
+  --endpoint-host <account>.r2.cloudflarestorage.com \
+  --bucket <bucket> \
+  --key-map ./key-map.jsonl \
+  --only sha256:<one-sha> \
+  --reviewed-by person:me \
+  --approve --format json
+```
+
+**Step B — the full batch.** Once Step A has adopted one object, re-run WITHOUT
+`--only` (the full `--key-map` batch of all 19,054 objects now proceeds):
 
 ```bash
 archive object-storage-adopt-existing <archive-root> \
@@ -99,6 +119,15 @@ archive object-storage-adopt-existing <archive-root> \
   --reviewed-by person:me \
   --approve --format json
 ```
+
+**Why two steps, and the in-band signal.** A batch verified adopt on a store with no
+prior verified adopt fails closed with the blocker `adopt_tiny_first_unmet`; the
+message names Step A as the exact remedy. Since v0.3.174 the adopt gate is DECOUPLED
+from the object-storage-upload 5 GiB / multipart tier proof — adopt is HEAD-only and
+moves zero bytes, so it does NOT need a large-object PUT proof. Exactly ONE prior
+verified tiny-first adopt unlocks a batch of any size N; an object-storage-upload
+receipt does NOT unblock adopt. If you see `adopt_tiny_first_unmet`, run Step A once
+and re-run Step B — that is the only in-band unblock signal and remedy.
 
 Read the report: `adopt_summary` shows `mapped_count`, `unmapped_count`,
 `map_rejected_count`, and `mapped_but_no_manifest_size_count`, and each

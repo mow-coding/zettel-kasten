@@ -163,6 +163,30 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.173` To `v0.3.174`
+
+One additive fix to the verified-adopt tiered gate. No migration is required; existing
+receipts and manifests are unaffected, and the object-storage-upload tier ladder is
+byte-identical.
+
+Operator-visible notes:
+
+- **Adopt tiered gating is decoupled from the upload 5 GiB multipart proof.** A verified
+  `object-storage-adopt-existing --approve` is HEAD-only (it moves zero bytes), so it no
+  longer needs a store proven to the object-storage-upload tier 2 (a 5 GiB / multipart PUT
+  proof). It now uses a binary adopt-specific gate: a single tiny-first adopt is always
+  permitted, and exactly one prior verified tiny-first adopt unlocks a batch adopt of any
+  size. Operator remedy for a large handover: run `object-storage-adopt-existing --only
+  <one-sha> --approve` once, then re-run the full `--key-map` batch.
+- **Adopt blocker token renamed.** The adopt gate blocker is now `adopt_tiny_first_unmet`
+  (was `tiered_gate_unmet`). The object-storage-upload gate keeps `tiered_gate_unmet`
+  unchanged. Update any script that matched the adopt blocker string.
+- **No migration; nothing else changes.** Existing execution receipts and manifest locations
+  are unaffected. An upload receipt still never unblocks adopt, a declared/unverified adopt
+  still never counts and never gates a PUT, and a wrong `--key-map` still self-limits to zero
+  adopts.
+- See `wom-kit/docs/releases/v0.3.174.md`.
+
 ## From `v0.3.172` To `v0.3.173`
 
 One additive command. No migration is required, and every default path is byte-identical to

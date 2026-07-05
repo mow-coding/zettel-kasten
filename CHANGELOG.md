@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.174 - 2026-07-05
+
+Decouple verified-adopt tiered gating from the object-storage-upload 5 GiB multipart proof.
+Additive; no migration; existing receipts and manifests are unaffected.
+
+- **Adopt gate decoupled from the upload tier ladder.** A verified adopt is HEAD-only (it
+  moves zero bytes and runs a per-object HEAD-verify self-limit), so gating it on the
+  object-storage-upload 5 GiB / multipart tier proof was wrong: it deadlocked a large
+  first-live batch handover that has no large-object PUT to prove. `object-storage-adopt-existing`
+  now uses a binary adopt-specific gate — one prior verified tiny-first adopt unlocks a batch
+  adopt of any size. New pure functions `object_storage_adopt_requested_tier` /
+  `object_storage_adopt_proven_tier` carry the adopt rule; the upload tier ladder
+  (`object_storage_requested_tier` / `object_storage_proven_tier`) is byte-identical and the
+  upload gate keeps `tiered_gate_unmet`. The adopt blocker token is renamed
+  `tiered_gate_unmet` → `adopt_tiny_first_unmet`. The adopt proof is derived only from
+  execution receipts carrying a verified `adopt_verification` marker, so an upload receipt
+  (including an upload that skipped on already-matching bytes) never unblocks adopt, a
+  declared/unverified adopt never counts, and a wrong `--key-map` still self-limits to zero
+  adopts. Additive; no migration.
+
 ## v0.3.173 - 2026-07-05
 
 One additive command. It needs no migration and leaves every default path byte-identical

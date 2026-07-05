@@ -152,6 +152,30 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.173` To `v0.3.174`
+
+검증된 adopt tiered gate에 대한 추가적(additive) 수정 하나입니다. 마이그레이션이 필요 없고,
+기존 receipt와 매니페스트는 영향을 받지 않으며, object-storage-upload 티어 사다리는 바이트
+단위로 동일합니다.
+
+운영자에게 보이는 변경:
+
+- **adopt tiered gating이 업로드 5 GiB 멀티파트 증명과 분리됩니다.** 검증된
+  `object-storage-adopt-existing --approve`는 HEAD 전용(0바이트 이동)이므로, 더 이상
+  object-storage-upload 티어 2(5 GiB / 멀티파트 PUT 증명)로 증명된 store를 필요로 하지
+  않습니다. 이제 이진(binary) adopt 전용 게이트를 씁니다: 단일 tiny-first adopt는 항상
+  허용되고, 검증된 tiny-first adopt가 정확히 1건 있으면 임의 크기의 배치 adopt가 열립니다.
+  대용량 이관 운영 절차: `object-storage-adopt-existing --only <one-sha> --approve`를 한 번
+  실행한 뒤 전체 `--key-map` 배치를 다시 실행하세요.
+- **adopt blocker 토큰 개명.** adopt 게이트 blocker는 이제 `adopt_tiny_first_unmet`입니다
+  (기존 `tiered_gate_unmet`). object-storage-upload 게이트는 `tiered_gate_unmet`을 그대로
+  유지합니다. adopt blocker 문자열을 매칭하던 스크립트를 갱신하세요.
+- **마이그레이션 없음; 그 외 변화 없음.** 기존 실행 receipt와 매니페스트 위치는 영향을 받지
+  않습니다. 업로드 receipt는 여전히 adopt를 열지 못하고, declared/미검증 adopt는 여전히
+  카운트되지 않으며 PUT을 게이팅하지 않고, 잘못된 `--key-map`은 여전히 0건으로 self-limit
+  합니다.
+- `wom-kit/docs/releases/v0.3.174.md`를 보세요.
+
 ## From `v0.3.172` To `v0.3.173`
 
 추가적(additive)인 명령 하나입니다. 마이그레이션이 필요 없고, 모든 기본 경로는 v0.3.172와
