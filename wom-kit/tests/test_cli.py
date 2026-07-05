@@ -29793,6 +29793,291 @@ state:
             # strip-intent preview is STILL surfaced but did not change the class.
             self.assertTrue(plan["bom_stripped"], plan)
 
+    # ------------------------------------------------------------------
+    # v0.3.176 reconcile body-diff diagnostic (DX-only, STRICT classification NO-OP)
+    # ------------------------------------------------------------------
+
+    # --- Category correctness (direct helper unit tests) ---
+
+    def test_body_diff_diag_T1_final_newline_only(self) -> None:
+        diag = archive_services._reconcile_body_diff_diagnostic("abc\n", "abc")
+        self.assertTrue(diag["differs"])
+        self.assertEqual(diag["category"], "final_newline_only")
+        self.assertEqual(diag["normalized_length_delta"], 1)
+
+    def test_body_diff_diag_T2_trailing_whitespace_only(self) -> None:
+        diag = archive_services._reconcile_body_diff_diagnostic("hello  \nworld", "hello\nworld")
+        self.assertTrue(diag["differs"])
+        self.assertEqual(diag["category"], "trailing_whitespace_only")
+
+    def test_body_diff_diag_T3_unicode_normalization_only(self) -> None:
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        self.assertNotEqual(nfc, nfd)
+        diag = archive_services._reconcile_body_diff_diagnostic(nfc, nfd)
+        self.assertTrue(diag["differs"])
+        self.assertEqual(diag["category"], "unicode_normalization_only")
+        self.assertIn(diag["canonical_form"], {"nfc", "nfd"})
+        self.assertIn(diag["snapshot_form"], {"nfc", "nfd"})
+        self.assertNotEqual(diag["normalized_length_delta"], 0)
+
+    def test_body_diff_diag_T4_content_difference_plain(self) -> None:
+        diag = archive_services._reconcile_body_diff_diagnostic("hello\nworld", "hello\nWORLD")
+        self.assertEqual(diag["category"], "content_difference")
+
+    # --- Anti-laundering (the critics' primary attacks) ---
+
+    def test_body_diff_diag_T5_mixed_trailing_ws_plus_content_is_content(self) -> None:
+        diag = archive_services._reconcile_body_diff_diagnostic("hello  \nworld", "hello\nWORLD")
+        self.assertEqual(diag["category"], "content_difference")
+
+    def test_body_diff_diag_T6_mixed_inner_content_plus_trailing_ws_is_content(self) -> None:
+        diag = archive_services._reconcile_body_diff_diagnostic("line1\nAAA  ", "line1\nBBB")
+        self.assertEqual(diag["category"], "content_difference")
+
+    def test_body_diff_diag_T7_internal_whitespace_edit_is_content(self) -> None:
+        diag = archive_services._reconcile_body_diff_diagnostic("the  cat", "the cat")
+        self.assertEqual(diag["category"], "content_difference")
+
+    def test_body_diff_diag_T8_leading_indentation_edit_is_content(self) -> None:
+        diag = archive_services._reconcile_body_diff_diagnostic("  code", "code")
+        self.assertEqual(diag["category"], "content_difference")
+
+    def test_body_diff_diag_T9_added_blank_line_is_content(self) -> None:
+        diag = archive_services._reconcile_body_diff_diagnostic("abc\n\n", "abc\n")
+        self.assertEqual(diag["category"], "content_difference")
+
+    def test_body_diff_diag_T10_false_unicode_norm_nfd_plus_ws_is_content(self) -> None:
+        canonical = unicodedata.normalize("NFD", "café") + "  "
+        snapshot = unicodedata.normalize("NFC", "café")
+        diag = archive_services._reconcile_body_diff_diagnostic(canonical, snapshot)
+        self.assertEqual(diag["category"], "content_difference")
+
+    def test_body_diff_diag_T11_false_unicode_norm_nfd_plus_content_is_content(self) -> None:
+        canonical = unicodedata.normalize("NFD", "café dog")
+        snapshot = unicodedata.normalize("NFC", "café cat")
+        diag = archive_services._reconcile_body_diff_diagnostic(canonical, snapshot)
+        self.assertEqual(diag["category"], "content_difference")
+
+    # --- No-op / classification invariance (Q1) ---
+
+    def test_body_diff_diag_T12_diagnostic_is_strict_classification_noop(self) -> None:
+        # The presence of body_diff_diagnostic must NOT alter drift_class /
+        # classification_basis / content_change_ack_required. Pin both a format_drift and a
+        # content_change fixture to the hard-coded baseline a v0.3.175 plan produced.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            # format_drift baseline: pure CRLF drift on the canonical.
+            canonical.write_bytes(canonical.read_bytes().replace(b"\n", b"\r\n"))
+            plan_fd = archive_services.remint_reconcile_plan(archive_root, zettel_id=zid)
+            self.assertEqual(plan_fd["drift_class"], "format_drift")
+            # The snapshot's own sha still matches (only the canonical drifted), so the
+            # anchor is Tier A clean_anchor. This is the v0.3.175 baseline value.
+            self.assertEqual(plan_fd["classification_basis"], "clean_anchor")
+            self.assertFalse(plan_fd["content_change_ack_required"])
+            # format_drift => body_changed False => NO diagnostic.
+            self.assertNotIn("body_diff_diagnostic", plan_fd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            canonical.write_text(
+                canonical.read_text(encoding="utf-8") + "\nExtra human paragraph.\n",
+                encoding="utf-8",
+            )
+            plan_cc = archive_services.remint_reconcile_plan(archive_root, zettel_id=zid)
+            self.assertEqual(plan_cc["drift_class"], "content_change")
+            self.assertEqual(plan_cc["classification_basis"], "content_change_fallback")
+            self.assertTrue(plan_cc["content_change_ack_required"])
+            # content_change with a body edit => diagnostic present, but classification
+            # is byte-identical to the baseline above.
+            self.assertIn("body_diff_diagnostic", plan_cc)
+
+    # --- Guards (Q4) ---
+
+    def test_body_diff_diag_T13_tier_c_no_snapshot_anchor_omits_key(self) -> None:
+        # Delete the draft snapshot so no anchor exists (body_changed None) -> key ABSENT.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            snapshot = archive_root / mint["draft_snapshot_path"]
+            snapshot.unlink()
+            plan = archive_services.remint_reconcile_plan(archive_root, zettel_id=zid)
+            self.assertIsNone(plan["body_changed"])
+            self.assertNotIn("body_diff_diagnostic", plan)
+
+    def test_body_diff_diag_T14_format_drift_body_identical_omits_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            canonical = archive_root / mint["canonical_path"]
+            canonical.write_bytes(canonical.read_bytes().replace(b"\n", b"\r\n"))
+            plan = archive_services.remint_reconcile_plan(archive_root, zettel_id=zid)
+            self.assertEqual(plan["drift_class"], "format_drift")
+            self.assertFalse(plan["body_changed"])
+            self.assertNotIn("body_diff_diagnostic", plan)
+
+    def test_body_diff_diag_T15_unreadable_snapshot_no_crash_omits_key(self) -> None:
+        # A snapshot that fails to parse as a zettel -> snapshot_body None, body_changed
+        # None, no crash, key ABSENT.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            zid = mint["zettel_id"]
+            snapshot = archive_root / mint["draft_snapshot_path"]
+            snapshot.write_bytes(b"\xff\xfe not valid utf-8 zettel \xff")
+            plan = archive_services.remint_reconcile_plan(archive_root, zettel_id=zid)
+            self.assertIsNone(plan["body_changed"])
+            self.assertNotIn("body_diff_diagnostic", plan)
+
+    def test_body_diff_diag_T16_defensive_sentinel_equal_after_normalization(self) -> None:
+        # The helper never crashes and returns the differs:false sentinel (no offsets/text)
+        # when fed inputs equal after normalization (e.g. CRLF vs LF).
+        diag = archive_services._reconcile_body_diff_diagnostic("abc\r\n", "abc\n")
+        self.assertFalse(diag["differs"])
+        self.assertEqual(diag["category"], "none")
+        self.assertEqual(diag["first_differing_byte_offset"], -1)
+        self.assertEqual(diag["normalized_length_delta"], 0)
+
+    # --- Content-free / privacy (Q2) ---
+
+    def test_body_diff_diag_T17_no_body_substring_in_serialized_diagnostic(self) -> None:
+        # For EVERY category, the canonical body text and a distinctive substring must NOT
+        # appear in json.dumps(diagnostic).
+        marker = "ZZDISTINCTIVEZZ"
+        cases = {
+            "final_newline_only": (f"line {marker}\n", f"line {marker}"),
+            "trailing_whitespace_only": (f"line {marker}  \nx", f"line {marker}\nx"),
+            "unicode_normalization_only": (
+                unicodedata.normalize("NFC", f"café {marker}"),
+                unicodedata.normalize("NFD", f"café {marker}"),
+            ),
+            "content_difference": (f"alpha {marker}", f"beta {marker}"),
+        }
+        for expected_cat, (canonical, snapshot) in cases.items():
+            with self.subTest(category=expected_cat):
+                diag = archive_services._reconcile_body_diff_diagnostic(canonical, snapshot)
+                self.assertEqual(diag["category"], expected_cat, diag)
+                serialized = json.dumps(diag)
+                self.assertNotIn(marker, serialized)
+                self.assertNotIn(canonical, serialized)
+                self.assertNotIn(snapshot, serialized)
+
+    def test_body_diff_diag_T18_cli_printer_line_is_content_free(self) -> None:
+        # The remint AND retire CLI text printers must never echo the body text on the
+        # "body diff" line.
+        marker = "SECRETBODYMARKER"
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            retire = self._mint_and_retire_lunch(archive_root)
+            zid = retire["zettel_id"]
+            canonical = archive_root / retire["canonical_path"]
+            canonical.write_text(
+                canonical.read_text(encoding="utf-8") + f"\n{marker} edit\n",
+                encoding="utf-8",
+            )
+            # remint text printer (ok plan -> exit 0; show_content fires on content_change)
+            code, out = self.run_cli(
+                ["remint-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "text"]
+            )
+            self.assertEqual(code, 0, out)
+            body_diff_lines = [ln for ln in out.splitlines() if ln.startswith("- body diff:")]
+            self.assertTrue(body_diff_lines, out)
+            for ln in body_diff_lines:
+                self.assertNotIn(marker, ln)
+            # retire text printer
+            code, out = self.run_cli(
+                ["retire-draft-reconcile", str(archive_root), "--zettel-id", zid, "--dry-run", "--format", "text"]
+            )
+            body_diff_lines = [ln for ln in out.splitlines() if ln.startswith("- body diff:")]
+            self.assertTrue(body_diff_lines, out)
+            for ln in body_diff_lines:
+                self.assertNotIn(marker, ln)
+
+    def test_body_diff_diag_T19_dict_keys_are_exactly_the_locked_set(self) -> None:
+        expected_keys = {
+            "differs",
+            "category",
+            "first_differing_byte_offset",
+            "normalized_length_delta",
+            "canonical_form",
+            "snapshot_form",
+        }
+        # differs:true path
+        diag = archive_services._reconcile_body_diff_diagnostic("hello\nworld", "hello\nWORLD")
+        self.assertEqual(set(diag.keys()), expected_keys)
+        # differs:false sentinel path
+        diag2 = archive_services._reconcile_body_diff_diagnostic("abc\r\n", "abc\n")
+        self.assertEqual(set(diag2.keys()), expected_keys)
+
+    # --- Primitive lock (Q5) ---
+
+    def test_body_diff_diag_T20_normalization_primitive_byte_for_byte_pin(self) -> None:
+        # Pin bytes_normalized_for_content_compare unchanged: single leading BOM strip +
+        # CRLF/CR -> LF, and NOTHING else (no whitespace collapse, no unicode fold).
+        self.assertEqual(
+            archive_services.bytes_normalized_for_content_compare(b"\xef\xbb\xbf a\r\nb\r"),
+            b" a\nb\n",
+        )
+        self.assertEqual(
+            archive_services.bytes_normalized_for_content_compare(b"a\r\nb"),
+            b"a\nb",
+        )
+        self.assertEqual(
+            archive_services.bytes_normalized_for_content_compare(b"a  b\t\n"),
+            b"a  b\t\n",  # internal whitespace / tabs preserved verbatim
+        )
+        self.assertEqual(
+            archive_services.bytes_normalized_for_content_compare(b"\xef\xbb\xbf\xef\xbb\xbfx"),
+            b"\xef\xbb\xbfx",  # only ONE leading BOM stripped
+        )
+
+    # --- Retire parity (A5) ---
+
+    def test_body_diff_diag_T21_retire_parity_identical_dict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            retire = self._mint_and_retire_lunch(archive_root)
+            zid = retire["zettel_id"]
+            canonical = archive_root / retire["canonical_path"]
+            canonical.write_text(
+                canonical.read_text(encoding="utf-8") + "\nExtra human paragraph.\n",
+                encoding="utf-8",
+            )
+            remint_plan = archive_services.remint_reconcile_plan(archive_root, zettel_id=zid)
+            retire_plan = archive_services.retire_draft_reconcile_plan(archive_root, zettel_id=zid)
+            self.assertIn("body_diff_diagnostic", remint_plan)
+            self.assertIn("body_diff_diagnostic", retire_plan)
+            self.assertEqual(
+                retire_plan["body_diff_diagnostic"],
+                remint_plan["body_diff_diagnostic"],
+            )
+
+    def test_body_diff_diag_T22_retire_no_body_change_omits_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            retire = self._mint_and_retire_lunch(archive_root)
+            zid = retire["zettel_id"]
+            # No canonical body change -> retire plan has NO body_diff_diagnostic key.
+            retire_plan = archive_services.retire_draft_reconcile_plan(archive_root, zettel_id=zid)
+            self.assertNotIn("body_diff_diagnostic", retire_plan)
+
+    # --- Offset semantics ---
+
+    def test_body_diff_diag_T23_prefix_offset_is_min_length(self) -> None:
+        diag = archive_services._reconcile_body_diff_diagnostic("abc", "abcdef")
+        self.assertEqual(diag["first_differing_byte_offset"], 3)
+        self.assertIsInstance(diag["first_differing_byte_offset"], int)
+        self.assertEqual(diag["normalized_length_delta"], -3)
+        self.assertEqual(diag["category"], "content_difference")
+
     def test_retire_draft_sha_block_routes_to_reconcile_but_id_missing_does_not(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")

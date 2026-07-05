@@ -9090,6 +9090,20 @@ def command_remint_reconcile(args: argparse.Namespace) -> int:
             else:
                 print("- no content change detected (newline/BOM only)")
             print(f"- body_changed: {result.get('body_changed')}")
+            # v0.3.176: CONTENT-FREE body-diff diagnostic (numbers + fixed labels only,
+            # never body text). Present only when body_changed True and both bodies exist.
+            diag = result.get("body_diff_diagnostic")
+            if isinstance(diag, dict) and diag.get("differs"):
+                print(
+                    f"- body diff: category={diag.get('category')} "
+                    f"offset={diag.get('first_differing_byte_offset')} "
+                    f"length_delta={diag.get('normalized_length_delta')}"
+                    + (
+                        f" forms={diag.get('canonical_form')}/{diag.get('snapshot_form')}"
+                        if diag.get("category") == "unicode_normalization_only"
+                        else ""
+                    )
+                )
             text = result.get("current_canonical_text")
             if isinstance(text, str):
                 print("--- canonical text (begin) ---")
@@ -9158,6 +9172,20 @@ def command_retire_draft_reconcile(args: argparse.Namespace) -> int:
                 f"- {report.get('ref')}: {report.get('drift_class')} "
                 f"(basis={report.get('classification_basis')})"
                 + (f" — {report.get('note')}" if report.get("note") else "")
+            )
+        # v0.3.176: CONTENT-FREE body-diff diagnostic (numbers + fixed labels only, never
+        # body text). Present only when the inner remint plan's body_changed was True.
+        diag = result.get("body_diff_diagnostic")
+        if isinstance(diag, dict) and diag.get("differs"):
+            print(
+                f"- body diff: category={diag.get('category')} "
+                f"offset={diag.get('first_differing_byte_offset')} "
+                f"length_delta={diag.get('normalized_length_delta')}"
+                + (
+                    f" forms={diag.get('canonical_form')}/{diag.get('snapshot_form')}"
+                    if diag.get("category") == "unicode_normalization_only"
+                    else ""
+                )
             )
         if result.get("content_change_ack_required"):
             print("Content change acknowledgment required: rerun --approve with --content-changed-ack.")

@@ -10005,6 +10005,16 @@ def remint_reconcile_plan(
         "next_safe_actions": [],
         "writes": "none",
     }
+    # v0.3.176: CONTENT-FREE body-diff diagnostic. A STRICT CLASSIFICATION NO-OP added to
+    # the already-built dict AFTER the predicate, mirroring the strip_bom_preview merge; it
+    # never reads or influences drift_class/classification_basis/content_change_ack_required.
+    # Emitted ONLY when an anchor granted a body comparison AND the bodies changed, so the
+    # diagnostic is absent on Tier C (body_changed None) and format_drift (body_changed
+    # False) — no misleading residual. The helper is never called with None.
+    if body_changed is True and snapshot_body is not None:
+        classified_result["body_diff_diagnostic"] = _reconcile_body_diff_diagnostic(
+            canonical_body, snapshot_body
+        )
     # v0.3.172 Item 2: strip-intent metadata is preview-ONLY and never influenced
     # drift_class/classification_basis above (classifier untouched, BOM-insensitive).
     if strip_bom_preview is not None:
@@ -10480,13 +10490,19 @@ def _retire_reconcile_load_receipt(
     return receipt_relative, receipt_path, receipt
 
 
-def _retire_reconcile_content_anchor_class(root: Path, zettel_id: str) -> str | None:
+def _retire_reconcile_content_anchor_class(root: Path, zettel_id: str) -> dict[str, Any] | None:
     """Derive the SHARED mint-reconcile content-identity verdict for the canonical +
     snapshot pair. This is the POSITIVE proof the retire target/snapshot refs need to
     be allowed to format_drift: remint_reconcile_plan runs the full Item 1 classifier
     (body identity vs the canonical, receipt-sourced frontmatter, Tier A/B anchors),
     so its "format_drift" verdict means the canonical and snapshot are content-identical
-    modulo newline/BOM. Returns the drift_class string, or None if it cannot classify.
+    modulo newline/BOM.
+
+    Returns a small dict {"drift_class": <str>, "body_diff_diagnostic": <dict|None>}, or
+    None if it cannot classify. v0.3.176: the CONTENT-FREE body_diff_diagnostic is threaded
+    up from the inner remint plan (it is present there only when the inner body_changed is
+    True) so retire has parity with remint without introducing any body symbols into retire
+    scope. The verdict `drift_class` is UNCHANGED — a STRICT CLASSIFICATION NO-OP.
     """
     try:
         # v0.3.172 Item 2 (Decision B): keep strip_bom=False (the default). This helper
@@ -10500,7 +10516,9 @@ def _retire_reconcile_content_anchor_class(root: Path, zettel_id: str) -> str | 
     if not plan.get("ok"):
         return None
     dc = plan.get("drift_class")
-    return dc if isinstance(dc, str) else None
+    if not isinstance(dc, str):
+        return None
+    return {"drift_class": dc, "body_diff_diagnostic": plan.get("body_diff_diagnostic")}
 
 
 def _retire_reconcile_build_ref_reports(
@@ -10588,8 +10606,13 @@ def retire_draft_reconcile_plan(
     )
 
     ref_reports: list[dict[str, Any]] = []
+    inner_diag: dict[str, Any] | None = None
     if not blockers:
-        content_anchor_class = _retire_reconcile_content_anchor_class(root, zid)
+        anchor = _retire_reconcile_content_anchor_class(root, zid)
+        # Keep the drift_class STRING for the ref-report classifier (which uses only the
+        # string), and capture the CONTENT-FREE body_diff_diagnostic separately (v0.3.176).
+        content_anchor_class = anchor.get("drift_class") if anchor is not None else None
+        inner_diag = anchor.get("body_diff_diagnostic") if anchor is not None else None
         ref_reports = _retire_reconcile_build_ref_reports(root, receipt, content_anchor_class)
 
     drifted = [r for r in ref_reports if r["drift_class"] != "clean"]
@@ -10632,6 +10655,12 @@ def retire_draft_reconcile_plan(
         "next_safe_actions": [],
         "writes": "none",
     }
+    # v0.3.176: CONTENT-FREE body-diff diagnostic threaded up from the inner remint plan.
+    # A STRICT CLASSIFICATION NO-OP: it never influenced the per-ref classification/overall
+    # above. inner_diag is non-None only when the inner remint plan emitted it (inner
+    # body_changed is True), so it is the IDENTICAL dict the remint plan produced.
+    if inner_diag is not None:
+        classified_result["body_diff_diagnostic"] = inner_diag
     # v0.3.172 Item 2: strip-intent metadata is preview-ONLY and never influenced the
     # per-ref classification/overall above. Omitted when strip_bom is False.
     if strip_bom_preview is not None:
@@ -10709,7 +10738,11 @@ def retire_draft_reconcile_apply(
     now = datetime.now().astimezone().replace(microsecond=0).isoformat()
     prior_retire_receipt_sha = sha256_path(receipt_path)
     updated_receipt = dict(receipt)
-    content_anchor_class = _retire_reconcile_content_anchor_class(root, zid)
+    # v0.3.176: the anchor helper now returns a dict; the apply path needs only the
+    # drift_class STRING for ref-report classification (the content-free diagnostic is a
+    # plan-only decoration and is not recorded in the reconcile receipt).
+    _anchor = _retire_reconcile_content_anchor_class(root, zid)
+    content_anchor_class = _anchor.get("drift_class") if _anchor is not None else None
     ref_provenance = _retire_reconcile_build_ref_reports(root, receipt, content_anchor_class)
     for report in ref_provenance:
         ref_name = report["ref"]
@@ -64151,6 +64184,104 @@ def raw_bytes_drift_is_newline_or_bom_only(raw: bytes) -> bool:
 
 def bytes_match_after_normalization(left: bytes, right: bytes) -> bool:
     return bytes_normalized_for_content_compare(left) == bytes_normalized_for_content_compare(right)
+
+
+def _reconcile_body_diff_diagnostic(canonical_body: str, snapshot_body: str) -> dict[str, Any]:
+    """CONTENT-FREE body-diff diagnostic for a reconcile plan (v0.3.176, DX-only).
+
+    A STRICT CLASSIFICATION NO-OP decoration. It NEVER influences drift_class /
+    classification_basis / content_change_ack_required; it only explains WHICH kind of
+    sub-BOM residual the (unchanged) classifier saw when the two bodies still differ
+    AFTER `bytes_normalized_for_content_compare` (single leading BOM strip + CRLF/CR->LF).
+
+    It reuses the LOCKED primitive `bytes_normalized_for_content_compare` READ-ONLY on the
+    SAME forms the drift_class body-identity proof compared (`body.encode("utf-8")` per
+    side), so the reported offset/delta explains the EXACT residual the classifier folded
+    down to. It emits ONLY integers and a CLOSED set of fixed label strings: it NEVER
+    echoes any body byte, character, slice, or repr. Callers guard so it is never invoked
+    with None (only when `body_changed is True` and both bodies are available).
+
+    Category is exactly one of the fixed set:
+      final_newline_only, trailing_whitespace_only, unicode_normalization_only,
+      content_difference
+    (plus the defensive `none` sentinel when the two are equal after normalization).
+    A non-`content_difference` category is reported ONLY when its transform makes the TWO
+    normalized bodies EQUAL TO EACH OTHER (mutual/symmetric full reconciliation); any
+    residual after the transform means that category does NOT apply and we fall through to
+    the honest terminal label `content_difference`. This is the anti-laundering guarantee:
+    a mix of whitespace/normalization drift AND a real content edit is never mislabeled.
+    """
+    canonical_norm = bytes_normalized_for_content_compare(canonical_body.encode("utf-8"))
+    snapshot_norm = bytes_normalized_for_content_compare(snapshot_body.encode("utf-8"))
+
+    # Defensive equal-after-normalization sentinel: unreachable when body_changed is True
+    # (which implies they differ after normalization), but carries no offsets/text if the
+    # caller ever skews.
+    if canonical_norm == snapshot_norm:
+        return {
+            "differs": False,
+            "category": "none",
+            "first_differing_byte_offset": -1,
+            "normalized_length_delta": 0,
+            "canonical_form": "n/a",
+            "snapshot_form": "n/a",
+        }
+
+    # First differing BYTE offset in the normalized form (a plain int, never a slice); or
+    # min_len when one normalized form is a strict prefix of the other.
+    min_len = min(len(canonical_norm), len(snapshot_norm))
+    offset = next(
+        (i for i in range(min_len) if canonical_norm[i] != snapshot_norm[i]),
+        min_len,
+    )
+    length_delta = len(canonical_norm) - len(snapshot_norm)
+
+    canonical_form = "n/a"
+    snapshot_form = "n/a"
+
+    # ORDERED category check (most specific first). Each transform operates on the two
+    # `bytes` normalized forms; a category is reported ONLY when its transform makes the
+    # two transformed forms EQUAL TO EACH OTHER (mutual full reconciliation).
+    category = "content_difference"
+
+    # 1) final_newline_only: strip a SINGLE trailing "\n" byte from each side.
+    canon_no_final_nl = canonical_norm[:-1] if canonical_norm.endswith(b"\n") else canonical_norm
+    snap_no_final_nl = snapshot_norm[:-1] if snapshot_norm.endswith(b"\n") else snapshot_norm
+    if canon_no_final_nl == snap_no_final_nl:
+        category = "final_newline_only"
+    else:
+        # 2) trailing_whitespace_only: PER-LINE rstrip ONLY (never internal, never leading,
+        #    never split()/join() collapse, never unicode-whitespace folding).
+        canonical_str = canonical_norm.decode("utf-8", "surrogatepass")
+        snapshot_str = snapshot_norm.decode("utf-8", "surrogatepass")
+        canon_rstrip = "\n".join(line.rstrip() for line in canonical_str.split("\n"))
+        snap_rstrip = "\n".join(line.rstrip() for line in snapshot_str.split("\n"))
+        if canon_rstrip == snap_rstrip:
+            category = "trailing_whitespace_only"
+        elif unicodedata.normalize("NFC", canonical_str) == unicodedata.normalize("NFC", snapshot_str):
+            # 3) unicode_normalization_only: NFC-equal (and raw normalized bytes differ,
+            #    guaranteed past the sentinel) -> a FULL reconciliation by definition.
+            category = "unicode_normalization_only"
+
+            def _form(s: str) -> str:
+                if s == unicodedata.normalize("NFC", s):
+                    return "nfc"
+                if s == unicodedata.normalize("NFD", s):
+                    return "nfd"
+                return "mixed"
+
+            canonical_form = _form(canonical_str)
+            snapshot_form = _form(snapshot_str)
+        # else: 4) fallthrough -> content_difference (already the default).
+
+    return {
+        "differs": True,
+        "category": category,
+        "first_differing_byte_offset": offset,
+        "normalized_length_delta": length_delta,
+        "canonical_form": canonical_form,
+        "snapshot_form": snapshot_form,
+    }
 
 
 def files_match_after_newline_normalization(left: Path, right: Path) -> bool:
