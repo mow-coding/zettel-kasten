@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.172 pre-release
+v0.3.173 pre-release
 ```
 
-이전 공개 기준: v0.3.171 pre-release.
+이전 공개 기준: v0.3.172 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -108,6 +108,7 @@ Tiro:
 
 Notion:
 
+- 승인형 `archive migrate --target base-link-types`: 자체 `types.yml`을 vendoring한 archive에 누락된 모든 base WOM-kit link type을 덧붙입니다(recommended-9 집합의 상위집합이라 `continues`도 함께 끌어옵니다). 기존 항목은 제거·개명·재정렬·덮어쓰기하지 않는 append-only, no-clobber이며, revert는 없고 `--reviewed-by` 게이트를 걸며, 로컬 `types.yml`이 아예 없는 archive에서는 아무것도 쓰지 않는 안전 no-op입니다(이미 base를 상속). 형제 마이그레이션처럼 `safe_dump`로 파일 전체를 정규화한다는 점을 정직하게 밝힙니다.
 - Notion child page/database/view 구조를 `contains` edge type으로 다루는 read-only connection planning과, 맞는 edge type이 없을 때 AI가 억지 매핑하지 않고 model gap으로 올리는 안전 가드,
 - read-only nested tree recovery planning: 중첩 child page leaf를 세대 root에 귀속하고 `node_kind` 기반 content class를 보수적으로 도출하며, 큰 fixture가 부분 성공으로 위장하지 않도록 차단하고, 추적불능 parent chain과 조상 crawl 요청 큐를 버리지 않고 보고합니다.
 - broad workspace 큐를 generation/ref scope filter로 좁힌 뒤 adapter 입력으로 넘길 수 있게 하는 read-only 조상 crawl 요청 계획과, 고정된 recursive fetch adapter execution contract,

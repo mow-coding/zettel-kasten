@@ -1660,7 +1660,13 @@ class Doctor:
                 continue
             edge_type = edge.get("type")
             if edge_type and self.allowed_link_types and edge_type not in self.allowed_link_types:
-                self.warn("zettel_edge_type_unknown", f"Edge type is not defined in zettel-kasten/types.yml: {edge_type}", path)
+                self.warn(
+                    "zettel_edge_type_unknown",
+                    f"Edge type is not defined in zettel-kasten/types.yml: {edge_type}. "
+                    "If this is a base WOM-kit link type, run: archive migrate --target base-link-types --dry-run "
+                    "to preview pulling missing base link types.",
+                    path,
+                )
 
     def _check_views(self) -> None:
         root = self.archive_root / "views"
@@ -3255,6 +3261,13 @@ def command_repair_gitignore(args: argparse.Namespace) -> int:
 
 
 def command_migrate(args: argparse.Namespace) -> int:
+    reviewed_by = getattr(args, "reviewed_by", None)
+    if args.target == archive_services.BASE_LINK_TYPES_TARGET and args.approve and not reviewed_by:
+        print(
+            "base-link-types migration requires --reviewed-by when --approve is used.",
+            file=sys.stderr,
+        )
+        return 1
     try:
         result = archive_services.migrate_archive(
             Path(args.archive_root),
@@ -3262,6 +3275,7 @@ def command_migrate(args: argparse.Namespace) -> int:
             dry_run=bool(args.dry_run),
             approve=bool(args.approve),
             revert=bool(args.revert),
+            reviewed_by=reviewed_by,
         )
     except archive_services.ArchiveServiceError as exc:
         print(str(exc), file=sys.stderr)
@@ -13061,12 +13075,17 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument(
         "--target",
         required=True,
-        choices=[archive_services.FRONTMATTER_V03_TARGET, archive_services.LINK_TYPES_V03_TARGET],
+        choices=[
+            archive_services.FRONTMATTER_V03_TARGET,
+            archive_services.LINK_TYPES_V03_TARGET,
+            archive_services.BASE_LINK_TYPES_TARGET,
+        ],
         help="Migration target.",
     )
     migrate.add_argument("--dry-run", action="store_true", help="Preview migration changes without writing files.")
     migrate.add_argument("--approve", action="store_true", help="Apply the reviewed migration changes.")
     migrate.add_argument("--revert", action="store_true", help="Preview or apply a safe migration rollback where the target supports it.")
+    migrate.add_argument("--reviewed-by", help="Reviewer id required with --approve for the base-link-types target.")
     migrate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     migrate.set_defaults(func=command_migrate)
 

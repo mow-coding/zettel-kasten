@@ -78,6 +78,37 @@ a developer decision before writing durable edges.
 For the next pre-parser safety gate, see
 [Connection Evidence Parser Contract](connection-evidence-parser-contract.md).
 
+## Keeping a vendored `types.yml` in sync with the base (`base-link-types`)
+
+An archive that vendored its own `zettel-kasten/types.yml` permanently shadows the
+WOM-kit base: `load_allowed_link_types` returns the local set and never falls back to
+the base once a local file exists. So base link types added after the archive vendored
+its file — for example `continues` (added to the base in v0.3.168) — become invisible in
+that archive and their edges fail the `allowed_edges` check.
+
+Since v0.3.173, `archive migrate --target base-link-types (--dry-run | --approve)
+[--reviewed-by <actor>] [--format json]` pulls the missing base link types into the
+archive-local `types.yml`. It is append-only and no-clobber:
+
+- It appends every base id missing from the archive (a strict superset of the
+  recommended-9 connection-edge set above — it also covers `continues` and any other
+  base-only id). After a sync, `migrate --target link-types-v0.3` is a no-op; after a
+  prior `link-types-v0.3` migrate, sync adds only the non-recommended remainder.
+- It never removes, renames, reorders, or overwrites an existing entry. An archive that
+  customized a base id keeps its own entry (reported under `present_not_overwritten`).
+- `--reviewed-by` is required with `--approve`. It writes a receipt
+  (`receipt_kind: base_link_types_sync`) under `receipts/migrations/`, is atomic with
+  rollback, and is idempotent (a second run with nothing missing is a clean no-op).
+- There is **no `--revert`**: it is forward-only append.
+
+Honesty boundary: if the archive has NO local `types.yml`, sync writes nothing — the
+archive already inherits all current and future base link types, and adding a local
+`types.yml` would permanently freeze that inheritance. When it does write, it normalizes
+the whole `types.yml` via `safe_dump` (comments, anchors, flow-style, and key ordering
+may be normalized), exactly like the sibling `link-types-v0.3` migration; existing
+entries are preserved by value/id, and surrounding formatting is not byte-preserved. It
+copies base entry shapes as of the release (a snapshot, not a live link).
+
 ## Dynamic Snapshot Rule
 
 Database views and filters are dynamic. A view result can change after export,

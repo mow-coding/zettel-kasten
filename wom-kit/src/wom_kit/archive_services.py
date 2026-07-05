@@ -2528,6 +2528,7 @@ REQUIRED_ZETTEL_FIELDS = [
 ]
 FRONTMATTER_V03_TARGET = "frontmatter-v0.3"
 LINK_TYPES_V03_TARGET = "link-types-v0.3"
+BASE_LINK_TYPES_TARGET = "base-link-types"
 FRONTMATTER_V03_MIGRATION_COMMAND = (
     "archive migrate <archive-root> --target frontmatter-v0.3 --dry-run"
 )
@@ -62928,6 +62929,7 @@ def migrate_archive(
     dry_run: bool,
     approve: bool,
     revert: bool = False,
+    reviewed_by: str | None = None,
 ) -> dict[str, Any]:
     if target == FRONTMATTER_V03_TARGET:
         if revert:
@@ -62937,6 +62939,16 @@ def migrate_archive(
         if revert:
             return migrate_link_types_v03_revert(archive_root, target=target, dry_run=dry_run, approve=approve)
         return migrate_link_types_v03(archive_root, target=target, dry_run=dry_run, approve=approve)
+    if target == BASE_LINK_TYPES_TARGET:
+        if revert:
+            raise ArchiveServiceError("base-link-types migration does not support --revert.")
+        return sync_base_link_types(
+            archive_root,
+            target=target,
+            dry_run=dry_run,
+            approve=approve,
+            reviewed_by=reviewed_by,
+        )
     raise ArchiveServiceError(f"Unsupported migration target: {target}")
 
 
@@ -63141,6 +63153,197 @@ def migrate_link_types_v03(
             "present_recommended_edge_types": sorted(edge_type for edge_type in recommended if edge_type in present_ids),
             "missing_recommended_edge_types": missing,
         },
+        "receipt_path": receipt_relative,
+        "would_change": [
+            {
+                "path": types_relative,
+                "changes": changes
+                + (
+                    [
+                        {
+                            "action": "write_receipt",
+                            "field": "receipt",
+                            "path": receipt_relative,
+                        }
+                    ]
+                    if receipt_relative
+                    else []
+                ),
+                "manual_review_required": bool(blockers),
+                "blockers": blockers,
+            }
+        ]
+        if changes or blockers
+        else [],
+        "new_text": new_text if dry_run and changes and not blockers else None,
+    }
+
+
+def sync_base_link_types(
+    archive_root: Path | str,
+    *,
+    target: str,
+    dry_run: bool,
+    approve: bool,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    if target != BASE_LINK_TYPES_TARGET:
+        raise ArchiveServiceError(f"Unsupported migration target: {target}")
+    if dry_run == approve:
+        raise ArchiveServiceError("archive migrate requires exactly one of --dry-run or --approve.")
+
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    types_relative = "zettel-kasten/types.yml"
+    types_path = archive_internal_path(root, types_relative)
+
+    if not types_path.is_file():
+        # Safe no-op: an archive with no local types.yml transparently inherits ALL
+        # current and future base link types via load_allowed_link_types's base
+        # fallback. Creating a local types.yml here would permanently shadow (freeze)
+        # that inheritance, so sync writes nothing and creates no file.
+        return {
+            "ok": True,
+            "lifecycle_action": "base_link_types_sync",
+            "target": BASE_LINK_TYPES_TARGET,
+            "dry_run": bool(dry_run),
+            "approved": bool(approve),
+            "archive_id": archive_id,
+            "files_scanned": 0,
+            "files_with_changes": 0,
+            "files_written": [],
+            "blocked": False,
+            "blockers": [],
+            "warnings": [],
+            "appended_link_type_ids": [],
+            "present_not_overwritten": [],
+            "inherits_base_directly": True,
+            "receipt_path": None,
+            "would_change": [],
+            "message": "archive inherits base directly; nothing to sync",
+            "new_text": None,
+        }
+
+    original_text = types_path.read_text(encoding="utf-8")
+    archive_types = load_yaml(original_text)
+    base_types = load_yaml((KIT_ROOT / "zettel-kasten" / "types.yml").read_text(encoding="utf-8"))
+    if not isinstance(archive_types, dict) or not isinstance(archive_types.get("link_types"), list):
+        raise ArchiveServiceError("zettel-kasten/types.yml must be a YAML object with link_types.")
+    if not isinstance(base_types, dict) or not isinstance(base_types.get("link_types"), list):
+        raise ArchiveServiceError("Base zettel-kasten/types.yml must be a YAML object with link_types.")
+
+    archive_link_types = archive_types["link_types"]
+    present_ids = {
+        item.get("id")
+        for item in archive_link_types
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item.get("id")
+    }
+    base_by_id = {
+        item.get("id"): item
+        for item in base_types["link_types"]
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item.get("id")
+    }
+    base_ids = sorted(base_by_id)
+    missing = [bid for bid in base_ids if bid not in present_ids]
+    missing_records = [copy.deepcopy(base_by_id[bid]) for bid in missing]
+    present_not_overwritten = sorted(bid for bid in base_ids if bid in present_ids)
+
+    files_written: list[str] = []
+    new_text = original_text
+    receipt_relative: str | None = None
+    blockers: list[dict[str, Any]] = []
+    if missing_records:
+        new_types = copy.deepcopy(archive_types)
+        new_link_types = copy.deepcopy(archive_link_types)
+        new_link_types.extend(missing_records)
+        new_types["link_types"] = new_link_types
+        new_types.setdefault("schema_version", archive_types.get("schema_version") or "wom-kit/zettel-kasten-types/v0.2-draft")
+        new_text = dump_yaml(new_types)
+        receipt_relative = migration_receipt_relative_path(
+            target,
+            {
+                "archive_id": archive_id,
+                "target": BASE_LINK_TYPES_TARGET,
+                "appended_link_type_ids": missing,
+                "before_sha256": sha256_text(original_text),
+                "after_sha256": sha256_text(new_text),
+            },
+        )
+        receipt_path = archive_internal_path(root, receipt_relative)
+        if receipt_path.exists():
+            blockers.append(
+                {
+                    "path": receipt_relative,
+                    "field": "receipt",
+                    "code": "migration_receipt_exists",
+                    "message": "Base link type sync receipt already exists.",
+                }
+            )
+        if approve and not blockers:
+            now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            receipt = {
+                "schema_version": "wom-kit/base-link-types-sync-receipt/v0.1",
+                "lifecycle_action": "base_link_types_sync",
+                "receipt_kind": "base_link_types_sync",
+                "created_at": now,
+                "archive_id": archive_id,
+                "target": BASE_LINK_TYPES_TARGET,
+                "reviewed_by": reviewed_by,
+                "files_changed": [types_relative],
+                "appended_link_type_ids": missing,
+                "before_sha256": sha256_text(original_text),
+                "after_sha256": sha256_text(new_text),
+                "result": {
+                    "types_file_written": True,
+                    "receipt_written": True,
+                },
+                "closed_actions": {
+                    "provider_api_called": False,
+                    "real_source_export_files_read": False,
+                    "zettel_files_written": False,
+                    "edge_receipts_deleted": False,
+                },
+            }
+            try:
+                write_text_atomic(types_path, new_text)
+                files_written.append(types_relative)
+                receipt_path.parent.mkdir(parents=True, exist_ok=True)
+                write_json_new_file(receipt_path, receipt)
+                files_written.append(receipt_relative)
+            except OSError:
+                write_text_atomic(types_path, original_text)
+                if receipt_path.exists():
+                    try:
+                        receipt_path.unlink()
+                    except OSError:
+                        pass
+                raise
+
+    changes = [
+        {
+            "action": "append_link_type",
+            "field": "link_types",
+            "id": item.get("id"),
+            "source": "wom-kit/zettel-kasten/types.yml",
+        }
+        for item in missing_records
+    ]
+    return {
+        "ok": not blockers,
+        "lifecycle_action": "base_link_types_sync",
+        "target": BASE_LINK_TYPES_TARGET,
+        "dry_run": bool(dry_run),
+        "approved": bool(approve),
+        "archive_id": archive_id,
+        "files_scanned": 1,
+        "files_with_changes": 1 if changes else 0,
+        "files_written": files_written,
+        "blocked": bool(blockers),
+        "blockers": blockers,
+        "warnings": [],
+        "appended_link_type_ids": missing,
+        "present_not_overwritten": present_not_overwritten,
+        "inherits_base_directly": False,
         "receipt_path": receipt_relative,
         "would_change": [
             {

@@ -152,6 +152,36 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.172` To `v0.3.173`
+
+추가적(additive)인 명령 하나입니다. 마이그레이션이 필요 없고, 모든 기본 경로는 v0.3.172와
+바이트 단위로 동일합니다.
+
+운영자에게 보이는 변경:
+
+- **새 `archive migrate --target base-link-types --dry-run|--approve --reviewed-by
+  <actor>`.** archive-local `zettel-kasten/types.yml`에 누락된 모든 base WOM-kit link
+  type을 덧붙입니다(recommended-9 `link-types-v0.3` 집합의 상위집합이라 `continues`도 함께
+  끌어옵니다). append-only, no-clobber입니다: 기존 항목은 제거·개명·재정렬·값 변경을 하지
+  않으므로 divergent same-id 커스터마이징이 항상 이깁니다(`present_not_overwritten`에 보고).
+  `--approve`에는 `--reviewed-by`가 필요합니다. `receipts/migrations/base-link-types.*
+  .migration.json` 아래에 receipt(`receipt_kind: base_link_types_sync`)를 쓰고, 롤백을
+  포함한 원자적 쓰기이며 멱등적입니다. 의도적으로 **`--revert`는 없습니다**
+  (`--revert --target base-link-types`는 닫힘 실패). 실행하지 않으면 변화 없음.
+- **로컬 `types.yml`이 없으면 안전 no-op.** archive에 로컬 `zettel-kasten/types.yml`이
+  없으면 sync는 아무것도 쓰지 않고 파일도 만들지 않습니다 — 이미 모든 현재·미래 base link
+  type을 상속합니다. 이 명령을 돌리려고 일부러 로컬 `types.yml`을 만들지 마세요. 로컬
+  `types.yml`은 base를 영구적으로 가립니다(고정).
+- **doctor 라우팅.** `archive doctor`는 이제 정의되지 않은 edge type을 만난 운영자를
+  `archive migrate --target base-link-types --dry-run`으로 안내합니다.
+- **정직성.** archive가 자기 `types.yml`을 가지면 base를 영구적으로 가리므로, 이후의 모든
+  base link type도 수동 `migrate --target base-link-types`가 필요합니다(자동 전파 없음).
+  sync는 이 릴리스 시점의 base 항목 형태를 복사합니다(스냅샷). 형제 `link-types-v0.3`
+  마이그레이션처럼 `safe_dump`로 `types.yml` 전체를 정규화/재작성합니다 — 주석·앵커·flow
+  스타일·키 순서가 정규화될 수 있습니다. 기존 항목은 값/id 기준으로 보존되고, 주변 서식은
+  바이트 단위로 보존되지 않습니다. diff를 검토하세요.
+- `wom-kit/docs/releases/v0.3.173.md`를 보세요.
+
 ## From `v0.3.171` To `v0.3.172`
 
 두 가지 검증-정직성(verification-honesty) 수정입니다. 둘 다 추가적(additive)이며

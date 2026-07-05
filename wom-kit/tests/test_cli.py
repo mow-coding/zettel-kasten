@@ -34126,6 +34126,313 @@ state:
             self.assertIn("link_type_in_use", json.dumps(result, ensure_ascii=False))
             self.assertIn("embed", result["archive_link_type_status"]["used_recommended_edge_types"])
 
+    def _strip_link_type(self, types_path: Path, edge_id: str) -> None:
+        types_data = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
+        types_data["link_types"] = [
+            item
+            for item in types_data["link_types"]
+            if not (isinstance(item, dict) and item.get("id") == edge_id)
+        ]
+        types_path.write_text(archive_cli.dump_yaml(types_data), encoding="utf-8")
+
+    def test_sync_base_link_types_dry_run_reports_continues_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            self._strip_link_type(types_path, "continues")
+            original_text = types_path.read_text(encoding="utf-8")
+
+            code, output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "base-link-types", "--dry-run", "--format", "json"]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["lifecycle_action"], "base_link_types_sync")
+            self.assertIn("continues", result["appended_link_type_ids"])
+            self.assertEqual(result["files_written"], [])
+            self.assertFalse(result["inherits_base_directly"])
+            self.assertEqual(types_path.read_text(encoding="utf-8"), original_text)
+
+    def test_sync_base_link_types_approve_appends_continues_and_writes_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            self._strip_link_type(types_path, "continues")
+
+            code, output = self.run_cli(
+                [
+                    "migrate",
+                    str(archive_root),
+                    "--target",
+                    "base-link-types",
+                    "--approve",
+                    "--reviewed-by",
+                    "ci:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(result["files_written"][0], "zettel-kasten/types.yml")
+            self.assertTrue(result["receipt_path"].startswith("receipts/migrations/base-link-types."))
+            self.assertIn(result["receipt_path"], result["files_written"])
+            self.assertIn("continues", result["appended_link_type_ids"])
+
+            receipt_path = archive_root / result["receipt_path"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["receipt_kind"], "base_link_types_sync")
+            self.assertEqual(receipt["schema_version"], "wom-kit/base-link-types-sync-receipt/v0.1")
+            self.assertEqual(receipt["reviewed_by"], "ci:test")
+
+            self.assertIn("continues", archive_services.load_allowed_link_types(archive_root))
+
+    def test_sync_base_link_types_requires_reviewed_by(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            self._strip_link_type(types_path, "continues")
+            original_text = types_path.read_text(encoding="utf-8")
+
+            code, output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "base-link-types", "--approve", "--format", "json"]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertIn(
+                "base-link-types migration requires --reviewed-by when --approve is used.",
+                output,
+            )
+            self.assertEqual(types_path.read_text(encoding="utf-8"), original_text)
+            receipts_dir = archive_root / "receipts" / "migrations"
+            base_receipts = list(receipts_dir.glob("base-link-types.*.migration.json")) if receipts_dir.is_dir() else []
+            self.assertEqual(base_receipts, [])
+
+    def test_sync_base_link_types_preserves_custom_and_divergent_entries_by_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            types_data = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
+            new_link_types = []
+            for item in types_data["link_types"]:
+                if isinstance(item, dict) and item.get("id") == "continues":
+                    item = dict(item)
+                    item["description"] = "OWNER divergent continues meaning; do not clobber."
+                new_link_types.append(item)
+            new_link_types.append(
+                {
+                    "id": "owner_private",
+                    "description": "Owner-authored private link type.",
+                    "from": "zettel",
+                    "to": "zettel",
+                }
+            )
+            types_data["link_types"] = new_link_types
+            types_path.write_text(archive_cli.dump_yaml(types_data), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "migrate",
+                    str(archive_root),
+                    "--target",
+                    "base-link-types",
+                    "--approve",
+                    "--reviewed-by",
+                    "ci:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertIn("continues", result["present_not_overwritten"])
+            self.assertNotIn("continues", result["appended_link_type_ids"])
+            self.assertNotIn("owner_private", result["appended_link_type_ids"])
+
+            migrated = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
+            by_id: dict[str, list[dict[str, Any]]] = {}
+            for item in migrated["link_types"]:
+                if isinstance(item, dict) and item.get("id"):
+                    by_id.setdefault(item["id"], []).append(item)
+            self.assertEqual(len(by_id["continues"]), 1)
+            self.assertEqual(
+                by_id["continues"][0]["description"],
+                "OWNER divergent continues meaning; do not clobber.",
+            )
+            self.assertEqual(len(by_id["owner_private"]), 1)
+            self.assertEqual(by_id["owner_private"][0]["description"], "Owner-authored private link type.")
+
+    def test_sync_base_link_types_no_types_file_is_safe_no_op(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            types_path.unlink()
+
+            dry_code, dry_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "base-link-types", "--dry-run", "--format", "json"]
+            )
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertEqual(dry_result["files_written"], [])
+            self.assertTrue(dry_result["inherits_base_directly"])
+            self.assertFalse(types_path.exists())
+
+            approve_code, approve_output = self.run_cli(
+                [
+                    "migrate",
+                    str(archive_root),
+                    "--target",
+                    "base-link-types",
+                    "--approve",
+                    "--reviewed-by",
+                    "ci:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            approve_result = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertEqual(approve_result["files_written"], [])
+            self.assertTrue(approve_result["inherits_base_directly"])
+            self.assertFalse(types_path.exists())
+            self.assertIn("continues", archive_services.load_allowed_link_types(archive_root))
+
+    def test_sync_base_link_types_rolls_back_on_receipt_write_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            self._strip_link_type(types_path, "continues")
+            original_text = types_path.read_text(encoding="utf-8")
+
+            def boom(path: Path, payload: dict) -> None:
+                raise OSError("simulated receipt write failure")
+
+            with patch.object(archive_services, "write_json_new_file", boom):
+                with self.assertRaises(OSError):
+                    archive_services.sync_base_link_types(
+                        archive_root,
+                        target="base-link-types",
+                        dry_run=False,
+                        approve=True,
+                        reviewed_by="ci:test",
+                    )
+
+            self.assertEqual(types_path.read_text(encoding="utf-8"), original_text)
+            self.assertFalse((types_path.with_name(types_path.name + ".tmp")).exists())
+            receipts_dir = archive_root / "receipts" / "migrations"
+            base_receipts = list(receipts_dir.glob("base-link-types.*.migration.json")) if receipts_dir.is_dir() else []
+            self.assertEqual(base_receipts, [])
+
+    def test_sync_base_link_types_idempotent_and_migrate_interaction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            self._strip_link_type(types_path, "continues")
+
+            first_code, first_output = self.run_cli(
+                [
+                    "migrate", str(archive_root), "--target", "base-link-types",
+                    "--approve", "--reviewed-by", "ci:test", "--format", "json",
+                ]
+            )
+            first_result = json.loads(first_output)
+            self.assertEqual(first_code, 0, first_output)
+            self.assertIn("continues", first_result["appended_link_type_ids"])
+
+            second_code, second_output = self.run_cli(
+                [
+                    "migrate", str(archive_root), "--target", "base-link-types",
+                    "--approve", "--reviewed-by", "ci:test", "--format", "json",
+                ]
+            )
+            second_result = json.loads(second_output)
+            self.assertEqual(second_code, 0, second_output)
+            self.assertEqual(second_result["files_written"], [])
+            self.assertTrue(second_result["ok"])
+            self.assertFalse(second_result["blocked"])
+            self.assertEqual(second_result["appended_link_type_ids"], [])
+            self.assertEqual(second_result["blockers"], [])
+
+            # After a sync, link-types-v0.3 migrate is a no-op (its 9 already present).
+            v03_code, v03_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "link-types-v0.3", "--dry-run", "--format", "json"]
+            )
+            v03_result = json.loads(v03_output)
+            self.assertEqual(v03_code, 0, v03_output)
+            self.assertEqual(v03_result["archive_link_type_status"]["missing_recommended_edge_types"], [])
+
+    def test_sync_base_link_types_after_link_types_v03_adds_only_remainder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            # Strip the recommended 9 AND continues so v0.3 migrate has work to do.
+            types_data = archive_cli.load_yaml(types_path.read_text(encoding="utf-8"))
+            recommended = set(archive_services.CONNECTION_IMPORT_RECOMMENDED_EDGE_TYPES)
+            drop = recommended | {"continues"}
+            types_data["link_types"] = [
+                item
+                for item in types_data["link_types"]
+                if not (isinstance(item, dict) and item.get("id") in drop)
+            ]
+            types_path.write_text(archive_cli.dump_yaml(types_data), encoding="utf-8")
+
+            v03_code, v03_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "link-types-v0.3", "--approve", "--format", "json"]
+            )
+            self.assertEqual(v03_code, 0, v03_output)
+
+            sync_code, sync_output = self.run_cli(
+                [
+                    "migrate", str(archive_root), "--target", "base-link-types",
+                    "--approve", "--reviewed-by", "ci:test", "--format", "json",
+                ]
+            )
+            sync_result = json.loads(sync_output)
+            self.assertEqual(sync_code, 0, sync_output)
+            appended = set(sync_result["appended_link_type_ids"])
+            self.assertIn("continues", appended)
+            self.assertFalse(appended & recommended, sync_output)
+
+            # A link-types-v0.3 --revert after a sync must not pick up the sync receipt.
+            revert_code, revert_output = self.run_cli(
+                ["migrate", str(archive_root), "--target", "link-types-v0.3", "--revert", "--dry-run", "--format", "json"]
+            )
+            revert_result = json.loads(revert_output)
+            # The revert reads only its own migration_write receipt, so it still finds
+            # the recommended-set migration; it must never surface `continues`.
+            self.assertNotIn(
+                "continues",
+                revert_result.get("archive_link_type_status", {}).get("revert_candidate_edge_types", []),
+            )
+
+    def test_doctor_unknown_edge_type_routes_to_base_link_types_sync(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            types_path = archive_root / "zettel-kasten" / "types.yml"
+            self._strip_link_type(types_path, "continues")
+
+            zettel_path = next(iter(sorted((archive_root / "zettels").glob("*.md"))))
+            frontmatter, body = archive_services.split_zettel_text(zettel_path.read_text(encoding="utf-8"))
+            frontmatter["edges"] = [
+                {
+                    "type": "continues",
+                    "target": "sha256:acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136",
+                    "visibility": "private",
+                }
+            ]
+            zettel_path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n" + body, encoding="utf-8")
+
+            code, output = self.run_cli(["doctor", str(archive_root), "--json"])
+            diagnostics = json.loads(output)
+            unknown = [item for item in diagnostics if item.get("code") == "zettel_edge_type_unknown"]
+            self.assertTrue(unknown, output)
+            self.assertTrue(
+                all(
+                    "archive migrate --target base-link-types --dry-run" in item.get("message", "")
+                    for item in unknown
+                ),
+                output,
+            )
+
     def test_doctor_legacy_frontmatter_json_includes_migration_hint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "personal-archive"

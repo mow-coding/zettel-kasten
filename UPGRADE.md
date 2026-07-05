@@ -163,6 +163,38 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.172` To `v0.3.173`
+
+One additive command. No migration is required, and every default path is byte-identical to
+v0.3.172.
+
+Operator-visible notes:
+
+- **New `archive migrate --target base-link-types --dry-run|--approve --reviewed-by
+  <actor>`.** It appends every base WOM-kit link type missing from an archive-local
+  `zettel-kasten/types.yml` (a superset of the recommended-9 `link-types-v0.3` set — it also
+  pulls `continues`). It is append-only and no-clobber: no existing entry is removed,
+  renamed, reordered, or altered in value, so a divergent same-id customization always wins
+  (reported under `present_not_overwritten`). `--reviewed-by` is required with `--approve`.
+  It writes a receipt (`receipt_kind: base_link_types_sync`) under
+  `receipts/migrations/base-link-types.*.migration.json`, is atomic with rollback, and is
+  idempotent. There is deliberately **no `--revert`** (`--revert --target base-link-types`
+  fails closed). No change if you do not run it.
+- **Safe no-op with no local `types.yml`.** If your archive has no local
+  `zettel-kasten/types.yml`, the sync writes nothing and creates no file — you already
+  inherit all current and future base link types. Do not add a local `types.yml` just to run
+  this; a local `types.yml` permanently shadows (freezes) the base.
+- **Doctor routing.** `archive doctor` now points an operator hitting an undefined edge type
+  toward `archive migrate --target base-link-types --dry-run`.
+- **Honesty.** Once an archive has its own `types.yml`, it shadows the base permanently, so
+  every future base link type also needs a manual `migrate --target base-link-types` (no
+  automatic propagation). Sync copies base entry shapes as of this release (a snapshot). It
+  normalizes/rewrites the whole `types.yml` via `safe_dump` — comments, anchors, flow-style,
+  and key ordering may be normalized — exactly like the sibling `link-types-v0.3` migration.
+  Existing entries are preserved by value/id; surrounding formatting is not byte-preserved.
+  Review the diff.
+- See `wom-kit/docs/releases/v0.3.173.md`.
+
 ## From `v0.3.171` To `v0.3.172`
 
 Two verification-honesty fixes. Both are additive; no migration is required, and every
