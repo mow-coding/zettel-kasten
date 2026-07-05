@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.174 pre-release
+v0.3.175 pre-release
 ```
 
-이전 공개 기준: v0.3.173 pre-release.
+이전 공개 기준: v0.3.174 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -131,6 +131,7 @@ Object storage:
 - 선택 가능하고 기록되는 업로드 키 전략(`--key-strategy sha256_content_addressed|prefix`, 기본값 불변)과 안전한 `object-storage-adopt-existing` 명령: 운영자 자신의 키 레이아웃에 이미 저장된 객체는 기록된 키에서 존재+크기 일치를 증명하는 라이브 HEAD가 있을 때만 채택하고, 라이브 전송 계층에서는 실행기가 스킵 전에 항상 그 기록된 키를 다시 HEAD 한다(404면 재업로드하며, 조용한 스킵은 없음); 콘텐츠 주소 템플릿이 객체별 확장자를 복원하지 못할 때는 선택형 `--key-map`(JSONL sha256 -> 정확한 원격 키)으로 운영자의 실제 키에 저장된 객체를 채택하며, 크기는 여전히 매니페스트에서만 가져오고 모든 키는 digest 바인딩과 leak 가드를 통과한다,
 - 검증된 adopt(HEAD 전용)는 업로드 5 GiB 티어 증명과 분리된다: adopt는 0바이트만 이동하므로, 검증된 tiny-first adopt 1건이 있으면 임의 크기의 배치 이관이 열린다(잘못된 키 self-limit, declared는 절대 카운트되지 않음, 업로드 티어 사다리 바이트 단위 불변은 모두 그대로 유지된다),
 - 라이브 검증용 `--multipart-part-size` 오버라이드(`--allow-tiny-parts` 승인과 함께, `[4096, 64 MiB]` 범위, receipt에 `effective_multipart_part_size_bytes`로 기록): 낮춘 `--multipart-threshold`와 함께 쓰면 작은 객체에도 멀티파트를 강제해 라이브 R2 멀티파트를 증명한다. `handle.read()` 분할만 바뀌고 전체 객체 사전 해시·HEAD-after 전체 객체 검증·orphan 정리·leak 게이트는 바이트 단위로 그대로 유지된다,
+- 라이브 검증용 `--force-reupload`: 이미 존재하는 객체를 다시 PUT한다(승인 + 리뷰어 게이트, 비-sha 키에서는 거부, `--dry-run`에서는 무효, 로컬이 손상됐으면 어떤 PUT보다 먼저 거부). 강제된 작은 멀티파트로 업로드 tier2를 증명할 수 있고, 이제 실제 멀티파트(`part_count>1`)가 기존 5 GiB 경로와 함께 tier2 증명으로 인정된다,
 
 IMAP:
 

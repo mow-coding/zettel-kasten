@@ -152,6 +152,27 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.174` To `v0.3.175`
+
+object-storage 업로드 어댑터를 위한 추가적(additive) 라이브 검증 보조 기능 두 가지입니다.
+마이그레이션이 필요 없고, 기본 동작과 기존 receipt/매니페스트는 바이트 단위로 동일합니다.
+
+운영자에게 보이는 변경:
+
+- **`v0.3.175`는 승인 게이트가 걸린 `--force-reupload`를 추가합니다** (`object-storage-upload`).
+  이미 존재하며 크기/해시가 일치하는 객체를 다시 PUT해서 라이브 프로바이더 PUT(예: 강제된
+  작은 멀티파트)를 실행할 수 있게 합니다. `--approve`와 `--reviewed-by`가 모두 필요하고,
+  비-sha 키 전략에서는 거부되며, `--dry-run`에서는 무효이고, PUT 이전 로컬
+  `sha256(local)==object_id` 재검증이 그대로 실행되어 손상된 로컬 파일은 어떤 PUT보다 먼저
+  거부됩니다. 실행 receipt는 최상위 `forced_reupload` 불리언을 기록합니다.
+- **실제 멀티파트(`part_count>1`)가 이제 업로드 tier2 증명으로 인정됩니다**(기존 5 GiB
+  `bytes_uploaded` 경로와 함께). 따라서 5 GiB 이상 객체가 없는 store도 강제된 작은
+  멀티파트로 업로드 tier2를 증명할 수 있습니다. adopt 티어 사다리는 영향을 받지 않습니다.
+- **마이그레이션 없음; 기본 동작과 기존 receipt/매니페스트는 바이트 단위로 동일합니다.**
+  플래그가 없으면 모든 경로가 동일하고, 기본 receipt는 항상 존재하는 `forced_reupload: false`
+  불리언만 추가로 갖습니다.
+- `wom-kit/docs/releases/v0.3.175.md`를 보세요.
+
 ## From `v0.3.173` To `v0.3.174`
 
 검증된 adopt tiered gate에 대한 추가적(additive) 수정 하나입니다. 마이그레이션이 필요 없고,

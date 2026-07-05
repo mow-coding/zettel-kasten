@@ -163,6 +163,27 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.174` To `v0.3.175`
+
+Two additive live-verification aids for the object-storage upload adapter. No migration is
+required; default behavior and existing receipts/manifests are byte-identical.
+
+Operator-visible notes:
+
+- **`v0.3.175` adds an approval-gated `--force-reupload`** on `object-storage-upload`. It
+  re-PUTs an already-present, size/hash-matching object so a client can exercise a LIVE
+  provider PUT (e.g. a forced small multipart). It requires `--approve` AND `--reviewed-by`,
+  is refused for any non-sha-derived `--key-strategy`, is inert under `--dry-run`, and still
+  runs the pre-PUT local `sha256(local)==object_id` re-verify so a corrupt local file is
+  refused before any PUT. The execution receipt records a top-level `forced_reupload` boolean.
+- **A real multipart (`part_count>1`) is now recognized as an upload tier2 proof**, alongside
+  the existing 5 GiB `bytes_uploaded` path. A forced small multipart can therefore prove
+  upload tier2 for a store with no >5 GiB object. The adopt tier ladder is unaffected.
+- **No migration; default behavior and existing receipts/manifests are byte-identical.** With
+  the flag absent, every path is unchanged; a default receipt gains only an always-present
+  `forced_reupload: false` boolean.
+- See `wom-kit/docs/releases/v0.3.175.md`.
+
 ## From `v0.3.173` To `v0.3.174`
 
 One additive fix to the verified-adopt tiered gate. No migration is required; existing
