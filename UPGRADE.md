@@ -163,6 +163,32 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.175` To `v0.3.176`
+
+One additive, DX-only reconcile body-diff diagnostic. **No behavior or classification change, no
+migration.** The drift classifier is byte-identical.
+
+Operator-visible notes:
+
+- **`v0.3.176` adds a content-free `body_diff_diagnostic`** to the `remint-reconcile` and
+  `retire-draft-reconcile` plan output. When a drift is classified `content_change` because the
+  two bodies still differ AFTER the single leading BOM strip + CRLF/CR→LF fold, the plan now
+  reports WHICH kind of sub-BOM residual it is: a fixed `category`
+  (`final_newline_only` / `trailing_whitespace_only` / `unicode_normalization_only` /
+  `content_difference`), a `first_differing_byte_offset` (an integer), a `normalized_length_delta`
+  (an integer), and — for the unicode case only — a closed-enum NFC/NFD form label. It emits ONLY
+  numbers and fixed labels, never any body text.
+- **It is a STRICT CLASSIFICATION NO-OP.** It is computed AFTER the drift_class predicate and only
+  decorates the output dict (exactly like the v0.3.172 strip-BOM preview). `drift_class`,
+  `classification_basis`, `content_change_ack_required`, and `bytes_normalized_for_content_compare`
+  are byte-identical with and without it. A mixed whitespace/normalization + real-edit diff stays
+  the honest `content_difference` — never laundered.
+- **The key is absent when it would be misleading**: on a no-anchor / no-snapshot plan
+  (`body_changed` None) and on a `format_drift` plan (`body_changed` False). Both CLI text printers
+  gain one content-free summary line; JSON consumers see the key only when present.
+- **No migration; no behavior change.** Existing receipts and manifests are unaffected.
+- See `wom-kit/docs/releases/v0.3.176.md`.
+
 ## From `v0.3.174` To `v0.3.175`
 
 Two additive live-verification aids for the object-storage upload adapter. No migration is

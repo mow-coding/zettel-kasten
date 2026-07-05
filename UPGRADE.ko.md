@@ -152,6 +152,32 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.175` To `v0.3.176`
+
+추가적(additive)이며 DX 전용인 reconcile 본문-diff 진단 하나입니다. **동작이나 분류 변경 없음,
+마이그레이션 없음.** 드리프트 분류기는 바이트 단위로 동일합니다.
+
+운영자에게 보이는 변경:
+
+- **`v0.3.176`은 내용을 노출하지 않는 `body_diff_diagnostic`을 추가합니다** (`remint-reconcile`
+  및 `retire-draft-reconcile` 플랜 출력). 앞쪽 BOM 하나 제거 + CRLF/CR→LF 접기 이후에도 두 본문이
+  여전히 다를 때 드리프트가 `content_change`로 분류되는데, 이제 플랜은 그것이 어떤 종류의 sub-BOM
+  잔차인지 보고합니다: 고정된 `category`
+  (`final_newline_only` / `trailing_whitespace_only` / `unicode_normalization_only` /
+  `content_difference`), `first_differing_byte_offset`(정수), `normalized_length_delta`(정수),
+  그리고 unicode 경우에 한해 닫힌 열거형 NFC/NFD 형태 라벨. 오직 숫자와 고정 라벨만 방출하며,
+  본문 텍스트는 절대 방출하지 않습니다.
+- **엄격한 분류 no-op입니다.** drift_class 술어 이후에 계산되어 출력 dict만 장식합니다(v0.3.172
+  strip-BOM 프리뷰와 완전히 동일). `drift_class`, `classification_basis`,
+  `content_change_ack_required`, 그리고 `bytes_normalized_for_content_compare`는 이 기능이 있든
+  없든 바이트 단위로 동일합니다. 공백/정규화 + 실제 편집이 섞인 diff는 정직한
+  `content_difference`로 남으며 절대 세탁되지 않습니다.
+- **오해를 부를 수 있는 경우에는 키가 없습니다**: 앵커/스냅샷이 없는 플랜(`body_changed` None)과
+  `format_drift` 플랜(`body_changed` False). 두 CLI 텍스트 프린터는 내용 없는 요약 한 줄을
+  추가로 얻고, JSON 소비자는 키가 있을 때만 봅니다.
+- **마이그레이션 없음; 동작 변경 없음.** 기존 receipt와 매니페스트는 영향받지 않습니다.
+- `wom-kit/docs/releases/v0.3.176.md`를 보세요.
+
 ## From `v0.3.174` To `v0.3.175`
 
 object-storage 업로드 어댑터를 위한 추가적(additive) 라이브 검증 보조 기능 두 가지입니다.

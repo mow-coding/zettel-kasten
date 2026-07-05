@@ -6,6 +6,35 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.176 - 2026-07-06
+
+A content-free reconcile body-diff diagnostic (DX-only). Additive; **no classification or
+behavior change, no migration.** The classifier — `bytes_normalized_for_content_compare`, the
+Tier A/B anchor logic, the drift_class predicate, `classification_basis`, and
+`content_change_ack_required` — is byte-identical with and without this change.
+
+- **Content-free `body_diff_diagnostic` on the reconcile plans.** When
+  `archive remint-reconcile` (and the sibling `archive retire-draft-reconcile`) classifies a
+  drift as `content_change` because the two bodies still differ AFTER the single leading
+  BOM strip + CRLF/CR→LF fold, the plan now carries a `body_diff_diagnostic` decoration so a
+  client running `--strip-bom --dry-run` can self-diagnose WHICH kind of sub-BOM residual they
+  have without echoing any body bytes. It reports ONLY non-content facts: a fixed `category`
+  label (`final_newline_only`, `trailing_whitespace_only`, `unicode_normalization_only`, or
+  `content_difference`), a `first_differing_byte_offset` (an integer index into the normalized
+  form), a `normalized_length_delta` (an integer byte delta), and — for the unicode case only —
+  a closed-enum NFC/NFD `canonical_form`/`snapshot_form` label. A non-`content_difference`
+  category is reported ONLY when its transform makes the two normalized bodies EQUAL TO EACH
+  OTHER (mutual full reconciliation), so a mix of whitespace/normalization drift AND a real
+  content edit is never laundered to a benign label — it stays the honest `content_difference`.
+  It is a **STRICT CLASSIFICATION NO-OP**: it is computed AFTER the drift_class predicate and
+  only added to the output dict, exactly like the existing strip-BOM preview, and never
+  influences `drift_class` / `classification_basis` / `content_change_ack_required`. It emits
+  only integers and fixed labels — never a body substring, slice, or repr. The key is ABSENT
+  when there is no snapshot anchor (Tier C, `body_changed` None) or when the bodies are
+  identical (`format_drift`, `body_changed` False), so it never shows a misleading residual.
+  Both CLI text printers gain one content-free summary line; JSON consumers see the new key
+  only when it is present. Additive; no migration.
+
 ## v0.3.175 - 2026-07-05
 
 Live-verification aids for the object-storage upload adapter (Stage 2): a forced re-upload of
