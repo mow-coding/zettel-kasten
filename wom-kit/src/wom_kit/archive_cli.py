@@ -2019,7 +2019,24 @@ class Doctor:
             # §4.1 / RC3: a success receipt must have advanced a wom_uploaded manifest
             # location that passes the wom_uploaded audit (both by_wom_kit flags true,
             # key_strategy, execution_receipt_ref safe) AND the digest invariant.
-            if str(data.get("result_status") or "") in {"uploaded", "skipped_remote_same"}:
+            #
+            # v0.3.175 (FIX A exemption): a `--force-reupload` re-PUT lands a SECOND
+            # `uploaded` receipt at the SAME content-addressed remote_key of an
+            # already-linked object. The manifest keeps exactly ONE wom_uploaded
+            # location per remote_key (append is idempotent-per-key), so that lone
+            # location links the ORIGINAL receipt, and a forced re-PUT is by design a
+            # live-verification action, not a new manifest transition. Requiring the
+            # forced receipt to also be linked would emit a spurious
+            # object_storage_upload_wom_location_missing on a legitimate forced
+            # receipt. A receipt with forced_reupload=true is therefore exempt from
+            # the manifest-linkage requirement below; every OTHER invariant (schema,
+            # operation, reviewed_by, remote_key digest bind, retry_summary scalar)
+            # still applies to it above.
+            forced_reupload_receipt = bool(data.get("forced_reupload"))
+            if (
+                str(data.get("result_status") or "") in {"uploaded", "skipped_remote_same"}
+                and not forced_reupload_receipt
+            ):
                 object_id = str(data.get("object_id") or "").lower()
                 provider_kind = str(data.get("provider_kind") or "")
                 store_ref = str(data.get("store_ref") or "")
@@ -5432,6 +5449,19 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
     if approve and not (args.reviewed_by or "").strip():
         print("object-storage-upload requires --reviewed-by when --approve is used.", file=sys.stderr)
         return 1
+    # FIX A (v0.3.175): --force-reupload is an approval-gated LIVE re-PUT of an
+    # already-present size/hash-matching object. Fail closed at the CLI with a
+    # clear message; the service re-enforces the same gates for a direct call.
+    force_reupload = bool(getattr(args, "force_reupload", False))
+    if force_reupload and args.dry_run:
+        print("--force-reupload has no effect under --dry-run; run with --approve to re-PUT.", file=sys.stderr)
+        return 1
+    if force_reupload and not approve:
+        print("--force-reupload requires --approve (a deliberate live provider PUT).", file=sys.stderr)
+        return 1
+    if force_reupload and not (args.reviewed_by or "").strip():
+        print("--force-reupload requires --reviewed-by (a deliberate live overwrite).", file=sys.stderr)
+        return 1
     # Stage 2: wire the production send seam only for a real --approve run. The
     # default sender is the ONLY place stdlib networking is reachable; --dry-run
     # never builds it. The service still fails closed without env creds, a met
@@ -5447,6 +5477,7 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
             only=args.only,
             max_objects=args.max_objects,
             skip_uploaded=bool(args.skip_uploaded),
+            force_reupload=force_reupload,
             reviewed_by=args.reviewed_by,
             approve=approve,
             dry_run=bool(args.dry_run),
@@ -13701,6 +13732,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="allow_tiny_parts",
         help="Acknowledge a sub-64-MiB --multipart-part-size (a live-verification aid; real R2 rejects multipart parts < 5 MiB except the last). Required to set --multipart-part-size below the 64 MiB default.",
+    )
+    object_storage_upload.add_argument(
+        "--force-reupload",
+        action="store_true",
+        dest="force_reupload",
+        help=(
+            "Live-verification aid: RE-PUT an already-present object whose remote bytes "
+            "already size/hash-match, to exercise a LIVE provider PUT (e.g. a forced small "
+            "multipart). Requires --approve AND --reviewed-by (a deliberate provider PUT cost "
+            "and a live overwrite). Refused for any non-sha-derived --key-strategy. The pre-PUT "
+            "local sha256==object_id re-verify still runs, so a corrupt local file is refused "
+            "before any PUT. Inert under --dry-run. Default absent = behavior byte-identical to prior."
+        ),
     )
     object_storage_upload.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
     object_storage_upload.add_argument("--dry-run", action="store_true", help="Preview the plan and execution-receipt shape without provider calls, byte reads, or secret reads.")

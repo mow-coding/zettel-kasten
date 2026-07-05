@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import base64
 import hashlib
+import itertools
 import json
 import re
 import shutil
@@ -14779,6 +14780,462 @@ state:
             self.assertEqual(tier(), 3, "multipart proof + enough distinct objects reaches the batch tier")
             # A batch is now permitted (requested tier 3 needs proven >= 2).
             self.assertLessEqual(s.object_storage_requested_tier(object_count=5) - 1, tier())
+
+    # --- v0.3.175 FIX B: multipart-proven upload tier2 (part_count>1 OR 5 GiB) ---
+
+    def _write_tier_receipt(self, root, case, *, provider, store, object_id, status="uploaded", bytes_uploaded=0, part_count=0):
+        s = archive_services
+        receipt = {
+            "schema": s.OBJECT_STORAGE_UPLOAD_RECEIPT_SCHEMA,
+            "provider_kind": provider, "store_ref": store,
+            "object_id": object_id, "result_status": status,
+            "bytes_uploaded": bytes_uploaded, "part_count": part_count,
+            "object_count": 1,
+        }
+        s.object_storage_write_execution_receipt(root, case, receipt)
+
+    def test_object_storage_proven_tier_multipart_part_count_reaches_tier2(self) -> None:  # FIX B #1
+        # A real multipart execution (part_count > 1) on a SUB-5 GiB uploaded object
+        # is now a legitimate tier2 proof (DEC-11), so a byte-external client with a
+        # small forced multipart can prove upload tier2 without any 5 GiB object.
+        s = archive_services
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.copy_fake_archive(Path(tmp) / "archive")
+            provider, store = "cloudflare-r2", "r2-fixb-partcount"
+            self._write_tier_receipt(
+                root, "c1", provider=provider, store=store,
+                object_id="sha256:" + "a" * 64, status="uploaded",
+                bytes_uploaded=12345, part_count=2,  # < 5 GiB, but a real multipart
+            )
+            self.assertEqual(
+                s.object_storage_proven_tier(root, provider_kind=provider, store_ref=store), 2
+            )
+
+    def test_object_storage_proven_tier_forced_multipart_plus_distinct_reaches_tier3(self) -> None:  # FIX B #2
+        # DEC-12 (intentional drift): a forced small multipart (part_count>1) + at
+        # least TIER3_BATCH_MIN distinct successful objects reaches tier3 WITHOUT any
+        # 5 GiB object, because the new disjunct sets the SAME saw_multipart_proof flag.
+        s = archive_services
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.copy_fake_archive(Path(tmp) / "archive")
+            provider, store = "cloudflare-r2", "r2-fixb-tier3"
+            self._write_tier_receipt(
+                root, "mp", provider=provider, store=store,
+                object_id="sha256:" + "a" * 64, status="uploaded",
+                bytes_uploaded=9999, part_count=3,
+            )
+            for i in range(s.OBJECT_STORAGE_TIER3_BATCH_MIN):
+                self._write_tier_receipt(
+                    root, f"d{i}", provider=provider, store=store,
+                    object_id="sha256:" + f"{i:064d}", status="uploaded",
+                    bytes_uploaded=5, part_count=1,
+                )
+            self.assertEqual(
+                s.object_storage_proven_tier(root, provider_kind=provider, store_ref=store), 3
+            )
+
+    def test_object_storage_proven_tier_skip_with_forged_part_count_not_tier2(self) -> None:  # FIX B #3
+        # DEC-11 status=="uploaded" guard: a skipped_remote_same receipt carrying a
+        # fabricated part_count > 1 must NOT mint tier2. Only an `uploaded` receipt's
+        # part_count is a multipart proof (part_count on a skip is always 0 in code).
+        s = archive_services
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.copy_fake_archive(Path(tmp) / "archive")
+            provider, store = "cloudflare-r2", "r2-fixb-forged"
+            self._write_tier_receipt(
+                root, "skip", provider=provider, store=store,
+                object_id="sha256:" + "a" * 64, status="skipped_remote_same",
+                bytes_uploaded=0, part_count=2,  # forged part_count on a SKIP
+            )
+            # tier1 (a skip is still a landed object) but NOT tier2.
+            self.assertEqual(
+                s.object_storage_proven_tier(root, provider_kind=provider, store_ref=store), 1
+            )
+
+    def test_object_storage_proven_tier_5gib_path_still_recognized(self) -> None:  # FIX B #4 (DEC-19/DEC-20)
+        # DEFAULT tier path unchanged: a receipt whose bytes_uploaded reaches the
+        # 5 GiB multipart threshold still proves tier2 exactly as before, regardless
+        # of part_count (the 5 GiB disjunct is kept verbatim as the first operand).
+        s = archive_services
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.copy_fake_archive(Path(tmp) / "archive")
+            provider, store = "cloudflare-r2", "r2-fixb-5gib"
+            self._write_tier_receipt(
+                root, "big", provider=provider, store=store,
+                object_id="sha256:" + "b" * 64, status="uploaded",
+                bytes_uploaded=s.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES, part_count=1,
+            )
+            self.assertEqual(
+                s.object_storage_proven_tier(root, provider_kind=provider, store_ref=store), 2
+            )
+            # And a sub-5 GiB single-part uploaded receipt stays tier1 (unchanged).
+            self._write_tier_receipt(
+                root, "small", provider=provider, store="r2-fixb-small",
+                object_id="sha256:" + "c" * 64, status="uploaded",
+                bytes_uploaded=10, part_count=1,
+            )
+            self.assertEqual(
+                s.object_storage_proven_tier(root, provider_kind=provider, store_ref="r2-fixb-small"), 1
+            )
+
+    def test_object_storage_requested_tier_and_adopt_tier_funcs_byte_identical(self) -> None:  # FIX B #5 (DEC-13/DEC-14)
+        # R1 (v0.3.174) tier functions MUST stay byte-identical: object_storage_requested_tier
+        # is unchanged, and the adopt requested/proven tiers are structurally independent
+        # of part_count/bytes_uploaded, so a FIX-B forced-multipart UPLOAD receipt (which
+        # carries NO adopt_verification) can never lift adopt proven tier above 0.
+        s = archive_services
+        for n in (1, 2, 3, 5):
+            self.assertEqual(s.object_storage_requested_tier(object_count=n), 3 if n > 1 else 1)
+            self.assertEqual(s.object_storage_adopt_requested_tier(object_count=n), 2 if n > 1 else 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.copy_fake_archive(Path(tmp) / "archive")
+            provider, store = "cloudflare-r2", "r2-fixb-adopt"
+            # A FIX-B forced-multipart UPLOAD receipt (part_count>1, no adopt_verification).
+            self._write_tier_receipt(
+                root, "mp", provider=provider, store=store,
+                object_id="sha256:" + "a" * 64, status="uploaded",
+                bytes_uploaded=9999, part_count=4,
+            )
+            # Upload proven tier sees the multipart proof -> tier2; adopt proven tier
+            # ignores it entirely -> 0 (needs a verified-adopt marker).
+            self.assertEqual(
+                s.object_storage_proven_tier(root, provider_kind=provider, store_ref=store), 2
+            )
+            self.assertEqual(
+                s.object_storage_adopt_proven_tier(root, provider_kind=provider, store_ref=store), 0
+            )
+
+    # --- v0.3.175 FIX A: approval-gated --force-reupload (live re-PUT) ---
+
+    def _seed_uploaded_object(self, archive_root, transport, *, only, **run_kwargs):
+        """Run one real upload so a wom_uploaded manifest location + ledger exist, so a
+        follow-up run's F0-b re-HEAD path (idempotency_verdict==already_uploaded) is
+        entered. Returns the run result."""
+        return self._upload_run(
+            archive_root, only=only, max_objects=1, reviewed_by="kim",
+            approve=True, transport=transport, skip_uploaded=True, **run_kwargs
+        )
+
+    def test_force_reupload_reputs_present_match_object(self) -> None:  # FIX A #6
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                self._seed_uploaded_object(archive_root, transport, only=f"sha256:{_FAKE_SHA_A}")
+                first_puts = transport.put_calls
+                # Without --force-reupload a re-run would skip (present+match). With it,
+                # the object is RE-PUT for live verification.
+                result = self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport,
+                    skip_uploaded=True, force_reupload=True,
+                )
+            self.assertEqual(first_puts, 1)
+            self.assertEqual(result["execution_results"][0]["result_status"], "uploaded")
+            self.assertNotEqual(result["execution_results"][0]["result_status"], "skipped_remote_same")
+            self.assertEqual(transport.put_calls, 2, "the forced re-PUT issues a second single PUT")
+            receipt = json.loads((archive_root / result["receipts_written"][0]).read_text(encoding="utf-8"))
+            self.assertIs(receipt["forced_reupload"], True)
+            self.assertEqual(archive_cli.validate_schema(receipt, "object-storage-upload-receipt.schema.json"), [])
+
+    def test_force_reupload_forced_small_multipart_records_part_count_and_tier2(self) -> None:  # FIX A #7
+        floor = archive_services.OBJECT_STORAGE_MULTIPART_MIN_PART_SIZE_BYTES  # 4096
+        size = floor * 3 + 111  # 4 parts
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            digest = self._install_multipart_fixture_object(archive_root, size)
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                # Seed the object as a single-part upload first (default threshold).
+                self._seed_uploaded_object(archive_root, transport, only=f"sha256:{digest}")
+                # Now FORCE a small multipart re-PUT of the present+match object.
+                result = self._upload_run(
+                    archive_root, only=f"sha256:{digest}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport,
+                    skip_uploaded=True, force_reupload=True,
+                    multipart_threshold_bytes=floor, multipart_part_size_bytes=floor,
+                    allow_tiny_parts=True,
+                )
+            self.assertEqual(result["execution_results"][0]["result_status"], "uploaded", result)
+            receipt = json.loads((archive_root / result["receipts_written"][0]).read_text(encoding="utf-8"))
+            self.assertGreater(receipt["part_count"], 1, receipt)
+            self.assertIs(receipt["forced_reupload"], True)
+            self.assertEqual(archive_cli.validate_schema(receipt, "object-storage-upload-receipt.schema.json"), [])
+            # FIX B: the forced small multipart is now a legitimate tier2 proof.
+            self.assertEqual(
+                archive_services.object_storage_proven_tier(
+                    archive_root, provider_kind="cloudflare-r2", store_ref="r2-upload-20260704"
+                ),
+                2,
+            )
+
+    def test_default_no_force_reupload_present_match_still_skips(self) -> None:  # FIX A #8 (DEC-19)
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                self._seed_uploaded_object(archive_root, transport, only=f"sha256:{_FAKE_SHA_A}")
+                first_puts = transport.put_calls
+                # Flag ABSENT => the DEFAULT present+match skip short-circuit fires.
+                result = self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport, skip_uploaded=True,
+                )
+            self.assertEqual(first_puts, 1)
+            self.assertEqual(transport.put_calls, 1, "default re-run must NOT PUT again")
+            self.assertEqual(result["execution_results"][0]["result_status"], "skipped_remote_same")
+
+    def test_force_reupload_corrupt_local_refused_before_put(self) -> None:  # FIX A #9
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                self._seed_uploaded_object(archive_root, transport, only=f"sha256:{_FAKE_SHA_A}")
+                puts_after_seed = transport.put_calls
+                # Corrupt the local bytes AFTER seeding: sha256(local) != object_id.
+                local_path = archive_root / "objects" / "sample" / "fake-school-record.txt"
+                local_path.write_bytes(b"corrupted-after-adoption-bytes")
+                result = self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=transport,
+                    skip_uploaded=True, force_reupload=True,
+                )
+            self.assertEqual(result["execution_results"][0]["result_status"], "failed_upload")
+            self.assertEqual(transport.put_calls, puts_after_seed, "a corrupt local file must never be PUT")
+
+    def test_force_reupload_head_after_mismatch_deletes_orphan(self) -> None:  # FIX A #10 (Q5)
+        floor = archive_services.OBJECT_STORAGE_MULTIPART_MIN_PART_SIZE_BYTES
+        size = floor * 3 + 111
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            digest = self._install_multipart_fixture_object(archive_root, size)
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                seed = _FakeObjectStorageTransport()
+                self._seed_uploaded_object(archive_root, seed, only=f"sha256:{digest}")
+                # A transport whose completed multipart yields a WRONG whole-object sha:
+                # HEAD-after must fail and the orphan must be deleted (SA-5), even on a
+                # forced re-PUT. Prime it as present+match so F0-b enters the skip path
+                # that force-reupload bypasses.
+                trunc = _FakeObjectStorageTransport(truncate_multipart=True, present="same",
+                                                    present_size=size, present_checksum=digest)
+                result = self._upload_run(
+                    archive_root, only=f"sha256:{digest}", max_objects=1,
+                    reviewed_by="kim", approve=True, transport=trunc,
+                    skip_uploaded=True, force_reupload=True,
+                    multipart_threshold_bytes=floor, multipart_part_size_bytes=floor,
+                    allow_tiny_parts=True,
+                )
+            self.assertEqual(result["execution_results"][0]["result_status"], "failed_upload", result)
+            self.assertGreaterEqual(trunc.delete_calls, 1, "HEAD-after mismatch must delete the orphan (SA-5)")
+
+    def test_force_reupload_without_approve_refused(self) -> None:  # FIX A #11
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                result = self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="kim", approve=False, dry_run=True,
+                    transport=transport, skip_uploaded=True, force_reupload=True,
+                )
+            self.assertFalse(result["ok"], result)
+            self.assertTrue(
+                any("--force-reupload requires --approve" in b or "--force-reupload has no effect under --dry-run" in b
+                    for b in result["blockers"]),
+                result["blockers"],
+            )
+            self.assertEqual(transport.put_calls, 0)
+
+    def test_force_reupload_without_reviewed_by_refused(self) -> None:  # FIX A #12
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                result = self._upload_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                    reviewed_by="", approve=True, transport=transport,
+                    skip_uploaded=True, force_reupload=True,
+                )
+            self.assertFalse(result["ok"], result)
+            self.assertTrue(
+                any("--force-reupload requires --reviewed-by" in b or "requires --reviewed-by when --approve" in b
+                    for b in result["blockers"]),
+                result["blockers"],
+            )
+            self.assertEqual(transport.put_calls, 0)
+
+    def test_force_reupload_non_sha_key_strategy_refused(self) -> None:  # FIX A #13 (DEC-6/Q6)
+        # A non-{sha256_content_addressed, prefix} strategy makes the remote key not
+        # embed the digest, so the conflict-guard bypass would be a clobber vector.
+        # Refuse the whole flag. We patch the strategy allowlist so the strategy
+        # validator accepts a hypothetical non-sha strategy but the DEC-6 guard still
+        # refuses force-reupload.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                original = archive_services._object_storage_validate_key_strategy
+
+                def _accept_opaque(*, key_strategy, key_prefix, blockers):
+                    if str(key_strategy) == "opaque_uuid":
+                        return "opaque_uuid"
+                    return original(key_strategy=key_strategy, key_prefix=key_prefix, blockers=blockers)
+
+                transport = _FakeObjectStorageTransport()
+                with patch.object(archive_services, "_object_storage_validate_key_strategy", side_effect=_accept_opaque):
+                    result = self._upload_run(
+                        archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                        reviewed_by="kim", approve=True, transport=transport,
+                        skip_uploaded=True, force_reupload=True, key_strategy="opaque_uuid",
+                    )
+            self.assertFalse(result["ok"], result)
+            self.assertTrue(
+                any("force_reupload_requires_sha_derived_key" in b for b in result["blockers"]),
+                result["blockers"],
+            )
+            self.assertEqual(transport.put_calls, 0)
+
+    def test_force_reupload_receipt_passes_privacy_and_validator(self) -> None:  # FIX A #14 (DEC-10)
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                # Force the seed receipt and the forced-re-PUT receipt onto DISTINCT
+                # case_ids (distinct created_at seconds) so BOTH receipts persist on
+                # disk: the original wom_uploaded location links the seed receipt, and
+                # the forced re-PUT lands a SECOND unlinked receipt at the same key.
+                # This is exactly the scenario the FIX A C7 exemption must clear —
+                # without a distinct timestamp the two runs could collide on one case_id
+                # and overwrite to a single (linked) receipt, never exercising it.
+                _clock = itertools.count()
+
+                def _fake_now_iso():
+                    # Every call yields a distinct whole-second stamp, so the seed run
+                    # and the forced re-PUT run resolve DISTINCT case_ids (which fold in
+                    # created_at) and both receipts persist on disk.
+                    n = next(_clock)
+                    return f"2026-07-05T{n // 3600:02d}:{(n // 60) % 60:02d}:{n % 60:02d}Z"
+
+                with patch.object(archive_services, "_object_storage_now_iso", _fake_now_iso):
+                    self._seed_uploaded_object(archive_root, transport, only=f"sha256:{_FAKE_SHA_A}")
+                    result = self._upload_run(
+                        archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                        reviewed_by="kim", approve=True, transport=transport,
+                        skip_uploaded=True, force_reupload=True,
+                    )
+            receipt_rel = result["receipts_written"][0]
+            receipt = json.loads((archive_root / receipt_rel).read_text(encoding="utf-8"))
+            self.assertIs(receipt["forced_reupload"], True)
+            # Both receipts persist on disk (distinct case_ids): the exemption is
+            # genuinely exercised on the forced (unlinked) one.
+            _exec_dir = archive_root / archive_services.OBJECT_STORAGE_EXECUTIONS_DIR
+            self.assertGreaterEqual(
+                len(list(_exec_dir.glob("*.object-storage-upload.json"))), 2,
+            )
+            # forced_reupload is a bare top-level boolean: it does NOT live in retry_summary.
+            self.assertNotIn("forced_reupload", receipt["retry_summary"])
+            # Schema accepts the new field (no additionalProperties:false).
+            self.assertEqual(archive_cli.validate_schema(receipt, "object-storage-upload-receipt.schema.json"), [])
+            # The C7 execution-receipt validator (Doctor) raises NO object-storage-upload
+            # ERROR on the forced receipt. The new forced_reupload top-level boolean trips
+            # neither the retry_summary scalar guard nor any named-field/schema check.
+            #
+            # v0.3.175 FIX A exemption: a `--force-reupload` re-PUT lands a SECOND
+            # `uploaded` receipt at the SAME content-addressed remote_key of an object that
+            # already carries its lone wom_uploaded location (linking the ORIGINAL receipt).
+            # The C7 manifest-linkage requirement now EXEMPTS receipts with
+            # forced_reupload=true, so the legitimate forced receipt no longer emits a
+            # spurious object_storage_upload_wom_location_missing. Assert NO
+            # object-storage-upload ERROR of ANY code fires on this receipt — including the
+            # linkage code, which the exemption must suppress.
+            diagnostics = archive_cli.Doctor(archive_root).run()
+            forced_field_errors = [
+                d for d in diagnostics
+                if d.severity == "ERROR"
+                and d.code and d.code.startswith("object_storage_upload_")
+            ]
+            self.assertEqual(
+                forced_field_errors, [], [(d.code, d.message, d.path) for d in forced_field_errors]
+            )
+            # The exemption specifically suppresses the manifest-linkage error on the
+            # forced receipt (it would otherwise fire — the lone location links the
+            # original receipt, not this forced one).
+            self.assertNotIn(
+                "object_storage_upload_wom_location_missing",
+                {d.code for d in diagnostics},
+            )
+            # Explicitly: the scalar-only retry_summary guard did NOT fire on this receipt.
+            self.assertNotIn(
+                "object_storage_upload_retry_summary_not_scalar",
+                {d.code for d in diagnostics},
+            )
+            # The §6 privacy gate accepts the receipt (a bare boolean carries no leak).
+            leak = archive_services.assert_no_secret_or_location_leak(
+                json.dumps(receipt, ensure_ascii=False), key_values=[]
+            )
+            self.assertEqual(leak, [])
+
+    def test_force_reupload_respects_put_ceiling(self) -> None:  # FIX A #15 (Q3/Critique 2 #2)
+        # A forced re-PUT still accrues against the HARD cumulative PUT ceiling; when
+        # the ceiling is already reached the run aborts with total_put_ceiling_exceeded
+        # BEFORE the next object's PUTs, independent of --max-objects.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+                self._seed_uploaded_object(archive_root, transport, only=f"sha256:{_FAKE_SHA_A}")
+                # Force the run's cumulative counter to the ceiling by patching the
+                # module constant to 0 so the guard trips before the forced re-PUT.
+                with patch.object(archive_services, "OBJECT_STORAGE_TOTAL_PUT_CEILING", 0):
+                    result = self._upload_run(
+                        archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                        reviewed_by="kim", approve=True, transport=transport,
+                        skip_uploaded=True, force_reupload=True,
+                    )
+            self.assertFalse(result["ok"], result)
+            self.assertTrue(
+                any("total_put_ceiling_exceeded" in b for b in result["blockers"]),
+                result["blockers"],
+            )
 
     # --- Stage 2: SA-4 derived signing-material leak gate ---
 

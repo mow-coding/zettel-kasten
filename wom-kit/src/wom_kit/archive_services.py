@@ -57830,11 +57830,12 @@ def object_storage_proven_tier(root: Path, *, provider_kind: str, store_ref: str
     - tier 0: no prior successful live object for this store.
     - tier >= 1: at least one prior `uploaded`/`skipped_remote_same` receipt (a
       single tiny-first object has landed).
-    - tier >= 2: a prior success whose bytes_uploaded reached the multipart
-      threshold (a genuine large-object / multipart proof).
+    - tier >= 2: a prior `uploaded` success that is a genuine large-object PUT
+      (bytes_uploaded reached the 5 GiB multipart threshold) OR a real multipart
+      execution (part_count > 1, e.g. a FORCED small multipart used for live
+      verification). Either is a multipart proof.
     - tier >= 3: at least OBJECT_STORAGE_TIER3_BATCH_MIN distinct objects have
-      landed AND a tier-2 large-object proof exists (a batch proof: the store has
-      demonstrably absorbed both a big object and a batch).
+      landed AND a tier-2 multipart proof exists (5 GiB OR forced-small-multipart).
     Tiers 4/5 are operational milestones layered above tier 3; this derivation
     caps at 3 from receipt facts alone and never fabricates a higher tier.
     """
@@ -57850,7 +57851,14 @@ def object_storage_proven_tier(root: Path, *, provider_kind: str, store_ref: str
             continue
         tier = max(tier, 1)
         successful_object_ids.add(str(data.get("object_id") or ""))
-        if int(data.get("bytes_uploaded") or 0) >= OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES:
+        # tier2 is proven by EITHER a genuine 5 GiB large-object PUT (kept byte-identical)
+        # OR a real multipart execution (part_count > 1). part_count > 1 is only ever
+        # written from _object_storage_multipart_put on an `uploaded` receipt (:58121);
+        # skip statuses carry part_count 0, so guard on status == "uploaded" so a future
+        # receipt shape that carries part_count on a skip cannot silently mint tier2.
+        if int(data.get("bytes_uploaded") or 0) >= OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES or (
+            status == "uploaded" and int(data.get("part_count") or 0) > 1
+        ):
             saw_multipart_proof = True
             tier = max(tier, 2)
     if saw_multipart_proof and len(successful_object_ids) >= OBJECT_STORAGE_TIER3_BATCH_MIN:
@@ -58685,6 +58693,7 @@ def object_storage_upload_run(
     only: str | None = None,
     max_objects: int | None = None,
     skip_uploaded: bool = False,
+    force_reupload: bool = False,
     reviewed_by: str | None = None,
     approve: bool = False,
     dry_run: bool = False,
@@ -58806,6 +58815,34 @@ def object_storage_upload_run(
     normalized_reviewer = str(reviewed_by or "").strip()
     if approve and not normalized_reviewer:
         blockers.append("object-storage-upload requires --reviewed-by when --approve is used.")
+
+    # FIX A (v0.3.175, DEC-5/DEC-6): --force-reupload re-PUTs an already-present,
+    # size/hash-matching object to exercise a LIVE provider PUT (e.g. a forced small
+    # multipart). The service re-enforces every gate so a direct service/MCP call
+    # cannot force a re-PUT without approval + reviewer. The conflict-guard bypass
+    # (present+match skip suppressed below, HEAD-before suppressed in the executor)
+    # is safe ONLY because BOTH current key strategies embed the full 64-hex digest
+    # (object_storage_content_addressed_key_hint / <prefix>/<digest>, hard-enforced
+    # by the `clean not in key` raise): a re-PUT there overwrites hash-anomalous
+    # bytes with sha-verified-correct bytes at a content-addressed key. A future
+    # non-sha strategy would make force-reupload a real clobber vector, so refuse it.
+    if force_reupload and not approve:
+        blockers.append("object-storage-upload --force-reupload requires --approve.")
+    if force_reupload and not normalized_reviewer:
+        blockers.append(
+            "object-storage-upload --force-reupload requires --reviewed-by when forcing a re-upload."
+        )
+    if force_reupload and dry_run:
+        blockers.append("object-storage-upload --force-reupload has no effect under --dry-run.")
+    if force_reupload and normalized_strategy not in {
+        OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,          # sha256_content_addressed
+        OBJECT_STORAGE_UPLOAD_KEY_STRATEGY_PREFIX,   # prefix
+    }:
+        blockers.append(
+            "force_reupload_requires_sha_derived_key: --force-reupload is refused for a key "
+            "strategy whose remote key does not embed the object digest; the conflict-guard "
+            "bypass is safe only when the key binds the bytes."
+        )
 
     credential_summary = _object_storage_validate_credential_refs(
         access_key_id_ref=access_key_id_ref,
@@ -59030,7 +59067,7 @@ def object_storage_upload_run(
                                 skip_ok = bool(size_matches)
                             else:
                                 skip_ok = bool(size_matches and head_now.get("checksum_sha256") == digest)
-                            if skip_ok:
+                            if skip_ok and not force_reupload:
                                 execution_results.append(
                                     {
                                         "object_id": object_id,
@@ -59047,6 +59084,17 @@ def object_storage_upload_run(
                                     }
                                 )
                                 continue
+                            # FIX A (v0.3.175, DEC-7/DEC-8): a forced re-PUT of a
+                            # PRESENT+match object must NOT take the skip short-circuit
+                            # above AND must set the executor's force_upload so the
+                            # ledger terminal-success short-circuit and the redundant
+                            # HEAD-before are bypassed for this object. Control still
+                            # falls THROUGH to the unconditional pre-PUT local re-verify
+                            # below (a corrupt local file is refused before any PUT) and
+                            # to the HEAD-after GET-rehash + orphan cleanup — a re-PUT is
+                            # verified exactly like a first PUT.
+                            if force_reupload:
+                                force_upload_after_absent = True
                             # Absent / size-mismatch at the recorded key: re-upload.
                             # This needs the local bytes; if they are missing we
                             # cannot honor the (now falsified) skip, so surface it.
@@ -59144,6 +59192,7 @@ def object_storage_upload_run(
                             remote_key=remote_key,
                             effective_multipart_threshold_bytes=effective_multipart_threshold_bytes,
                             effective_multipart_part_size_bytes=effective_multipart_part_size_bytes,
+                            forced_reupload=force_reupload,
                         )
                         # §6 leak gate on the fully-serialized receipt BEFORE write.
                         serialized = json.dumps(json_safe(receipt), ensure_ascii=False, default=str)
@@ -59925,6 +59974,7 @@ def _object_storage_build_execution_receipt(
     remote_key: str | None = None,
     effective_multipart_threshold_bytes: int = OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
     effective_multipart_part_size_bytes: int = OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES,
+    forced_reupload: bool = False,
 ) -> dict[str, Any]:
     """Assemble the execution receipt from a FIXED scalar allowlist (RC5).
 
@@ -59959,6 +60009,14 @@ def _object_storage_build_execution_receipt(
         # live-verification aid) rather than incidental to object size.
         "effective_multipart_part_size_bytes": int(effective_multipart_part_size_bytes),
         "part_count": int(result.get("part_count") or 0),
+        # FIX A (v0.3.175, DEC-10): a bare top-level boolean, True only on a real
+        # forced re-PUT (--force-reupload). MUST NOT be nested in retry_summary (the
+        # scalar-only guard iterates that dict); a top-level boolean trips no
+        # validator (the schema has no additionalProperties:false) and the §6 leak
+        # gate sees only true/false, carrying no secret or location. On every default
+        # run it is False, so default receipts stay byte-shaped-identical but for this
+        # always-present boolean.
+        "forced_reupload": bool(forced_reupload),
         "retry_summary": {
             "attempts": int(result.get("attempts") or 0),
             "last_status_class": str(result.get("result_status") or "failed_upload"),

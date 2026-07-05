@@ -6,6 +6,32 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.175 - 2026-07-05
+
+Live-verification aids for the object-storage upload adapter (Stage 2): a forced re-upload of
+an already-present object, and multipart-proven upload tier2. Additive; no migration; default
+behavior and existing receipts/manifests are byte-identical.
+
+- **Approval-gated `--force-reupload`.** `object-storage-upload --force-reupload` RE-PUTs an
+  already-present object whose remote bytes already size/hash-match, so a client can exercise
+  a LIVE provider PUT (e.g. a forced small multipart) on the only object it has. It requires
+  `--approve` AND `--reviewed-by` (a deliberate provider PUT cost and a live overwrite), is
+  inert under `--dry-run`, and is REFUSED for any non-sha-derived `--key-strategy` (the
+  conflict-guard bypass is safe only when the remote key embeds the object digest). The
+  pre-PUT local `sha256(local)==object_id` re-verify still runs, so a corrupt local file is
+  refused before any PUT; the HEAD-after GET-rehash verification, orphan cleanup on mismatch,
+  and the cumulative `OBJECT_STORAGE_TOTAL_PUT_CEILING` all remain in force. The execution
+  receipt records a top-level `forced_reupload` boolean. Default (flag absent) is
+  byte-identical to prior behavior.
+- **Multipart-proven upload tier2.** `object_storage_proven_tier` now recognizes a real
+  multipart execution (`part_count > 1` on an `uploaded` receipt) as a legitimate tier2 proof,
+  in addition to the existing 5 GiB `bytes_uploaded` path (kept verbatim). A forced small
+  multipart — already possible via `--multipart-part-size`/`--allow-tiny-parts` — is now the
+  tier2 proof it actually is, so a byte-external client with no >5 GiB object can prove upload
+  tier2. The `status == "uploaded"` guard blocks a fabricated skip receipt from minting tier2.
+  The adopt tier ladder (`object_storage_adopt_requested_tier` / `object_storage_adopt_proven_tier`)
+  is unaffected. Additive; no migration.
+
 ## v0.3.174 - 2026-07-05
 
 Decouple verified-adopt tiered gating from the object-storage-upload 5 GiB multipart proof.
