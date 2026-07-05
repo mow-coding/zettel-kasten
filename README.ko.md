@@ -31,10 +31,10 @@ tag 목록을 여기서 다시 키우지 않습니다.
 현재 공개 기준:
 
 ```text
-v0.3.170 pre-release
+v0.3.171 pre-release
 ```
 
-이전 공개 기준: v0.3.169 pre-release.
+이전 공개 기준: v0.3.170 pre-release.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -127,7 +127,7 @@ Object storage:
 - 버킷명·정확한 다음 명령·Cloudflare R2 설정 필드 안내를 곁들인 manifest-aware object-storage 추천, adapter readiness/operation request/execution-contract/presigned URL 계획,
 - approval-gated 외부 upload evidence 등록과 read-only upload evidence 감사(라이브 provider adapter 이전 단계),
 - 라이브 업로드 어댑터 Stage 2: 단일 네트워킹 seam 뒤에 손으로 구현한 실제 AWS SigV4 R2/S3 전송 계층(새 의존성 없음), (단일 PUT·multipart 모두에 적용되는) bounded 재시도 루프, 하드 누적 PUT 상한, 프로바이더의 체크섬 표면에 의존하지 않고 재다운로드-후-해시로 검증하는 전체 객체 무결성, orphan 정리, tiered tiny-first 게이트. 이제 실제 업로드 능력을 갖췄지만 라이브 `--approve`는 여전히 env 자격 증명·충족된 tiered 게이트·endpoint/bucket 없이는 닫힌 상태로 실패하며, 첫 사람 실행 라이브 객체 전까지 `unproven_against_live_provider` 상태를 유지,
-- 선택 가능하고 기록되는 업로드 키 전략(`--key-strategy sha256_content_addressed|prefix`, 기본값 불변)과 안전한 `object-storage-adopt-existing` 명령: 운영자 자신의 키 레이아웃에 이미 저장된 객체는 기록된 키에서 존재+크기 일치를 증명하는 라이브 HEAD가 있을 때만 채택하고, 라이브 전송 계층에서는 실행기가 스킵 전에 항상 그 기록된 키를 다시 HEAD 한다(404면 재업로드하며, 조용한 스킵은 없음),
+- 선택 가능하고 기록되는 업로드 키 전략(`--key-strategy sha256_content_addressed|prefix`, 기본값 불변)과 안전한 `object-storage-adopt-existing` 명령: 운영자 자신의 키 레이아웃에 이미 저장된 객체는 기록된 키에서 존재+크기 일치를 증명하는 라이브 HEAD가 있을 때만 채택하고, 라이브 전송 계층에서는 실행기가 스킵 전에 항상 그 기록된 키를 다시 HEAD 한다(404면 재업로드하며, 조용한 스킵은 없음); 콘텐츠 주소 템플릿이 객체별 확장자를 복원하지 못할 때는 선택형 `--key-map`(JSONL sha256 -> 정확한 원격 키)으로 운영자의 실제 키에 저장된 객체를 채택하며, 크기는 여전히 매니페스트에서만 가져오고 모든 키는 digest 바인딩과 leak 가드를 통과한다,
 
 IMAP:
 

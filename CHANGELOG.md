@@ -6,6 +6,44 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.171 - 2026-07-04
+
+`object-storage-adopt-existing --key-map`: the hardened 158 GB false-skip fix. A
+new opt-in flag lets an operator hand WOM the EXACT existing remote key per object
+(JSONL: `{"sha256":"<64hex>","remote_key":"<key>"}` per line), so objects a client
+already uploaded under their own per-object extension are adopted instead of being
+re-uploaded. Additive and adopt-only; the default path (no `--key-map`) is
+byte-identical to before, and no `object-storage-upload` behavior changes.
+
+- New `--key-map` on `object-storage-adopt-existing` (adopt subcommand only). For a
+  mapped object the map value becomes the resolved `remote_key` verbatim, bypassing
+  the `object_storage_remote_key` template; `--key-strategy`/`--key-prefix`/
+  `--key-append-extension` are IGNORED for mapped objects. This recovers the
+  prehashed-ledger case where the manifest `logical_key` has no filename extension,
+  so `--key-append-extension` recovers nothing and every template HEAD 404s.
+- Binding audit `object_storage_map_key_binds_digest_segment`: an operator-supplied
+  key must bind the object's 64-hex sha256 as a full `/`-delimited path segment OR
+  the filename stem — strictly stronger than the shipped substring check. A map that
+  points one object's sha at a different object's real key is refused (per-row skip,
+  re-uploads). This narrows, but does not eliminate, the same-size-wrong-bytes hole;
+  `--content-hash-verify` remains the only cryptographic proof (documented residual).
+- Size is ALWAYS sourced from the manifest, never from the map; a mapped object whose
+  manifest `size_bytes` is null never adopts on presence alone
+  (`mapped_but_no_manifest_size_count`). A mapped key that 404s or size-mismatches
+  re-uploads, never false-skips (live HEAD gate unchanged). Every written delta still
+  passes the existing adopt leak guard and `safe_object_storage_remote_key`.
+- Fail-safe map loader `read_object_storage_key_map` (fail-closed UTF-8/JSONL, BOM
+  strip, 200,000-entry cap): an unreadable/non-JSONL file, a row missing a field, a
+  non-hex sha, an unsafe key, a duplicate sha with conflicting keys, or an over-cap
+  file is whole-run-fatal — adopt ZERO, no partial adopt. A duplicate sha with the
+  identical key is deduped.
+- Reporting: `adopt_summary` gains `key_map_used`, `mapped_count`, `unmapped_count`,
+  `map_rejected_count`, and `mapped_but_no_manifest_size_count`; each `adopt_results`
+  row carries `key_source` ∈ {`template`,`map`,`map_rejected`,`unmapped`}. A
+  discoverability warning points at `--key-map` (and the lossy mime-derived fallback)
+  when a template run with `--key-append-extension` recovers no extension for a high
+  fraction of objects.
+
 ## v0.3.170 - 2026-07-04
 
 Runtime AI-operator discipline. A normative "AI-Operator Discipline" section is

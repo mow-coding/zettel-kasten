@@ -57241,6 +57241,132 @@ def object_storage_location_remote_key_binds_digest(location: Any, object_id: st
     return digest in remote_key
 
 
+def object_storage_map_key_binds_digest_segment(remote_key: Any, digest: Any) -> bool:
+    """Operator-supplied --key-map binding audit (locked spec §3.1, Critique A1).
+
+    STRICTLY STRONGER than the shipped `digest in remote_key` substring check
+    used by the prefix-strategy audit path. An operator hands WOM a full
+    bucket-relative key per object; a mechanically-generated ledger addresses
+    each object at its own slot, so the object's 64-hex sha256 digest must appear
+    EITHER as a full `/`-delimited path segment OR as the filename stem (the tail
+    after the last `/`, taken up to its first `.`). This refuses a hand-edited map
+    that points sha-A at sha-B's real key (sha-B's key has no sha-A segment/stem),
+    shrinking the residual same-size-wrong-bytes hole to the object's addressed
+    slot. It is NOT cryptographic proof — only --content-hash-verify is (§6, A2).
+    """
+    if not isinstance(remote_key, str) or not safe_object_storage_remote_key(remote_key):
+        return False
+    clean = str(digest or "").removeprefix("sha256:").lower()
+    if not SHA256_RE.match(clean):
+        return False
+    segments = remote_key.split("/")
+    if clean in segments:
+        return True
+    tail = segments[-1]
+    stem = tail.split(".", 1)[0]
+    return stem == clean
+
+
+def read_object_storage_key_map(map_path: Path, *, max_entries: int) -> dict[str, Any]:
+    """Load an operator --key-map: JSONL, UTF-8, one object per line (§2/§5).
+
+    Each line is exactly {"sha256":"<64hex>","remote_key":"<exact key>"}. Mirrors
+    read_prehashed_objet_ledgers' fail-closed idiom: open("r", encoding="utf-8"),
+    per-line json.loads, and `except (OSError, UnicodeError)` -> a blocker. The
+    WHOLE file is parsed and validated before returning; the caller adopts NOTHING
+    if `blockers` is non-empty (A4 — no partial adopt from a half-parsed map).
+
+    Whole-run-fatal rules (append a blocker, return whatever was parsed):
+      1. unreadable / non-UTF-8 / any line not a JSON object.
+      2. any row missing sha256/remote_key, or sha256 not normalizable to 64-hex.
+      3. any remote_key failing safe_object_storage_remote_key (URL/bucket/host/
+         leading-slash/`..`/whitespace/control).
+      4. duplicate sha256 with a DIFFERENT remote_key (ambiguous). Duplicate with
+         an IDENTICAL key is deduped silently (counted in duplicate_deduped).
+      5. more than max_entries data rows (guards OOM on a huge/garbage file).
+
+    A leading UTF-8 BOM on the first line is stripped before parse (v0.3.x BOM
+    discipline). Blank lines are skipped. Unknown fields are ignored
+    (forward-compatible); a `size`/`length` field, even if present, is NEVER
+    consumed — size always comes from the manifest (A3/B5).
+    """
+    blockers: list[str] = []
+    warnings: list[str] = []
+    key_map: dict[str, str] = {}
+    entry_count = 0
+    duplicate_deduped = 0
+    if not isinstance(map_path, Path) or not map_path.is_file():
+        blockers.append("key-map must be an existing JSONL file.")
+        return {
+            "map": key_map,
+            "entry_count": 0,
+            "duplicate_deduped": 0,
+            "blockers": blockers,
+            "warnings": warnings,
+        }
+    try:
+        first_line = True
+        with map_path.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line
+                if first_line:
+                    line = line.lstrip("﻿")
+                    first_line = False
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    blockers.append("key-map could not be read safely as UTF-8 JSONL.")
+                    continue
+                if not isinstance(row, dict):
+                    blockers.append("key-map could not be read safely as UTF-8 JSONL.")
+                    continue
+                entry_count += 1
+                if entry_count > max_entries:
+                    blockers.append(
+                        f"key-map exceeds the {max_entries}-entry safety cap; refusing to adopt."
+                    )
+                    break
+                raw_sha = row.get("sha256")
+                raw_key = row.get("remote_key")
+                if raw_sha is None or raw_key is None:
+                    blockers.append("key-map row is missing sha256 or remote_key.")
+                    continue
+                row_sha = normalize_prehashed_ledger_sha256(raw_sha)
+                if row_sha is None:
+                    blockers.append("key-map sha256 is not a 64-hex sha256 digest.")
+                    continue
+                if not isinstance(raw_key, str) or not safe_object_storage_remote_key(raw_key):
+                    blockers.append(
+                        "key-map remote_key is not a safe bucket-relative object key "
+                        "(no leading slash, no '..', no URL/bucket/host, no whitespace/control)."
+                    )
+                    continue
+                if row_sha in key_map:
+                    if key_map[row_sha] == raw_key:
+                        duplicate_deduped += 1
+                        continue
+                    blockers.append(
+                        "key-map has a duplicate sha256 with conflicting remote_keys; refusing to adopt."
+                    )
+                    continue
+                key_map[row_sha] = raw_key
+    except (OSError, UnicodeError):
+        blockers.append("key-map could not be read safely as UTF-8 JSONL.")
+    return {
+        "map": key_map,
+        "entry_count": entry_count,
+        "duplicate_deduped": duplicate_deduped,
+        "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
+    }
+
+
+OBJECT_STORAGE_KEY_MAP_MAX_ENTRIES = 200_000
+
+
 def safe_object_storage_execution_receipt_relative(value: Any) -> bool:
     if not isinstance(value, str):
         return False
@@ -58955,6 +59081,7 @@ def object_storage_adopt_existing_run(
     key_strategy: str = OBJECT_STORAGE_UPLOAD_KEY_STRATEGY_PREFIX,
     key_prefix: str | None = None,
     append_extension: bool = False,
+    key_map_path: Path | None = None,
     accept_unverified_adopt: bool = False,
     content_hash_verify: bool = False,
     approve: bool = False,
@@ -59000,9 +59127,19 @@ def object_storage_adopt_existing_run(
     if not normalized_store_ref or not safe_object_storage_ref(normalized_store_ref):
         blockers.append("store_ref must be a safe store label; do not pass a URL, path, token, or secret.")
 
-    normalized_strategy = _object_storage_validate_key_strategy(
-        key_strategy=key_strategy, key_prefix=key_prefix, blockers=blockers
-    )
+    # --key-map (B3) IGNORES --key-strategy/--key-prefix/--key-append-extension
+    # per mapped object: the map value is the FULL exact remote_key and bypasses
+    # object_storage_remote_key entirely. So a key-map run must NOT require a
+    # --key-prefix (nor refuse a stray strategy/prefix) — it simply records the
+    # normalized strategy for the receipt without gating on it.
+    if key_map_path is not None:
+        normalized_strategy = str(key_strategy or "").strip() or OBJECT_STORAGE_UPLOAD_KEY_STRATEGY
+        if normalized_strategy not in OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES:
+            normalized_strategy = OBJECT_STORAGE_UPLOAD_KEY_STRATEGY
+    else:
+        normalized_strategy = _object_storage_validate_key_strategy(
+            key_strategy=key_strategy, key_prefix=key_prefix, blockers=blockers
+        )
 
     normalized_reviewer = str(reviewed_by or "").strip()
     if approve and not normalized_reviewer:
@@ -59057,33 +59194,92 @@ def object_storage_adopt_existing_run(
                     "adopt a single tiny-first object (--only <id>) before a batch."
                 )
 
+    # --key-map (§3): load + validate the whole operator map UP FRONT. On any
+    # whole-run-fatal error (§5), append blockers and adopt ZERO — never a partial
+    # adopt from a half-parsed map (A4). The map overrides --key-strategy/
+    # --key-prefix/--key-append-extension per mapped object (B3); size is NEVER
+    # sourced from the map (A3/B5).
+    key_map: dict[str, str] | None = None
+    key_map_used = bool(key_map_path is not None)
+    if not blockers and key_map_path is not None:
+        key_map_load = read_object_storage_key_map(
+            key_map_path, max_entries=OBJECT_STORAGE_KEY_MAP_MAX_ENTRIES
+        )
+        for blocker in key_map_load.get("blockers") or []:
+            blockers.append(blocker)
+        for warning in key_map_load.get("warnings") or []:
+            warnings.append(warning)
+        if not blockers:
+            key_map = key_map_load.get("map") or {}
+
     # Resolve each object's remote_key up front (no bytes, no secret).
     plan_rows: list[dict[str, Any]] = []
+    mapped_count = 0
+    unmapped_count = 0
+    map_rejected_count = 0
+    mapped_but_no_manifest_size_count = 0
+    present_row_count = 0
+    ext_unrecoverable_present_count = 0
     if not blockers:
         for object_id in object_ids:
             digest = str(object_id).removeprefix("sha256:").lower()
             record = find_manifest_record(root, object_id)
-            ext = _object_storage_recovered_extension(record) if append_extension else None
+            recovered_ext_for_row = _object_storage_recovered_extension(record)
+            ext = recovered_ext_for_row if append_extension else None
+            if isinstance(record, dict):
+                present_row_count += 1
+                if recovered_ext_for_row is None:
+                    ext_unrecoverable_present_count += 1
             remote_key = None
             key_error = None
-            try:
-                remote_key = object_storage_remote_key(
-                    strategy=normalized_strategy,
-                    digest=digest,
-                    ext=ext,
-                    key_prefix=key_prefix,
-                    append_extension=append_extension,
-                )
-            except ArchiveServiceError as exc:
-                key_error = str(exc)
+            key_source = "template"
+            if key_map is not None:
+                # --key-map present: mapped rows bypass object_storage_remote_key
+                # entirely (B2/B3); unmapped rows are reported and NOT adopted (A5
+                # report-unmapped-not-adopted) — they do NOT silently fall to the
+                # broken template.
+                mapped_key = key_map.get(digest)
+                if mapped_key is not None:
+                    if object_storage_map_key_binds_digest_segment(
+                        mapped_key, digest
+                    ) and safe_object_storage_remote_key(mapped_key):
+                        remote_key = mapped_key
+                        key_source = "map"
+                        mapped_count += 1
+                    else:
+                        key_error = "map_key_rejected_binding_or_safety"
+                        key_source = "map_rejected"
+                        map_rejected_count += 1
+                else:
+                    key_error = "unmapped_no_key_map_entry"
+                    key_source = "unmapped"
+                    unmapped_count += 1
+            else:
+                try:
+                    remote_key = object_storage_remote_key(
+                        strategy=normalized_strategy,
+                        digest=digest,
+                        ext=ext,
+                        key_prefix=key_prefix,
+                        append_extension=append_extension,
+                    )
+                except ArchiveServiceError as exc:
+                    key_error = str(exc)
             size_bytes = record.get("size_bytes") if isinstance(record, dict) else None
+            normalized_size = size_bytes if isinstance(size_bytes, int) else None
+            if key_source == "map" and normalized_size is None:
+                # A mapped object present at its key must NEVER adopt on presence
+                # alone when the manifest has no size to gate on (A3/B5). Report a
+                # distinct reason; the null-size row simply never size-matches.
+                mapped_but_no_manifest_size_count += 1
             plan_rows.append(
                 {
                     "object_id": object_id,
                     "digest": digest,
                     "remote_key": remote_key,
                     "key_resolution_error": key_error,
-                    "size_bytes": size_bytes if isinstance(size_bytes, int) else None,
+                    "key_source": key_source,
+                    "size_bytes": normalized_size,
                     "record_present": isinstance(record, dict),
                 }
             )
@@ -59094,6 +59290,30 @@ def object_storage_adopt_existing_run(
     declared_count = 0
     manifest_updates = 0
     total_objects = len(plan_rows)
+
+    # Discoverability hint (B7/B9): the prehashed-manifest signature is a
+    # logical_key with no dot, so --key-append-extension recovers NOTHING and the
+    # 158 GB wall re-appears. When a template run (no --key-map) has
+    # append_extension on and the extension is unrecoverable for a high fraction
+    # (>= 50%) of present rows, point the operator at --key-map, the runbook, and
+    # the LOSSY mime-derived alternative. Surfaced in dry-run preview too.
+    if (
+        not blockers
+        and append_extension
+        and key_map is None
+        and present_row_count > 0
+        and (ext_unrecoverable_present_count * 2) >= present_row_count
+    ):
+        warnings.append(
+            "key_map_hint: --key-append-extension recovered no extension for "
+            f"{ext_unrecoverable_present_count} of {present_row_count} present objects "
+            "(the prehashed-ledger signature: a logical_key with no filename extension), "
+            "so those keys will HEAD-404 and re-upload. Hand WOM the exact existing keys "
+            "with --key-map (JSONL: {\"sha256\":\"<64hex>\",\"remote_key\":\"<key>\"} per line); "
+            "see wom-kit/docs/object-storage-adopt-existing-key-map-runbook.md. A lossy "
+            "mime-derived extension (extension_from_mime_hint over the stored manifest mime) "
+            "is a fallback only — it can HEAD-404 on .jpg vs .jpeg or octet-stream."
+        )
 
     result = _object_storage_upload_base_result(
         lifecycle_action="object_storage_adopt_existing",
@@ -59329,6 +59549,24 @@ def object_storage_adopt_existing_run(
             secret_value = None
 
     would_reupload = max(total_objects - adopted_count - declared_count, 0)
+    # Thread the plan-row key_source into each adopt_results row (B11) so a partial
+    # or wrong map is visible per-object. object_ids are unique from the resolver.
+    key_source_by_object_id = {row["object_id"]: row.get("key_source", "template") for row in plan_rows}
+    for adopt_row in adopt_results:
+        adopt_row["key_source"] = key_source_by_object_id.get(adopt_row.get("object_id"), "template")
+    if key_map_used:
+        report = (
+            f"{adopted_count} of {total_objects} adopted (presence+size); "
+            f"{mapped_count} mapped, {unmapped_count} unmapped (no --key-map entry), "
+            f"{map_rejected_count} map entries refused; {would_reupload} will re-upload."
+        )
+    elif not accept_unverified_adopt:
+        report = (
+            f"{adopted_count} of {total_objects} adopted (presence+size); "
+            f"{would_reupload} will re-upload."
+        )
+    else:
+        report = f"{declared_count} of {total_objects} declared (unverified — will NOT skip a PUT)."
     result.update(
         {
             "ok": not blockers,
@@ -59345,14 +59583,16 @@ def object_storage_adopt_existing_run(
                 "declared_count": declared_count,
                 "not_adopted_count": not_adopted_count,
                 "would_reupload_count": would_reupload,
-                # §6.4: a human-readable partial-adopt line so a template miss is
-                # visible rather than silently paid for on re-upload.
-                "report": (
-                    f"{adopted_count} of {total_objects} adopted (presence+size); "
-                    f"{would_reupload} will re-upload."
-                    if not accept_unverified_adopt
-                    else f"{declared_count} of {total_objects} declared (unverified — will NOT skip a PUT)."
-                ),
+                # §4/§6.4: key-map coverage counts so a partial or wrong map is
+                # visible, never a silent partial adopt.
+                "key_map_used": key_map_used,
+                "mapped_count": mapped_count,
+                "unmapped_count": unmapped_count,
+                "map_rejected_count": map_rejected_count,
+                "mapped_but_no_manifest_size_count": mapped_but_no_manifest_size_count,
+                # A human-readable partial-adopt line so a template miss is visible
+                # rather than silently paid for on re-upload.
+                "report": report,
             },
             "manifest_updates": manifest_updates,
             "live_execution_allowed_now": False,
