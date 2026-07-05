@@ -105,13 +105,21 @@ self-limits to zero adopts and those objects simply re-upload. A **declared** ad
 (`--accept-unverified-adopt`, distinct from `--approve`) records a NON-gating
 `declared_uploaded` location that never skips a PUT.
 
-Verified adopt is a new live-execution surface (it reaches the live transport), so
-it honours the same SA-6 tiny-first tiered gate as `object-storage-upload`: a bulk
-first-live adopt REFUSES with `tiered_gate_unmet` until a single tiny-first object
-(`--only <id>`) has proved the store. A location adopted presence+size records
-`remote_key_verification: presence_size`, and the executor's later skip re-HEAD of
-such a location is likewise presence-only — a size-only proof is never silently
-promoted to a content-hash claim.
+Verified adopt is a live-execution surface (it reaches the live transport), so it
+still bounds the first live batch behind a tiny-first proof. Since v0.3.174 the
+adopt gate is DECOUPLED from the `object-storage-upload` 5 GiB / multipart tier
+proof (additive, no migration): adopt is HEAD-only and moves zero bytes, so it uses
+a BINARY adopt-specific gate rather than the upload 3-tier ladder — a single
+tiny-first adopt (`--only <id>`) is always permitted, and exactly one prior VERIFIED
+tiny-first adopt unlocks a batch adopt of any size N. A bulk first-live adopt on a
+store with no prior verified adopt REFUSES with `adopt_tiny_first_unmet` (NOT the
+upload gate's `tiered_gate_unmet`, which is unchanged); the adopt proof is derived
+only from execution receipts carrying a verified `adopt_verification` marker
+(`presence_size`/`content_hash`), so an `object-storage-upload` receipt never
+unblocks adopt and a declared/unverified adopt never counts. A location adopted
+presence+size records `remote_key_verification: presence_size`, and the executor's
+later skip re-HEAD of such a location is likewise presence-only — a size-only proof
+is never silently promoted to a content-hash claim.
 
 ## Integrity Rules
 

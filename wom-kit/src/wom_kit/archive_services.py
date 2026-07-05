@@ -57870,6 +57870,50 @@ def object_storage_requested_tier(*, object_count: int) -> int:
     return 3 if int(object_count) > 1 else 1
 
 
+def object_storage_adopt_requested_tier(*, object_count: int) -> int:
+    """Adopt-specific requested tier (v0.3.174). DECOUPLED from the upload
+    3-tier ladder: adopt is HEAD-only and moves ZERO bytes, so it needs no
+    5 GiB-multipart proof and no TIER3_BATCH_MIN distinct-object proof.
+
+    Binary: a single tiny-first adopt is tier 1; ANY batch (>1 object) is tier 2.
+    With the shared `requested - 1 > proven` gate this means a single adopt is
+    always permitted (predecessor tier 0 = empty store), and a batch requires a
+    proven tier >= 1 (i.e. exactly one prior verified tiny-first adopt).
+    """
+    return 2 if int(object_count) > 1 else 1
+
+
+def object_storage_adopt_proven_tier(
+    root: Path, *, provider_kind: str, store_ref: str
+) -> int:
+    """Adopt-specific proven tier (v0.3.174), derived ONLY from execution
+    receipts for this store — NEVER from manifest declared_uploaded/wom_uploaded
+    locations (a declared/unverified adopt writes a location but NO receipt, so
+    it can never enter this proof).
+
+    A receipt is a VERIFIED-ADOPT proof ONLY when it carries a verified adopt
+    marker: adopt_verification in {"presence_size", "content_hash"} (the sole
+    assignment site is _object_storage_write_adopt_receipt) AND result_status
+    == "skipped_remote_same". A bare skipped_remote_same receipt WITHOUT
+    adopt_verification is an UPLOAD skip and does NOT count.
+
+    Returns 1 once >= 1 verified-adopt receipt exists for this store, else 0.
+    No 5 GiB rule, no distinct-object minimum: one verified tiny-first adopt
+    unlocks any batch size N.
+    """
+    receipts = _object_storage_execution_receipts_for_store(
+        root, provider_kind=provider_kind, store_ref=store_ref
+    )
+    for data in receipts:
+        verification = str(data.get("adopt_verification") or "")
+        if verification not in {"presence_size", "content_hash"}:
+            continue
+        if str(data.get("result_status") or "") != "skipped_remote_same":
+            continue
+        return 1
+    return 0
+
+
 def object_storage_write_execution_receipt(root: Path, case_id: str, receipt: dict[str, Any]) -> str:
     """Write a monotonic-suffixed immutable execution receipt via _atomic_write_json."""
     receipts_dir = archive_internal_path(root, OBJECT_STORAGE_EXECUTIONS_DIR)
@@ -59324,22 +59368,28 @@ def object_storage_adopt_existing_run(
                     "live_transport_not_implemented: verified adopt has no live transport reachable "
                     "(pass --accept-unverified-adopt for a non-gating declared adopt instead)."
                 )
-            # SA-6 (F5): verified adopt is a NEW live-execution surface — it
-            # issues a live HEAD per object (a batch of 19,000 = 19,000 live
-            # HEADs). It must honour the SAME tiered tiny-first gate as
-            # object-storage-upload: a bulk first-live adopt (no prior proven
-            # tier for this store) REFUSES; a single tiny-first object is always
-            # permitted. Without this a client could issue an unbounded first
-            # live batch with no tiny-first proof and no cost bound.
-            requested_tier = object_storage_requested_tier(object_count=len(object_ids))
-            proven_tier = object_storage_proven_tier(
+            # SA-6 (F5) v0.3.174: verified adopt is a NEW live-execution surface
+            # — it issues a live HEAD per object (a batch of 19,054 = 19,054 live
+            # HEADs). It must still bound the first live batch behind a tiny-first
+            # proof, BUT adopt is DECOUPLED from the object-storage-upload 3-tier
+            # ladder: adopt is HEAD-only and moves ZERO bytes, so there is no
+            # 5 GiB-multipart proof and no TIER3_BATCH_MIN distinct-object proof
+            # for adopt. The adopt gate is BINARY: a single tiny-first adopt is
+            # always permitted (predecessor tier 0 = empty store), and exactly ONE
+            # prior verified tiny-first adopt (a receipt carrying an
+            # adopt_verification marker) unlocks a batch adopt of ANY size N. An
+            # object-storage-upload receipt does NOT unblock adopt.
+            requested_tier = object_storage_adopt_requested_tier(object_count=len(object_ids))
+            proven_tier = object_storage_adopt_proven_tier(
                 root, provider_kind=normalized_provider, store_ref=normalized_store_ref
             )
             if requested_tier - 1 > proven_tier:
                 blockers.append(
-                    "tiered_gate_unmet: this verified adopt requests a higher live tier than prior receipts "
-                    f"have proved for this store (requested tier {requested_tier}, proven tier {proven_tier}); "
-                    "adopt a single tiny-first object (--only <id>) before a batch."
+                    "adopt_tiny_first_unmet: a batch verified adopt for this store needs one prior "
+                    "verified tiny-first adopt (this store has none). Run a single verified adopt first: "
+                    "object-storage-adopt-existing --only <one-sha> --approve — then re-run the batch. "
+                    "(Adopt is HEAD-only and decoupled from the object-storage-upload 5 GiB tier proof; "
+                    "an upload receipt does NOT unblock adopt.)"
                 )
 
     # --key-map (§3): load + validate the whole operator map UP FRONT. On any

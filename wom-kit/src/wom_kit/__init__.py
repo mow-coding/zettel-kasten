@@ -1,3 +1,3 @@
 """WOM-kit package for local-first zet archives."""
 
-__version__ = "0.3.173"
+__version__ = "0.3.174"

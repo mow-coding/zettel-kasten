@@ -13375,10 +13375,15 @@ state:
     # --- §12.13 partial-adopt report ---
 
     def _seed_proven_tier2(self, root, *, provider="cloudflare-r2", store="r2-basoon-20260704"):
-        """Seed prior success receipts so the store proves tier >= 2 (a multipart /
-        large-object proof), which a batch adopt (requested tier 3) requires under
-        the SA-6 / F5 tiered gate. Uses distinct synthetic object_ids so it does
-        not touch the two real objects the batch adopt operates on.
+        """Seed prior UPLOAD success receipts so the store proves upload tier >= 2
+        (a multipart / large-object proof), which an object-storage-UPLOAD batch
+        (requested upload tier 3) requires under the SA-6 tiered gate. Uses
+        distinct synthetic object_ids.
+
+        v0.3.174 (DEC-6): these are UPLOAD receipts (result_status "uploaded", NO
+        adopt_verification) and MUST NEVER be used to unblock a batch ADOPT — the
+        adopt gate is decoupled and requires a real verified tiny-first adopt
+        (see object_storage_adopt_proven_tier). This helper is UPLOAD-only.
         """
         s = archive_services
         for case, oid, nbytes in (
@@ -13396,11 +13401,23 @@ state:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             key_a = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
-            # SA-6 (F5): a batch adopt requests tier 3, which needs a proven tier
-            # >= 2 (a multipart proof). Seed that proof — mirroring a client who
-            # already ran a tiny-first + large upload before the batch adopt.
-            self._seed_proven_tier2(archive_root)
-            # SHA_B intentionally NOT seeded => it 404s and is not adopted.
+            # v0.3.174 (DEC-6/T8): a batch adopt is decoupled from the upload
+            # 5 GiB tier proof — it needs exactly ONE prior verified tiny-first
+            # adopt. Mint that proof with a REAL --only verified adopt (bytes:0 +
+            # adopt_verification), NOT a fabricated 5 GiB upload receipt. SHA_B is
+            # intentionally NOT seeded in the batch transport => it 404s and is not
+            # adopted, so the report path still exercises the partial-adopt case.
+            with self._adopt_env():
+                tiny = _FakeObjectStorageTransport()
+                tiny.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}
+                seed = self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=tiny)
+                self.assertEqual(seed["adopt_summary"]["adopted_count"], 1, seed)
+            self.assertEqual(
+                archive_services.object_storage_adopt_proven_tier(
+                    archive_root, provider_kind="cloudflare-r2", store_ref="r2-basoon-20260704"
+                ),
+                1,
+            )
             with self._adopt_env():
                 transport = _FakeObjectStorageTransport()
                 transport.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}
@@ -13553,18 +13570,246 @@ state:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             key_a = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            key_b = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_B)
             with self._adopt_env():
                 transport = _FakeObjectStorageTransport()
                 transport.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}
-                # A batch adopt on a fresh store (no prior proven tier) REFUSES.
+                transport.store[key_b] = {"size": 162, "sha": _FAKE_SHA_B}
+                # v0.3.174 (DEC-2/T2): a batch adopt on a fresh store (no prior
+                # VERIFIED tiny-first adopt) REFUSES, now with the adopt-specific
+                # blocker token — NOT the upload ladder's tiered_gate_unmet.
                 batch = self._adopt_run(archive_root, max_objects=10, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=transport)
                 self.assertFalse(batch["ok"], batch)
-                self.assertTrue(any("tiered_gate_unmet" in b for b in batch["blockers"]), batch["blockers"])
+                self.assertTrue(any("adopt_tiny_first_unmet" in b for b in batch["blockers"]), batch["blockers"])
+                self.assertFalse(any("tiered_gate_unmet" in b for b in batch["blockers"]), batch["blockers"])
                 self.assertEqual(batch["adopt_summary"]["adopted_count"], 0)
                 # A single tiny-first adopt is always permitted (tier 1).
                 single = self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=transport)
-            self.assertTrue(single["ok"], single)
-            self.assertEqual(single["adopt_summary"]["adopted_count"], 1)
+                self.assertTrue(single["ok"], single)
+                self.assertEqual(single["adopt_summary"]["adopted_count"], 1)
+                # THE BEHAVIORAL FLIP this release delivers: after exactly ONE
+                # verified tiny-first adopt, the re-run batch now PROCEEDS (no
+                # adopt_tiny_first_unmet) and adopts the rest of the batch.
+                rerun = self._adopt_run(archive_root, max_objects=10, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=transport)
+            self.assertTrue(rerun["ok"], rerun)
+            self.assertFalse(any("adopt_tiny_first_unmet" in b for b in rerun["blockers"]), rerun["blockers"])
+            self.assertGreaterEqual(rerun["adopt_summary"]["adopted_count"], 2)
+
+    # --- §12.19a (v0.3.174) EXACT basoon scenario: a REAL verified tiny-first
+    #     adopt (NOT a fabricated 5 GiB upload receipt) unlocks a batch adopt ---
+
+    def _executions_dir(self, root):
+        return archive_services.archive_internal_path(
+            root, archive_services.OBJECT_STORAGE_EXECUTIONS_DIR
+        )
+
+    def _count_execution_receipts(self, root):
+        exec_dir = self._executions_dir(root)
+        if not exec_dir.is_dir():
+            return 0
+        return len(list(exec_dir.glob("*.object-storage-upload.json")))
+
+    def test_object_storage_adopt_batch_proceeds_after_verified_tiny_first(self) -> None:  # T1
+        # The headline v0.3.174 property: the basoon 158 GB / 19,054-object batch
+        # is unblocked by ONE real verified tiny-first adopt — with NO fabricated
+        # 5 GiB upload receipt (_seed_proven_tier2 is NOT called anywhere here).
+        seed_calls = []
+        real_seed = self._seed_proven_tier2
+
+        def tracking_seed(*args, **kwargs):
+            seed_calls.append((args, kwargs))
+            return real_seed(*args, **kwargs)
+
+        with patch.object(self, "_seed_proven_tier2", side_effect=tracking_seed):
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                key_a = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+                key_b = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_B)
+                with self._adopt_env():
+                    tiny = _FakeObjectStorageTransport()
+                    tiny.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}
+                    tiny.store[key_b] = {"size": 162, "sha": _FAKE_SHA_B}
+                    # Step 1: a REAL single verified adopt (bytes:0 + adopt_verification).
+                    single = self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=tiny)
+                    self.assertTrue(single["ok"], single)
+                    self.assertEqual(single["adopt_summary"]["adopted_count"], 1)
+                # Step 2: the proof is a VERIFIED-ADOPT proof, derived from the receipt.
+                self.assertEqual(
+                    archive_services.object_storage_adopt_proven_tier(
+                        archive_root, provider_kind="cloudflare-r2", store_ref="r2-basoon-20260704"
+                    ),
+                    1,
+                )
+                with self._adopt_env():
+                    batch_transport = _FakeObjectStorageTransport()
+                    batch_transport.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}
+                    batch_transport.store[key_b] = {"size": 162, "sha": _FAKE_SHA_B}
+                    # Step 3: the batch now PROCEEDS.
+                    batch = self._adopt_run(archive_root, max_objects=10, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=batch_transport)
+                self.assertTrue(batch["ok"], batch)
+                self.assertFalse(any("adopt_tiny_first_unmet" in b for b in batch["blockers"]), batch["blockers"])
+                self.assertFalse(any("tiered_gate_unmet" in b for b in batch["blockers"]), batch["blockers"])
+                self.assertGreaterEqual(batch["adopt_summary"]["adopted_count"], 2)
+        # No fabricated 5 GiB upload receipt was minted anywhere in this test.
+        self.assertEqual(seed_calls, [], "T1 must NOT fabricate an upload proof")
+
+    def test_object_storage_upload_receipt_does_not_unblock_adopt(self) -> None:  # T3
+        # A fabricated UPLOAD proof (result_status "uploaded", 5 GiB, NO
+        # adopt_verification) does NOT lift the adopt proven tier and does NOT
+        # unblock a batch adopt — the two gates are decoupled.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self._seed_proven_tier2(archive_root)  # UPLOAD proof only
+            # The UPLOAD tier is proven, but the ADOPT tier is not.
+            self.assertGreaterEqual(
+                archive_services.object_storage_proven_tier(
+                    archive_root, provider_kind="cloudflare-r2", store_ref="r2-basoon-20260704"
+                ),
+                2,
+            )
+            self.assertEqual(
+                archive_services.object_storage_adopt_proven_tier(
+                    archive_root, provider_kind="cloudflare-r2", store_ref="r2-basoon-20260704"
+                ),
+                0,
+            )
+            key_a = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                transport.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}
+                batch = self._adopt_run(archive_root, max_objects=10, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=transport)
+            self.assertFalse(batch["ok"], batch)
+            self.assertTrue(any("adopt_tiny_first_unmet" in b for b in batch["blockers"]), batch["blockers"])
+            self.assertEqual(batch["adopt_summary"]["adopted_count"], 0)
+
+    def test_object_storage_skipped_upload_receipt_not_adopt_proof(self) -> None:  # T4
+        # A skipped_remote_same UPLOAD receipt WITHOUT adopt_verification (an
+        # upload that skipped on already-matching bytes) is NOT an adopt proof —
+        # the adopt marker is the sole discriminator.
+        s = archive_services
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            s.object_storage_write_execution_receipt(archive_root, "skip-no-marker", {
+                "schema": s.OBJECT_STORAGE_UPLOAD_RECEIPT_SCHEMA,
+                "provider_kind": "cloudflare-r2", "store_ref": "r2-basoon-20260704",
+                "object_id": "sha256:" + "c" * 64, "result_status": "skipped_remote_same",
+                "bytes_uploaded": 0, "object_count": 1,
+            })
+            self.assertEqual(
+                s.object_storage_adopt_proven_tier(
+                    archive_root, provider_kind="cloudflare-r2", store_ref="r2-basoon-20260704"
+                ),
+                0,
+            )
+            key_a = s.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                transport.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}
+                batch = self._adopt_run(archive_root, max_objects=10, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=transport)
+            self.assertFalse(batch["ok"], batch)
+            self.assertTrue(any("adopt_tiny_first_unmet" in b for b in batch["blockers"]), batch["blockers"])
+
+    def test_object_storage_declared_adopt_never_counts_or_gates(self) -> None:  # T5
+        # A declared/unverified adopt writes a manifest location but NO execution
+        # receipt, so it can never enter the adopt proof, never opens a batch, and
+        # never gates a PUT (its declared_uploaded location does not let a later
+        # upload skip the PUT).
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before_receipts = self._count_execution_receipts(archive_root)
+            with self._adopt_env():
+                declared = self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, accept_unverified_adopt=True)
+            self.assertTrue(declared["ok"], declared)
+            self.assertEqual(declared["adopt_summary"]["declared_count"], 1)
+            # (2) No execution receipt was written for the store — none to filter.
+            self.assertEqual(self._count_execution_receipts(archive_root), before_receipts)
+            # (3) The declared adopt does NOT lift the adopt proven tier.
+            self.assertEqual(
+                archive_services.object_storage_adopt_proven_tier(
+                    archive_root, provider_kind="cloudflare-r2", store_ref="r2-basoon-20260704"
+                ),
+                0,
+            )
+            # (4) A subsequent bare batch adopt still blocks.
+            key_a = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                transport.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}
+                batch = self._adopt_run(archive_root, max_objects=10, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=transport)
+            self.assertFalse(batch["ok"], batch)
+            self.assertTrue(any("adopt_tiny_first_unmet" in b for b in batch["blockers"]), batch["blockers"])
+            # (5) The declared->PUT boundary: the declared_uploaded manifest
+            #     location must NOT let a later upload skip the PUT. Run the upload
+            #     against a transport where the key is ABSENT (no legitimate live
+            #     skip): if the declared location gated a skip, this would falsely
+            #     skip; instead it must actually upload (PUT).
+            with self._adopt_env():
+                up_transport = _FakeObjectStorageTransport()  # empty store => key absent
+                upload = self._upload_run(archive_root, store_ref="r2-basoon-20260704", only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", approve=True, transport=up_transport, skip_uploaded=True, key_strategy="prefix", key_prefix=self._BASOON_PREFIX)
+            self.assertEqual(upload["execution_results"][0]["result_status"], "uploaded")
+            self.assertEqual(up_transport.put_calls, 1)
+
+    def test_object_storage_wrong_key_map_self_limits_under_relaxed_gate(self) -> None:  # T6
+        # Even with the gate OPEN (one prior verified tiny-first adopt), a batch
+        # with a WRONG key-map self-limits to zero false adopts: the per-object
+        # HEAD-verify sees absent/size-mismatch and does NOT adopt.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key_a = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            # Open the gate with a real tiny-first verified adopt of sha-A.
+            with self._adopt_env():
+                tiny = _FakeObjectStorageTransport()
+                tiny.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}
+                seed = self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=tiny)
+                self.assertEqual(seed["adopt_summary"]["adopted_count"], 1, seed)
+            self.assertEqual(
+                archive_services.object_storage_adopt_proven_tier(
+                    archive_root, provider_kind="cloudflare-r2", store_ref="r2-basoon-20260704"
+                ),
+                1,
+            )
+            # A key-map that points sha-B at a WRONG-but-digest-binding key (sha-B's
+            # own digest, different path) that the transport does NOT hold. The key
+            # binds sha-B's digest so it resolves, but the per-object HEAD self-limit
+            # sees it absent => sha-B must NOT adopt.
+            wrong_key_for_b = f"archives/archive:personal:elsewhere/objets/{_FAKE_SHA_B}"
+            key_map = self._write_key_map(tmp, [(_FAKE_SHA_B, wrong_key_for_b)], name="wrong-map.jsonl")
+            with self._adopt_env():
+                transport = _FakeObjectStorageTransport()
+                # sha-B's wrong-mapped key is NOT seeded (absent).
+                batch = self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_B}", max_objects=10, reviewed_by="kim", key_map_path=key_map, approve=True, transport=transport)
+            # The batch is PERMITTED to start (gate open) ...
+            self.assertFalse(any("adopt_tiny_first_unmet" in b for b in batch["blockers"]), batch["blockers"])
+            # ... but the wrong-mapped object self-limits to zero adopts.
+            self.assertEqual(batch["adopt_summary"]["adopted_count"], 0)
+            row_b = next(r for r in batch["adopt_results"] if r["object_id"] == f"sha256:{_FAKE_SHA_B}")
+            self.assertEqual(row_b["adopt_status"], "absent_or_size_mismatch")
+            self.assertIn(wrong_key_for_b, transport.heads)  # it HEADed the mapped key, saw absent
+
+    def test_object_storage_adopt_max_objects_bounds_under_relaxed_gate(self) -> None:  # T9
+        # After the gate is opened (one verified tiny-first adopt), --max-objects
+        # still bounds the batch: a full-plan run whose resolved plan exceeds the
+        # limit is REFUSED by the RC6 bound (max_objects_refuse), NOT let through
+        # by the relaxed adopt gate. The bound, not the tiny-first gate, is what
+        # stops it (no adopt_tiny_first_unmet).
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            key_a = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A)
+            key_b = archive_services.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_B)
+            with self._adopt_env():
+                tiny = _FakeObjectStorageTransport()
+                tiny.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}
+                seed = self._adopt_run(archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=tiny)
+                self.assertEqual(seed["adopt_summary"]["adopted_count"], 1, seed)
+                # The fake archive has 2 objects; a full run bounded to 1 is refused.
+                transport = _FakeObjectStorageTransport()
+                transport.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}
+                transport.store[key_b] = {"size": 162, "sha": _FAKE_SHA_B}
+                bounded = self._adopt_run(archive_root, max_objects=1, reviewed_by="kim", key_strategy="prefix", key_prefix=self._BASOON_PREFIX, approve=True, transport=transport)
+            self.assertFalse(bounded["ok"], bounded)
+            self.assertTrue(any("max_objects_refuse" in b for b in bounded["blockers"]), bounded["blockers"])
+            self.assertFalse(any("adopt_tiny_first_unmet" in b for b in bounded["blockers"]), bounded["blockers"])
+            self.assertEqual(bounded["adopt_summary"]["adopted_count"], 0)
 
     # --- §12.20 (F6) round-trip skip is anchored to an INDEPENDENTLY-real key ---
 
@@ -13729,10 +13974,21 @@ state:
     def test_key_map_unmapped_rows_reported_not_adopted(self) -> None:  # §8.4
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self._seed_proven_tier2(archive_root)  # batch adopt needs proven tier
             key_a = f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}.png"
             # Map covers ONLY sha-A; sha-B is unmapped.
             key_map = self._write_key_map(tmp, [(_FAKE_SHA_A, key_a)])
+            # v0.3.174 (DEC-6): a batch adopt needs one prior VERIFIED tiny-first
+            # adopt — decoupled from the upload 5 GiB proof. Mint it with a REAL
+            # --only verified adopt of sha-A (through the same key-map), not a
+            # fabricated upload receipt.
+            with self._adopt_env():
+                tiny = _FakeObjectStorageTransport()
+                tiny.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}
+                seed = self._adopt_run(
+                    archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1, reviewed_by="kim",
+                    key_map_path=key_map, approve=True, transport=tiny,
+                )
+                self.assertEqual(seed["adopt_summary"]["adopted_count"], 1, seed)
             with self._adopt_env():
                 transport = _FakeObjectStorageTransport()
                 transport.store[key_a] = {"size": 151, "sha": _FAKE_SHA_A}

@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.173 pre-release
+v0.3.174 pre-release
 ```
 
-Previous public baseline: v0.3.172 pre-release.
+Previous public baseline: v0.3.173 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -163,6 +163,7 @@ Object storage:
 - approval-gated external upload evidence registration and read-only upload evidence auditing before live provider adapters,
 - Stage 2 of the live upload adapter: a real hand-rolled AWS SigV4 R2/S3 transport behind a single networking seam (no new dependency), with a bounded retry loop (single-PUT and multipart), a hard cumulative PUT ceiling, whole-object integrity verified by re-download-and-hash (no dependence on any provider checksum surface), orphan cleanup, and a tiered tiny-first gate; the capability is now real but a live `--approve` still fails closed without env credentials, a met tiered gate, and endpoint/bucket, and stays `unproven_against_live_provider` until the first human-run live object,
 - a selectable, recorded upload key strategy (`--key-strategy sha256_content_addressed|prefix`, default unchanged) plus a safe `object-storage-adopt-existing` command: objects already stored under an operator's own key layout are adopted only on a live HEAD proving presence + size-match at the recorded key, and under a live transport the executor always re-HEADs that recorded key before any skip (a 404 re-uploads, never a silent skip); an opt-in `--key-map` (JSONL sha256 -> exact remote key) adopts objects stored under the operator's own per-object extension when the content-addressed template cannot recover it, size still manifest-sourced and every key digest-bound and leak-guarded,
+- verified adopt (HEAD-only) is decoupled from the upload 5 GiB tier proof: because adopt moves zero bytes, one prior verified tiny-first adopt unlocks a batch handover of any size (the wrong-key self-limit, declared-never-counts, and byte-identical upload tier ladder all hold),
 - a live-verification `--multipart-part-size` override (with the `--allow-tiny-parts` acknowledgment, bounded `[4096, 64 MiB]`, recorded in the receipt as `effective_multipart_part_size_bytes`) that, paired with a lowered `--multipart-threshold`, forces multipart on a small object to prove LIVE R2 multipart; it changes only `handle.read()` fragmentation and leaves the whole-object before-hash, HEAD-after full-object verify, orphan cleanup, and leak gate byte-for-byte unchanged,
 
 IMAP:
