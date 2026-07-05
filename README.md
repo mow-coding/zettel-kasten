@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.172 pre-release
+v0.3.173 pre-release
 ```
 
-Previous public baseline: v0.3.171 pre-release.
+Previous public baseline: v0.3.172 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -138,6 +138,7 @@ Notion:
 - approved external imports that preserve explicit safe object refs, safe `source_refs`, safe facets, and safe zettel id overrides from manifests into imported drafts, plus optional Notion body locator conversion to reviewed `objet:` refs,
 - read-only Notion connection import planning for typed-edge candidates with base connection edge vocabulary including `contains` for structural child page/database/view containment and model-gap escalation when no active edge type fits,
 - approval-gated link type migration for stale archive-local `types.yml`, plus receipt-backed safe `link-types-v0.3` migration revert when the migration receipt says which edge types were added and those types remain unused and unchanged from the base template,
+- approval-gated `archive migrate --target base-link-types` that appends every base WOM-kit link type missing from a vendored `types.yml` (a superset of the recommended-9 set, so it also pulls `continues`) without removing, renaming, reordering, or overwriting any existing entry — append-only, no-clobber, no revert, `--reviewed-by`-gated, safe no-op when the archive has no local `types.yml` (it already inherits the base), and honest that it normalizes the whole file via `safe_dump` like the sibling migration,
 - a read-only connection evidence parser contract before real export parsing, and a sanitized fixture parser that emits candidate edge previews without writes,
 - read-only connection edge intelligence planning that separates relationship meaning from source mechanism, distinguishes ambiguous candidates from human-review-required candidates, flags provisional candidates before human approval, and recommends `supersedes` for sanitized version-chain hints plus `contains` for sanitized containment hints,
 - read-only Notion nested tree recovery planning that assigns leaf pages to known generation roots, derives safe content classes from node kinds when needed, blocks oversized nested-tree fixtures instead of returning partial success, and reports untraceable parent chains instead of guessing from partial mirrors,

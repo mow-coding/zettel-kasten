@@ -6,6 +6,43 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.173 - 2026-07-05
+
+One additive command. It needs no migration and leaves every default path byte-identical
+to v0.3.172.
+
+- **Archive base link type sync.** New `archive migrate --target base-link-types
+  --dry-run|--approve --reviewed-by <actor>` pulls every base WOM-kit link type that is
+  missing from a stale archive-local `zettel-kasten/types.yml` into that file. It is
+  append-only and no-clobber: missing base entries are deep-copied verbatim and appended
+  after the archive's existing entries; no existing entry is removed, renamed, reordered,
+  or altered in value, so an archive's divergent same-id customization always wins (it is
+  reported under `present_not_overwritten`). Its id set is a strict superset of the
+  recommended-9 `link-types-v0.3` migration set — it also covers `continues` (added to the
+  base in v0.3.168) and any other base-only id. `--reviewed-by` is required with
+  `--approve`. It writes a receipt (`receipt_kind: base_link_types_sync`) under
+  `receipts/migrations/base-link-types.*.migration.json`, is atomic with rollback, and is
+  idempotent (a second run with nothing missing is a clean no-op — no receipt, no blocker).
+  There is deliberately **no `--revert`** (`--revert --target base-link-types` fails
+  closed).
+- **No-`types.yml` safe branch.** If the archive has no local `zettel-kasten/types.yml`,
+  sync writes nothing and creates no file: the archive already inherits all current and
+  future base link types via the base fallback, and creating a local `types.yml` would
+  permanently shadow (freeze) that inheritance.
+- **Discoverability.** `archive doctor` now routes an operator hitting an undefined edge
+  type toward `archive migrate --target base-link-types --dry-run`.
+
+Honesty facts, stated plainly:
+
+1. Once an archive has its **own** `zettel-kasten/types.yml`, it shadows the base
+   permanently — every future base link type also needs a manual `migrate --target
+   base-link-types`. There is no automatic propagation.
+2. Sync copies base entry shapes **as of this release** (a snapshot, not a live link).
+3. Sync normalizes/rewrites the whole `types.yml` via `safe_dump` (comments, anchors,
+   flow-style, and key ordering may be normalized) — exactly like the sibling
+   `link-types-v0.3` migration. Existing link-type entries are preserved by value/id;
+   surrounding formatting is not byte-preserved. Review the diff.
+
 ## v0.3.172 - 2026-07-05
 
 Two verification-honesty fixes. Both are additive, need no migration, and leave every
