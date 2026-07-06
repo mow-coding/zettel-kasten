@@ -2,7 +2,7 @@
 
 Status: active
 Date: 2026-07-05
-Applies to: `wom-kit` v0.3.171+ (tiny-first gate decoupled from the upload 5 GiB proof since v0.3.174)
+Applies to: `wom-kit` v0.3.171+ (tiny-first gate decoupled from the upload 5 GiB proof since v0.3.174; large plan resolution indexed since v0.3.180)
 
 Use `--key-map` when objects already sit in your bucket under your own key layout and
 the content-addressed template cannot rebuild the exact key — most importantly when
@@ -136,6 +136,12 @@ Read the report: `adopt_summary` shows `mapped_count`, `unmapped_count`,
 `adopt_results` row shows `key_source` ∈ {`template`,`map`,`map_rejected`,`unmapped`}.
 An adopted row records `remote_key_verification` = `presence_size` (or `content_hash`
 under `--content-hash-verify`).
+
+Since v0.3.180, the plan phase builds one per-run manifest index before resolving
+object ids, so a large key-map batch should not re-scan `objects/manifests/files.jsonl`
+once per object. If `--progress` still shows a slow `adopt-plan` stage, capture the
+last progress lines and the object count; that is now evidence for a different
+planner bottleneck rather than the pre-v0.3.180 manifest lookup pattern.
 
 ## 5. Content identity — read this before trusting a hand-edited map
 

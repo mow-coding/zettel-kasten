@@ -6,6 +6,22 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.180 - 2026-07-06
+
+Large-archive performance hardening for adopt planning and doctor receipt checks. Additive; no
+migration.
+
+- **`object-storage-adopt-existing` adopt-plan manifest index.** Large key-map adopts now build
+  one per-run `objects/manifests/files.jsonl` object-id index before plan resolution instead of
+  repeatedly scanning the manifest for every object. This targets the v0.3.179 basoon
+  revalidation bottleneck where `adopt-plan` itself was slow before provider HEAD checks began.
+- **Doctor per-run file caches.** `archive doctor` now reuses file SHA-256 and zettel
+  frontmatter/BOM evidence within one run, reducing repeated work in receipt stages such as
+  `mint-receipts` without changing diagnostics.
+- **Regression tests.** Added tests that fail if adopt planning falls back to per-object
+  `find_manifest_record` scans, if doctor hashes the same receipt ref twice in one run, or if
+  cached zettel frontmatter is not reused.
+
 ## v0.3.179 - 2026-07-06
 
 Redacted remint-reconcile diagnostic output. Additive; default output is unchanged.

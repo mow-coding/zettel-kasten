@@ -584,6 +584,43 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("[doctor] symlink-boundaries: start", output)
         self.assertIn("[doctor] local-profile-secret-safety: done", output)
 
+    def test_doctor_mint_receipt_file_sha_is_cached_per_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            receipt_path = archive_root / mint["mint_receipt_path"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            target_path = archive_root / mint["canonical_path"]
+            real_sha256_file = archive_cli.sha256_file
+            sha_calls: list[Path] = []
+
+            def counted_sha(path: Path) -> str:
+                sha_calls.append(path.resolve())
+                return real_sha256_file(path)
+
+            doctor = archive_cli.Doctor(archive_root)
+            with patch.object(archive_cli, "sha256_file", side_effect=counted_sha):
+                first = doctor._check_mint_receipt_file_ref(receipt, receipt_path, "target")
+                second = doctor._check_mint_receipt_file_ref(receipt, receipt_path, "target")
+                self.assertEqual(first.resolve() if first is not None else None, target_path.resolve())
+                self.assertEqual(second.resolve() if second is not None else None, target_path.resolve())
+
+        self.assertEqual(sha_calls.count(target_path.resolve()), 1)
+
+    def test_doctor_zettel_frontmatter_cache_reuses_first_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mint = self._mint_lunch_for_reconcile(archive_root)
+            target_path = archive_root / mint["canonical_path"]
+            doctor = archive_cli.Doctor(archive_root)
+
+            first = doctor._load_zettel_frontmatter_cached(target_path)
+            self.assertIsInstance(first, dict)
+            with patch.object(Path, "read_text", side_effect=AssertionError("frontmatter cache was not used")):
+                second = doctor._load_zettel_frontmatter_cached(target_path)
+
+        self.assertEqual(second, first)
+
     def doctor_warning_codes(self, archive_root: Path) -> list[str]:
         code, output = self.run_cli(["doctor", str(archive_root), "--format", "json"])
         self.assertEqual(code, 0, output)
@@ -13156,6 +13193,33 @@ state:
         self.assertIn(("adopt-verify", "checked remote key", 1, 1), events)
         self.assertIn(("adopt-verify", "done", None, None), events)
         self.assertFalse(any(_FAKE_SHA_A in str(event) or self._BASOON_PREFIX in str(event) for event in events))
+
+    def test_object_storage_adopt_plan_uses_manifest_index_not_per_object_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            mapped_key = f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}"
+            key_map = self._write_key_map(tmp, [(_FAKE_SHA_A, mapped_key)])
+            transport = _FakeObjectStorageTransport()
+            transport.store[mapped_key] = {"size": 151, "sha": _FAKE_SHA_A}
+
+            with self._adopt_env():
+                with patch.object(
+                    archive_services,
+                    "find_manifest_record",
+                    side_effect=AssertionError("adopt plan must use the per-run manifest index"),
+                ):
+                    result = self._adopt_run(
+                        archive_root,
+                        only=f"sha256:{_FAKE_SHA_A}",
+                        max_objects=1,
+                        reviewed_by="kim",
+                        key_map_path=key_map,
+                        approve=True,
+                        transport=transport,
+                    )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["adopt_summary"]["mapped_count"], 1)
 
     # --- §12.1/§12.2 prefix key byte-exact + edge matrix ---
 

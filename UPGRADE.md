@@ -163,6 +163,21 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.179` To `v0.3.180`
+
+One additive performance-hardening patch. No migration is required.
+
+Operator-visible notes:
+
+- **Large `object-storage-adopt-existing --key-map` plan resolution should no longer scan the
+  manifest once per object.** The adopt plan now builds one per-run manifest index and uses
+  O(1) object-id lookup while preserving first-record-wins semantics.
+- **`archive doctor` receipt stages reuse per-run file evidence.** File SHA-256 and zettel
+  frontmatter/BOM checks are cached during one doctor run, reducing repeated disk reads in
+  `mint-receipts` and related receipt checks.
+- Existing command shapes, progress output, result JSON, and receipt formats are unchanged.
+- See `wom-kit/docs/releases/v0.3.180.md`.
+
 ## From `v0.3.178` To `v0.3.179`
 
 One additive redacted diagnostic-output patch. No migration is required.

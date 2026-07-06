@@ -59584,12 +59584,13 @@ def object_storage_adopt_existing_run(
     present_row_count = 0
     ext_unrecoverable_present_count = 0
     if not blockers:
+        manifest_record_index = manifest_records_by_object_id(root)
         _progress("adopt-plan", "start", None, None)
         for index, object_id in enumerate(object_ids, start=1):
             if _progress_step(index, len(object_ids)):
                 _progress("adopt-plan", "resolved object", index, len(object_ids))
             digest = str(object_id).removeprefix("sha256:").lower()
-            record = find_manifest_record(root, object_id)
+            record = manifest_record_index.get(str(object_id).lower())
             recovered_ext_for_row = _object_storage_recovered_extension(record)
             ext = recovered_ext_for_row if append_extension else None
             if isinstance(record, dict):
@@ -60304,6 +60305,21 @@ def find_manifest_record(root: Path, object_id_value: str) -> dict[str, Any] | N
         if str(record.get("object_id") or "").lower() == object_id_value.lower():
             return record
     return None
+
+
+def manifest_records_by_object_id(root: Path) -> dict[str, dict[str, Any]]:
+    """Build a per-run manifest lookup index keyed by lowercase object_id.
+
+    `find_manifest_record` preserves the historical single-object API, but using it inside
+    large loops repeatedly re-reads `objects/manifests/files.jsonl`. Batch callers should build
+    this index once and keep first-record-wins semantics to match `find_manifest_record`.
+    """
+    index: dict[str, dict[str, Any]] = {}
+    for record in load_manifest_records(root):
+        object_id = str(record.get("object_id") or "").lower()
+        if object_id and object_id not in index:
+            index[object_id] = record
+    return index
 
 
 def resolve_objet_ref(
