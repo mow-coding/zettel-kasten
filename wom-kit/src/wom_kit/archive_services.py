@@ -64233,11 +64233,28 @@ def frontmatter_v03_blocker(path: str, field: str, code: str, message: str) -> d
     return {"path": path, "field": field, "code": code, "message": message}
 
 
-def sha256_path(path: Path) -> str:
+def sha256_path(
+    path: Path,
+    *,
+    progress_callback: Callable[[int], None] | None = None,
+    progress_step_bytes: int = 256 * 1024 * 1024,
+) -> str:
     digest = hashlib.sha256()
+    bytes_read = 0
+    last_reported = 0
+    next_report = max(1, progress_step_bytes)
     with path.open("rb") as file:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(chunk)
+            if progress_callback is not None:
+                bytes_read += len(chunk)
+                if bytes_read >= next_report:
+                    progress_callback(bytes_read)
+                    last_reported = bytes_read
+                    while next_report <= bytes_read:
+                        next_report += max(1, progress_step_bytes)
+    if progress_callback is not None and bytes_read != last_reported:
+        progress_callback(bytes_read)
     return digest.hexdigest()
 
 
@@ -68248,6 +68265,7 @@ def staged_cleanup_check(
     staged_folder: str,
     *,
     deferred_path: Path | str | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
     """Report-only G2 deletion-safety verifier for a staged intake folder.
 
@@ -68260,6 +68278,22 @@ def staged_cleanup_check(
     archive_id = read_archive_id(root)
     blockers: list[str] = []
     warnings: list[str] = []
+
+    def _progress(stage: str, message: str, current: int | None = None, total: int | None = None) -> None:
+        if progress_callback is not None:
+            progress_callback(stage, message, current, total)
+
+    def _progress_step(index: int, total: int | None = None) -> bool:
+        return index == 1 or (total is not None and index == total) or index % 100 == 0
+
+    def _hash_progress(stage: str, total_bytes: int) -> Callable[[int], None] | None:
+        if progress_callback is None or total_bytes < 64 * 1024 * 1024:
+            return None
+
+        def report(bytes_read: int) -> None:
+            _progress(stage, "hashed bytes", min(bytes_read, total_bytes), total_bytes)
+
+        return report
 
     try:
         normalized = normalize_archive_relative_path(staged_folder)
@@ -68286,9 +68320,17 @@ def staged_cleanup_check(
             return _staged_cleanup_abort(archive_id, ["deferred_list_invalid"])
         deferred = {value.replace("\\", "/").strip("/") for value in raw_deferred}
 
+    _progress("manifest", "start")
     canonical_ids = objet_capture_canonical_record_ids(load_manifest_records(root))
+    _progress("manifest", f"loaded {len(canonical_ids)} canonical object records")
     referencing: dict[str, int] = {}
+    _progress("zettel-references", "start")
+    zettel_count = 0
+    reference_count = 0
     for zettel_path in iter_zettel_paths(root):
+        zettel_count += 1
+        if _progress_step(zettel_count):
+            _progress("zettel-references", f"scanned {zettel_count} notes")
         try:
             frontmatter, _body = split_zettel_text(zettel_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, yaml.YAMLError, ArchiveServiceError):
@@ -68300,6 +68342,8 @@ def staged_cleanup_check(
             ref_id = normalize_object_id(str(ref.get("value") or ref.get("object_id") or ""), ref_blockers)
             if not ref_blockers and ref_id:
                 referencing[ref_id] = referencing.get(ref_id, 0) + 1
+                reference_count += 1
+    _progress("zettel-references", f"done; scanned {zettel_count} notes and {reference_count} references")
 
     files: list[dict[str, Any]] = []
     counts = {"preserved": 0, "deferred": 0, "not_preserved": 0, "unsafe": 0}
@@ -68312,15 +68356,24 @@ def staged_cleanup_check(
     def _on_walk_error(error: OSError) -> None:
         blockers.append("staged_tree_unreadable")
 
+    _progress("staged-walk", "start")
     for dirpath, _dirnames, filenames in os.walk(staged_root, onerror=_on_walk_error):
         for filename in filenames:
             staged_files.append(Path(dirpath) / filename)
+            if _progress_step(len(staged_files)):
+                _progress("staged-walk", f"found {len(staged_files)} staged entries")
         # also capture symlinked subdirectories as unsafe (os.walk does not descend symlinks)
         for dirname in _dirnames:
             sub = Path(dirpath) / dirname
             if sub.is_symlink():
                 staged_files.append(sub)
-    for path in sorted(staged_files):
+                if _progress_step(len(staged_files)):
+                    _progress("staged-walk", f"found {len(staged_files)} staged entries")
+    _progress("staged-walk", f"done; found {len(staged_files)} staged entries")
+    total_staged_files = len(staged_files)
+    for index, path in enumerate(sorted(staged_files), start=1):
+        if _progress_step(index, total_staged_files):
+            _progress("verify", "checking staged entry", index, total_staged_files)
         if path.is_symlink() or objet_capture_path_chain_blockers(
             root, f"{normalized}/{path.relative_to(staged_root).as_posix()}"
         ):
@@ -68340,7 +68393,12 @@ def staged_cleanup_check(
             continue
         relative = path.relative_to(staged_root).as_posix()
         try:
-            digest = sha256_path(path)
+            source_size = path.stat().st_size
+            digest = sha256_path(
+                path,
+                progress_callback=_hash_progress("source-hash", source_size),
+                progress_step_bytes=256 * 1024 * 1024,
+            )
         except OSError:
             counts["unsafe"] += 1
             files.append(
@@ -68360,7 +68418,17 @@ def staged_cleanup_check(
         # file whose stored copy is absent, corrupted, or unreferenced would let the only
         # copy be deleted. So preservation requires ALL THREE: dest exists, stored bytes
         # re-hash to the same digest, and a canonical manifest record exists.
-        bytes_verified = dest.is_file() and sha256_path(dest) == digest
+        bytes_verified = False
+        if dest.is_file():
+            dest_size = dest.stat().st_size
+            bytes_verified = (
+                sha256_path(
+                    dest,
+                    progress_callback=_hash_progress("store-hash", dest_size),
+                    progress_step_bytes=256 * 1024 * 1024,
+                )
+                == digest
+            )
         record_present = object_id in canonical_ids
         if bytes_verified and record_present:
             status = "preserved"
@@ -68379,6 +68447,7 @@ def staged_cleanup_check(
                 "referencing_zets": referencing.get(object_id, 0),
             }
         )
+    _progress("verify", f"done; checked {len(files)} staged file reports")
 
     if not files:
         warnings.append("staged_folder_empty")

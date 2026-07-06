@@ -37478,6 +37478,46 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertTrue(entry["preserved_bytes_verified"])
             self.assertTrue(entry["manifest_record_present"])
 
+    def test_staged_cleanup_check_progress_is_content_free(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, digest, staged = self._captured_sandbox(tmp)
+            events: list[tuple[str, str, int | None, int | None]] = []
+            result = archive_services.staged_cleanup_check(
+                archive_root,
+                staged,
+                progress_callback=lambda stage, message, current, total: events.append(
+                    (stage, message, current, total)
+                ),
+            )
+            self.assertTrue(result["safe_to_cleanup"], result)
+            stages = {stage for stage, _message, _current, _total in events}
+            self.assertIn("manifest", stages)
+            self.assertIn("staged-walk", stages)
+            self.assertIn("verify", stages)
+            rendered = json.dumps(events)
+            self.assertNotIn("note.txt", rendered)
+            self.assertNotIn(digest, rendered)
+
+    def test_staged_cleanup_check_cli_progress_streams_stage_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root, digest, staged = self._captured_sandbox(tmp)
+            code, output = self.run_cli(
+                ["staged-cleanup-check", str(archive_root), "--staged", staged, "--dry-run", "--progress"]
+            )
+            self.assertEqual(code, 0, output)
+            self.assertIn("[staged-cleanup-check] staged-walk: start", output)
+            self.assertIn("[staged-cleanup-check] verify:", output)
+
+    def test_sha256_path_progress_callback_preserves_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blob.bin"
+            data = b"abcdef"
+            path.write_bytes(data)
+            progress: list[int] = []
+            digest = archive_services.sha256_path(path, progress_callback=progress.append, progress_step_bytes=2)
+            self.assertEqual(digest, hashlib.sha256(data).hexdigest())
+            self.assertEqual(progress[-1], len(data))
+
     def test_staged_cleanup_check_uncaptured_file_blocks_safe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root, digest, staged = self._captured_sandbox(tmp)

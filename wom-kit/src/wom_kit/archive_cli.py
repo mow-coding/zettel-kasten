@@ -9622,11 +9622,15 @@ def command_staged_cleanup_check(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("staged-cleanup-check is report-only; pass --dry-run.", file=sys.stderr)
         return 1
+    progress_callback = make_stage_progress_callback(
+        bool(getattr(args, "progress", False)), label="staged-cleanup-check"
+    )
     try:
         result = archive_services.staged_cleanup_check(
             Path(args.archive_root),
             args.staged,
             deferred_path=Path(args.deferred) if args.deferred else None,
+            progress_callback=progress_callback,
         )
     except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError, yaml.YAMLError) as exc:
         print(f"Staged cleanup check failed: {exc}", file=sys.stderr)
@@ -15919,6 +15923,7 @@ def build_parser() -> argparse.ArgumentParser:
     staged_cleanup.add_argument("--deferred", help="Optional JSON file: {\"deferred\": [staged-relative paths]} explicitly deferred from capture.")
     staged_cleanup.add_argument("--dry-run", action="store_true", help="Required: report-only and never deletes; exits 0 only when safe_to_cleanup is true.")
     staged_cleanup.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    staged_cleanup.add_argument("--progress", action="store_true", help="Stream content-free stage progress to stderr.")
     staged_cleanup.set_defaults(func=command_staged_cleanup_check)
 
     objet_capture_selection = subcommands.add_parser(
