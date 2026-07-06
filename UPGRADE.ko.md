@@ -152,6 +152,20 @@ zet, receipt로 보존해야 합니다.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.178` To `v0.3.179`
+
+내용을 줄인 진단 출력만 추가된 릴리즈입니다. 마이그레이션은 필요 없습니다.
+
+운영자가 볼 변화:
+
+- **`archive remint-reconcile --diagnostic-only --format json`**은 dry-run 전용 출력입니다.
+  `drift_class`, `body_changed`, `body_diff_diagnostic`, blocker/warning, frontmatter 필드
+  이름/개수는 남기고 `current_canonical_text`와 frontmatter 값은 뺍니다.
+- **승인 경로는 일부러 가리지 않습니다.** `--diagnostic-only`는 `--approve`와 함께 쓰면
+  거부됩니다. approve는 사람이 현재 디스크 내용을 직접 보고 검토해야 하기 때문입니다.
+- 기존 `remint-reconcile --format json` 출력은 호환성을 위해 그대로 유지됩니다.
+- `wom-kit/docs/releases/v0.3.179.md`를 보세요.
+
 ## From `v0.3.177` To `v0.3.178`
 
 운영자 진행률 출력에 대한 추가적(additive) 패치입니다. 마이그레이션은 필요 없습니다.

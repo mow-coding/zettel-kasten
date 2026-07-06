@@ -163,6 +163,20 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.178` To `v0.3.179`
+
+One additive redacted diagnostic-output patch. No migration is required.
+
+Operator-visible notes:
+
+- **`archive remint-reconcile --diagnostic-only --format json`** is a dry-run-only projection
+  that keeps `drift_class`, `body_changed`, `body_diff_diagnostic`, blockers/warnings, and
+  frontmatter field names/counts while omitting `current_canonical_text` and frontmatter values.
+- **Approval is intentionally not redacted.** `--diagnostic-only` is refused with `--approve`
+  because the approve path must still show the current on-disk content for human review.
+- Existing `remint-reconcile --format json` output is unchanged for compatibility.
+- See `wom-kit/docs/releases/v0.3.179.md`.
+
 ## From `v0.3.177` To `v0.3.178`
 
 One additive operator-progress patch. No migration is required.

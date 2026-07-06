@@ -6,6 +6,18 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.179 - 2026-07-06
+
+Redacted remint-reconcile diagnostic output. Additive; default output is unchanged.
+
+- **`archive remint-reconcile --diagnostic-only --format json`.** A dry-run can now return a
+  redacted diagnostic projection with drift class, body-change status, `body_diff_diagnostic`,
+  and frontmatter field names/counts while omitting `current_canonical_text` and
+  `frontmatter_field_changes` values. This lets operators inspect the v0.3.176 body-diff
+  numbers without dumping canonical body text into a JSON transcript.
+- **Approve remains review-visible.** `--diagnostic-only` is refused with `--approve` because
+  approval must still show the current on-disk content for human review.
+
 ## v0.3.178 - 2026-07-06
 
 Operator progress output for long archive checks and large object-storage adopts. Additive; no

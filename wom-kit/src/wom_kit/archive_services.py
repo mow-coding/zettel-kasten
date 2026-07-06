@@ -9748,6 +9748,56 @@ def _reconcile_strip_bom_preview(raw: bytes) -> dict[str, Any]:
     return {"bom_stripped": False, "bom_strip_note": "no leading BOM present; nothing stripped"}
 
 
+def remint_reconcile_diagnostic_view(result: dict[str, Any]) -> dict[str, Any]:
+    """Return a content-redacted diagnostic projection of a remint plan.
+
+    The ordinary remint JSON stays backward-compatible and review-friendly. This
+    projection is for operator diagnostics where the caller needs the drift class
+    and body-diff numbers but not the canonical body or frontmatter values.
+    """
+    safe_keys = [
+        "ok",
+        "dry_run",
+        "action",
+        "zettel_id",
+        "canonical_path",
+        "mint_receipt_path",
+        "draft_snapshot_path",
+        "drift_class",
+        "classification_basis",
+        "content_change_ack_required",
+        "body_changed",
+        "body_diff_diagnostic",
+        "bom_stripped",
+        "bom_strip_note",
+        "blockers",
+        "warnings",
+        "next_safe_actions",
+        "writes",
+    ]
+    view: dict[str, Any] = {"diagnostic_only": True}
+    for key in safe_keys:
+        if key in result:
+            view[key] = json_safe(result.get(key))
+
+    changes = result.get("frontmatter_field_changes")
+    if isinstance(changes, list):
+        fields = sorted(
+            {
+                str(change.get("field"))
+                for change in changes
+                if isinstance(change, dict) and str(change.get("field") or "").strip()
+            }
+        )
+        view["frontmatter_field_change_count"] = len(changes)
+        view["frontmatter_field_change_fields"] = fields
+
+    view["omitted_fields"] = [
+        key for key in ("current_canonical_text", "frontmatter_field_changes") if key in result
+    ]
+    return view
+
+
 def remint_reconcile_plan(
     archive_root: Path | str,
     *,

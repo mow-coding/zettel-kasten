@@ -9055,8 +9055,15 @@ def command_remint_reconcile(args: argparse.Namespace) -> int:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
     approve = bool(args.approve)
+    diagnostic_only = bool(getattr(args, "diagnostic_only", False))
     if approve and not (args.reviewed_by or "").strip():
         print("remint-reconcile requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+    if diagnostic_only and approve:
+        print("remint-reconcile --diagnostic-only is dry-run only; approve must show review content.", file=sys.stderr)
+        return 1
+    if diagnostic_only and args.format != "json":
+        print("remint-reconcile --diagnostic-only requires --format json.", file=sys.stderr)
         return 1
 
     try:
@@ -9081,7 +9088,10 @@ def command_remint_reconcile(args: argparse.Namespace) -> int:
         return 1
 
     if args.format == "json":
-        print_json(result)
+        if diagnostic_only:
+            print_json(archive_services.remint_reconcile_diagnostic_view(result))
+        else:
+            print_json(result)
     else:
         state = "passed" if result.get("ok") else "blocked"
         print(f"Reconcile {state} for {result.get('zettel_id') or result.get('canonical_path')}.")
@@ -15717,6 +15727,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--strip-bom",
         action="store_true",
         help="Opt-in: remove a single leading UTF-8 BOM from the canonical file (format_drift by definition; never bypasses the content-change ack gate).",
+    )
+    remint_reconcile.add_argument(
+        "--diagnostic-only",
+        action="store_true",
+        help="Dry-run JSON only: omit canonical body text and frontmatter values while keeping drift and body-diff diagnostics.",
     )
     remint_reconcile.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     remint_reconcile.set_defaults(func=command_remint_reconcile)
