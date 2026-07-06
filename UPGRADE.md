@@ -163,6 +163,28 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.185` To `v0.3.186`
+
+One additive operator-diagnostics patch. No migration is required.
+
+Operator-visible notes:
+
+- `object-storage-adopt-existing` now accepts `--stop-after-plan`. It may be combined with an
+  `--approve` command shape to resolve the same key-map/resume plan, then stop before credential
+  value reads, provider HEADs, manifest updates, or execution receipt writes.
+- The final `--format json` or text result is written to stdout. Optional `--progress` heartbeats
+  are written to stderr, so scripts that need the structured result should watch stdout or redirect
+  stderr separately.
+- `adopt_summary` now includes `plan_only`, `plan_only_stop_stage`,
+  `planned_remote_head_count`, `unresolved_remote_key_count`,
+  `existing_matching_wom_uploaded_location_count`, and same-store `wom_uploaded`
+  raw-vs-gating counts. These explain why a simple `store_ref` manifest count can be higher than
+  the stricter resume skip candidates.
+- `doctor --strict --progress` now emits detailed mint-receipt sub-steps for the first three
+  receipts and prints `completed receipt checks` for detailed receipts, making a post-link stall
+  easier to localize.
+- See `wom-kit/docs/releases/v0.3.186.md`.
+
 ## From `v0.3.184` To `v0.3.185`
 
 One additive diagnostics patch. No migration is required.

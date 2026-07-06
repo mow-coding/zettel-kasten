@@ -169,6 +169,30 @@ run adopt against that store identity; otherwise continue verified adopt for the
 current store ref so new `wom_uploaded` rows are written under the intended
 identity. v0.3.185 intentionally does not add an automatic store-ref migration.
 
+Since v0.3.186, use `--stop-after-plan` when you want only the plan-time
+diagnostics and no partial writes:
+
+```bash
+archive object-storage-adopt-existing <archive-root> \
+  --provider-kind cloudflare-r2 \
+  --store-ref <store-ref> \
+  --access-key-id-ref env:WOM_R2_ACCESS_KEY_ID \
+  --secret-access-key-ref env:WOM_R2_SECRET_ACCESS_KEY \
+  --endpoint-host <account>.r2.cloudflarestorage.com \
+  --bucket <bucket> \
+  --key-map ./key-map.jsonl \
+  --reviewed-by person:me \
+  --approve --skip-existing-wom-uploaded --stop-after-plan --progress --format json
+```
+
+This resolves the same key-map/resume plan and then stops after `adopt-plan`.
+It reads no credential values, issues no provider HEADs, and writes no manifest
+locations or execution receipts. The final JSON/text result is written to stdout;
+`--progress` heartbeats are written to stderr. The JSON `adopt_summary` also
+distinguishes a raw same-`store_ref` `wom_uploaded` location count from the
+stricter resume skip candidates that match this run's key hint, resolved
+`remote_key`, and digest binding.
+
 **Why two steps, and the in-band signal.** A batch verified adopt on a store with no
 prior verified adopt fails closed with the blocker `adopt_tiny_first_unmet`; the
 message names Step A as the exact remedy. Since v0.3.174 the adopt gate is DECOUPLED
