@@ -163,6 +163,24 @@ and receipts before any cleanup.
 | `v0.2.3` | superseded public pre-release | `wom-kit/docs/releases/v0.2.3.md` |
 | `v0.2.2` | superseded public pre-release | `wom-kit/docs/releases/v0.2.2.md` |
 
+## From `v0.3.176` To `v0.3.177`
+
+One additive force-reupload hardening patch for the object-storage upload adapter. No migration is
+required; default idempotency behavior is unchanged.
+
+Operator-visible notes:
+
+- **`--force-reupload` now also bypasses resume-ledger-only skips.** If a post-crash or
+  handoff state has a terminal resume-ledger row but the manifest does not currently have a
+  `wom_uploaded` location, a reviewed force run now reaches the provider PUT path instead of
+  returning `skipped_already_present`.
+- **A forced zero-PUT result is blocked.** Force run output includes `forced_reupload: true`;
+  if no provider PUT is attempted, the run reports `force_reupload_not_performed` with
+  `ok:false` instead of a misleading executed success.
+- **No migration; no default behavior change.** Without `--force-reupload`, the existing
+  resume-ledger/idempotency skips behave as before.
+- See `wom-kit/docs/releases/v0.3.177.md`.
+
 ## From `v0.3.175` To `v0.3.176`
 
 One additive, DX-only reconcile body-diff diagnostic. **No behavior or classification change, no

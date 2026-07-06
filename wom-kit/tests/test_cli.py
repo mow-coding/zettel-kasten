@@ -14916,6 +14916,20 @@ state:
             approve=True, transport=transport, skip_uploaded=True, **run_kwargs
         )
 
+    def _strip_wom_uploaded_manifest_location(self, archive_root: Path, object_id: str) -> None:
+        """Simulate a post-crash/handoff state: resume ledger remains, manifest location is gone."""
+        manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+        records = [json.loads(l) for l in manifest_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        for record in records:
+            if record.get("object_id") == object_id:
+                record["locations"] = [
+                    loc for loc in record.get("locations", [])
+                    if loc.get("availability") != "wom_uploaded"
+                ]
+        manifest_path.write_text(
+            "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n", encoding="utf-8"
+        )
+
     def test_force_reupload_reputs_present_match_object(self) -> None:  # FIX A #6
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -15236,6 +15250,86 @@ state:
                 any("total_put_ceiling_exceeded" in b for b in result["blockers"]),
                 result["blockers"],
             )
+
+    def test_force_reupload_bypasses_ledger_even_without_manifest_location(self) -> None:
+        # v0.3.177 regression: a post-crash/handoff state can retain a terminal
+        # resume-ledger row while the manifest no longer has a wom_uploaded
+        # location. --force-reupload must still reach a provider PUT, not return
+        # skipped_already_present from the ledger.
+        floor = archive_services.OBJECT_STORAGE_MULTIPART_MIN_PART_SIZE_BYTES
+        size = floor * 2 + 333
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            digest = self._install_multipart_fixture_object(archive_root, size)
+            object_id = f"sha256:{digest}"
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                seed_transport = _FakeObjectStorageTransport()
+                self._seed_uploaded_object(archive_root, seed_transport, only=object_id)
+                self._strip_wom_uploaded_manifest_location(archive_root, object_id)
+
+                force_transport = _FakeObjectStorageTransport()
+                result = self._upload_run(
+                    archive_root, only=object_id, max_objects=1,
+                    reviewed_by="kim", approve=True, transport=force_transport,
+                    skip_uploaded=True, force_reupload=True,
+                    multipart_threshold_bytes=floor, multipart_part_size_bytes=floor,
+                    allow_tiny_parts=True,
+                )
+
+        execution = result["execution_results"][0]
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(execution["result_status"], "uploaded", result)
+        self.assertIs(execution["forced_reupload"], True)
+        self.assertFalse(execution.get("force_reupload_not_performed", False), execution)
+        self.assertGreater(execution["put_calls"], 0, execution)
+        self.assertGreater(execution["part_count"], 1, execution)
+        self.assertEqual(force_transport.multipart_calls, 1, "forced run must reach multipart PUT")
+        self.assertNotEqual(execution["result_status"], "skipped_already_present")
+
+    def test_force_reupload_zero_put_attempt_is_blocked_not_ok(self) -> None:
+        # Defense in depth: if a future edit reintroduces a zero-PUT skip while
+        # --force-reupload is active, the run must not report ok:true.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with patch.dict(
+                archive_services.os.environ,
+                {"WOM_R2_ACCESS_KEY_ID": _R2_ACCESS_KEY_ID, "WOM_R2_SECRET_ACCESS_KEY": _R2_SECRET_HEX64},
+                clear=False,
+            ):
+                transport = _FakeObjectStorageTransport()
+
+                def fake_execute(**kwargs):
+                    digest = kwargs["content_sha256"]
+                    return {
+                        "object_id": f"sha256:{digest}",
+                        "key_hint": kwargs["key"],
+                        "result_status": "skipped_already_present",
+                        "bytes": 0,
+                        "part_count": 0,
+                        "attempts": 0,
+                        "backoff_ms_total": 0,
+                        "put_calls": 0,
+                        "provider_api_called": False,
+                    }
+
+                with patch.object(archive_services, "object_storage_execute_one_upload", side_effect=fake_execute):
+                    result = self._upload_run(
+                        archive_root, only=f"sha256:{_FAKE_SHA_A}", max_objects=1,
+                        reviewed_by="kim", approve=True, transport=transport,
+                        skip_uploaded=True, force_reupload=True,
+                    )
+
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["execution_status"], "blocked", result)
+        self.assertTrue(any("force_reupload_not_performed" in b for b in result["blockers"]), result)
+        execution = result["execution_results"][0]
+        self.assertIs(execution["forced_reupload"], True)
+        self.assertIs(execution["force_reupload_not_performed"], True)
+        self.assertEqual(result["receipts_written"], [])
 
     # --- Stage 2: SA-4 derived signing-material leak gate ---
 
@@ -40202,4 +40296,3 @@ class ObjetCaptureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

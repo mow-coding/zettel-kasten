@@ -33,10 +33,10 @@ wom-kit/docs/releases/ - do not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.176 pre-release
+v0.3.177 pre-release
 ```
 
-Previous public baseline: v0.3.175 pre-release.
+Previous public baseline: v0.3.176 pre-release.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -165,7 +165,7 @@ Object storage:
 - a selectable, recorded upload key strategy (`--key-strategy sha256_content_addressed|prefix`, default unchanged) plus a safe `object-storage-adopt-existing` command: objects already stored under an operator's own key layout are adopted only on a live HEAD proving presence + size-match at the recorded key, and under a live transport the executor always re-HEADs that recorded key before any skip (a 404 re-uploads, never a silent skip); an opt-in `--key-map` (JSONL sha256 -> exact remote key) adopts objects stored under the operator's own per-object extension when the content-addressed template cannot recover it, size still manifest-sourced and every key digest-bound and leak-guarded,
 - verified adopt (HEAD-only) is decoupled from the upload 5 GiB tier proof: because adopt moves zero bytes, one prior verified tiny-first adopt unlocks a batch handover of any size (the wrong-key self-limit, declared-never-counts, and byte-identical upload tier ladder all hold),
 - a live-verification `--multipart-part-size` override (with the `--allow-tiny-parts` acknowledgment, bounded `[4096, 64 MiB]`, recorded in the receipt as `effective_multipart_part_size_bytes`) that, paired with a lowered `--multipart-threshold`, forces multipart on a small object to prove LIVE R2 multipart; it changes only `handle.read()` fragmentation and leaves the whole-object before-hash, HEAD-after full-object verify, orphan cleanup, and leak gate byte-for-byte unchanged,
-- a live-verification `--force-reupload` that re-PUTs an already-present object (approval + reviewer gated, refused for a non-sha key, inert under `--dry-run`, corrupt-local still refused before any PUT) so a small forced multipart can prove upload tier2, which a real multipart (`part_count>1`) now satisfies alongside the existing 5 GiB path,
+- a live-verification `--force-reupload` that re-PUTs an already-present object (approval + reviewer gated, refused for a non-sha key, inert under `--dry-run`, corrupt-local still refused before any PUT), now also bypassing resume-ledger-only skips and failing closed with `force_reupload_not_performed` if no provider PUT is attempted, so a small forced multipart can prove upload tier2, which a real multipart (`part_count>1`) now satisfies alongside the existing 5 GiB path,
 
 IMAP:
 
